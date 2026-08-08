@@ -570,6 +570,177 @@ app.post("/line/bind", express.json({ limit: "8kb" }), async (req, res) => {
   }
 })
 
+// ── Silent LINE reauth ───────────────────────────────────────────────────
+// Incident (2026-08): physicians who had already bound a LINE account were
+// still hitting the plain email/OTP form on every visit. Root cause turned
+// out to have nothing to do with the bind itself — is_bound is only ever
+// consulted once a session already exists, and these physicians had NO
+// session cookie at all by the time they reopened the app. Evidence from
+// production auth logs: the same bound account created a brand-new session
+// (fresh /otp + verifyOtp) every time it reopened the app, sometimes only a
+// couple of hours after its previous session had refreshed successfully —
+// i.e. the cookie itself was not surviving between separate LIFF launches,
+// most plausibly because LINE gives each chat-triggered LIFF launch its own,
+// non-persistent webview storage. No cookie attribute can fix that; the
+// browser instance that held the cookie is simply gone by the next tap.
+//
+// What DOES survive across LIFF launches is LINE's own login — liff.init()
+// + liff.getIDToken() keeps working because that is tied to the LINE app
+// account, not to our webview's storage. This endpoint uses that as the
+// actual reauthentication mechanism for a RETURNING bound physician: verify
+// the ID token with LINE, look up the email it was already bound to (never
+// creates a binding — only resumes one that the real email+OTP+ID-token
+// flow already established), and mint a fresh Supabase session for that
+// email entirely server-side. No email is sent and no OTP is typed; the
+// physician never sees the form at all. An unbound LINE account (never
+// completed the real flow) simply falls through to today's behavior.
+
+// Generates a magic-link OTP for an existing user and immediately redeems it
+// server-side, entirely with our own credentials. Two Supabase calls,
+// service-role then anon:
+//   1. POST /auth/v1/admin/generate_link — returns `email_otp`, the same
+//      6-digit code that would otherwise be emailed. Nothing is actually
+//      sent; we consume it ourselves in the next step.
+//   2. POST /auth/v1/verify — the identical {email, token, type:"email"}
+//      shape verify/app.js's client-side db.auth.verifyOtp() already sends
+//      today, so this reuses a call this app already proves works in
+//      production, rather than a PKCE/hashed_token path this codebase has
+//      never exercised.
+async function mintSessionForEmail(email) {
+  const gen = await axios.post(
+    SUPABASE_URL + "/auth/v1/admin/generate_link",
+    { type: "magiclink", email: email },
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": "application/json",
+      },
+      timeout: 8000,
+    }
+  )
+  // Some GoTrue versions nest verification fields under `properties`; guard
+  // both shapes and log the raw keys on failure so a field-name drift shows
+  // up immediately in Vercel logs instead of as a silent 500 with no clue.
+  const otp = gen.data && (gen.data.email_otp || (gen.data.properties && gen.data.properties.email_otp))
+  if (!otp) {
+    console.error("[line-silent-auth] generate_link returned no email_otp. keys:",
+      gen.data ? Object.keys(gen.data).join(",") : "(no body)")
+    throw new Error("generate_link returned no email_otp")
+  }
+
+  const verify = await axios.post(
+    SUPABASE_URL + "/auth/v1/verify",
+    { type: "email", email: email, token: otp },
+    { headers: { apikey: SUPABASE_ANON, "Content-Type": "application/json" }, timeout: 8000 }
+  )
+  if (!verify.data || !verify.data.access_token || !verify.data.refresh_token) {
+    throw new Error("verify did not return a session")
+  }
+  return verify.data
+}
+
+// No Authorization header — there is no session yet; proving identity via a
+// LINE ID token is the entire point of this endpoint.
+app.post("/line/silent-auth", express.json({ limit: "8kb" }), async (req, res) => {
+  const idToken = (req.body && req.body.id_token) || ""
+  if (!idToken) return res.status(400).json({ error: "missing id_token" })
+
+  const line = await verifyLineIdToken(idToken)
+  if (!line) return res.status(401).json({ error: "line verification failed" })
+
+  // Look up an EXISTING binding — this can only RESUME a session for an email
+  // that the real email+OTP+verified-ID-token flow already bound to this
+  // exact LINE account. It cannot be used to claim an email nobody has proven
+  // ownership of: unlike /line/bind (email from an existing session, LINE
+  // identity from the request), this looks the other direction — LINE
+  // identity to email — so there is no "different LINE account" case to
+  // mismatch against, and nothing here can create a new line_user_bindings row.
+  let email = null
+  try {
+    const r = await axios.get(
+      SUPABASE_URL + "/rest/v1/line_user_bindings?line_user_id=eq." + encodeURIComponent(line.sub) + "&select=email",
+      {
+        headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY },
+        timeout: 8000,
+      }
+    )
+    email = r.data && r.data[0] && r.data[0].email
+  } catch (e) {
+    console.error("[line-silent-auth] binding lookup failed:",
+      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
+    return res.status(500).json({ error: "lookup failed" })
+  }
+  // Not bound yet — fall through to the normal email/OTP form. Not an error.
+  if (!email) return res.status(404).json({ error: "not_bound" })
+
+  // Refuse to mint a session for a denylisted email, independent of whether
+  // the client should have skipped this call (verify/app.js does, based on
+  // the bounce reason, but that is JS an attacker can ignore). Without this,
+  // a blocked-but-still-bound account could mint a session here, get bounced
+  // straight back by the gate's OWN blocked_emails check on the very next
+  // page, and — if the client retried — loop indefinitely minting sessions
+  // against a denylisted address.
+  try {
+    const blocked = await axios.get(
+      SUPABASE_URL + "/rest/v1/blocked_emails?email=eq." + encodeURIComponent(email) + "&select=email",
+      {
+        headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY },
+        timeout: 8000,
+      }
+    )
+    if (Array.isArray(blocked.data) && blocked.data.length > 0) {
+      return res.status(403).json({ error: "blocked" })
+    }
+  } catch (e) {
+    console.error("[line-silent-auth] blocklist check failed:",
+      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
+    return res.status(500).json({ error: "lookup failed" })
+  }
+
+  try {
+    const session = await mintSessionForEmail(email)
+    setSessionCookie(res, session.access_token, session.refresh_token)
+
+    // Record this brand-new session as LINE-verified too, using the SAME
+    // safe, mismatch-checking RPC /line/bind uses — so a later switch to
+    // LINE_BIND_ENFORCE doesn't immediately ask this device to prove itself
+    // again right after it just did, silently, one line above. A mismatch
+    // genuinely can't happen here (we looked email up FROM this exact LINE
+    // account), but routing through the same RPC is one code path to trust
+    // rather than two, and keeps line_verified_sessions consistent.
+    //
+    // Awaited, not fire-and-forget: Vercel can freeze a serverless function
+    // the instant a response is sent (see the Telegram webhook handler
+    // below for the same lesson learned the hard way), so an un-awaited call
+    // here could get silently killed before it ever reaches Supabase. Best
+    // effort either way — its own failure must not fail the login, since the
+    // session cookie is already good by this point.
+    const sessionId = jwtPayload(session.access_token).session_id || null
+    if (sessionId) {
+      await axios.post(
+        SUPABASE_URL + "/rest/v1/rpc/bind_line_user_id_verified",
+        { p_email: email, p_line_user_id: line.sub, p_line_display_name: line.name, p_session_id: sessionId },
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+            "Content-Type": "application/json",
+          },
+          timeout: 8000,
+        }
+      ).catch((e) => console.warn("[line-silent-auth] post-mint verify record failed:", e.message))
+    }
+
+    console.log("[line-silent-auth] minted session for " + email)
+    return res.json({ ok: true })
+  } catch (e) {
+    console.error("[line-silent-auth] mint failed:",
+      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
+    return res.status(500).json({ error: "mint failed" })
+  }
+})
+
 // Receives Telegram's "callback_query" webhook when an admin taps ✅/❌ on the
 // access-request alert (buttons added by scripts/telegram-approve-buttons.sql).
 // Uses the Supabase SERVICE ROLE key to call the approve/reject RPC — that key
