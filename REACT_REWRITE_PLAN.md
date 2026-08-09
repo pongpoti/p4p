@@ -373,6 +373,26 @@ state machine. This is also where the `/verify` vs `/verify/` rewrite gets confi
 *Exit: a real end-to-end bind on a device via staging LIFF, confirmed by a row in
 `line_verified_sessions`.*
 
+**Carry forward: silent LINE reauth (added 2026-08, production hotfix).** Bound physicians
+were being sent through the full email+OTP form on every visit, because the session cookie
+does not reliably survive a fresh LIFF launch (evidence: production auth logs showed the same
+bound account creating a brand-new session every reopen, sometimes hours after its previous
+one had refreshed fine — strongly suggesting LINE gives each chat-triggered LIFF launch its
+own non-persistent webview storage, which no cookie attribute can work around). The fix, live
+in `main.js`/`verify/app.js` ahead of this rewrite: before showing the email form at all,
+attempt `liff.getIDToken()` → `POST /line/silent-auth` → look up the existing
+`line_user_bindings` row for that LINE userId → if found, mint a fresh Supabase session
+server-side (`admin/generate_link` → redeem the returned `email_otp` via the same
+`{email, token, type:"email"}` shape `verifyOtp` already uses) with no email sent and no OTP
+typed. Only resumes a binding that the real flow already established; never creates one.
+Skipped for `reason=blocked` / `reason=gate_unavailable` client-side, and independently
+refused server-side for a denylisted email, so a client that ignored the skip can't loop.
+
+This is a genuine behavior change, not an implementation detail — build it into Phase 5's
+state machine from the start rather than porting the old form-first flow and adding it back
+later. See `main.js`'s `/line/silent-auth` handler and the comment block above it for the
+full reasoning.
+
 **Phase 6 — cutover.** See §9.
 
 **Phase 7 — decommission.** Delete `main.js`, `verify/`, `status/`, `list/`, `ranking/`,

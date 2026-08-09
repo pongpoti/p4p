@@ -274,14 +274,15 @@
             return
         }
 
-        // ── Email input intro loading state ──────────────────────────────────
-        // Briefly show loading dots over the email input (disabled underneath)
-        // when the page first lands on step 1, then hand control to the user.
+        // The email input starts disabled with loading dots showing over it.
+        // Previously this was just a fixed 5s cosmetic delay before handing
+        // control to the user. It is now driven by the silent LINE reauth
+        // attempt below — see showEmailForm(), which is what actually
+        // re-enables it. Declared here (rather than inline below) because
+        // sanitizeName/PENDING_KEY/otpBoxes etc. all sit between here and
+        // where the reauth attempt is wired up, and this line documents the
+        // very first thing that happens on a fresh page load.
         emailInput.disabled = true
-        setTimeout(() => {
-            emailInput.disabled = false
-            emailLoadingDots.classList.add("hidden")
-        }, 5000)
 
         // ── Physician name (request-access step) ────────────────────────────────
         // This used to be a <select> populated from list_all_physicians(), which
@@ -400,20 +401,102 @@
         // Why did the server send us here? "expired" = the session lapsed;
         // "blocked" = revoked via blocked_emails (a valid session is not enough —
         // main.js re-checks the denylist on every gated-page request); "no_session"
-        // is the everyday logged-out case and stays silent.
+        // is the everyday logged-out case and stays silent; "gate_unavailable"
+        // means the gate RPC itself couldn't be reached.
         const bounceReason = new URLSearchParams(location.search).get("reason")
         const reasonShown = bounceReason === "expired" || bounceReason === "blocked"
-        if (bounceReason === "expired") {
-            showNotice("เซสชันหมดอายุ กรุณายืนยันตัวตนอีกครั้ง")
-        } else if (bounceReason === "blocked") {
-            showError("บัญชีของท่านถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ")
+
+        // ── Silent LINE reauth ────────────────────────────────────────────────
+        // Incident (2026-08): a physician who had already bound a LINE account
+        // was still landing on this plain email form on every visit. The cause
+        // had nothing to do with the bind itself — is_bound is only ever
+        // consulted once a session already exists, and these physicians had NO
+        // session cookie at all by the time they reopened the app. Production
+        // auth logs showed the same bound account creating a brand-new session
+        // every time it reopened, sometimes only hours after its previous
+        // session had refreshed successfully — the cookie was not surviving a
+        // fresh LIFF launch, most plausibly because LINE gives each
+        // chat-triggered launch its own non-persistent webview storage. No
+        // cookie attribute fixes that: the browser instance that held it is
+        // simply gone by the next tap.
+        //
+        // What DOES survive across launches is LINE's own login — liff.init()
+        // and liff.getIDToken() keep working regardless, because that is tied
+        // to the LINE app account, not this webview's storage. So before
+        // showing the form at all, ask POST /line/silent-auth (see main.js) to
+        // resume a session via that: it verifies the ID token with LINE, looks
+        // up the email it was already bound to (never creates a binding — only
+        // resumes one the real email+OTP+ID-token flow already established),
+        // and mints a fresh Supabase session server-side. No email is sent, no
+        // OTP is typed, and an unbound LINE account just falls through to the
+        // form exactly as before.
+        //
+        // Deliberately SKIPPED for "blocked" and "gate_unavailable": retrying
+        // either would just mint a session the gate immediately rejects (or
+        // hit a live outage again), and a client that kept retrying on
+        // "blocked" specifically could loop — mint a session, get bounced back
+        // here with the same reason, try again. The server independently
+        // refuses to mint a session for a blocked email regardless of what
+        // this check does, but there is no reason to even make the round trip
+        // in these two cases.
+        const pendingEmail = readPending()
+        const skipSilentReauth = Boolean(pendingEmail) || bounceReason === "blocked" || bounceReason === "gate_unavailable"
+
+        async function attemptSilentLineReauth() {
+            const inited = await liffReady
+            if (!inited || !liff.isLoggedIn()) return false
+            const idToken = liff.getIDToken()
+            if (!idToken) return false
+            try {
+                const resp = await fetch("/line/silent-auth", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id_token: idToken }),
+                })
+                return resp.ok
+            } catch (err) {
+                console.warn("silent LINE reauth failed:", err)
+                return false
+            }
         }
 
-        // If a verification was in progress before a reload, restore the code step.
-        const pendingEmail = readPending()
+        // Bounded so a slow/hanging liff.init() can't stall a visitor who has
+        // nothing to gain from this check (never bound, or not in LINE at all)
+        // indefinitely — they still need to reach the email form eventually.
+        function withTimeout(promise, ms) {
+            return Promise.race([
+                promise,
+                new Promise((resolve) => setTimeout(() => resolve(false), ms)),
+            ])
+        }
+
+        function showEmailForm() {
+            emailInput.disabled = false
+            emailLoadingDots.classList.add("hidden")
+            if (bounceReason === "expired") {
+                showNotice("เซสชันหมดอายุ กรุณายืนยันตัวตนอีกครั้ง")
+            } else if (bounceReason === "blocked") {
+                showError("บัญชีของท่านถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ")
+            }
+        }
+
         if (pendingEmail) {
+            // A verification was in progress before a reload — restore the code
+            // step. Unaffected by silent reauth: we're already mid-flow for a
+            // specific email, so there is nothing to resume in its place.
             goToCodeStep(pendingEmail)
             if (!reasonShown) showOk("กรุณากรอกรหัสยืนยันที่ส่งไปยังอีเมลของท่าน")
+        } else if (skipSilentReauth) {
+            showEmailForm()
+        } else {
+            withTimeout(attemptSilentLineReauth(), 4000).then((ok) => {
+                if (ok) {
+                    showOk("ยืนยันสำเร็จ กำลังนำท่านเข้าสู่ระบบ...")
+                    location.replace(RETURN_TO)
+                    return
+                }
+                showEmailForm()
+            })
         }
 
         // ── Step 1 — request an OTP ───────────────────────────────────────────
