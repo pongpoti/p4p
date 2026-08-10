@@ -958,12 +958,35 @@ app.get(["/verify", "/verify/"], async (req, res) => {
 
 // ── /admin/ — roster CRUD dashboard, single-admin only ──────────────────────
 // See the "Admin auth" block above for how ADMIN_COOKIE gets set (LINE DM ->
-// signed login link -> this cookie). The page itself is served as a plain
-// static file (no server-side gating on the HTML — it renders an
-// "unauthorized" state client-side by calling GET /admin/api/tables, which
-// IS gated) so it needs no <meta> token injection and no CSP changes: it
-// never talks to Supabase directly, only to these same-origin routes, which
-// hold SUPABASE_SERVICE_ROLE_KEY server-side.
+// signed login link -> this cookie). There is no server-side gating on the
+// HTML — it renders an "unauthorized" state client-side by calling GET
+// /admin/api/tables, which IS gated — so it needs no <meta> token injection
+// and no CSP changes: it never talks to Supabase directly, only to these same-
+// origin routes, which hold SUPABASE_SERVICE_ROLE_KEY server-side.
+//
+// It is still served from a template rather than by express.static below, for
+// one reason: stampAssets. A dashboard whose app.js is pinned in a WebView
+// cache goes on driving last week's UI against this week's API routes, which
+// is a worse failure here than on the read-only physician pages — this page
+// writes to the roster.
+const adminTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, "admin", "index.html"), "utf8"),
+  "admin",
+)
+app.get(["/admin", "/admin/"], (req, res) => {
+  // Relative <script src="app.js"> only resolves to /admin/app.js when the URL
+  // ends in a slash — the same trap servePage documents for the gated pages.
+  // express.static used to answer /admin without one, leaving the page asking
+  // for /app.js.
+  if (!req.path.endsWith("/")) {
+    return res.redirect(302, "/admin/" + req.originalUrl.slice(req.path.length))
+  }
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  // No token in this HTML, but a cached copy would keep requesting the app.js
+  // URL that was current when it was stored, which defeats the hash above.
+  res.setHeader("Cache-Control", "no-store")
+  res.send(adminTemplate)
+})
 
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
 // page itself, which shows the "message the bot" instructions.
