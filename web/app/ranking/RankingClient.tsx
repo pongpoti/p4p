@@ -93,7 +93,7 @@ export default function RankingClient({
             แพทย์ที่ส่ง P4P ตามกำหนด
           </h1>
           <p className="text-xs text-[var(--color-ink-muted)]">
-            (ส่งภายในวันที่ 15 ของเดือนถัดไป)
+            (ส่งภายในวันที่ 10 ของเดือนถัดไป)
           </p>
 
           <div
