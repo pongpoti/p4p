@@ -81,17 +81,54 @@ const RT_COOKIE = "p4p_rt"
 const COOKIE_BASE = "HttpOnly; Secure; SameSite=Lax; Path=/"
 const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
 
+// Same-origin <script src> gets a content hash appended at boot, so a deploy
+// that changes page logic actually reaches LINE's in-app WebView.
+//
+// Incident (2026-08): the ranking cut-off moved from the 15th of the following
+// month to the 10th, but physicians kept seeing the old list — the WebView was
+// still running a cached ranking/app.js carrying the 15th. Only the OLDER month
+// tabs exposed it: the previous month's deadline had not passed yet, so both
+// cut-offs produced an identical list there and the page looked correct.
+// express.static's default `max-age=0` should have forced a revalidation, but a
+// business rule that decides who counts as on time cannot rest on a WebView
+// honouring cache headers. A hashed URL cannot be answered from cache at all —
+// when app.js changes, so does the URL the page asks for.
+//
+// Absolute URLs (the Supabase and LIFF SDKs on their CDNs) are left alone: they
+// are already versioned in the path and are not ours to hash. A script that
+// cannot be read is served unstamped rather than failing the boot — a missing
+// hash is a stale cache, a throw here is the whole site down.
+function stampAssets(html, pageDir) {
+  return html.replace(/(<script\s+src=")([^":?]+\.js)(")/g, (tag, pre, src, post) => {
+    const rel = src.startsWith("/") ? src.slice(1) : path.posix.join(pageDir, src)
+    try {
+      const hash = crypto
+        .createHash("sha1")
+        .update(fs.readFileSync(path.join(__dirname, rel)))
+        .digest("hex")
+        .slice(0, 8)
+      return pre + src + "?v=" + hash + post
+    } catch (e) {
+      console.warn("[assets] could not hash " + rel + " — serving it unversioned: " + e.message)
+      return tag
+    }
+  })
+}
+
 // Gated pages cached as templates; the server fills the token placeholder per
 // request. Files never change at runtime.
 const gatedPages = ["status", "list", "ranking"]
 const pageTemplates = {}
 for (const p of gatedPages) {
-  pageTemplates[p] = fs.readFileSync(path.join(__dirname, p, "index.html"), "utf8")
+  pageTemplates[p] = stampAssets(fs.readFileSync(path.join(__dirname, p, "index.html"), "utf8"), p)
 }
 // /verify/ also carries the same <meta name="p4p-session"> placeholder, used
 // only for the silent LINE-bind bounce (see servePage's "bind_required"
 // redirect below) — every other visit serves this same template unmodified.
-const verifyTemplate = fs.readFileSync(path.join(__dirname, "verify", "index.html"), "utf8")
+const verifyTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, "verify", "index.html"), "utf8"),
+  "verify",
+)
 
 function parseCookies(req) {
   const out = {}
@@ -442,6 +479,11 @@ function servePage(name) {
 
     clearBindLoopCookie(res)
     res.setHeader("Content-Type", "text/html; charset=utf-8")
+    // This HTML carries a live access token in its <meta>, so it must never be
+    // written to a cache — and a cached copy would also keep pointing at the
+    // script URL that was current when it was stored, which is how a stale
+    // ranking/app.js survives a deploy (see stampAssets above).
+    res.setHeader("Cache-Control", "no-store")
     res.send(pageTemplates[name].replace(PAGE_TOKEN_PLACEHOLDER, at))
   }
 }
@@ -908,6 +950,9 @@ app.get(["/verify", "/verify/"], async (req, res) => {
     " session=" + (at ? "yes" : "no") +
     " token_injected=" + (at ? "yes" : "no")
   )
+  // Same reasoning as servePage: the signed-in variant embeds an access token,
+  // and either variant must be re-fetched so its <script> URLs stay current.
+  res.setHeader("Cache-Control", "no-store")
   res.send(at ? verifyTemplate.replace(PAGE_TOKEN_PLACEHOLDER, at) : verifyTemplate)
 })
 
