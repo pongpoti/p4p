@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { NextResponse } from "next/server"
 import { serverEnv } from "@/lib/config"
 import { createStatusList } from "@/lib/line/flex"
-import { signAdminToken } from "@/lib/admin/tokens"
+import { adminKeyUsable, signAdminToken } from "@/lib/admin/tokens"
 
 export const runtime = "nodejs"
 
@@ -75,6 +75,15 @@ async function handleEvent(event: LineEvent): Promise<void> {
     // recognised command, so this cannot be used to probe for the admin's
     // identity.
     if (event.source?.userId !== serverEnv.adminLineUserId()) return
+    // signAdminToken throws when the signing secrets are missing. Tell the
+    // admin instead of letting it reject the whole webhook batch.
+    if (!adminKeyUsable()) {
+      await lineApi("message/reply", {
+        replyToken,
+        messages: [{ type: "text", text: "ระบบผู้ดูแลปิดใช้งานชั่วคราว: ไม่ได้ตั้งค่า secret บนเซิร์ฟเวอร์" }],
+      })
+      return
+    }
     const exp = Math.floor(Date.now() / 1000) + 600 // 10 minutes
     const url = `${serverEnv.adminBaseUrl()}/admin/login?token=${signAdminToken("login", exp)}`
     await lineApi("message/reply", {

@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto"
 import { beforeEach, describe, expect, it } from "vitest"
 import { signAdminToken, verifyAdminToken, isAdminRequest } from "../admin/tokens"
 import { filterToColumns, type RosterColumn } from "../admin/roster"
@@ -30,6 +31,35 @@ describe("admin tokens", () => {
   it("rejects a tampered expiry", () => {
     const [, sig] = signAdminToken("session", future()).split(".")
     expect(verifyAdminToken("session", `${future() + 99999}.${sig}`)).toBe(false)
+  })
+
+  // The signing key is `${LINE_CHANNEL_SECRET}:${SUPABASE_SERVICE_ROLE_KEY}`
+  // with `?? ""` on both halves. With a secret unset that key degraded to the
+  // literal ":", and since the signed payload is only `purpose:exp` — no nonce,
+  // no identity — a forged cookie was trivial. Every admin route holds the
+  // service-role key, so this must fail closed, not fall back.
+  describe("fails closed when a signing secret is missing", () => {
+    for (const missing of ["LINE_CHANNEL_SECRET", "SUPABASE_SERVICE_ROLE_KEY"]) {
+      it(`refuses to sign or verify without ${missing}`, () => {
+        // A token minted while the secrets WERE present must stop verifying.
+        const good = signAdminToken("session", future())
+        delete process.env[missing]
+
+        expect(() => signAdminToken("session", future())).toThrow()
+        expect(verifyAdminToken("session", good)).toBe(false)
+      })
+
+      it(`does not accept a token forged against the degraded key (${missing} unset)`, () => {
+        delete process.env[missing]
+        // Reproduce the old behaviour: HMAC over the key an attacker could
+        // guess once the fallback kicked in.
+        const exp = future()
+        const degraded = `${exp}.${createHmac("sha256", missing === "LINE_CHANNEL_SECRET" ? ":service-role-key" : "channel-secret:")
+          .update(`session:${exp}`)
+          .digest("hex")}`
+        expect(verifyAdminToken("session", degraded)).toBe(false)
+      })
+    }
   })
 
   it("will not let a login token be replayed as a session cookie", () => {

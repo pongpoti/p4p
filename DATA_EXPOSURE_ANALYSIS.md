@@ -241,20 +241,37 @@ rather than exploited. But two documented, ordinary workflows create the state:
 Then which account you are silently logged into is a coin flip decided by
 Postgres row order.
 
-**Compounding:** Block 4 of `line-bind-verified.sql:270-275` — which revokes and
-drops the **old client-asserted `bind_line_user_id(text, text)`** — is commented
-out and marked POST-DEPLOY ONLY. It has not run. That RPC takes the LINE userId
-as a caller-supplied parameter and is still `authenticated`-executable, so a
-single compromised inbox can bind an attacker-controlled LINE account to that
-email and then use `silent-auth` for **permanent, OTP-free re-entry** — a
-one-time email compromise upgraded into durable access.
+> **Correction (2026-08, verified against the live database).** This section
+> originally said Block 4 of `line-bind-verified.sql:270-275` had never run, so
+> the old client-asserted `bind_line_user_id(text, text)` was still live and
+> `authenticated`-executable — and that a single compromised inbox could
+> therefore bind an attacker-controlled LINE account for permanent, OTP-free
+> re-entry. That was inferred from the repo, where the block is still commented
+> out, and **it is wrong**. Querying `pg_proc` directly shows
+> `bind_line_user_id`, `get_line_bind_gate_status` and `list_all_physicians`
+> **do not exist** on the live project. Block 4 was applied out-of-band and the
+> scripts were never updated to say so. The escalation path described above
+> does not exist. (`list_all_physicians` being gone also closes item 2 of
+> `SECURITY_ANALYSIS.md` §4, still listed there as pending.)
+>
+> The surviving functions are correctly scoped:
+> `bind_line_user_id_verified` — `service_role` only (anon **and**
+> authenticated both false); `get_line_bind_gate_status_self` —
+> `authenticated` only.
 
-**Fix (all three, in order):**
-1. `create unique index on public.line_user_bindings (line_user_id);` — and
-   resolve any duplicates first.
-2. Make silent-auth `limit=2` and refuse when it gets more than one row.
-3. Run Block 4. The Express `/verify/` that needed the old RPC is the reason it
-   was deferred; confirm and drop it.
+**Status — both fixed, 2026-08:**
+1. ✅ `create unique index line_user_bindings_line_user_id_key on
+   public.line_user_bindings (line_user_id);` — applied after verifying 24
+   bindings, **0 duplicates, 0 nulls**. Recorded as Block 5 of
+   `scripts/line-bind-verified.sql`.
+2. ✅ `silent-auth` now requests `&limit=2` and returns **409
+   `ambiguous_binding`** on a second row, so a violation is refused loudly even
+   if the index is later dropped or something writes around it.
+3. ✅ Block 4 — already applied (see the correction above); nothing to run.
+
+One operational consequence: the admin runbook for a physician changing phone
+or LINE account is now **mandatory** rather than advisory. The old row must be
+deleted, or the unique index rejects the new bind.
 
 ---
 
@@ -283,6 +300,18 @@ This is a realistic misconfiguration, not a theoretical one: a preview
 deployment, a renamed env var, or a Vercel environment that never got the
 secrets set all produce it silently. The `?? ""` in the TypeScript version makes
 the degradation deliberate-looking.
+
+**✅ Fixed (2026-08).** Both implementations now fail closed: `signAdminToken`
+throws and `verifyAdminToken` returns false whenever either secret is absent,
+so admin login is disabled rather than falling back to a guessable key. The
+LINE `admin` command reports the outage to the admin instead of throwing inside
+the webhook batch. Covered by four regression tests in
+`web/lib/__tests__/admin.test.ts` — including one that forges a token against
+the old degraded key and asserts it is rejected. Verified the tests fail when
+the guard is removed.
+
+The two remaining items in this section — the replayable login token and the
+non-revocable 90-day session — are **not** fixed.
 
 Related, same file:
 
@@ -374,18 +403,21 @@ the core design:
 
 | # | Action | Effort | Impact |
 |---|---|---|---|
-| 1 | **Make the repository private.** Removes findings 1–3 immediately while the rest is done properly | XS | **Critical** |
-| 2 | Purge `csv_2569_01-04/` from history; shape-based `.gitignore` + CI check | M | **Critical** |
-| 3 | Strip the seed `insert` from `dept_heads.sql`; purge from history; warn the 18 heads | S | **High** |
-| 4 | Stop uploading un-redacted run logs as artifacts | XS | **High** |
-| 5 | `unique index on line_user_bindings (line_user_id)` + `limit=2` guard in silent-auth | XS | **High** |
-| 6 | Run Block 4 — drop the client-asserted `bind_line_user_id` | XS | **High** |
-| 7 | Fail hard when the admin signing secrets are unset | XS | **High** |
+| 1 | **Make the repository private.** Blocked — Vercel Hobby cannot deploy a private org-owned repo, and its collaboration rule rejects Claude-authored commits. Needs Vercel Pro, or deploying via Actions + `VERCEL_TOKEN` | XS | **Critical** |
+| ~~2~~ | ~~Remove `csv_2569_01-04/`; shape-based `.gitignore` + CI check~~ **DONE** (PR #139). History purge still pending | M | **Critical** |
+| ~~3~~ | ~~Strip the seed `insert` from `dept_heads.sql`~~ **DONE** (PR #139). History purge + warning the 18 heads still pending | S | **High** |
+| ~~4~~ | ~~Stop uploading un-redacted run logs as artifacts~~ **DONE** (PR #139) | XS | **High** |
+| ~~5~~ | ~~`unique index on line_user_bindings (line_user_id)` + `limit=2` guard~~ **DONE** | XS | **High** |
+| ~~6~~ | ~~Run Block 4~~ **Already applied out-of-band** — see the correction in §5 | XS | **High** |
+| ~~7~~ | ~~Fail hard when the admin signing secrets are unset~~ **DONE**, both implementations, with regression tests | XS | **High** |
 | 8 | Nonce-bind and lifetime-cap silent-auth sessions | M | **Med-High** |
 | 9 | PDPA assessment / notification for the disclosed dataset | M | **Med-High** |
-| 10 | `forwarded.delete(TOKEN_HEADER)` in middleware | XS | Low |
-| 11 | Pin `ANTHROPIC_BASE_URL`; document the processor | XS | Low |
+| 10 | Purge the CSVs and addresses from **git history** (force-push + cache purge). 0 forks today, so unusually effective | M | **Med-High** |
+| 11 | Replayable admin login token (no `jti`) + non-revocable 90-day session | M | Medium |
+| 12 | `forwarded.delete(TOKEN_HEADER)` in middleware | XS | Low |
+| 13 | Pin `ANTHROPIC_BASE_URL`; document the processor | XS | Low |
 
-Items 1, 4, 5, 6, 7 and 10 are each a few minutes' work and together close the
-two highest-impact findings plus every latent auth issue. Item 2 is the only one
-that needs real coordination.
+Items 2–7 are done. What remains splits cleanly: **10 and 9** are the residue of
+the disclosure itself (the data is out; history and notification are what's
+left), **8 and 11** are the auth-design items that need a decision rather than a
+patch, and **1** is blocked on a Vercel plan choice.
