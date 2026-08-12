@@ -401,9 +401,27 @@ the core design:
 
 ## 10. Priority
 
+> **Final status, 2026-08.** The owner has decided to take the repository
+> private, which closes findings 1, 2, 3 and the history residue in one move —
+> see [`GOING_PRIVATE.md`](GOING_PRIVATE.md) for the ordered runbook and, most
+> importantly, the deployment work that must land **first**.
+>
+> Two things are explicitly *not* solved by that switch, and both are recorded
+> as decisions rather than left as open findings:
+>
+> - **The Drive tree stays shared by link.** Owner's assessment: department
+>   heads are trusted not to forward report emails outside the hospital. This
+>   is an accepted risk, not an oversight. It also means Option C (serving files
+>   through the authenticated app) is deferred rather than rejected — the
+>   dataflow and the signed-link alternative are worked out if it is revisited.
+> - **The two aggregate folders are a separate case.** Their ids were published
+>   in a public repo, so the population holding those links is "anyone who read
+>   the repo", not "department heads". The trusted-heads acceptance does not
+>   extend to them and they should be restricted regardless.
+
 | # | Action | Effort | Impact |
 |---|---|---|---|
-| 1 | **Make the repository private.** Blocked — Vercel Hobby cannot deploy a private org-owned repo, and its collaboration rule rejects Claude-authored commits. Needs Vercel Pro, or deploying via Actions + `VERCEL_TOKEN` | XS | **Critical** |
+| 1 | **Make the repository private** — decided; blocked on reworking deploy first (Vercel Hobby cannot deploy a private org-owned repo, and its collaboration rule rejects Claude-authored commits). See `GOING_PRIVATE.md` | S | **Critical** |
 | ~~2~~ | ~~Remove `csv_2569_01-04/`; shape-based `.gitignore` + CI check~~ **DONE** (PR #139). History purge still pending | M | **Critical** |
 | ~~3~~ | ~~Strip the seed `insert` from `dept_heads.sql`~~ **DONE** (PR #139). History purge + warning the 18 heads still pending | S | **High** |
 | ~~4~~ | ~~Stop uploading un-redacted run logs as artifacts~~ **DONE** (PR #139) | XS | **High** |
@@ -412,7 +430,8 @@ the core design:
 | ~~7~~ | ~~Fail hard when the admin signing secrets are unset~~ **DONE**, both implementations, with regression tests | XS | **High** |
 | 8 | Nonce-bind and lifetime-cap silent-auth sessions | M | **Med-High** |
 | 9 | PDPA assessment / notification for the disclosed dataset | M | **Med-High** |
-| 10 | Purge the CSVs and addresses from **git history** (force-push + cache purge). 0 forks today, so unusually effective | M | **Med-High** |
+| ~~10~~ | ~~Purge the CSVs and addresses from **git history**~~ **Superseded** by going private — history stops being publicly readable. Still worth doing before the repo is ever public again | M | Med |
+| 10a | **Two Drive folder ids were hardcoded in the public tree** (`process/report.js`, `process/eligible-list.js`) pointing at `anyone`-shared folders — a direct repo→data path needing no email link. Ids moved to env vars; **the folders themselves still need restricting** | XS | **High** |
 | 11 | Replayable admin login token (no `jti`) + non-revocable 90-day session | M | Medium |
 | 12 | `forwarded.delete(TOKEN_HEADER)` in middleware | XS | Low |
 | 13 | Pin `ANTHROPIC_BASE_URL`; document the processor | XS | Low |

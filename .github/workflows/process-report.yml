@@ -43,6 +43,10 @@ jobs:
           GOOGLE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
           SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
+          # Drive folder for the outstanding-submissions list. Was hardcoded in
+          # report.js while this repo was public; the job now refuses to run
+          # without it rather than defaulting somewhere wrong.
+          P4P_REPORT_FOLDER_ID:  ${{ secrets.P4P_REPORT_FOLDER_ID }}
         run: node report.js
 
       # Report-log artifact upload REMOVED — see .github/workflows/p4p-cron.yml
