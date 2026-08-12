@@ -295,4 +295,32 @@ grant execute on function public.get_line_bind_gate_status_self() to authenticat
 --     delete from public.line_user_bindings     where email = '<their email>';
 --     delete from public.line_verified_sessions where email = '<their email>';
 --   Their next visit re-binds (trust on first use) with no OTP re-entry.
+--
+--   NOTE: with Block 5 below in place, that runbook is now MANDATORY when an
+--   account moves. Previously a stale row could linger harmlessly; now the
+--   unique index will reject the new bind until the old row is deleted.
 -- ============================================================================
+
+
+-- ============================================================================
+-- Block 5 — one LINE account maps to at most ONE email.  ✅ APPLIED 2026-08.
+-- ============================================================================
+--
+--  The mismatch check in Block 2 guards a single direction: "does this EMAIL
+--  already have a different LINE id?". Nothing asked the reverse, so two
+--  emails could bind the same LINE account.
+--
+--  That matters because /line/silent-auth (main.js) looks up in exactly the
+--  unguarded direction — line_user_id -> email — and the result decides WHICH
+--  IDENTITY to mint a session for. It took rows[0] from an unordered PostgREST
+--  response, so with duplicates present the choice was nondeterministic.
+--
+--  Two ordinary workflows produced that state: a physician binding both a
+--  personal and an institutional address, and the runbook above when someone
+--  changes email rather than LINE account (the old row survives).
+--
+--  Verified before applying: 24 bindings, 0 duplicate line_user_ids, 0 nulls.
+--  main.js additionally sends &limit=2 and refuses with 409 on a second row, so
+--  a violation is detected even if this index is ever dropped.
+create unique index if not exists line_user_bindings_line_user_id_key
+  on public.line_user_bindings (line_user_id);

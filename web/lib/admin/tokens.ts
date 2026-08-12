@@ -24,16 +24,36 @@ import { ADMIN_COOKIE, serverEnv } from "../config"
  */
 export type TokenPurpose = "login" | "session"
 
+/**
+ * True only when BOTH source secrets are present.
+ *
+ * The `?? ""` fallbacks below are what make this necessary: with either secret
+ * unset the key silently became the literal ":", and since the signed payload
+ * is only `purpose:exp` — no nonce, no user identity — anyone could forge an
+ * admin session cookie. Every route behind this holds the service-role key and
+ * bypasses RLS, so the failure mode is total. Fail closed instead.
+ */
+export function adminKeyUsable(): boolean {
+  return Boolean(serverEnv.lineChannelSecret()) && Boolean(serverEnv.supabaseServiceRoleKey())
+}
+
 function signingKey(): string {
   return `${serverEnv.lineChannelSecret() ?? ""}:${serverEnv.supabaseServiceRoleKey() ?? ""}`
 }
 
 export function signAdminToken(purpose: TokenPurpose, exp: number): string {
+  if (!adminKeyUsable()) {
+    throw new Error("admin signing key unavailable: LINE_CHANNEL_SECRET / SUPABASE_SERVICE_ROLE_KEY not set")
+  }
   const sig = crypto.createHmac("sha256", signingKey()).update(`${purpose}:${exp}`).digest("hex")
   return `${exp}.${sig}`
 }
 
 export function verifyAdminToken(purpose: TokenPurpose, token: string | undefined | null): boolean {
+  if (!adminKeyUsable()) {
+    console.error("[admin] signing secrets not set — refusing to verify any admin token")
+    return false
+  }
   if (!token || typeof token !== "string") return false
   const i = token.indexOf(".")
   if (i === -1) return false

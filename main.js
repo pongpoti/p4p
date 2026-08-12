@@ -225,12 +225,28 @@ function jwtExp(token) { return typeof jwtPayload(token).exp === "number" ? jwtP
 // requiring a new one to be provisioned; "purpose" is mixed into the HMAC so
 // a short-lived login token can never be replayed as a long-lived session
 // cookie or vice versa.
+//
+// FAIL CLOSED when either secret is missing. Both are read from process.env
+// with no default, so an unset var used to concatenate into the fully
+// predictable literal "undefined:undefined" — and since the token body is only
+// "purpose:exp", with no nonce and no user identity, ANYONE could then forge an
+// admin session cookie. These routes hold SUPABASE_SERVICE_ROLE_KEY and bypass
+// RLS, so that is the highest-value credential in the system. A missing env var
+// on a preview deployment or a renamed secret is an ordinary mistake; silently
+// degrading to a guessable key because of one is not an acceptable outcome.
 const ADMIN_TOKEN_KEY = LINE_CHANNEL_SECRET + ":" + SUPABASE_SERVICE_ROLE_KEY
+const ADMIN_KEY_USABLE = Boolean(LINE_CHANNEL_SECRET) && Boolean(SUPABASE_SERVICE_ROLE_KEY)
+if (!ADMIN_KEY_USABLE) {
+  console.error("[admin] LINE_CHANNEL_SECRET and/or SUPABASE_SERVICE_ROLE_KEY is not set — " +
+    "admin login is DISABLED (refusing to sign or accept tokens with a predictable key)")
+}
 function signAdminToken(purpose, exp) {
+  if (!ADMIN_KEY_USABLE) throw new Error("admin signing key unavailable")
   const sig = crypto.createHmac("sha256", ADMIN_TOKEN_KEY).update(purpose + ":" + exp).digest("hex")
   return exp + "." + sig
 }
 function verifyAdminToken(purpose, token) {
+  if (!ADMIN_KEY_USABLE) return false
   if (!token || typeof token !== "string") return false
   const i = token.indexOf(".")
   if (i === -1) return false
@@ -698,15 +714,33 @@ app.post("/line/silent-auth", express.json({ limit: "8kb" }), async (req, res) =
   // identity from the request), this looks the other direction — LINE
   // identity to email — so there is no "different LINE account" case to
   // mismatch against, and nothing here can create a new line_user_bindings row.
+  //
+  // Cardinality is enforced, not assumed. This lookup decides WHICH IDENTITY a
+  // session is minted for, so "take the first row" is not good enough: the
+  // email->uid mismatch check above guards only one direction, and until the
+  // unique index below existed, two emails could bind the same LINE account and
+  // rows[0] from an unordered result would pick between them nondeterministically.
+  //
+  //   create unique index line_user_bindings_line_user_id_key
+  //     on public.line_user_bindings (line_user_id);
+  //
+  // limit=2 is deliberate — enough to DETECT a second row, so a violation is
+  // refused loudly here rather than silently resolved, even if the index is
+  // ever dropped or a future path writes around it.
   let email = null
   try {
     const r = await axios.get(
-      SUPABASE_URL + "/rest/v1/line_user_bindings?line_user_id=eq." + encodeURIComponent(line.sub) + "&select=email",
+      SUPABASE_URL + "/rest/v1/line_user_bindings?line_user_id=eq." + encodeURIComponent(line.sub) + "&select=email&limit=2",
       {
         headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY },
         timeout: 8000,
       }
     )
+    if (Array.isArray(r.data) && r.data.length > 1) {
+      console.error("[line-silent-auth] REFUSED: LINE userId maps to " + r.data.length +
+        "+ emails — ambiguous identity, refusing to mint a session")
+      return res.status(409).json({ error: "ambiguous_binding" })
+    }
     email = r.data && r.data[0] && r.data[0].email
   } catch (e) {
     console.error("[line-silent-auth] binding lookup failed:",
@@ -1162,6 +1196,16 @@ const handleEvent = async (event) => {
     // recognized command, so this can't be used to probe for the admin's
     // userId.
     if (event.source.userId !== ADMIN_LINE_USER_ID) return Promise.resolve(null)
+    // signAdminToken throws when the signing secrets are missing. Report that
+    // to the admin instead of letting it reject the whole webhook — the
+    // handler's catch would turn one unusable command into a 500 for every
+    // event in the batch, and LINE would retry it.
+    if (!ADMIN_KEY_USABLE) {
+      return client.replyMessage({
+        "replyToken": event.replyToken,
+        "messages": [{ "type": "text", "text": "ระบบผู้ดูแลปิดใช้งานชั่วคราว: ไม่ได้ตั้งค่า secret บนเซิร์ฟเวอร์" }]
+      })
+    }
     const exp = Math.floor(Date.now() / 1000) + 600 // 10 minutes
     const url = ADMIN_BASE_URL + "/admin/login?token=" + signAdminToken("login", exp)
     return client.replyMessage({
