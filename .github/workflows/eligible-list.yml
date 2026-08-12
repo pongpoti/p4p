@@ -44,4 +44,7 @@ jobs:
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
+          # Drive folder for the monthly eligible-physicians PDF. Was hardcoded
+          # in eligible-list.js while this repo was public.
+          P4P_ELIGIBLE_FOLDER_ID: ${{ secrets.P4P_ELIGIBLE_FOLDER_ID }}
         run: node eligible-list.js

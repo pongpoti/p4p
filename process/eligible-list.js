@@ -28,10 +28,19 @@ const CONFIG = {
     url: process.env.SUPABASE_URL,
     key: process.env.SUPABASE_KEY,
   },
-  // Fixed destination folder for the monthly eligible-physicians PDF.
-  folderId: '1l94mRkKavJxT6oOnHHbUtdukMv20o2yR',
+  // Destination folder for the monthly eligible-physicians PDF.
+  //
+  // Was hardcoded. A Drive folder id is a LOCATOR, not a secret — but this
+  // repository was public, so the literal was a direct address for a folder
+  // shared "anyone with the link".
+  folderId: process.env.P4P_ELIGIBLE_FOLDER_ID,
   fontDir:  path.join(__dirname, '..', 'src', 'fonts'),
 };
+
+if (!CONFIG.folderId) {
+  console.error('P4P_ELIGIBLE_FOLDER_ID is not set — refusing to run.');
+  process.exit(1);
+}
 
 const THAI_MONTHS = {
   1: 'มกราคม',   2: 'กุมภาพันธ์', 3: 'มีนาคม',

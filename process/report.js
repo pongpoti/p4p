@@ -53,9 +53,22 @@ const CONFIG = {
     key: process.env.SUPABASE_KEY,
   },
   rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,
-  reportFolderId: '1vbEX7-RRCPij2UkkHwnc9oSbQ2HRfXkq',
+  // Was hardcoded. A Drive folder id is a LOCATOR, not a secret — but this
+  // repository was public, so the literal handed anyone who read report.js a
+  // direct address for a folder that is shared "anyone with the link". Config
+  // that points at real data belongs in the environment, next to
+  // GOOGLE_ROOT_FOLDER_ID on the line above.
+  reportFolderId: process.env.P4P_REPORT_FOLDER_ID,
   reportFileName: 'รายชื่อแพทย์ค้างส่ง P4P.xlsx',
 };
+
+if (!CONFIG.reportFolderId) {
+  // Fail loudly rather than defaulting. A silent fallback would either write
+  // the outstanding-submissions list to the wrong folder or drop it entirely,
+  // and nobody watches this job closely enough to notice either.
+  console.error('P4P_REPORT_FOLDER_ID is not set — refusing to run.');
+  process.exit(1);
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  Thai month names
