@@ -61,18 +61,40 @@ jobs:
 
             # 2. Real-looking personal email addresses. Consumer domains are
             #    the tell — institutional aliases and example.com are fine.
-            hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null | sort -u || true)
+            #
+            #    SYSTEM_MAILBOXES are the project's own accounts, not personal
+            #    data: the P4P inbox that receives submissions and the Drive
+            #    owner. They appear legitimately in config, and flagging them
+            #    would fail every PR that touches automation/config.js.
+            hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null \
+                   | grep -viE '^(sakhonmso|p4pskh)@gmail\.com$' | sort -u || true)
             if [ -n "$hits" ]; then
               echo "::error file=$f::Personal email address(es) found. These are also the login allow-list; keep them in the dept_heads table."
               echo "$hits" | sed 's/^/    /'
               fail=1
             fi
 
-            # 3. Thai personal names alongside a score/department column —
-            #    the shape of a roster export in any file format.
-            if grep -aqE '[ก-๙]{2,}[[:space:]]+[ก-๙]{2,}' "$f" 2>/dev/null \
-               && grep -aqiE '(score|คะแนน|department|แผนก|firstname|lastname)' "$f" 2>/dev/null; then
-              echo "::error file=$f::Looks like a physician roster (Thai names + score/department column)."
+            # 3. A physician roster in any file format.
+            #
+            #    DENSITY, not presence. The first version of this rule asked
+            #    only "does the file contain two Thai words AND the word
+            #    score/department?" — which flagged 33 legitimate source files,
+            #    because the ENT department is spelled "โสต ศอ นาสิก" and
+            #    contains spaces, so every file carrying the department list
+            #    matched. That would have failed essentially every PR.
+            #
+            #    A real roster has one name per LINE START (CSV, TSV, SQL
+            #    values, a pasted table). Source code has Thai strings embedded
+            #    mid-line inside quotes and almost never at column 0. Measured:
+            #    the leaked 2569_01.csv has 185 such lines; main.js,
+            #    departments.ts and automation/index.js each have 0.
+            #    `grep -c` prints "0" AND exits 1 when there is no match, so
+            #    `|| echo 0` would append a SECOND zero and make the numeric
+            #    test below blow up with "integer expression expected".
+            names=$(grep -acE '^[[:space:]]*[("'"'"']?[ก-๙]{2,}[[:space:]]+[ก-๙]{2,}' "$f" 2>/dev/null || true)
+            [ -z "$names" ] && names=0
+            if [ "$names" -ge 20 ]; then
+              echo "::error file=$f::Looks like a physician roster — $names name-shaped rows. Roster data belongs in Supabase."
               fail=1
             fi
           done <<< "$files"
