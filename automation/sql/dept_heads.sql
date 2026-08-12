@@ -26,25 +26,19 @@ alter table public.dept_heads enable row level security;
 revoke all on public.dept_heads from anon, authenticated;
 grant select, insert, update, delete on public.dept_heads to service_role;
 
--- Seed with the current mapping (built from the "head" Gmail label earlier
--- this session).
-insert into dept_heads (department, head_email) values
-  ('กุมารเวชกรรม', 'abunto@hotmail.com'),
-  ('จักษุวิทยา', 'skch1136@gmail.com'),
-  ('จิตเวชและยาเสพติด', 'nithinanmd@hotmail.com'),
-  ('เทคนิคการแพทย์และพยาธิวิทยาคลินิก', 'thirunda123@hotmail.com'),
-  ('นิติเวช', 'dr.apisara@gmail.com'),
-  ('ผู้ป่วยนอก', 'meepoohjew@hotmail.com'),
-  ('พยาธิวิทยากายวิภาค', 'sirathird@gmail.com'),
-  ('รังสีวิทยา', 'orawanxray@gmail.com'),
-  ('วิสัญญีวิทยา', 'dkuakulkiat@gmail.com'),
-  ('เวชกรรมฟื้นฟู', 'nat_kaning@yahoo.com'),
-  ('เวชกรรมสังคม', 'suppasarun33@gmail.com'),
-  ('เวชศาสตร์ฉุกเฉิน', 'alps209@gmail.com'),
-  ('ศัลยกรรม', 'dr-kj@hotmail.com'),
-  ('ศัลยกรรมออร์โธปิดิกส์', 'opaspmk@gmail.com'),
-  ('สูติ-นรีเวชกรรม', 'chsutjarit@gmail.com'),
-  ('โสต ศอ นาสิก', 'naruwat@yahoo.com'),
-  ('อาชีวเวชกรรม', 'pisit222@gmail.com'),
-  ('อายุรกรรม', 'meepoohjew@hotmail.com')
-on conflict (department) do update set head_email = excluded.head_email;
+-- SEED DATA REMOVED — do not re-add it here.
+--
+-- This file used to carry the full department -> head_email mapping inline.
+-- That is 18 named individuals' personal email addresses, and this repository
+-- is public, so the seed was published to the internet. Worse, those same
+-- addresses are the login allow-list (login is possession of the inbox, with
+-- no MFA), so the seed doubled as a target list.
+--
+-- The mapping now lives ONLY in the dept_heads table, which is where the file
+-- header above already says it should live. It is populated and edited through
+-- the Supabase Table Editor. The 18 rows were verified present and identical
+-- to this former seed before it was removed.
+--
+-- To (re)populate on a fresh project, run an insert with the real values
+-- pasted into the SQL Editor directly — never through a file in this repo.
+-- The DDL and grants above are the only part that belongs in version control.

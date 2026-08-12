@@ -56,8 +56,9 @@ test("returns null when no year found", () => {
 });
 
 test("falls back to email received date when no year found anywhere", () => {
-  // Reproduces the binkapisada@gmail.com case: name/month present in the
-  // body but no year in subject, body, filename, or sheet.
+  // Reproduces a real reported case: name/month present in the body but no
+  // year in subject, body, filename, or sheet. (The submitter's address used
+  // to be named here; removed — this repository is public.)
   assert.equal(
     resolveBeYear("P4P-Intern.xlsx", "P4P Int", "เดือน มิถุนายน", "2026-07-01T17:08:15+07:00"),
     2569

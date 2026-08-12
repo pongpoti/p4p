@@ -62,7 +62,12 @@ const CATCHUP_START_MONTH = "2569_05";
 // report covering that same set of departments too. Skipped only on TEST
 // runs (TEST_EMAIL_OVERRIDE set), which redirect the whole send to a test
 // address and must stay isolated from real inboxes.
-const OVERSIGHT_EMAIL = "pee_krp@hotmail.com";
+// Read from the environment, never hardcoded: this repository is public, and
+// a hardcoded value published a named individual's personal address. Set the
+// OVERSIGHT_EMAIL secret in GitHub Actions. Unset -> the oversight copy is
+// SKIPPED with a loud warning; the department-head reports still go out,
+// because those are the primary function and must not fail over this.
+const OVERSIGHT_EMAIL = (process.env.OVERSIGHT_EMAIL ?? "").trim();
 
 // ── Test-mode overrides (manual workflow_dispatch only, see process-pipeline.yml) ──
 // Restrict to specific department(s) and/or redirect the email to a test
@@ -355,7 +360,12 @@ export async function main() {
     // Oversight gets its OWN single email per month covering every department
     // just sent, sorted in Thai dictionary order — not a Bcc of each head's
     // email. Skipped on TEST runs (already redirected to the test address).
-    if (sentThisMonth.length > 0 && !TEST_EMAIL_OVERRIDE) {
+    if (sentThisMonth.length > 0 && !TEST_EMAIL_OVERRIDE && !OVERSIGHT_EMAIL) {
+      console.warn("    ⚠️   OVERSIGHT_EMAIL is not set — skipping the all-departments summary copy.");
+      summaryRows.push({ month: monthDisplay, dept: "(สรุปทุกกลุ่มงาน)", emailed: false, note: "ข้ามไป — ไม่ได้ตั้งค่า OVERSIGHT_EMAIL" });
+    }
+
+    if (sentThisMonth.length > 0 && !TEST_EMAIL_OVERRIDE && OVERSIGHT_EMAIL) {
       const sortedDepts = sortDeptsThai(sentThisMonth);
       const introText = `สรุปรายงานคะแนน P4P ของทุกกลุ่มงานที่ครบถ้วนแล้ว ประจำเดือน ` +
         `${monthDisplay} กดชื่อแพทย์เพื่อเปิดไฟล์ Excel บน Google Drive`;
@@ -374,7 +384,7 @@ export async function main() {
 
       await gmail.sendMessage({ to: OVERSIGHT_EMAIL, subject, body: plainBody, html });
       console.log(`    📧  ${maskEmail(OVERSIGHT_EMAIL)} — สรุปทุกกลุ่มงาน (${sortedDepts.length} กลุ่มงาน)`);
-      summaryRows.push({ month: monthDisplay, dept: "(สรุปทุกกลุ่มงาน)", emailed: true, note: `ส่งแล้ว — ${OVERSIGHT_EMAIL}` });
+      summaryRows.push({ month: monthDisplay, dept: "(สรุปทุกกลุ่มงาน)", emailed: true, note: `ส่งแล้ว — ${maskEmail(OVERSIGHT_EMAIL)}` });
     }
     console.log();
   }

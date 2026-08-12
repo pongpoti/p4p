@@ -58,11 +58,10 @@ jobs:
             fi
           done
 
-      - name: Upload run log
-        if: always()             # upload even if the run had errors
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-log-${{ github.run_number }}
-          path: automation/run.log
-          retention-days: 30
-          if-no-files-found: ignore
+      # Run-log artifact upload REMOVED. automation/index.js logs physician
+      # names per submission ("✅ Physician : <name>"), and artifacts on a
+      # public repository are downloadable by anyone — so a 30-day retention
+      # made this a rolling PII feed. The log is still written to disk and is
+      # visible in the job output to anyone with repo access; only the
+      # public, retained copy is gone. Re-enable only after names are
+      # redacted at the point of logging.
