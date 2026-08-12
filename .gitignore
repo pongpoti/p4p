@@ -6,6 +6,20 @@ node_modules/
 .env.*
 !.env.example
 
-# Contains real physician PII — data now lives in the Supabase
-# sender_physician_match table instead (see automation/sql/).
-sender-physician-match.csv
+# ── Physician data never belongs in this repository ────────────────────────
+# This repo is PUBLIC. Roster/submission data lives in Supabase; the tables
+# there are the source of truth (see SUPABASE_TABLES.md).
+#
+# This used to name a single file (sender-physician-match.csv). A denylist of
+# one filename does not generalise: csv_2569_01-04/ was added later and walked
+# straight past it, publishing 773 rows of name + department + score. So the
+# rule is now shape-based — ignore ALL csv/xlsx by default and opt individual
+# files back in only when they are demonstrably not personal data.
+*.csv
+*.xlsx
+*.xls
+
+# Opt-ins go here, e.g.:
+#   !test/fixtures/synthetic-roster.csv
+# .github/workflows/pii-guard.yml also fails any PR that adds a file whose
+# header looks like personal data, so an opt-in still has to be a real one.

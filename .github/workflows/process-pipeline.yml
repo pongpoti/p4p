@@ -70,14 +70,9 @@ jobs:
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
         run: node process.js
 
-      - name: Upload run log as artifact
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: run-log-${{ github.run_number }}
-          path: process/*.log
-          if-no-files-found: ignore
-          retention-days: 30
+      # Run-log artifact upload REMOVED — see .github/workflows/p4p-cron.yml
+      # for the reasoning. These logs carry physician names and this repo is
+      # public, so the retained artifact was readable by anyone.
 
   notify-dept-heads:
     name: Check completion & notify dept heads
@@ -117,6 +112,11 @@ jobs:
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
           # Department -> head email comes from the Supabase dept_heads
           # table (see automation/sql/dept_heads.sql), not a secret.
+          # Oversight summary recipient. Was hardcoded in score-tracker.mjs,
+          # which published a personal address in this public repo. If this
+          # secret is missing the summary copy is skipped with a warning and
+          # the dept-head reports still send.
+          OVERSIGHT_EMAIL:      ${{ secrets.OVERSIGHT_EMAIL }}
           # Google Drive root folder ID for P4P files (used to resolve per-physician links)
           P4P_FOLDER_ID:        ${{ secrets.P4P_FOLDER_ID }}
           # Manual-run test overrides — blank on the scheduled run (see workflow_dispatch inputs above)

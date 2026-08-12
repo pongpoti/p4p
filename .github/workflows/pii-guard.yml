@@ -1,0 +1,88 @@
+name: PII guard
+
+# Fails a pull request that adds personal data to this PUBLIC repository.
+#
+# History: 773 rows of physician name + department + score (csv_2569_01-04/)
+# and 18 department heads' personal email addresses (automation/sql/
+# dept_heads.sql) were both committed and published. .gitignore only named one
+# specific filename at the time, so neither was caught. This is the backstop
+# that does not depend on remembering to update a denylist.
+#
+# Scope: files ADDED or MODIFIED by the PR, not the whole tree — the history
+# still contains the original leak, and failing every run on that helps nobody.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  scan:
+    name: Scan changed files for personal data
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+
+          files=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA")
+          [ -z "$files" ] && { echo "No added/modified files."; exit 0; }
+
+          fail=0
+
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+
+            # Skip this workflow and the docs that necessarily discuss the
+            # leak, or the guard would flag its own explanation.
+            case "$f" in
+              .github/workflows/pii-guard.yml|.gitignore) continue ;;
+              DATA_EXPOSURE_ANALYSIS.md|SECURITY_ANALYSIS.md) continue ;;
+            esac
+
+            # 1. Tabular data files have no business being added at all.
+            case "$f" in
+              *.csv|*.xlsx|*.xls)
+                echo "::error file=$f::Spreadsheet/CSV added. Roster data belongs in Supabase, not in this public repo."
+                fail=1
+                continue
+                ;;
+            esac
+
+            # Only scan text.
+            file --mime "$f" | grep -q 'charset=binary' && continue
+
+            # 2. Real-looking personal email addresses. Consumer domains are
+            #    the tell — institutional aliases and example.com are fine.
+            hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null | sort -u || true)
+            if [ -n "$hits" ]; then
+              echo "::error file=$f::Personal email address(es) found. These are also the login allow-list; keep them in the dept_heads table."
+              echo "$hits" | sed 's/^/    /'
+              fail=1
+            fi
+
+            # 3. Thai personal names alongside a score/department column —
+            #    the shape of a roster export in any file format.
+            if grep -aqE '[ก-๙]{2,}[[:space:]]+[ก-๙]{2,}' "$f" 2>/dev/null \
+               && grep -aqiE '(score|คะแนน|department|แผนก|firstname|lastname)' "$f" 2>/dev/null; then
+              echo "::error file=$f::Looks like a physician roster (Thai names + score/department column)."
+              fail=1
+            fi
+          done <<< "$files"
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "PII guard failed. This repository is public."
+            echo "If a match is a false positive, add an explicit exception in this workflow"
+            echo "and say why in the PR description."
+            exit 1
+          fi
+
+          echo "PII guard passed — no personal data in the changed files."
