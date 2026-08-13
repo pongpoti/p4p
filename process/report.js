@@ -182,10 +182,9 @@ const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_
 //               - table: ชื่อ-นามสกุล | กลุ่มงาน
 //               - footnote merged row immediately below table
 // ═══════════════════════════════════════════════════════════════════
-async function buildExcel(monthGroups, runTime, allDepts) {
+async function buildExcel(monthGroups, runTime) {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
   // already in descending month order; rows sorted by Thai name asc
-  // allDepts: Set of every department seen in Supabase across all months
 
   const wb = new ExcelJS.Workbook();
   wb.creator  = 'Missing Submission Tracker';
@@ -200,11 +199,6 @@ async function buildExcel(monthGroups, runTime, allDepts) {
     const incompleteDeptSet = new Set();
     monthGroups.forEach(g => g.rows.forEach(r => incompleteDeptSet.add(r.department)));
     const incompleteDepts = sortDepartments([...incompleteDeptSet]);
-
-    // Departments where all physicians submitted (complete) — from allDepts minus incomplete
-    const completeDepts = sortDepartments(
-      [...(allDepts ?? [])].filter(d => !incompleteDeptSet.has(d))
-    );
 
     // Column layout: กลุ่มงาน | month1 | month2 | ...
     ws.columns = [
@@ -363,8 +357,6 @@ function buildHtml(group, runTime) {
           <td class="name">${escHtml(r.fullname)}</td>
           <td class="dept">${escHtml(r.department)}</td>
         </tr>`).join('');
-
-  const emptyMsg = '';
 
   return `<!DOCTYPE html>
 <html>
@@ -589,7 +581,6 @@ async function main() {
 
   // monthGroups: one entry per incomplete month, in descending order
   const monthGroups = [];
-  const allDeptSet  = new Set(); // all departments seen across all SB months
   let totalMissing  = 0;
 
   for (const monthInfo of months) {
@@ -605,9 +596,6 @@ async function main() {
       continue;
     }
     log(`  [SB] ${sbPersons.length} persons`);
-
-    // Accumulate all departments seen in Supabase
-    sbPersons.forEach(p => allDeptSet.add(p.department));
 
     // Fetch Drive file names
     const driveNames = await getDriveNameSet(drive, monthInfo);
@@ -646,7 +634,7 @@ async function main() {
   // Build and upload Excel
   const runTime = formatRunTime();
   log(`[Excel] Building workbook (ตรวจสอบเมื่อ: ${runTime})…`);
-  const buffer   = await buildExcel(monthGroups, runTime, allDeptSet);
+  const buffer   = await buildExcel(monthGroups, runTime);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Excel saved : ${uploaded.webViewLink}`);

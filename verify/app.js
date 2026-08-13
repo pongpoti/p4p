@@ -323,16 +323,16 @@
         const PENDING_KEY = "p4p_verify_pending"
         const PENDING_TTL = 15 * 60 * 1000 // 15 min — after this the OTP is likely dead
         const savePending  = (email) => {
-            try { localStorage.setItem(PENDING_KEY, JSON.stringify({ email, ts: Date.now() })) } catch (e) { /* storage blocked */ }
+            try { localStorage.setItem(PENDING_KEY, JSON.stringify({ email, ts: Date.now() })) } catch { /* storage blocked */ }
         }
         const clearPending = () => {
-            try { localStorage.removeItem(PENDING_KEY) } catch (e) { /* storage blocked */ }
+            try { localStorage.removeItem(PENDING_KEY) } catch { /* storage blocked */ }
         }
         const readPending  = () => {
             try {
                 const p = JSON.parse(localStorage.getItem(PENDING_KEY) || "null")
                 if (p && p.email && Date.now() - p.ts < PENDING_TTL) return p.email
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             clearPending()
             return null
         }

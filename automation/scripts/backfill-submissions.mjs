@@ -52,7 +52,7 @@ const CONCURRENCY    = 8;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 const addrOf = (fromHeader) =>
-  (fromHeader.match(/<(.+?)>/) ?? [, fromHeader])[1].trim().toLowerCase();
+  (fromHeader.match(/<(.+?)>/) ?? [null, fromHeader])[1].trim().toLowerCase();
 
 const isBot = (fromHeader) => BOT_ADDRESSES.has(addrOf(fromHeader));
 

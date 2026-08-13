@@ -871,7 +871,7 @@ async function main() {
 
     const msgBody   = msg.body?.trim() ?? "";
     const fromRaw   = msg.from ?? "";
-    const fromEmail = (fromRaw.match(/<(.+?)>/) ?? [, fromRaw])[1].trim().toLowerCase();
+    const fromEmail = (fromRaw.match(/<(.+?)>/) ?? [null, fromRaw])[1].trim().toLowerCase();
     const fromNameMatch    = fromRaw.match(/^(.*?)\s*<([^>]+)>\s*$/);
     const fromDisplayName  = fromNameMatch ? fromNameMatch[1].trim().replace(/^"(.*)"$/, "$1") : "";
 
@@ -891,7 +891,7 @@ async function main() {
           const threadMsgs = await gmail.getThreadMessages(msg.threadId);
           for (const tm of [...threadMsgs].reverse()) {
             if (tm.msg.id === id) continue;
-            const tmEmail = (tm.msg.from.match(/<(.+?)>/) ?? [, tm.msg.from])[1].trim().toLowerCase();
+            const tmEmail = (tm.msg.from.match(/<(.+?)>/) ?? [null, tm.msg.from])[1].trim().toLowerCase();
             if (THREAD_RELAY_SENDERS.has(tmEmail)) continue; // skip other relay messages
             const xlsxInMsg = tm.attachments.filter((a) => isExcelFile(a.mimeType, a.filename));
             if (xlsxInMsg.length > 0) {

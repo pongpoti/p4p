@@ -166,8 +166,10 @@ export function resolveBeMonth(filename, subject, body) {
 }
 
 // ── JS-side physician name resolver ───────────────────────────────────────
-// Thai title prefixes to strip before returning a name
-const TITLE_PREFIX_RE = /^(?:นพ\.|พญ\.|นายแพทย์\s*|แพทย์หญิง\s*|ทพ\.|ทพญ\.|ดร\.|Dr\.\s*|Prof\.\s*|Mr\.\s*|Mrs\.\s*)/;
+// (A TITLE_PREFIX_RE constant used to sit here. Nothing referenced it: title
+// stripping is done by Pattern 1's `titleRe`, which captures the name AFTER the
+// title rather than removing it, and by the `deTitled` replace ahead of
+// Pattern 2. Both are in extractNameFromText below.)
 
 // Thai words that are not physician names (common non-name tokens in filenames/subjects)
 const NON_NAME_THAI = new Set([

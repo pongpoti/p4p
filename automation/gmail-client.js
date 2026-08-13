@@ -6,7 +6,6 @@
  */
 
 import { google }   from "googleapis";
-import { Readable } from "stream";
 
 // ── Build a pre-authorised OAuth2 client ──────────────────────────────────
 function createAuthClient() {
@@ -132,6 +131,7 @@ export function createGmailClient() {
 
     // Encode non-ASCII header values per RFC 2047 (e.g. Thai text in subject)
     const encodeHeader = (str) =>
+      // eslint-disable-next-line no-control-regex -- negated ASCII range, not a control-char match
       /[^\x00-\x7F]/.test(str)
         ? `=?utf-8?B?${Buffer.from(str, "utf8").toString("base64")}?=`
         : str;

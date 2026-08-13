@@ -17,7 +17,6 @@
  */
 
 import { google }        from "googleapis";
-import { createClient }  from "@supabase/supabase-js";
 import { config as dotenvConfig } from "dotenv";
 
 import { createGmailClient }                                       from "../gmail-client.js";
