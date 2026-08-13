@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { SUPABASE_URL, serverEnv } from "@/lib/config"
+import { validWebhookSecret } from "@/lib/telegram/auth"
 
 export const runtime = "nodejs"
 
@@ -33,18 +34,16 @@ interface CallbackQuery {
 }
 
 export async function POST(request: Request) {
+  // See lib/telegram/auth.ts. Rejects when the secret is unset, not just when
+  // it mismatches. Log LENGTHS only, never the values — a length mismatch is a
+  // strong sign of a copy-paste truncation between where the secret was set
+  // and where it was registered with setWebhook.
   const received = (request.headers.get("x-telegram-bot-api-secret-token") ?? "").trim()
-  const expected = (serverEnv.telegramWebhookSecret() ?? "").trim()
-
-  // Telegram echoes back the secret set via setWebhook in this header — the
-  // only real proof a request came from Telegram and not a guessed URL. Trim
-  // both sides so an accidental trailing space (easy to introduce pasting into
-  // an env var UI) doesn't cause a false mismatch. Log LENGTHS only, never the
-  // values — a length mismatch is a strong sign of a copy-paste truncation.
-  if (received !== expected) {
+  if (!validWebhookSecret(received)) {
+    const expectedLen = (serverEnv.telegramWebhookSecret() ?? "").trim().length
     console.log(
       `[tg-webhook] REJECTED: secret mismatch. received len=${received.length} ` +
-        `expected len=${expected.length} (configured=${Boolean(expected)})`,
+        `expected len=${expectedLen} (configured=${expectedLen > 0})`,
     )
     return new NextResponse(null, { status: 401 })
   }

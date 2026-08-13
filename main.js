@@ -192,7 +192,7 @@ function readSessionCookie(req) {
     // rather than falling through to using the raw JSON string itself as a
     // (bogus) refresh token.
     return (o && o.rt) ? { at: o.at || null, rt: o.rt } : null
-  } catch (e) {
+  } catch {
     // Legacy cookie held a bare refresh token (pre-JSON format).
     return { at: null, rt: raw }
   }
@@ -204,7 +204,7 @@ function jwtPayload(token) {
   try {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
     return JSON.parse(Buffer.from(b64, "base64").toString("utf8"))
-  } catch (e) { return {} }
+  } catch { return {} }
 }
 function jwtExp(token) { return typeof jwtPayload(token).exp === "number" ? jwtPayload(token).exp : 0 }
 
@@ -335,7 +335,7 @@ async function resolveAccessToken(req, res) {
       at = r.data && r.data.access_token
       if (!at) throw new Error("no access_token in refresh response")
       setSessionCookie(res, at, r.data.refresh_token || sess.rt)
-    } catch (e) {
+    } catch {
       clearSessionCookie(res)
       return { at: null, reason: "expired" }
     }
@@ -541,7 +541,7 @@ app.post("/auth/session", express.json({ limit: "8kb" }), async (req, res) => {
     await axios.get(SUPABASE_URL + "/auth/v1/user", {
       headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + access_token }, timeout: 8000,
     })
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: "invalid token" })
   }
   setSessionCookie(res, access_token, refresh_token)
@@ -574,7 +574,7 @@ app.post("/line/bind", express.json({ limit: "8kb" }), async (req, res) => {
       headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + at }, timeout: 8000,
     })
     email = u.data && u.data.email
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: "invalid session" })
   }
   if (!email) return res.status(401).json({ error: "no email on session" })
@@ -833,7 +833,20 @@ app.post("/telegram/webhook", express.json({ limit: "64kb" }), async (req, res) 
   // mismatch. Log LENGTHS only (never the values) — a length mismatch is a
   // strong sign of a copy-paste truncation between where the secret was set
   // (Vercel) and where it was registered (the setWebhook call).
-  if (receivedSecret !== expectedSecret) {
+  //
+  // The empty-secret case is checked FIRST and separately. With
+  // TELEGRAM_WEBHOOK_SECRET unset, expectedSecret is "" and a request carrying
+  // no header at all compares equal — the handler below then approves or
+  // rejects access requests through a service-role RPC for anyone who guesses
+  // this URL. Same reasoning as ADMIN_KEY_USABLE above: a missing env var must
+  // disable the endpoint, never open it.
+  if (!expectedSecret) {
+    console.error("[tg-webhook] REJECTED: TELEGRAM_WEBHOOK_SECRET is not set — " +
+      "refusing every callback (a missing secret is not a match)")
+    return res.sendStatus(401)
+  }
+  if (receivedSecret.length !== expectedSecret.length ||
+      !crypto.timingSafeEqual(Buffer.from(receivedSecret), Buffer.from(expectedSecret))) {
     console.log(
       "[tg-webhook] REJECTED: secret mismatch. received len=" + receivedSecret.length +
       " expected len=" + expectedSecret.length + " (configured=" + !!TELEGRAM_WEBHOOK_SECRET + ")"
