@@ -1,0 +1,50 @@
+name: lint
+
+# `npm run lint` existed but no workflow ever ran it, so nothing noticed when
+# the config stopped covering automation/ and process/. Those directories
+# matched no `files` block, fell back to the bare recommended config with no
+# globals declared, and reported every `require`/`process`/`console` in them as
+# no-undef — ~570 false positives on a clean tree. A lint script that always
+# exits non-zero is one nobody reads, which is how the handful of real findings
+# underneath went unseen. Running it in CI is what keeps that from recurring.
+#
+# web/ is excluded by eslint.config.mjs and covered by its own workflow
+# (web-tests.yml runs typecheck + build against the TypeScript toolchain).
+
+on:
+  push:
+    paths:
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "eslint.config.mjs"
+      - "package.json"
+      - ".github/workflows/lint.yml"
+  pull_request:
+    paths:
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "eslint.config.mjs"
+      - "package.json"
+      - ".github/workflows/lint.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint

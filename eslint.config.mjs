@@ -22,10 +22,27 @@ export default [
   },
 
   // Build / admin scripts — ESM, Node globals, top-level await.
+  // `automation/` declares "type": "module" in its own package.json, so its
+  // plain .js files are ESM too and belong here rather than with main.js.
   {
-    files: ["scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs", "automation/**/*.js", "automation/**/*.mjs"],
     languageOptions: {
       sourceType: "module",
+      ecmaVersion: "latest",
+      globals: { ...globals.node },
+    },
+  },
+
+  // The SK03 pipeline — CommonJS, Node globals. Same situation the browser
+  // block below describes: these directories matched no `files` block at all,
+  // so every `require`, `process` and `console` in them was reported as
+  // no-undef. Between them and automation/ that was ~570 false positives, which
+  // is why `npm run lint` exited non-zero on a clean tree and had stopped being
+  // a signal anyone could act on.
+  {
+    files: ["process/**/*.js"],
+    languageOptions: {
+      sourceType: "commonjs",
       ecmaVersion: "latest",
       globals: { ...globals.node },
     },
