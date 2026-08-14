@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@supabase/supabase-js": "^2.49.0",
+    "@supabase/supabase-js": "^2.112.3",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",
     "googleapis": "^144.0.0",
