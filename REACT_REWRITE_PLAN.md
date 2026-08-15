@@ -1,5 +1,19 @@
 # React Rewrite Plan — P4P LIFF Front End
 
+> **2026-08 update — the auth model this plan targets has changed.**
+> Everywhere below that says "transcribed from `main.js`, no behaviour
+> changes" for the gate/bind/verify logic no longer applies: `main.js`
+> itself was rewritten (see `scripts/auth-rewrite-2026-08.sql`,
+> `supabase/functions/line-verify`, and `SECURITY_ANALYSIS.md`'s
+> superseded-notice) to drop `LINE_BIND_ENFORCE`, the bind-attempt/fail-open
+> machinery, the bind-loop cookie, and `/line/bind` + `/line/silent-auth` as
+> routes on this server — LINE verification and the `physicians` write now
+> live in a Supabase Edge Function, called directly from the browser. Phase
+> 1 and Phase 5 below should port the **new**, simpler design (one boolean
+> gate check, no bind step in `/verify/`'s UI, LINE identity captured once on
+> load and reused) rather than reproduce the old state machine this plan
+> describes in detail. The URL-shape and CSP contracts in §1 are unaffected.
+
 **Status:** Phases 0–4 implemented in [`web/`](web/). Phases 5–7 proposed.
 **Scope:** the four physician pages (`/verify/`, `/status/`, `/list/`, `/ranking/`), the
 **`/admin/` roster dashboard** (§1a), the shared browser helpers in `assets/`, and the HTTP

@@ -15,31 +15,76 @@
 
         const db = supabase.createClient(P4P.SUPABASE_URL, P4P.SUPABASE_KEY, P4P.SUPABASE_OPTS)
 
-        // ── LINE userId binding — REQUIRED, not best-effort ─────────────────────
-        // Business rule: we must know every physician's LINE userId as of their
-        // first verification. liff.init() itself can still fail silently (no
-        // LINE-side consequence if it does — see attemptLineBind/runLineBindFlow
-        // below for how a failure is actually handled: retried, then — after
-        // BIND_ATTEMPT_LIMIT tries recorded server-side — let through anyway with
-        // an admin alert, so a genuine device/permission problem can't lock a
-        // physician out of a monthly-use tool forever).
+        // ── LINE identity capture ────────────────────────────────────────────
+        // Traceability only — matching a LINE account to a verified email — not
+        // a second auth factor. Email OTP alone is sufficient to log in; a
+        // missing or unavailable LINE ID token here never blocks that. See
+        // scripts/auth-rewrite-2026-08.sql and supabase/functions/line-verify,
+        // which owns all LINE verification now (not this app's own server).
         //
         // Dedicated LIFF app for THIS page. liff.init() requires the current
         // page to match the LIFF app's registered Endpoint URL — it is NOT
         // enough for the id to belong to the same LINE channel. /verify/ is
         // reached via an internal 302 redirect from /status, /ranking, or
-        // /list (each of which has ITS OWN LIFF app + endpoint — see
-        // scripts/setup-richmenu.mjs / scripts/update-month-picker.mjs), so
-        // initializing with any of THOSE ids here failed with "Invalid LIFF
-        // ID" / INIT_FAILED regardless of entry point. This id's Endpoint
-        // URL is set to /verify/ specifically, matching where this actually runs.
+        // /list (each of which has ITS OWN LIFF app + endpoint), so
+        // initializing with any of THOSE ids here fails with "Invalid LIFF
+        // ID" regardless of entry point. This id's Endpoint URL is set to
+        // /verify/ specifically, matching where this actually runs. It needs
+        // BOTH the `profile` and `openid` scopes enabled in the LINE
+        // Developers console — liff.getIDToken() returns null without
+        // `openid`, handled below as a no-op rather than an error.
         const LIFF_ID = "2008561527-AShTrJz0"
-        let liffInitError = null
         const liffReady = liff.init({ liffId: LIFF_ID }).then(() => true).catch((err) => {
             console.warn("liff.init failed:", err)
-            liffInitError = err
             return false
         })
+
+        async function getLineIdToken() {
+            const inited = await liffReady
+            if (!inited || !liff.isLoggedIn()) return null
+            try { return liff.getIDToken() || null } catch (err) { return null }
+        }
+
+        // Bounded so a slow/hanging liff.init() can't stall a visitor who has
+        // nothing to gain from it (never bound, or not really in LINE) — they
+        // still need to reach the email form eventually.
+        function withTimeout(promise, ms, fallback) {
+            return Promise.race([
+                promise,
+                new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+            ])
+        }
+
+        // POST to the Supabase Edge Function that owns all LINE verification —
+        // see supabase/functions/line-verify. Never same-origin: this app's own
+        // server (main.js) has no LINE-verification code path at all anymore.
+        async function callLineVerify(payload) {
+            try {
+                const resp = await fetch(P4P.SUPABASE_URL + "/functions/v1/line-verify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", apikey: P4P.SUPABASE_KEY },
+                    body: JSON.stringify(payload),
+                })
+                return await resp.json()
+            } catch (err) {
+                console.warn("line-verify call failed:", err)
+                return { ok: false }
+            }
+        }
+
+        // Hands a session's tokens to this app's own server, which stashes the
+        // refresh token in an HttpOnly cookie — the LIFF in-app browser doesn't
+        // reliably persist its own storage across navigations/launches, so the
+        // server holds the session instead (see main.js). This is now the ONLY
+        // thing /auth/session does.
+        async function establishSession(accessToken, refreshToken) {
+            const resp = await fetch("/auth/session", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
+            })
+            if (!resp.ok) throw new Error("session POST failed: " + resp.status)
+        }
 
         // ── Return target (open-redirect safe) ────────────────────────────────
         // Only accept same-origin paths: a single leading "/" that is not "//"
@@ -66,24 +111,17 @@
         const reqEmail    = document.getElementById("req-email")
         const requestSubmit = document.getElementById("request-submit")
         const requestBack = document.getElementById("request-back")
-        const bindStep       = document.getElementById("bind-step")
-        const bindStatusText = document.getElementById("bind-status-text")
-        const bindRetryBtn   = document.getElementById("bind-retry-btn")
-        const bindDebugLog   = document.getElementById("bind-debug-log")
         const msg         = document.getElementById("msg")
         const emailLoadingDots = document.getElementById("email-loading-dots")
 
         let currentEmail = ""
+        // Best-effort LINE ID token for this page load, captured once (on
+        // boot) and reused both for the silent-reauth attempt below and, if
+        // that doesn't apply, for the traceability bind after OTP succeeds —
+        // one liff.getIDToken() call, not two.
+        let capturedIdToken = null
 
         // ── Helpers ───────────────────────────────────────────────────────────
-        // Declared here (before the bind-only early-return below) rather than
-        // further down: the bind flow's async callbacks reference these, and if
-        // bind-only mode returns early, a `const` declared after that return
-        // point is never reached — a later reference to it from an already-
-        // in-flight async callback throws (temporal dead zone), which was
-        // silently swallowed into the bind flow's own .catch() as a false
-        // "bind failed" the first time this shipped. Keep these above ANY early
-        // return in this file.
         const showError  = (text) => { msg.className = "msg error";  msg.textContent = text }
         const showOk     = (text) => { msg.className = "msg ok";     msg.textContent = text }
         const showNotice = (text) => { msg.className = "msg notice"; msg.textContent = text }
@@ -93,217 +131,12 @@
             btn.innerHTML = on ? '<span class="spinner"></span>' + label : label
         }
 
-        // ── Shared LINE-bind flow — used by BOTH entry points ───────────────────
-        //   1. Fresh OTP verify (codeStep handler): token = data.session.access_token
-        //   2. Silent bind bounce (server injected <meta name="p4p-session">):
-        //      token = the injected token, no OTP involved at all
-        // A retry here must NEVER re-run verifyOtp() — OTP codes are single-use,
-        // so retrying the whole form would fail on the already-consumed code.
-        // Instead the retry button just re-attempts the bind itself with the
-        // SAME still-valid access token.
-        function buildAuthedClient(accessToken) {
-            return supabase.createClient(P4P.SUPABASE_URL, P4P.SUPABASE_KEY, {
-                // Don't reuse `db` / rely on supabase-js's own session bookkeeping —
-                // this project already found that unreliable inside LINE's in-app
-                // webview (same reason /auth/session extracts tokens directly
-                // instead of trusting client-side persistence). Attaching the
-                // token explicitly as a header works regardless of that quirk.
-                auth: { persistSession: false, autoRefreshToken: false },
-                global: { headers: { Authorization: `Bearer ${accessToken}` } },
-            })
-        }
-
-        // Describes ANY error (JS Error, Supabase PostgrestError, string, etc.)
-        // into one readable line — used for the on-screen debug log below, since
-        // the physician's device is otherwise a black box with no console access.
-        function describeError(err) {
-            if (!err) return "unknown error"
-            const parts = []
-            if (err.message) parts.push(err.message)
-            if (err.details) parts.push("details: " + err.details)
-            if (err.hint) parts.push("hint: " + err.hint)
-            if (err.code) parts.push("code: " + err.code)
-            // Dump every OTHER own-enumerable property too — the fixed
-            // message/details/hint/code list above covers Supabase/PostgREST
-            // errors, but a LIFF SDK error may carry additional fields (e.g.
-            // a more specific sub-reason) that this was silently dropping,
-            // which is exactly the information needed to pin down why
-            // liff.init() rejects a same-page-endpoint LIFF id.
-            const known = new Set(["message", "details", "hint", "code"])
-            for (const key of Object.keys(err)) {
-                if (known.has(key)) continue
-                try {
-                    const val = typeof err[key] === "object" ? JSON.stringify(err[key]) : String(err[key])
-                    parts.push(`${key}: ${val}`)
-                } catch { /* unstringifiable — skip */ }
-            }
-            return parts.length ? parts.join(" | ") : String(err)
-        }
-
-        async function attemptLineBind(accessToken) {
-            const inited = await liffReady
-            if (!inited) {
-                // Surface exactly what was attempted, not just the error —
-                // the previous "Invalid LIFF ID" report gave no way to
-                // confirm the id/URL actually in play at failure time.
-                throw new Error(
-                    "liff.init failed: " + describeError(liffInitError) +
-                    ` | liffId used: ${LIFF_ID}` +
-                    ` | page URL: ${location.href}`
-                )
-            }
-            if (!liff.isLoggedIn()) throw new Error("liff.isLoggedIn() returned false")
-
-            // An ID TOKEN, not getProfile(). getProfile() returns plain JSON
-            // that this page could put any value into — the old flow passed
-            // its userId straight to bind_line_user_id(), so the browser was
-            // asserting its own LINE identity and the "binding" proved nothing.
-            // An ID token is signed by LINE and verified server-side in
-            // main.js (POST /line/bind), so the userId that gets stored is one
-            // LINE vouched for. See scripts/line-bind-verified.sql.
-            const idToken = liff.getIDToken()
-            if (!idToken) {
-                throw new Error(
-                    "liff.getIDToken() returned null — the LIFF app is almost certainly " +
-                    "missing the `openid` scope (getProfile only needs `profile`). " +
-                    "Enable it for LIFF id " + LIFF_ID + " in the LINE Developers console."
-                )
-            }
-
-            const resp = await fetch("/line/bind", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: "Bearer " + accessToken,
-                },
-                body: JSON.stringify({ id_token: idToken }),
-            })
-            const body = await resp.json().catch(() => ({}))
-
-            // A mismatch is NOT a retryable failure — it means a different,
-            // LINE-verified account is presenting itself for this email. The
-            // server has already refused it and alerted the admin. Flagged so
-            // runLineBindFlow can avoid burning a bind attempt on it: those
-            // attempts exist for device/permission problems, and letting a
-            // mismatch count down to the fail-open limit would hand an
-            // attacker exactly the bypass this whole change removes.
-            if (resp.status === 403 && body.status === "mismatch") {
-                const mismatchErr = new Error("LINE account does not match the one bound to this email")
-                mismatchErr.mismatch = true
-                throw mismatchErr
-            }
-            if (!resp.ok) {
-                throw new Error("/line/bind failed: " + resp.status + " " + JSON.stringify(body))
-            }
-        }
-
-        // Records one failed attempt server-side and returns the running count.
-        // If the RPC call itself can't even be reached, fail OPEN (treat as if
-        // the limit were hit) — a physician must never be trapped by a failure
-        // in the failure-recording mechanism itself.
-        async function recordBindFailure(accessToken) {
-            try {
-                const { data, error } = await buildAuthedClient(accessToken).rpc("record_bind_failure")
-                if (error) throw error
-                return typeof data === "number" ? data : BIND_ATTEMPT_LIMIT
-            } catch (err) {
-                console.warn("record_bind_failure failed:", err)
-                return BIND_ATTEMPT_LIMIT
-            }
-        }
-
-        const BIND_ATTEMPT_LIMIT = 3
-        let currentBindToken = null
-
-        // Drives the bind-step UI end to end: attempt -> success (redirect) or
-        // failure -> record it -> under the limit (show retry) or at the limit
-        // (let them through anyway; scripts/line-bind-gate.sql already fired a
-        // one-time Telegram alert to the admin at that point).
-        function runLineBindFlow(accessToken) {
-            currentBindToken = accessToken
-            emailStep.classList.add("hidden")
-            codeStep.classList.add("hidden")
-            requestStep.classList.add("hidden")
-            bindStep.classList.remove("hidden")
-            bindRetryBtn.classList.add("hidden")
-            bindStatusText.innerHTML = '<span class="spinner spinner-dark"></span>กำลังยืนยันบัญชี LINE ของท่าน โปรดรอสักครู่...'
-
-            attemptLineBind(accessToken).then(() => {
-                showOk("ยืนยันสำเร็จ กำลังนำท่านเข้าสู่ระบบ...")
-                location.replace(RETURN_TO)
-            }).catch(async (err) => {
-                console.warn("LINE bind failed:", err)
-                const ts = new Date().toISOString().slice(11, 19)
-                bindDebugLog.textContent += `[${ts}] ${describeError(err)}\n`
-                bindDebugLog.classList.remove("hidden")
-
-                // Verified-but-different LINE account: stop here. No retry, no
-                // attempt recorded, no redirect — the admin has been alerted
-                // and only they can clear the binding (see the runbook at the
-                // end of scripts/line-bind-verified.sql).
-                if (err && err.mismatch) {
-                    showError("บัญชี LINE ของท่านไม่ตรงกับที่ลงทะเบียนไว้")
-                    bindStatusText.textContent =
-                        "ระบบตรวจพบว่าท่านเข้าใช้งานจากบัญชี LINE อื่น กรุณาติดต่อผู้ดูแลระบบ"
-                    bindRetryBtn.classList.add("hidden")
-                    return
-                }
-
-                const attempts = await recordBindFailure(accessToken)
-                if (attempts >= BIND_ATTEMPT_LIMIT) {
-                    bindStatusText.textContent = "ข้ามขั้นตอนนี้ชั่วคราว กำลังนำท่านเข้าสู่ระบบ..."
-                    setTimeout(() => location.replace(RETURN_TO), 1200)
-                } else {
-                    bindStatusText.textContent = "ไม่สามารถยืนยันบัญชี LINE ได้ กรุณาลองใหม่อีกครั้ง"
-                    bindRetryBtn.classList.remove("hidden")
-                }
-            })
-        }
-        bindRetryBtn.addEventListener("click", () => runLineBindFlow(currentBindToken))
-
-        // ── Silent-bind bounce ───────────────────────────────────────────────────
-        // main.js redirects an already-verified-but-unbound session here with a
-        // real access token injected into <meta name="p4p-session"> (see
-        // servePage's "bind_required" case) instead of the usual placeholder.
-        // When that's the case, skip straight to the bind flow — no email/OTP
-        // entry needed, this person is already logged in.
-        const sessionMeta = document.querySelector('meta[name="p4p-session"]')
-        const injectedToken = sessionMeta ? sessionMeta.getAttribute("content") : ""
-        if (injectedToken && injectedToken !== "__P4P_ACCESS_TOKEN__") {
-            runLineBindFlow(injectedToken)
-            return
-        }
-
-        // The email input starts disabled with loading dots showing over it.
-        // Previously this was just a fixed 5s cosmetic delay before handing
-        // control to the user. It is now driven by the silent LINE reauth
-        // attempt below — see showEmailForm(), which is what actually
-        // re-enables it. Declared here (rather than inline below) because
-        // sanitizeName/PENDING_KEY/otpBoxes etc. all sit between here and
-        // where the reauth attempt is wired up, and this line documents the
-        // very first thing that happens on a fresh page load.
-        emailInput.disabled = true
-
         // ── Physician name (request-access step) ────────────────────────────────
-        // This used to be a <select> populated from list_all_physicians(), which
-        // unions every YYYY_MM roster and returns all ~250 physician names. That
-        // RPC is callable by `anon` — it has to be, because this step runs before
-        // login — so the dropdown handed the hospital's entire physician roster
-        // to anyone holding the publishable key, which is (correctly) published in
-        // page source. RLS restricts firstname/lastname to allow-listed
-        // authenticated users; that SECURITY DEFINER function bypassed it
-        // entirely. It was the only confirmed PII-to-internet path in the app.
-        //
-        // It is now a plain text field: nothing about the roster crosses the wire.
-        // The admin already gets name + email in the Telegram approval alert, so
-        // the dropdown was only ever saving them from typos — not worth publishing
-        // the roster for. sanitizeName() below mirrors the server-side cleaning in
-        // log_access_request(), which is the check that actually counts (the RPC
-        // is anon-callable directly, so client validation is advisory only).
-
-        // Strip control characters — including newlines, which would otherwise let
-        // a submitted "name" forge extra lines in the admin's Telegram message —
-        // collapse whitespace, and cap the length.
+        // Free text, not a roster dropdown — see SECURITY_ANALYSIS.md §2a for
+        // why the dropdown this used to be was removed (it leaked all ~250
+        // physician names to `anon`). sanitizeName() mirrors the server-side
+        // cleaning in log_access_request(), which is the check that actually
+        // counts (the RPC is anon-callable directly, so this is advisory only).
         const NAME_MAX = 100
         function sanitizeName(raw) {
             return (
@@ -399,76 +232,11 @@
         }
 
         // Why did the server send us here? "expired" = the session lapsed;
-        // "blocked" = revoked via blocked_emails (a valid session is not enough —
-        // main.js re-checks the denylist on every gated-page request); "no_session"
-        // is the everyday logged-out case and stays silent; "gate_unavailable"
-        // means the gate RPC itself couldn't be reached.
+        // "blocked" = revoked (physicians.active = false) — a valid session is
+        // not enough, main.js re-checks on every gated-page request; "no_session"
+        // is the everyday logged-out case and stays silent.
         const bounceReason = new URLSearchParams(location.search).get("reason")
         const reasonShown = bounceReason === "expired" || bounceReason === "blocked"
-
-        // ── Silent LINE reauth ────────────────────────────────────────────────
-        // Incident (2026-08): a physician who had already bound a LINE account
-        // was still landing on this plain email form on every visit. The cause
-        // had nothing to do with the bind itself — is_bound is only ever
-        // consulted once a session already exists, and these physicians had NO
-        // session cookie at all by the time they reopened the app. Production
-        // auth logs showed the same bound account creating a brand-new session
-        // every time it reopened, sometimes only hours after its previous
-        // session had refreshed successfully — the cookie was not surviving a
-        // fresh LIFF launch, most plausibly because LINE gives each
-        // chat-triggered launch its own non-persistent webview storage. No
-        // cookie attribute fixes that: the browser instance that held it is
-        // simply gone by the next tap.
-        //
-        // What DOES survive across launches is LINE's own login — liff.init()
-        // and liff.getIDToken() keep working regardless, because that is tied
-        // to the LINE app account, not this webview's storage. So before
-        // showing the form at all, ask POST /line/silent-auth (see main.js) to
-        // resume a session via that: it verifies the ID token with LINE, looks
-        // up the email it was already bound to (never creates a binding — only
-        // resumes one the real email+OTP+ID-token flow already established),
-        // and mints a fresh Supabase session server-side. No email is sent, no
-        // OTP is typed, and an unbound LINE account just falls through to the
-        // form exactly as before.
-        //
-        // Deliberately SKIPPED for "blocked" and "gate_unavailable": retrying
-        // either would just mint a session the gate immediately rejects (or
-        // hit a live outage again), and a client that kept retrying on
-        // "blocked" specifically could loop — mint a session, get bounced back
-        // here with the same reason, try again. The server independently
-        // refuses to mint a session for a blocked email regardless of what
-        // this check does, but there is no reason to even make the round trip
-        // in these two cases.
-        const pendingEmail = readPending()
-        const skipSilentReauth = Boolean(pendingEmail) || bounceReason === "blocked" || bounceReason === "gate_unavailable"
-
-        async function attemptSilentLineReauth() {
-            const inited = await liffReady
-            if (!inited || !liff.isLoggedIn()) return false
-            const idToken = liff.getIDToken()
-            if (!idToken) return false
-            try {
-                const resp = await fetch("/line/silent-auth", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ id_token: idToken }),
-                })
-                return resp.ok
-            } catch (err) {
-                console.warn("silent LINE reauth failed:", err)
-                return false
-            }
-        }
-
-        // Bounded so a slow/hanging liff.init() can't stall a visitor who has
-        // nothing to gain from this check (never bound, or not in LINE at all)
-        // indefinitely — they still need to reach the email form eventually.
-        function withTimeout(promise, ms) {
-            return Promise.race([
-                promise,
-                new Promise((resolve) => setTimeout(() => resolve(false), ms)),
-            ])
-        }
 
         function showEmailForm() {
             emailInput.disabled = false
@@ -480,16 +248,56 @@
             }
         }
 
+        // The email input starts disabled with loading dots showing over it,
+        // re-enabled by showEmailForm() once the silent-reauth attempt below
+        // (or the timeout guarding it) settles.
+        emailInput.disabled = true
+
+        // ── Silent LINE reauth ────────────────────────────────────────────────
+        // For a RETURNING bound physician, LINE's own (persistent) login can
+        // resume a session with no email typed and no OTP sent — via the Edge
+        // Function's mode:"silent", which looks up the LINE account against
+        // `physicians` and mints a session if it's bound and active. A
+        // first-time or unbound visitor just falls through to the email form;
+        // that's the normal case, not an error.
+        async function attemptSilentLineReauth(idToken) {
+            if (!idToken) return false
+            const result = await callLineVerify({ mode: "silent", id_token: idToken })
+            if (!result || !result.ok || !result.session) return false
+            try {
+                await establishSession(result.session.access_token, result.session.refresh_token)
+                return true
+            } catch (err) {
+                console.warn("silent reauth session establish failed:", err)
+                return false
+            }
+        }
+
+        const pendingEmail = readPending()
+        // Skip only for "blocked" — retrying after "expired" is exactly the
+        // recovery path this exists for (session died, LINE still knows you).
+        // The Edge Function independently refuses to mint a session for a
+        // revoked email regardless, so this is a courtesy, not the real gate.
+        const skipSilentReauth = bounceReason === "blocked"
+
+        const idTokenPromise = withTimeout(getLineIdToken(), 4000, null).then((t) => {
+            capturedIdToken = t
+            return t
+        })
+
         if (pendingEmail) {
             // A verification was in progress before a reload — restore the code
             // step. Unaffected by silent reauth: we're already mid-flow for a
-            // specific email, so there is nothing to resume in its place.
+            // specific email, so there is nothing to resume in its place. The
+            // id-token capture above still runs in the background so it's ready
+            // if the OTP step below wants to attach it.
             goToCodeStep(pendingEmail)
             if (!reasonShown) showOk("กรุณากรอกรหัสยืนยันที่ส่งไปยังอีเมลของท่าน")
         } else if (skipSilentReauth) {
-            showEmailForm()
+            idTokenPromise.then(showEmailForm)
         } else {
-            withTimeout(attemptSilentLineReauth(), 4000).then((ok) => {
+            idTokenPromise.then(async (idToken) => {
+                const ok = await attemptSilentLineReauth(idToken)
                 if (ok) {
                     showOk("ยืนยันสำเร็จ กำลังนำท่านเข้าสู่ระบบ...")
                     location.replace(RETURN_TO)
@@ -512,10 +320,9 @@
             }
             busy(emailSubmit, true, "กำลังส่ง...")
             try {
-                // Only allow-listed physicians (in physician_directory or
-                // sender_physician_match) may proceed. Checked via a SECURITY
-                // DEFINER RPC that returns just a boolean, so the email list is
-                // never exposed.
+                // Only allow-listed physicians (active in `physicians`) may
+                // proceed. Checked via a SECURITY DEFINER RPC that returns just
+                // a boolean, so the email list is never exposed.
                 const { data: allowed, error: rpcErr } =
                     await db.rpc("is_sender_allowlisted", { p_email: email })
                 if (rpcErr) throw rpcErr
@@ -572,21 +379,27 @@
                 // Hand the tokens to the SERVER, which stores the refresh token in
                 // an HttpOnly cookie and validates every page request. The browser
                 // never persists a session itself (unreliable in LINE's webview).
-                const resp = await fetch("/auth/session", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        access_token: data.session.access_token,
-                        refresh_token: data.session.refresh_token,
-                    }),
-                })
-                if (!resp.ok) throw new Error("session POST failed: " + resp.status)
+                await establishSession(data.session.access_token, data.session.refresh_token)
 
-                // Session is live at this point. Binding the LINE userId is now a
-                // REQUIRED step, not best-effort — runLineBindFlow takes over the UI
-                // from here (retry-on-failure, then give up after BIND_ATTEMPT_LIMIT
-                // and let them through) and handles the final redirect itself.
-                runLineBindFlow(data.session.access_token)
+                // Best-effort LINE traceability (matching this email to a LINE
+                // account) — never a login condition. Awaited so it actually
+                // completes before the redirect below can cancel it in flight,
+                // but its failure is swallowed: the physician is already signed
+                // in at this point regardless of whether this succeeds.
+                if (capturedIdToken) {
+                    try {
+                        await callLineVerify({
+                            mode: "bind",
+                            access_token: data.session.access_token,
+                            id_token: capturedIdToken,
+                        })
+                    } catch (err) {
+                        console.warn("line bind (traceability) failed:", err)
+                    }
+                }
+
+                showOk("ยืนยันสำเร็จ กำลังนำท่านเข้าสู่ระบบ...")
+                location.replace(RETURN_TO)
             } catch (err) {
                 console.error(err)
                 busy(codeSubmit, false, "ยืนยัน")

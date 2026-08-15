@@ -4,6 +4,15 @@ Implements [`../REACT_REWRITE_PLAN.md`](../REACT_REWRITE_PLAN.md). **Nothing her
 deployed yet.** Production is still served by `../main.js` (Express), and this directory is
 built and tested in isolation until the cutover in Phase 6.
 
+**2026-08:** `../main.js`'s auth was rewritten to a much simpler design — email OTP is the
+sole login factor, LINE binding is traceability only (no bind step, no fail-open, no staged
+enforcement flag), and LINE ID-token verification now happens in a Supabase Edge Function
+(`../supabase/functions/line-verify`), not in this app's own server. `lib/gate/`, `middleware.ts`,
+and the `/admin/` access-request flow here were updated to match — see
+`../scripts/auth-rewrite-2026-08.sql` and `../REACT_REWRITE_PLAN.md`'s 2026-08 update note.
+`app/line/bind/`, `app/telegram/webhook/`, and `lib/line/verify.ts` were deleted: that logic no
+longer exists as a route on this server at all.
+
 It is a self-contained sub-project with its own `package.json`, matching the existing
 convention in `../automation/` and `../process/`. That isolation is deliberate: the live
 Vercel deployment builds from the repo root, so adding a framework there could change how
@@ -72,17 +81,18 @@ app/
   layout.tsx           html lang="th", self-hosted fonts, viewport
   globals.css          design tokens from ../design.md — one definition, not five
   status/ list/ ranking/   the three physician pages
-  admin/               roster CRUD + its six API route handlers
+  admin/               roster CRUD + access-request approval + their API route handlers
   verify/              PLACEHOLDER — Phase 5
-  auth/ line/ telegram/    session, LINE bind, LINE bot, Telegram webhooks
+  auth/ line/              session cookie, LINE bot messaging webhook
   preflight/           Phase 0 diagnostic page (delete in Phase 7)
 components/            DesktopBlock, StateBox, Spinner, BackToTop, Notice
 lib/
-  gate/                cookies, JWT claims, token refresh, gate decision, redirect targets
-  admin/               HMAC tokens, service-role roster access, form-field typing
-  line/                LIFF ID-token verification, Flex month picker
+  gate/                cookies, JWT claims, token refresh, one-boolean gate decision, redirect targets
+  admin/               HMAC tokens, service-role roster + access-request access, form-field typing
+  line/                Flex month picker only — LINE ID-token verification moved to
+                        ../supabase/functions/line-verify, called directly from the browser
   months.ts colors.ts departments.ts pagination.ts
-  __tests__/           108 tests, including the parity guard below
+  __tests__/           101 tests, including the parity guard below
 ```
 
 ### The parity guard

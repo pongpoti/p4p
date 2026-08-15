@@ -13,6 +13,11 @@
     const unauthorized  = document.getElementById("unauthorized")
     const appEl         = document.getElementById("app")
     const logoutBtn     = document.getElementById("logout-btn")
+    const requestsBtn   = document.getElementById("requests-btn")
+    const requestsBadge = document.getElementById("requests-badge")
+    const requestsPanel = document.getElementById("requests-panel")
+    const requestsList  = document.getElementById("requests-list")
+    const requestsEmpty = document.getElementById("requests-empty")
     const tableSelect   = document.getElementById("table_select")
     const searchInput   = document.getElementById("search_input")
     const deptFilter    = document.getElementById("dept_filter")
@@ -124,6 +129,73 @@
         return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
             "T" + pad(d.getHours()) + ":" + pad(d.getMinutes())
     }
+
+    // ── Access requests ──────────────────────────────────────────────────
+    // Approving/rejecting here replaces the old Telegram inline-button flow
+    // (a bearer token in callback_data, replayable by anyone in that chat —
+    // see SECURITY_ANALYSIS.md §2c): the write now happens through this
+    // already-authenticated dashboard session, server-side with the
+    // service-role key, same as every roster edit above.
+    let requestsPanelOpen = false
+
+    function renderRequestCard(reqRow) {
+        const card = document.createElement("div")
+        card.className = "row-card"
+        card.innerHTML =
+            '<div class="row-card-head" style="cursor:default;">' +
+            '<div style="flex:1;min-width:0;">' +
+            '<div class="row-card-name">' + escHtml(reqRow.name || "(ไม่ระบุชื่อ)") + "</div>" +
+            '<div class="req-email">' + escHtml(reqRow.email) + "</div>" +
+            "</div></div>" +
+            '<div class="row-card-body" style="display:block;">' +
+            '<div class="row-actions">' +
+            '<button type="button" class="row-btn btn-reject">ปฏิเสธ</button>' +
+            '<button type="button" class="row-btn btn-approve">อนุมัติ</button>' +
+            "</div></div>"
+
+        card.querySelector(".btn-approve").addEventListener("click", async () => {
+            try {
+                await api("/admin/api/access-requests/" + encodeURIComponent(reqRow.email) + "/approve", { method: "POST" })
+                showStatus("อนุมัติแล้ว: " + reqRow.email, false)
+                await loadAccessRequests()
+            } catch (e) {
+                showStatus("อนุมัติไม่สำเร็จ: " + e.message, true)
+            }
+        })
+        card.querySelector(".btn-reject").addEventListener("click", async () => {
+            if (!confirm("ปฏิเสธคำขอของ " + (reqRow.name || reqRow.email) + "?")) return
+            try {
+                await api("/admin/api/access-requests/" + encodeURIComponent(reqRow.email) + "/reject", { method: "POST" })
+                showStatus("ปฏิเสธแล้ว", false)
+                await loadAccessRequests()
+            } catch (e) {
+                showStatus("ปฏิเสธไม่สำเร็จ: " + e.message, true)
+            }
+        })
+        return card
+    }
+
+    async function loadAccessRequests() {
+        try {
+            const { requests } = await api("/admin/api/access-requests")
+            requestsList.innerHTML = ""
+            for (const r of requests) requestsList.appendChild(renderRequestCard(r))
+            requestsEmpty.classList.toggle("hidden", requests.length > 0)
+            if (requests.length > 0) {
+                requestsBadge.textContent = String(requests.length)
+                requestsBadge.classList.remove("hidden")
+            } else {
+                requestsBadge.classList.add("hidden")
+            }
+        } catch (e) {
+            if (e.message !== "unauthorized") console.error("loadAccessRequests failed:", e.message)
+        }
+    }
+
+    requestsBtn.addEventListener("click", () => {
+        requestsPanelOpen = !requestsPanelOpen
+        requestsPanel.classList.toggle("hidden", !requestsPanelOpen)
+    })
 
     // ── Table select ─────────────────────────────────────────────────────
     async function loadTables() {
@@ -396,6 +468,7 @@
             currentTable = await loadTables()
             unauthorized.classList.add("hidden")
             if (currentTable) await loadRowsAndColumns(currentTable)
+            await loadAccessRequests()
         } catch (e) {
             if (e.message !== "unauthorized") showStatus("โหลดไม่สำเร็จ: " + e.message, true)
         } finally {

@@ -5,8 +5,8 @@
  * already validated by Supabase — either at /auth/session, or by the refresh
  * call that minted it — so this is reading a token we already trust, not
  * deciding whether to trust one. Anything that needs to establish identity
- * (e.g. /line/bind deciding which email a LINE account attaches to) asks
- * Supabase instead of reading the JWT body.
+ * asks Supabase instead of reading the JWT body (see
+ * supabase/functions/line-verify, which does exactly that for LINE binding).
  *
  * Edge-safe: uses atob rather than Buffer, so it works in middleware.
  */

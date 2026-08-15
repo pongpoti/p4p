@@ -1,20 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server"
-import {
-  BIND_LOOP_COOKIE,
-  BIND_LOOP_MAX,
-  lineBindEnforce,
-} from "./lib/config"
 import { resolveAccessToken } from "./lib/gate/session"
-import { fetchGateStatus, gateDecision } from "./lib/gate/status"
+import { isCurrentUserAllowlisted } from "./lib/gate/status"
 import { canonicalPath, verifyBounce } from "./lib/gate/targets"
 import { redirectResponse, type CookieSpec } from "./lib/gate/redirect"
 
 /**
- * The gate, transcribed from main.js's servePage(), plus the CSP nonce.
+ * The gate, plus the CSP nonce.
  *
  * Runs before every page request. Three jobs:
  *   1. URL canonicalisation, which is subtler than it looks (see below)
- *   2. session + LINE-bind gating for /status, /list, /ranking
+ *   2. session + allow-list gating for /status, /list, /ranking — a single
+ *      boolean check, not a multi-field bind-status struct. Whether a LINE
+ *      account is bound plays no part in reaching a page; see
+ *      scripts/auth-rewrite-2026-08.sql and lib/gate/status.ts.
  *   3. a per-request CSP nonce, so Next's inline scripts do not force
  *      'unsafe-inline' into a policy that deliberately does not have it
  *
@@ -44,6 +42,9 @@ function buildCsp(nonce: string): string {
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
     "img-src 'self' data:",
+    // *.supabase.co also covers supabase/functions/line-verify — the browser
+    // calls it directly for all LINE verification, same origin as everything
+    // else Supabase.
     "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.line.me https://access.line.me",
     // frame-ancestors intentionally omitted so the pages still load inside
     // LINE's LIFF webview.
@@ -77,14 +78,6 @@ export async function middleware(request: NextRequest) {
   }
 
   // A plain Response, NOT NextResponse.redirect() — see lib/gate/redirect.ts.
-  //
-  // Two constraints, discovered by inspecting the emitted header:
-  //   - NextResponse.redirect() serialises through NextURL, which DROPS the
-  //     trailing empty fragment these targets depend on.
-  //   - Next validates the Location of ANY response middleware returns and
-  //     rejects a relative one with ERR_INVALID_URL.
-  // So: absolutise here with the standard URL class, which (unlike NextURL)
-  // keeps the "#", and hand the result to a plain Response.
   const redirect = (to: string, cookies: CookieSpec[] = []) =>
     redirectResponse(
       new URL(to, request.url).href,
@@ -96,47 +89,18 @@ export async function middleware(request: NextRequest) {
       cookies,
     )
 
-  const sessionCookie = (at: string, rt: string): CookieSpec => ({
-    name: "p4p_rt",
-    value: JSON.stringify({ at, rt }),
-    maxAge: 34_560_000,
-  })
   const clearedSession: CookieSpec = { name: "p4p_rt", value: "", maxAge: 0 }
-  const loopCookie = (n: number): CookieSpec => ({
-    name: BIND_LOOP_COOKIE,
-    value: String(n),
-    maxAge: 900,
-  })
 
   // ── /verify and /verify/ ──────────────────────────────────────────────
-  // BOTH render, with NO redirect between them.
-  //
-  // LIFF completes a login by navigating to the app's registered Endpoint URL
-  // with "#access_token=…" appended. A redirect whose Location carries its own
-  // fragment replaces LIFF's; liff.init() then finds no login state, restarts
-  // login, lands back here, and loops forever inside the webview. That is the
-  // 2026-08 outage. A rewrite is internal — no Location header, no navigation,
-  // no fragment involved — so it cannot reproduce it.
-  //
-  // The token is injected whenever a VALID SESSION EXISTS, not only when the
-  // URL still says ?reason=bind_required: LIFF's login round-trip does not
-  // preserve our query string, so keying off the parameter dropped physicians
-  // onto the email form for an account they were already signed in to.
+  // BOTH render, with NO redirect between them, for the same LIFF-fragment
+  // reason as ever (see lib/gate/targets.ts). No session lookup and no token
+  // injection here anymore: binding a LINE account no longer needs a
+  // server-injected token or a bounce-back-here round trip — the browser
+  // already holds whatever tokens it needs by the time it calls either
+  // /auth/session or supabase/functions/line-verify. The page is the same
+  // static-ish thing for everyone, every time.
   if (pathname === "/verify" || pathname === "/verify/") {
-    const resolved = await resolveAccessToken(request.cookies)
-    if (resolved.at) forwarded.set(TOKEN_HEADER, resolved.at)
-
-    const response = passThrough("/verify")
-    if (resolved.rotated) {
-      setSessionOn(response, resolved.rotated.at, resolved.rotated.rt)
-    } else if (resolved.clear) {
-      clearSessionOn(response)
-    }
-    console.log(
-      `[verify] reason=${request.nextUrl.searchParams.get("reason") ?? "-"} ` +
-        `session=${resolved.at ? "yes" : "no"}`,
-    )
-    return response
+    return passThrough("/verify")
   }
 
   // ── Gated pages ───────────────────────────────────────────────────────
@@ -144,11 +108,8 @@ export async function middleware(request: NextRequest) {
   if (!gated) return passThrough()
 
   // Canonicalise to the trailing-slash form first. LIFF opens "/status" with no
-  // slash. Unlike /verify, these DO want the redirect, and they want an
-  // explicit trailing "#": LINE's iOS webview carries an old fragment forward
-  // onto the new URL when our Location has none of its own, and a stale token
-  // from a DIFFERENT LIFF app then rides along and fails liff.init() with
-  // "Invalid LIFF ID". An empty fragment of our own stops that.
+  // slash. These want the redirect (unlike /verify), with an explicit trailing
+  // "#_" for the reason documented in lib/gate/targets.ts.
   if (pathname === `/${gated}`) {
     return redirect(canonicalPath(gated, search))
   }
@@ -163,43 +124,26 @@ export async function middleware(request: NextRequest) {
     )
   }
 
-  const status = await fetchGateStatus(resolved.at)
-  const loopCount = readLoopCount(request)
-  const action = gateDecision({
-    status,
-    enforce: lineBindEnforce(),
-    loopCount,
-    loopMax: BIND_LOOP_MAX,
-  })
-
+  const allowed = await isCurrentUserAllowlisted(resolved.at)
   const rotated: CookieSpec[] = resolved.rotated
     ? [sessionCookie(resolved.rotated.at, resolved.rotated.rt)]
     : []
 
-  switch (action.type) {
-    case "blocked":
-      return redirect(verifyBounce("blocked"), [clearedSession])
-    case "expired":
-      return redirect(verifyBounce("expired"), [clearedSession])
-    case "gate_unavailable":
-      return redirect(verifyBounce("gate_unavailable", returnTo), rotated)
-    case "bind_required":
-      return redirect(verifyBounce("bind_required", returnTo), [
-        ...rotated,
-        loopCookie(loopCount + 1),
-      ])
-    case "serve":
-    default: {
-      forwarded.set(TOKEN_HEADER, resolved.at)
-      const response = passThrough(`/${gated}`)
-      if (resolved.rotated) setSessionOn(response, resolved.rotated.at, resolved.rotated.rt)
-      clearLoopCount(response)
-      return response
-    }
+  if (!allowed) {
+    return redirect(verifyBounce("blocked"), [clearedSession])
   }
+
+  forwarded.set(TOKEN_HEADER, resolved.at)
+  const response = passThrough(`/${gated}`)
+  if (resolved.rotated) setSessionOn(response, resolved.rotated.at, resolved.rotated.rt)
+  return response
 }
 
-// ── Cookie helpers, applied to a response ──────────────────────────────────
+// ── Cookie helpers ──────────────────────────────────────────────────────────
+function sessionCookie(at: string, rt: string): CookieSpec {
+  return { name: "p4p_rt", value: JSON.stringify({ at, rt }), maxAge: 34_560_000 }
+}
+
 function setSessionOn(response: NextResponse, at: string, rt: string): void {
   response.cookies.set("p4p_rt", JSON.stringify({ at, rt }), {
     httpOnly: true,
@@ -207,31 +151,6 @@ function setSessionOn(response: NextResponse, at: string, rt: string): void {
     sameSite: "lax",
     path: "/",
     maxAge: 34_560_000,
-  })
-}
-
-function clearSessionOn(response: NextResponse): void {
-  response.cookies.set("p4p_rt", "", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  })
-}
-
-function readLoopCount(request: NextRequest): number {
-  const n = parseInt(request.cookies.get(BIND_LOOP_COOKIE)?.value ?? "", 10)
-  return Number.isFinite(n) && n > 0 ? n : 0
-}
-
-function clearLoopCount(response: NextResponse): void {
-  response.cookies.set(BIND_LOOP_COOKIE, "", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
   })
 }
 

@@ -5,6 +5,7 @@ import DesktopBlock, { useDeviceGate } from "@/components/DesktopBlock"
 import { Notice, Spinner } from "@/components/ui"
 import { departmentLabel, sortDepartments } from "@/lib/departments"
 import { rosterFullName, rosterSortName, toRequestBody } from "@/lib/admin/fields"
+import type { AccessRequest } from "@/lib/admin/access-requests"
 import type { RosterColumn } from "@/lib/admin/roster"
 import { monthKey, toBE } from "@/lib/months"
 import RowCard from "./RowCard"
@@ -39,11 +40,49 @@ export default function AdminClient() {
   const [department, setDepartment] = useState("")
   const [adding, setAdding] = useState(false)
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
+  const [requests, setRequests] = useState<AccessRequest[]>([])
+  const [requestsOpen, setRequestsOpen] = useState(false)
 
   const flash = useCallback((kind: "ok" | "error", text: string) => {
     setStatus({ kind, text })
     setTimeout(() => setStatus(null), 3500)
   }, [])
+
+  // Approving/rejecting writes through this already-authenticated dashboard
+  // session (service-role, server-side) — replacing the old Telegram inline
+  // buttons, whose bearer token in callback_data was replayable by anyone in
+  // that chat (SECURITY_ANALYSIS.md §2c).
+  const loadRequests = useCallback(async () => {
+    try {
+      const { requests: list } = await api<{ requests: AccessRequest[] }>("/admin/api/access-requests")
+      setRequests(list)
+    } catch (err) {
+      if (!(err instanceof Error && err.message === "unauthorized")) {
+        console.error("loadRequests failed:", err)
+      }
+    }
+  }, [])
+
+  async function handleApprove(email: string) {
+    try {
+      await api(`/admin/api/access-requests/${encodeURIComponent(email)}/approve`, { method: "POST" })
+      flash("ok", `อนุมัติแล้ว: ${email}`)
+      await loadRequests()
+    } catch (err) {
+      flash("error", `อนุมัติไม่สำเร็จ: ${(err as Error).message}`)
+    }
+  }
+
+  async function handleReject(req: AccessRequest) {
+    if (!confirm(`ปฏิเสธคำขอของ ${req.name ?? req.email}?`)) return
+    try {
+      await api(`/admin/api/access-requests/${encodeURIComponent(req.email)}/reject`, { method: "POST" })
+      flash("ok", "ปฏิเสธแล้ว")
+      await loadRequests()
+    } catch (err) {
+      flash("error", `ปฏิเสธไม่สำเร็จ: ${(err as Error).message}`)
+    }
+  }
 
   const pkColumn = useMemo(() => columns.find((c) => c.is_pk)?.column_name ?? "index", [columns])
   const editable = useMemo(() => columns.filter((c) => !c.is_pk), [columns])
@@ -80,6 +119,7 @@ export default function AdminClient() {
         setTable(initial)
         if (initial) await loadTable(initial)
         else setLoading(false)
+        await loadRequests()
       } catch (err) {
         if (cancelled) return
         if (err instanceof Error && err.message === "unauthorized") setAuthorized(false)
@@ -90,7 +130,7 @@ export default function AdminClient() {
     return () => {
       cancelled = true
     }
-  }, [device, loadTable, flash])
+  }, [device, loadTable, loadRequests, flash])
 
   const presentDepartments = useMemo(
     () => sortDepartments([...new Set(rows.map((r) => String(r.department ?? "")).filter(Boolean))]),
@@ -163,19 +203,73 @@ export default function AdminClient() {
           <div className="font-[family-name:var(--font-manrope)] text-base font-bold text-[var(--color-secondary)]">
             ผู้ดูแลระบบ
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await fetch("/admin/logout", { method: "POST", credentials: "same-origin" }).catch(
-                () => {},
-              )
-              location.reload()
-            }}
-            className="rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-secondary)]"
-          >
-            ออกจากระบบ
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRequestsOpen((v) => !v)}
+              className="relative rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-secondary)]"
+            >
+              คำขอเข้าใช้งาน
+              {requests.length > 0 ? (
+                <span className="ml-1 inline-block min-w-[16px] rounded-full bg-red-600 px-1.5 text-[10px] font-bold text-white">
+                  {requests.length}
+                </span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch("/admin/logout", { method: "POST", credentials: "same-origin" }).catch(
+                  () => {},
+                )
+                location.reload()
+              }}
+              className="rounded-[var(--radius-card)] border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-secondary)]"
+            >
+              ออกจากระบบ
+            </button>
+          </div>
         </div>
+
+        {requestsOpen ? (
+          <div className="mx-auto max-w-[640px] px-4 pb-3">
+            {requests.length === 0 ? (
+              <p className="py-3 text-center text-xs text-[var(--color-ink-muted)]">ไม่มีคำขอค้างอยู่</p>
+            ) : (
+              <div className="space-y-2">
+                {requests.map((req) => (
+                  <div
+                    key={req.email}
+                    className="flex items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-[var(--color-secondary)]">
+                        {req.name || "(ไม่ระบุชื่อ)"}
+                      </div>
+                      <div className="truncate text-xs text-[var(--color-ink-muted)]">{req.email}</div>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleReject(req)}
+                        className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700"
+                      >
+                        ปฏิเสธ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApprove(req.email)}
+                        className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700"
+                      >
+                        อนุมัติ
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
 
         <div className="mx-auto flex max-w-[640px] flex-col gap-2 px-4 pb-3">
           <select

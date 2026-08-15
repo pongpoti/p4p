@@ -9,34 +9,13 @@ const port = process.env.PORT || 3000
 const LINE_ACCESS_TOKEN = process.env.LINE_ACCESS_TOKEN
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET
 
-// For the Telegram approve/reject buttons (scripts/telegram-approve-buttons.sql).
-// SUPABASE_SERVICE_ROLE_KEY bypasses RLS — required only here, kept server-side.
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
+// Bypasses RLS — used by the /admin/api/* routes (roster CRUD, access
+// requests), gated by the admin's own signed-cookie session. Physician auth
+// no longer touches this key at all: LINE ID-token verification and the
+// `physicians` write happen in the Supabase Edge Function
+// (supabase/functions/line-verify), not here — see auth-rewrite-2026-08.sql
+// and that function's header comment for the full design.
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-// The LINE **Login** channel that owns the /verify/ LIFF app — NOT the
-// Messaging API channel that LINE_CHANNEL_SECRET/LINE_ACCESS_TOKEN belong to.
-// Used as `client_id` when asking LINE to verify a LIFF ID token; it is the
-// `aud` LINE checks the token against, so a token minted for someone else's
-// channel is rejected. Without this, ID-token verification cannot run at all.
-const LINE_LOGIN_CHANNEL_ID = process.env.LINE_LOGIN_CHANNEL_ID
-
-// Staged rollout switch for the LINE second factor (scripts/line-bind-verified.sql).
-//
-//   unset/false — DETECT ONLY. Binding is still verified against LINE and a
-//                 mismatch is refused and alerted, but page access keeps the
-//                 existing rules, including the "3 failures then let them
-//                 through" fail-open. Zero lockout risk.
-//   "true"      — ENFORCE. A gated page requires that THIS SESSION proved its
-//                 LINE identity, and the fail-opens are switched off (both the
-//                 attempts limit and the "gate RPC unreachable" path).
-//
-// Do NOT enable until /verify/ has been observed completing real binds in
-// production, because it depends on the LIFF app having the `openid` scope —
-// liff.getIDToken() returns null without it and every bind fails. Check with:
-//   select count(*) from public.line_verified_sessions where verified_at > now() - interval '1 day';
-const LINE_BIND_ENFORCE = process.env.LINE_BIND_ENFORCE === "true"
 
 // The single LINE userId allowed into /admin/ (the roster CRUD dashboard,
 // see servePage-adjacent routes below). Not a secret in itself — a LINE
@@ -122,9 +101,8 @@ const pageTemplates = {}
 for (const p of gatedPages) {
   pageTemplates[p] = stampAssets(fs.readFileSync(path.join(__dirname, p, "index.html"), "utf8"), p)
 }
-// /verify/ also carries the same <meta name="p4p-session"> placeholder, used
-// only for the silent LINE-bind bounce (see servePage's "bind_required"
-// redirect below) — every other visit serves this same template unmodified.
+// /verify/ carries no token placeholder at all — it's the same static page
+// for everyone, every time (see the route below).
 const verifyTemplate = stampAssets(
   fs.readFileSync(path.join(__dirname, "verify", "index.html"), "utf8"),
   "verify",
@@ -153,36 +131,6 @@ function clearSessionCookie(res) {
   res.append("Set-Cookie", RT_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
 }
 
-// ── Bind-redirect loop breaker ───────────────────────────────────────────
-// Incident (2026-08): an unbound physician got stuck reloading between a
-// gated page and /verify/ with no way out. Root cause: the "bind_required"
-// redirect below is gated on the DATABASE's line_bind_attempts count, but
-// verify/app.js's recordBindFailure() silently swallows any failure to reach
-// that RPC and fabricates attempts=3 locally so the CLIENT auto-redirects
-// back here — while the server, reading the real (unincremented) DB count,
-// sees attempts stuck below the limit and immediately redirects right back
-// to /verify/, which auto-runs the bind flow again on load with no tap
-// required. Client and server disagreed on the count, and nothing caught it.
-//
-// This cookie is a hard backstop that does not depend on Supabase, LINE, or
-// any client JS being reachable or correct — pure Express state. It counts
-// consecutive bind_required redirects for THIS browser and, once BIND_LOOP_MAX
-// is hit, serves the page instead of redirecting again, regardless of what
-// the DB says. A short Max-Age means a stuck user recovers within minutes
-// even if they never revisit; a successful serve always clears it, so a
-// later, genuine bind prompt is never permanently suppressed for that browser.
-const BIND_LOOP_COOKIE = "p4p_bindloop"
-const BIND_LOOP_MAX = 4 // one above the intended 3 real attempts, as slack
-function bindLoopCount(req) {
-  const n = parseInt(parseCookies(req)[BIND_LOOP_COOKIE], 10)
-  return Number.isFinite(n) && n > 0 ? n : 0
-}
-function bumpBindLoopCookie(res, n) {
-  res.append("Set-Cookie", BIND_LOOP_COOKIE + "=" + n + "; " + COOKIE_BASE + "; Max-Age=900")
-}
-function clearBindLoopCookie(res) {
-  res.append("Set-Cookie", BIND_LOOP_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
-}
 function readSessionCookie(req) {
   const raw = parseCookies(req)[RT_COOKIE]
   if (!raw) return null
@@ -261,9 +209,16 @@ function verifyAdminToken(purpose, token) {
 }
 
 const ADMIN_COOKIE = "p4p_admin"
+// 7 days, not the previous 90. This token is a stateless bearer with no
+// revocation path short of rotating LINE_CHANNEL_SECRET or
+// SUPABASE_SERVICE_ROLE_KEY (which would break the rest of the system), so
+// its lifetime IS its only real defense against a lost/handed-down phone.
+// Re-authenticating is a single "admin" DM to the bot — trivial for the one
+// person who ever needs to.
+const ADMIN_SESSION_SECONDS = 7 * 24 * 3600
 function setAdminCookie(res) {
-  const exp = Math.floor(Date.now() / 1000) + 90 * 24 * 3600 // 90 days
-  res.append("Set-Cookie", ADMIN_COOKIE + "=" + signAdminToken("session", exp) + "; " + COOKIE_BASE + "; Max-Age=" + 90 * 24 * 3600)
+  const exp = Math.floor(Date.now() / 1000) + ADMIN_SESSION_SECONDS
+  res.append("Set-Cookie", ADMIN_COOKIE + "=" + signAdminToken("session", exp) + "; " + COOKIE_BASE + "; Max-Age=" + ADMIN_SESSION_SECONDS)
 }
 function clearAdminCookie(res) {
   res.append("Set-Cookie", ADMIN_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
@@ -275,8 +230,8 @@ function requireAdmin(req, res, next) {
 }
 
 // Calls a service_role-only RPC (admin_list_roster_tables / admin_table_columns)
-// — same "apikey + Authorization both = service role key" pattern already
-// used for approve_access_request/reject_access_request below.
+// — same "apikey + Authorization both = service role key" pattern used by
+// every /admin/api/* route below, RPC or plain table access alike.
 async function callServiceRpc(fn, args) {
   const r = await axios.post(
     SUPABASE_URL + "/rest/v1/rpc/" + fn,
@@ -343,79 +298,35 @@ async function resolveAccessToken(req, res) {
   return { at, reason: null }
 }
 
-// Single-round-trip gate check: is this email denylisted, does it have a LINE
-// userId bound, how many failed bind attempts, and did THIS SESSION prove its
-// LINE identity (scripts/line-bind-verified.sql).
-//
-// Called with the USER'S access token, not the anon key. The previous version
-// used the anon key and passed the email as a parameter, which made the RPC an
-// unauthenticated "is this address a registered physician?" oracle — and meant
-// it could not be locked down, because revoking anon would 403, get swallowed
-// by the catch below, and silently disable the whole gate including the
-// denylist. get_line_bind_gate_status_self() takes no argument and reads the
-// email from the caller's own JWT, so there is nothing left to enumerate.
-// (apikey must still be the publishable key — Supabase requires that header —
-// but Authorization is what selects the `authenticated` role.)
-//
-// Returns null on any error. What that MEANS depends on LINE_BIND_ENFORCE:
-// in detect-only mode the caller proceeds (the long-standing fail-open, kept
-// so a transient Supabase hiccup can't lock out a whole hospital); with
-// enforcement on, the caller refuses to serve the page instead.
-async function getLineBindGateStatus(accessToken) {
+// Single boolean gate check: is this session's email still allowed to be
+// here — active in `physicians` and, as of auth-rewrite-2026-08.sql, not
+// sitting on a revoked Supabase session either. Called with the USER'S
+// access token, not the anon key, and the RPC reads the email from the
+// caller's own JWT rather than taking one as a parameter — there is nothing
+// here for an unauthenticated caller to enumerate.
+async function isCurrentUserAllowlisted(accessToken) {
   try {
     const r = await axios.post(
-      SUPABASE_URL + "/rest/v1/rpc/get_line_bind_gate_status_self",
+      SUPABASE_URL + "/rest/v1/rpc/is_current_user_allowlisted",
       {},
       { headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, timeout: 8000 }
     )
-    return (r.data && r.data[0]) || null
+    return r.data === true
   } catch (e) {
-    console.error("[gate] get_line_bind_gate_status_self failed:",
+    console.error("[gate] is_current_user_allowlisted failed:",
       e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    return null
+    // Fail open on a transient Supabase hiccup rather than locking out a
+    // whole hospital over a network blip — the same trade the old gate made.
+    // RLS is still the real data barrier regardless of what this returns.
+    return true
   }
 }
 
-// Ask LINE whether a LIFF ID token is genuine. LINE checks the signature,
-// expiry and audience for us and returns the claims; `sub` is the
-// authoritative LINE userId.
-//
-// This is the whole point of the second factor. liff.getProfile().userId is
-// just a string the browser chooses to send — the old bind RPC took it as a
-// parameter and believed it. An ID token cannot be forged by the page.
-async function verifyLineIdToken(idToken) {
-  if (!LINE_LOGIN_CHANNEL_ID) {
-    console.error("[line-bind] LINE_LOGIN_CHANNEL_ID is not set — cannot verify ID tokens")
-    return null
-  }
-  try {
-    const r = await axios.post(
-      "https://api.line.me/oauth2/v2.1/verify",
-      new URLSearchParams({ id_token: idToken, client_id: LINE_LOGIN_CHANNEL_ID }).toString(),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 8000 }
-    )
-    const sub = r.data && r.data.sub
-    if (!sub) {
-      console.error("[line-bind] LINE verify returned no sub claim")
-      return null
-    }
-    return { sub: sub, name: (r.data && r.data.name) || null }
-  } catch (e) {
-    console.error("[line-bind] LINE rejected the id_token:",
-      e.response ? JSON.stringify(e.response.data) : e.message)
-    return null
-  }
-}
-
-const BIND_ATTEMPT_LIMIT = 3
-
-// Serve a gated page: require a valid session cookie and inject the current
-// access token via <meta> (no inline script -> no CSP change). On top of
-// session validity, also enforce the LINE-binding rule: a denylisted email is
-// bounced out even with a valid session, and an email with no LINE userId
-// bound yet (and still under the retry limit) is routed to /verify/ to
-// silently complete that binding using its EXISTING session — no OTP
-// re-entry — before it's allowed to reach the actual page.
+// Serve a gated page: require a valid session cookie whose email is still
+// allow-listed, and inject the current access token via <meta> (no inline
+// script -> no CSP change). Whether a LINE account is bound is irrelevant
+// here — that's traceability recorded elsewhere (supabase/functions/line-
+// verify), never a condition for reaching the page.
 function servePage(name) {
   return async (req, res) => {
     // Canonicalize to a trailing slash first. LIFF opens "/status" (no slash),
@@ -443,57 +354,12 @@ function servePage(name) {
     const { at, reason } = await resolveAccessToken(req, res)
     if (!at) return res.redirect(302, "/verify/?return=" + ret + "&reason=" + reason + "#")
 
-    const gate = await getLineBindGateStatus(at)
-
-    if (!gate) {
-      // Could not confirm the denylist OR the session's LINE proof.
-      if (LINE_BIND_ENFORCE) {
-        return res.redirect(302, "/verify/?return=" + ret + "&reason=gate_unavailable#")
-      }
-      // Detect-only mode keeps the historical fail-open. Noted here because it
-      // is a real gap while it lasts: a broken gate RPC silently stops
-      // blocked_emails from being enforced at all.
-    } else {
-      if (gate.is_blocked) {
-        clearSessionCookie(res)
-        return res.redirect(302, "/verify/?reason=blocked#")
-      }
-      // Signed out, or revoked by an admin: Supabase DELETES the auth.sessions
-      // row, so a missing row means this access token outlived its session.
-      // Applies in both modes — it is a correctness fix, not part of the second
-      // factor. /auth/logout only clears our cookie and never calls Supabase
-      // signOut, so before this nothing in the system could really revoke a
-      // session; a lifted cookie stayed good until the cached token expired.
-      if (gate.session_revoked) {
-        clearSessionCookie(res)
-        return res.redirect(302, "/verify/?reason=expired#")
-      }
-      // `enforce_eligible` is true only for emails that have proved their LINE
-      // identity through this flow at least once. Without that condition,
-      // switching enforcement on would bounce every physician at once if the
-      // LIFF app turned out to be missing the `openid` scope — ~200 people
-      // locked out of a hospital tool by one env var. Users who have never
-      // proved keep the old rules until they do, so the factor phases in.
-      const wantsBindRedirect = LINE_BIND_ENFORCE && gate.enforce_eligible
-        ? !gate.session_verified
-        : !gate.is_bound && gate.attempts < BIND_ATTEMPT_LIMIT
-
-      if (wantsBindRedirect) {
-        // Hard backstop, independent of the DB-backed attempts count above
-        // (see the comment on BIND_LOOP_COOKIE) — this redirect must never be
-        // able to fire more than BIND_LOOP_MAX times in a row for one browser,
-        // full stop, regardless of whether Supabase, LINE, or the client's own
-        // retry accounting are behaving correctly.
-        const loopCount = bindLoopCount(req)
-        if (loopCount < BIND_LOOP_MAX) {
-          bumpBindLoopCookie(res, loopCount + 1)
-          return res.redirect(302, "/verify/?return=" + ret + "&reason=bind_required#")
-        }
-        console.warn("[bind-loop] backstop tripped for " + name + " — serving unbound rather than redirecting again")
-      }
+    const allowed = await isCurrentUserAllowlisted(at)
+    if (!allowed) {
+      clearSessionCookie(res)
+      return res.redirect(302, "/verify/?reason=blocked#")
     }
 
-    clearBindLoopCookie(res)
     res.setHeader("Content-Type", "text/html; charset=utf-8")
     // This HTML carries a live access token in its <meta>, so it must never be
     // written to a cache — and a cached copy would also keep pointing at the
@@ -510,11 +376,12 @@ function servePage(name) {
 // 'unsafe-inline', so an injected <script> or on*="" handler won't execute (all
 // page JS was moved to external app.js files for exactly this reason). style-src
 // keeps 'unsafe-inline' because the pages set element styles and load Google
-// Fonts CSS; connect-src allows the Supabase REST/Realtime endpoints plus the
-// LINE API hosts the LIFF SDK calls internally (liff.init / liff.getProfile, used
-// on /verify/ to bind a LINE userId to the verified email — see
-// scripts/bind-line-user.sql). frame-ancestors is intentionally omitted so the
-// pages still load inside LINE's LIFF webview.
+// Fonts CSS; connect-src allows the Supabase REST/Realtime/Edge-Function
+// endpoints (the *.supabase.co wildcard covers
+// supabase/functions/line-verify too — same origin as everything else
+// Supabase) plus the LINE API hosts the LIFF SDK calls internally
+// (liff.init / liff.getIDToken). frame-ancestors is intentionally omitted so
+// the pages still load inside LINE's LIFF webview.
 const CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -532,8 +399,13 @@ app.use((req, res, next) => {
   next()
 })
 
-// Client posts the tokens from its (working) client-side verifyOtp; we validate
-// the access token, then stash the refresh token in an HttpOnly cookie.
+// Client posts the tokens it already holds — either straight from its own
+// client-side verifyOtp(), or from the Supabase Edge Function's "silent"
+// mode (supabase/functions/line-verify) after a returning physician's LINE
+// login alone resumed a session. Either way this endpoint's only job is: is
+// this a real, currently-valid session, and if so, stash its refresh token
+// in an HttpOnly cookie. No LINE calls, no service-role key, no `physicians`
+// write happen here — that all lives in the Edge Function now.
 app.post("/auth/session", express.json({ limit: "8kb" }), async (req, res) => {
   const { access_token, refresh_token } = req.body || {}
   if (!access_token || !refresh_token) return res.status(400).json({ error: "missing tokens" })
@@ -549,371 +421,6 @@ app.post("/auth/session", express.json({ limit: "8kb" }), async (req, res) => {
 })
 app.post("/auth/logout", (req, res) => { clearSessionCookie(res); res.json({ ok: true }) })
 
-// Bind (or re-prove) the caller's LINE identity — the second factor.
-//
-// Both identities are established SERVER-SIDE here, and neither is taken on
-// trust from the request body:
-//   who they are in P4P   -> Supabase validates the access token
-//   who they are on LINE  -> LINE validates the ID token, and its `sub` claim
-//                            is the userId we store/compare
-// The DB function is service_role-only, so a browser cannot reach it directly
-// and cannot assert a LINE userId of its own choosing the way the old
-// bind_line_user_id(p_line_user_id) allowed.
-app.post("/line/bind", express.json({ limit: "8kb" }), async (req, res) => {
-  const authHeader = req.headers.authorization || ""
-  const at = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : ""
-  const idToken = (req.body && req.body.id_token) || ""
-  if (!at || !idToken) return res.status(400).json({ error: "missing token" })
-
-  // 1. Validate the session against Supabase rather than reading the JWT body —
-  //    this endpoint decides who a LINE account gets attached to, so the email
-  //    must come from an authority, not from an unverified claim.
-  let email = null
-  try {
-    const u = await axios.get(SUPABASE_URL + "/auth/v1/user", {
-      headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + at }, timeout: 8000,
-    })
-    email = u.data && u.data.email
-  } catch (e) {
-    return res.status(401).json({ error: "invalid session" })
-  }
-  if (!email) return res.status(401).json({ error: "no email on session" })
-
-  // 2. Validate the LINE ID token with LINE.
-  const line = await verifyLineIdToken(idToken)
-  if (!line) return res.status(401).json({ error: "line verification failed" })
-
-  // Without a session_id there is nothing to attach the proof to, so
-  // get_line_bind_gate_status_self would keep reporting session_verified=false
-  // and — with enforcement on — bounce the user straight back here forever.
-  // Fail loudly instead: an infinite redirect inside LINE's webview is close to
-  // undebuggable from the physician's side. session_id is a required claim on
-  // every Supabase access token, so this should be unreachable.
-  const sessionId = jwtPayload(at).session_id || null
-  if (!sessionId) {
-    console.error("[line-bind] access token has no session_id claim — cannot record proof")
-    return res.status(500).json({ error: "no session_id on token" })
-  }
-
-  // 3. Record it. session_id ties the proof to THIS session; it is a required
-  //    claim on every Supabase access token and is stable across refreshes, so
-  //    a physician proves once per session rather than once per page load.
-  try {
-    const r = await axios.post(
-      SUPABASE_URL + "/rest/v1/rpc/bind_line_user_id_verified",
-      {
-        p_email: email,
-        p_line_user_id: line.sub,
-        p_line_display_name: line.name,
-        p_session_id: sessionId,
-      },
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-          "Content-Type": "application/json",
-        },
-        timeout: 8000,
-      }
-    )
-    const status = (r.data && r.data.status) || "error"
-    console.log("[line-bind] " + email + " -> " + status)
-    if (status === "mismatch") return res.status(403).json({ status: status })
-    if (status === "bound" || status === "match") return res.json({ status: status })
-    return res.status(500).json({ status: status })
-  } catch (e) {
-    console.error("[line-bind] bind RPC failed:",
-      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    return res.status(500).json({ error: "bind failed" })
-  }
-})
-
-// ── Silent LINE reauth ───────────────────────────────────────────────────
-// Incident (2026-08): physicians who had already bound a LINE account were
-// still hitting the plain email/OTP form on every visit. Root cause turned
-// out to have nothing to do with the bind itself — is_bound is only ever
-// consulted once a session already exists, and these physicians had NO
-// session cookie at all by the time they reopened the app. Evidence from
-// production auth logs: the same bound account created a brand-new session
-// (fresh /otp + verifyOtp) every time it reopened the app, sometimes only a
-// couple of hours after its previous session had refreshed successfully —
-// i.e. the cookie itself was not surviving between separate LIFF launches,
-// most plausibly because LINE gives each chat-triggered LIFF launch its own,
-// non-persistent webview storage. No cookie attribute can fix that; the
-// browser instance that held the cookie is simply gone by the next tap.
-//
-// What DOES survive across LIFF launches is LINE's own login — liff.init()
-// + liff.getIDToken() keeps working because that is tied to the LINE app
-// account, not to our webview's storage. This endpoint uses that as the
-// actual reauthentication mechanism for a RETURNING bound physician: verify
-// the ID token with LINE, look up the email it was already bound to (never
-// creates a binding — only resumes one that the real email+OTP+ID-token
-// flow already established), and mint a fresh Supabase session for that
-// email entirely server-side. No email is sent and no OTP is typed; the
-// physician never sees the form at all. An unbound LINE account (never
-// completed the real flow) simply falls through to today's behavior.
-
-// Generates a magic-link OTP for an existing user and immediately redeems it
-// server-side, entirely with our own credentials. Two Supabase calls,
-// service-role then anon:
-//   1. POST /auth/v1/admin/generate_link — returns `email_otp`, the same
-//      6-digit code that would otherwise be emailed. Nothing is actually
-//      sent; we consume it ourselves in the next step.
-//   2. POST /auth/v1/verify — the identical {email, token, type:"email"}
-//      shape verify/app.js's client-side db.auth.verifyOtp() already sends
-//      today, so this reuses a call this app already proves works in
-//      production, rather than a PKCE/hashed_token path this codebase has
-//      never exercised.
-async function mintSessionForEmail(email) {
-  const gen = await axios.post(
-    SUPABASE_URL + "/auth/v1/admin/generate_link",
-    { type: "magiclink", email: email },
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-      },
-      timeout: 8000,
-    }
-  )
-  // Some GoTrue versions nest verification fields under `properties`; guard
-  // both shapes and log the raw keys on failure so a field-name drift shows
-  // up immediately in Vercel logs instead of as a silent 500 with no clue.
-  const otp = gen.data && (gen.data.email_otp || (gen.data.properties && gen.data.properties.email_otp))
-  if (!otp) {
-    console.error("[line-silent-auth] generate_link returned no email_otp. keys:",
-      gen.data ? Object.keys(gen.data).join(",") : "(no body)")
-    throw new Error("generate_link returned no email_otp")
-  }
-
-  const verify = await axios.post(
-    SUPABASE_URL + "/auth/v1/verify",
-    { type: "email", email: email, token: otp },
-    { headers: { apikey: SUPABASE_ANON, "Content-Type": "application/json" }, timeout: 8000 }
-  )
-  if (!verify.data || !verify.data.access_token || !verify.data.refresh_token) {
-    throw new Error("verify did not return a session")
-  }
-  return verify.data
-}
-
-// No Authorization header — there is no session yet; proving identity via a
-// LINE ID token is the entire point of this endpoint.
-app.post("/line/silent-auth", express.json({ limit: "8kb" }), async (req, res) => {
-  const idToken = (req.body && req.body.id_token) || ""
-  if (!idToken) return res.status(400).json({ error: "missing id_token" })
-
-  const line = await verifyLineIdToken(idToken)
-  if (!line) return res.status(401).json({ error: "line verification failed" })
-
-  // Look up an EXISTING binding — this can only RESUME a session for an email
-  // that the real email+OTP+verified-ID-token flow already bound to this
-  // exact LINE account. It cannot be used to claim an email nobody has proven
-  // ownership of: unlike /line/bind (email from an existing session, LINE
-  // identity from the request), this looks the other direction — LINE
-  // identity to email — so there is no "different LINE account" case to
-  // mismatch against, and nothing here can create a new line_user_bindings row.
-  //
-  // Cardinality is enforced, not assumed. This lookup decides WHICH IDENTITY a
-  // session is minted for, so "take the first row" is not good enough: the
-  // email->uid mismatch check above guards only one direction, and until the
-  // unique index below existed, two emails could bind the same LINE account and
-  // rows[0] from an unordered result would pick between them nondeterministically.
-  //
-  //   create unique index line_user_bindings_line_user_id_key
-  //     on public.line_user_bindings (line_user_id);
-  //
-  // limit=2 is deliberate — enough to DETECT a second row, so a violation is
-  // refused loudly here rather than silently resolved, even if the index is
-  // ever dropped or a future path writes around it.
-  let email = null
-  try {
-    const r = await axios.get(
-      SUPABASE_URL + "/rest/v1/line_user_bindings?line_user_id=eq." + encodeURIComponent(line.sub) + "&select=email&limit=2",
-      {
-        headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY },
-        timeout: 8000,
-      }
-    )
-    if (Array.isArray(r.data) && r.data.length > 1) {
-      console.error("[line-silent-auth] REFUSED: LINE userId maps to " + r.data.length +
-        "+ emails — ambiguous identity, refusing to mint a session")
-      return res.status(409).json({ error: "ambiguous_binding" })
-    }
-    email = r.data && r.data[0] && r.data[0].email
-  } catch (e) {
-    console.error("[line-silent-auth] binding lookup failed:",
-      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    return res.status(500).json({ error: "lookup failed" })
-  }
-  // Not bound yet — fall through to the normal email/OTP form. Not an error.
-  if (!email) return res.status(404).json({ error: "not_bound" })
-
-  // Refuse to mint a session for a denylisted email, independent of whether
-  // the client should have skipped this call (verify/app.js does, based on
-  // the bounce reason, but that is JS an attacker can ignore). Without this,
-  // a blocked-but-still-bound account could mint a session here, get bounced
-  // straight back by the gate's OWN blocked_emails check on the very next
-  // page, and — if the client retried — loop indefinitely minting sessions
-  // against a denylisted address.
-  try {
-    const blocked = await axios.get(
-      SUPABASE_URL + "/rest/v1/blocked_emails?email=eq." + encodeURIComponent(email) + "&select=email",
-      {
-        headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY },
-        timeout: 8000,
-      }
-    )
-    if (Array.isArray(blocked.data) && blocked.data.length > 0) {
-      return res.status(403).json({ error: "blocked" })
-    }
-  } catch (e) {
-    console.error("[line-silent-auth] blocklist check failed:",
-      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    return res.status(500).json({ error: "lookup failed" })
-  }
-
-  try {
-    const session = await mintSessionForEmail(email)
-    setSessionCookie(res, session.access_token, session.refresh_token)
-
-    // Record this brand-new session as LINE-verified too, using the SAME
-    // safe, mismatch-checking RPC /line/bind uses — so a later switch to
-    // LINE_BIND_ENFORCE doesn't immediately ask this device to prove itself
-    // again right after it just did, silently, one line above. A mismatch
-    // genuinely can't happen here (we looked email up FROM this exact LINE
-    // account), but routing through the same RPC is one code path to trust
-    // rather than two, and keeps line_verified_sessions consistent.
-    //
-    // Awaited, not fire-and-forget: Vercel can freeze a serverless function
-    // the instant a response is sent (see the Telegram webhook handler
-    // below for the same lesson learned the hard way), so an un-awaited call
-    // here could get silently killed before it ever reaches Supabase. Best
-    // effort either way — its own failure must not fail the login, since the
-    // session cookie is already good by this point.
-    const sessionId = jwtPayload(session.access_token).session_id || null
-    if (sessionId) {
-      await axios.post(
-        SUPABASE_URL + "/rest/v1/rpc/bind_line_user_id_verified",
-        { p_email: email, p_line_user_id: line.sub, p_line_display_name: line.name, p_session_id: sessionId },
-        {
-          headers: {
-            apikey: SUPABASE_SERVICE_ROLE_KEY,
-            Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-            "Content-Type": "application/json",
-          },
-          timeout: 8000,
-        }
-      ).catch((e) => console.warn("[line-silent-auth] post-mint verify record failed:", e.message))
-    }
-
-    console.log("[line-silent-auth] minted session for " + email)
-    return res.json({ ok: true })
-  } catch (e) {
-    console.error("[line-silent-auth] mint failed:",
-      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    return res.status(500).json({ error: "mint failed" })
-  }
-})
-
-// Receives Telegram's "callback_query" webhook when an admin taps ✅/❌ on the
-// access-request alert (buttons added by scripts/telegram-approve-buttons.sql).
-// Uses the Supabase SERVICE ROLE key to call the approve/reject RPC — that key
-// never leaves this server.
-app.post("/telegram/webhook", express.json({ limit: "64kb" }), async (req, res) => {
-  const receivedSecret = (req.headers["x-telegram-bot-api-secret-token"] || "").trim()
-  const expectedSecret = (TELEGRAM_WEBHOOK_SECRET || "").trim()
-  console.log("[tg-webhook] received. secret header present:", !!req.headers["x-telegram-bot-api-secret-token"])
-
-  // Telegram echoes back the secret set via setWebhook in this header — the
-  // only real proof a request came from Telegram and not a guessed URL. Trim
-  // both sides so an accidental trailing space/newline (easy to introduce
-  // pasting a long value into Vercel's env var UI) doesn't cause a false
-  // mismatch. Log LENGTHS only (never the values) — a length mismatch is a
-  // strong sign of a copy-paste truncation between where the secret was set
-  // (Vercel) and where it was registered (the setWebhook call).
-  if (receivedSecret !== expectedSecret) {
-    console.log(
-      "[tg-webhook] REJECTED: secret mismatch. received len=" + receivedSecret.length +
-      " expected len=" + expectedSecret.length + " (configured=" + !!TELEGRAM_WEBHOOK_SECRET + ")"
-    )
-    return res.sendStatus(401)
-  }
-
-  const cb = req.body && req.body.callback_query
-  if (!cb || !cb.data) {
-    console.log("[tg-webhook] no callback_query.data in body — update type:", Object.keys(req.body || {}).join(","))
-    return res.sendStatus(200)
-  }
-  const [action, token] = String(cb.data).split("|")
-  // Log only a token prefix — it's a single-use approve/reject token for
-  // access_requests, not a long-lived secret, but there's no reason to put
-  // the full value in Vercel's logs when a prefix is enough to correlate.
-  const tokenPreview = token ? token.slice(0, 8) + "…" : token
-  console.log("[tg-webhook] callback_data action:", action, "token:", tokenPreview)
-  if (!token || (action !== "appr" && action !== "rej")) {
-    console.log("[tg-webhook] REJECTED: unparseable callback_data")
-    return res.sendStatus(200)
-  }
-
-  const tg = (method, body) =>
-    axios.post("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/" + method, body, { timeout: 8000 })
-      .then((r) => { console.log("[tg-webhook] telegram." + method + " ok:", JSON.stringify(r.data)); return r })
-      .catch((e) => {
-        console.error("[tg-webhook] telegram." + method + " FAILED:",
-          e.response ? JSON.stringify(e.response.data) : e.message)
-      })
-
-  try {
-    const fn = action === "appr" ? "approve_access_request" : "reject_access_request"
-    console.log("[tg-webhook] calling Supabase RPC:", fn, "with token:", tokenPreview)
-    const r = await axios.post(
-      SUPABASE_URL + "/rest/v1/rpc/" + fn,
-      { p_token: token },
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-          "Content-Type": "application/json",
-        },
-        timeout: 8000,
-      }
-    )
-    console.log("[tg-webhook] RPC response:", JSON.stringify(r.data))
-    const ok = r.data === true
-
-    await tg("answerCallbackQuery", {
-      callback_query_id: cb.id,
-      text: ok
-        ? (action === "appr" ? "อนุมัติแล้ว" : "ปฏิเสธคำขอแล้ว")
-        : "คำขอนี้ถูกดำเนินการไปแล้ว หรือไม่พบข้อมูล",
-    })
-
-    if (ok && cb.message) {
-      const suffix = action === "appr" ? "\n\n✅ อนุมัติแล้ว" : "\n\n❌ ปฏิเสธแล้ว"
-      await tg("editMessageText", {
-        chat_id: cb.message.chat.id,
-        message_id: cb.message.message_id,
-        text: (cb.message.text || "") + suffix,
-        reply_markup: { inline_keyboard: [] },
-      })
-    }
-  } catch (e) {
-    console.error("[tg-webhook] RPC call FAILED:",
-      e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    await tg("answerCallbackQuery", { callback_query_id: cb.id, text: "เกิดข้อผิดพลาด กรุณาลองใหม่" })
-  }
-
-  console.log("[tg-webhook] handler complete, responding 200")
-  // Respond only after ALL Telegram/Supabase calls finish. Vercel's serverless
-  // runtime can freeze the function the instant a response is sent — an early
-  // ack (the previous version of this code) let the platform kill
-  // answerCallbackQuery/editMessageText before they completed, which is why the
-  // button spinner would time out with no confirmation ever showing.
-  res.sendStatus(200)
-})
-
 // Gated pages: server-validated + token injected (must be registered BEFORE the
 // static mounts so "/status/" hits the handler, while "/status/app.js" etc.
 // fall through to the static mount below).
@@ -921,14 +428,14 @@ for (const p of gatedPages) {
   app.get(["/" + p, "/" + p + "/"], servePage(p))
 }
 
-// /verify/ itself: for everyone this is the normal unauthenticated page
-// (served byte-identical to the plain static file). The ONE exception is the
-// "bind_required" bounce from servePage() above — a session that's valid but
-// still needs its LINE userId bound. In that case only, inject the existing
-// access token so the page can silently complete the bind (see verify/app.js)
-// without making the physician re-enter their email/OTP. Registered before
-// the static mount below for the same reason as the gated pages.
-app.get(["/verify", "/verify/"], async (req, res) => {
+// /verify/ itself: the same static page for everyone, every time — no
+// session lookup, no token injection. Binding a LINE account no longer needs
+// a server-injected token or a bounce-back-here round trip (see verify/app.js
+// and supabase/functions/line-verify): the browser already holds whatever
+// tokens it needs by the time it would call either. Registered before the
+// static mount below so it's this handler, not express.static, that serves
+// the trailing-slash-less form too.
+app.get(["/verify", "/verify/"], (req, res) => {
   // NO trailing-slash redirect here — this page is served identically at both
   // /verify and /verify/.
   //
@@ -938,56 +445,25 @@ app.get(["/verify", "/verify/"], async (req, res) => {
   // URL with "#access_token=…" appended to complete login, and the redirect
   // replaced that fragment with an empty one. liff.init() then found no login
   // state, restarted login, landed back on /verify, and got stripped again —
-  // forever. Vercel logs showed the cycle plainly, with no POST /line/bind
-  // ever reached.
+  // forever.
   //
   // It only surfaced when the `openid` scope was added: that invalidated
   // existing LIFF consent, so init() started needing a real login round-trip
   // instead of restoring from cache. The stripping bug was already here.
   //
   // Serving both paths keeps the fragment intact (no navigation at all), and
-  // verify/index.html now loads /verify/app.js absolutely so the no-slash URL
+  // verify/index.html loads /verify/app.js absolutely so the no-slash URL
   // resolves its script correctly — that 404 was the redirect's only purpose.
   //
   // The OTHER trailing-"#" redirects (servePage, for /status /list /ranking)
   // are deliberately untouched: those clear a genuinely stale fragment left by
   // a DIFFERENT LIFF app, which is a real problem and a different one.
   res.setHeader("Content-Type", "text/html; charset=utf-8")
-
-  // Inject the access token whenever a VALID SESSION EXISTS — not only when
-  // the URL still carries ?reason=bind_required.
-  //
-  // Incident (2026-08): an unbound physician reported the "ยืนยันอีเมล" email
-  // form reloading 2-3 times instead of binding silently. That page is the
-  // email/OTP step, which verify/app.js only shows when NO token was injected
-  // — the tell that finally explained why no POST /line/bind, no
-  // line_bind_attempts row and no line_verified_sessions row ever appeared:
-  // runLineBindFlow was never reached at all.
-  //
-  // Cause: servePage bounces them here as
-  // /verify/?return=…&reason=bind_required with the token injected, and
-  // verify/app.js starts the silent bind. liff.init() then performs a LINE
-  // login round-trip which navigates to the LIFF app's REGISTERED endpoint
-  // URL — our query string does not survive that. Coming back, reason was no
-  // longer "bind_required", so no token was injected, and the physician got
-  // dropped onto the email form for an account they were already signed in to.
-  //
-  // Keying off the session removes the dependency on a query parameter
-  // surviving a third party's redirect. Note this also means a signed-in
-  // visitor to /verify/ is taken straight through the bind rather than being
-  // offered the email form; switching accounts requires POST /auth/logout
-  // first. That is the right trade — being unable to log in at all is far
-  // worse than an awkward account switch.
-  const { at } = await resolveAccessToken(req, res)
-  console.log(
-    "[verify] reason=" + (req.query.reason || "-") +
-    " session=" + (at ? "yes" : "no") +
-    " token_injected=" + (at ? "yes" : "no")
-  )
-  // Same reasoning as servePage: the signed-in variant embeds an access token,
-  // and either variant must be re-fetched so its <script> URLs stay current.
+  // Still no-store: the page itself is static, but stampAssets hashes its
+  // script URL at boot, and a cached copy would keep requesting whatever
+  // hash was current when it was stored.
   res.setHeader("Cache-Control", "no-store")
-  res.send(at ? verifyTemplate.replace(PAGE_TOKEN_PLACEHOLDER, at) : verifyTemplate)
+  res.send(verifyTemplate)
 })
 
 // ── /admin/ — roster CRUD dashboard, single-admin only ──────────────────────
@@ -1146,6 +622,81 @@ app.delete("/admin/api/tables/:table/rows/:index", requireAdmin, async (req, res
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "delete failed" })
+  }
+})
+
+// ── Access requests ──────────────────────────────────────────────────────
+// An email that isn't allow-listed yet (log_access_request(), called from
+// /verify/) lands here for the admin to act on. Approving used to happen via
+// a bearer token riding in a Telegram button's callback_data — replayable by
+// anyone in that chat or holding the bot token, straight against Supabase,
+// with no admin session involved at all (SECURITY_ANALYSIS.md §2c). This is
+// the replacement: the admin's own authenticated dashboard, writing with the
+// service_role key server-side, same posture as the roster CRUD routes above.
+app.get("/admin/api/access-requests", requireAdmin, async (req, res) => {
+  try {
+    const r = await axios.get(
+      SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=*&order=requested_at.desc",
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
+    )
+    res.json({ requests: r.data || [] })
+  } catch (e) {
+    console.error("[admin] access-requests list failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load access requests" })
+  }
+})
+
+app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req, res) => {
+  const email = String(req.params.email || "").trim().toLowerCase()
+  if (!email) return res.status(400).json({ error: "missing email" })
+  try {
+    const reqRow = await axios.get(
+      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name",
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
+    )
+    const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
+
+    // Upsert rather than insert: the email may already exist (e.g. a
+    // previously revoked physician re-requesting) — approving should
+    // re-activate that row, not fail on the primary key.
+    await axios.post(
+      SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
+      { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() },
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates",
+        },
+        timeout: 8000,
+      }
+    )
+    await axios.patch(
+      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email),
+      { resolved: true },
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: pgErrorMessage(e, "approve failed") })
+  }
+})
+
+app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req, res) => {
+  const email = String(req.params.email || "").trim().toLowerCase()
+  if (!email) return res.status(400).json({ error: "missing email" })
+  try {
+    await axios.patch(
+      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email),
+      { resolved: true },
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    console.error("[admin] reject access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "reject failed" })
   }
 })
 
