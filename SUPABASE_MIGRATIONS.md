@@ -75,6 +75,12 @@ already-applied file is safe.
     see the file's own Block 6 for the post-deploy cleanup step. Also
     replaces `notify_access_request()` (drops the Telegram approve/reject
     buttons — approval now happens in the `/admin/` dashboard).
+15. `scripts/access-request-department-2026-08.sql` — adds `department` to
+    `access_requests` and to what `log_access_request()` accepts/stores,
+    closing a gap where an admin-approved physician (as opposed to one
+    auto-provisioned from a matched submission) landed in `physicians` with
+    no department at all — the request form never asked for one before this.
+    Run AFTER step 14.
 
 ## Superseded — do NOT run
 

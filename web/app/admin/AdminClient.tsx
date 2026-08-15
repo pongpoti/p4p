@@ -248,6 +248,11 @@ export default function AdminClient() {
                       </div>
                       <div className="truncate text-xs text-[var(--color-ink-muted)]">{req.email}</div>
                     </div>
+                    {req.department ? (
+                      <span className="shrink-0 rounded-full bg-[var(--color-tertiary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--color-secondary)]">
+                        {departmentLabel(req.department)}
+                      </span>
+                    ) : null}
                     <div className="flex shrink-0 gap-1.5">
                       <button
                         type="button"

@@ -95,12 +95,23 @@ revoked. Replaces `physician_directory`, the auth-relevant half of
 allow-list, so an admin can see who still needs to be added (visibility only,
 not an approval gate).
 
-- **Columns:** `email` (PK), `name` (self-reported), `requested_at`,
+- **Columns:** `email` (PK), `name` (self-reported), `department`
+  (self-reported, from a fixed dropdown — see below), `requested_at`,
   `request_count`, `resolved` (bool). (`approve_token` is dropped by
   `scripts/auth-rewrite-2026-08.sql` — approval no longer travels through
   Telegram `callback_data`.)
 - Written via the `log_access_request()` RPC, called from `/verify/` when a
-  user's email fails the allow-list check.
+  user's email fails the allow-list check. `department` is required on the
+  form (`assets/shared.js`'s `P4P.DEPARTMENTS`, the same fixed ~19-entry list
+  `status/app.js`/`admin/app.js` use) so it can't drift from the canonical
+  spelling the rest of the app groups by — added in
+  `scripts/access-request-department-2026-08.sql` to close a gap where an
+  admin-approved (as opposed to auto-provisioned) physician landed in
+  `physicians` with no department at all.
+- Approving copies `name`/`department` into the matching `physicians` row —
+  `department` is only included in that write when the request actually has
+  one, so an old pre-migration request with none doesn't overwrite an
+  existing value on re-approval.
 - `scripts/notify-access-request.sql`'s trigger fires an informational
   Telegram alert on INSERT (no buttons). An admin approves or rejects from
   `/admin/`'s Access Requests panel — `POST /admin/api/access-requests/:email`

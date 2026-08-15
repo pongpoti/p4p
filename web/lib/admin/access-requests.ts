@@ -16,6 +16,7 @@ import { AdminError } from "./roster"
 export interface AccessRequest {
   email: string
   name: string | null
+  department: string | null
   requested_at: string
   request_count: number
 }
@@ -53,24 +54,33 @@ async function markResolved(email: string): Promise<void> {
  * not fail on the primary key.
  */
 export async function approveAccessRequest(email: string): Promise<void> {
-  const nameRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/access_requests?email=eq.${encodeURIComponent(email)}&select=name`,
+  const reqRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/access_requests?email=eq.${encodeURIComponent(email)}&select=name,department`,
     { headers: serviceHeaders(), signal: AbortSignal.timeout(8000) },
   )
-  if (!nameRes.ok) throw new AdminError("failed to load access request", 500)
-  const rows = (await nameRes.json()) as Array<{ name: string | null }>
+  if (!reqRes.ok) throw new AdminError("failed to load access request", 500)
+  const rows = (await reqRes.json()) as Array<{ name: string | null; department: string | null }>
   const name = rows[0]?.name ?? null
+  const department = rows[0]?.department ?? null
+
+  // department is omitted from the body entirely when the request never
+  // captured one (logged before this field existed) — merge-duplicates only
+  // overwrites columns present in the payload, so leaving it out preserves
+  // whatever department the physicians row already has rather than
+  // clobbering it with null.
+  const upsertBody: Record<string, unknown> = {
+    email,
+    full_name: name,
+    source: "directory",
+    active: true,
+    updated_at: new Date().toISOString(),
+  }
+  if (department) upsertBody.department = department
 
   const upsert = await fetch(`${SUPABASE_URL}/rest/v1/physicians?on_conflict=email`, {
     method: "POST",
     headers: { ...serviceHeaders(), Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify({
-      email,
-      full_name: name,
-      source: "directory",
-      active: true,
-      updated_at: new Date().toISOString(),
-    }),
+    body: JSON.stringify(upsertBody),
     signal: AbortSignal.timeout(8000),
   })
   if (!upsert.ok) {
