@@ -251,8 +251,17 @@
                      See verify/app.js and SECURITY_ANALYSIS.md §2a. -->
                 <input id="reqname" type="text" autocomplete="name" maxlength="100"
                     placeholder="ชื่อ-นามสกุลของท่าน" required>
+                <!-- A fixed list of ~19 departments, unlike the name field above —
+                     no PII-leak concern the way a roster-of-physicians dropdown had.
+                     Options are populated from P4P.DEPARTMENTS (assets/shared.js) at
+                     runtime, not hardcoded here, so there's one list to keep in sync
+                     rather than a new copy. -->
+                <label for="reqdept" style="margin-top:14px;">กลุ่มงาน</label>
+                <select id="reqdept" required>
+                    <option value="" disabled selected>เลือกกลุ่มงาน</option>
+                </select>
                 <button id="request-submit" type="submit">ส่งคำขอเข้าใช้งาน</button>
-                <p class="hint">อีเมล <b id="req-email"></b> ยังไม่ได้ลงทะเบียน กรุณากรอกชื่อ-นามสกุลของท่านเพื่อให้ผู้ดูแลเพิ่มสิทธิ์ให้ท่าน</p>
+                <p class="hint">อีเมล <b id="req-email"></b> ยังไม่ได้ลงทะเบียน กรุณากรอกชื่อ-นามสกุลและกลุ่มงานของท่านเพื่อให้ผู้ดูแลเพิ่มสิทธิ์ให้ท่าน</p>
                 <button id="request-back" type="button" class="link-btn">ใช้อีเมลอื่น</button>
             </form>
 

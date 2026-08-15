@@ -146,7 +146,9 @@
             '<div style="flex:1;min-width:0;">' +
             '<div class="row-card-name">' + escHtml(reqRow.name || "(ไม่ระบุชื่อ)") + "</div>" +
             '<div class="req-email">' + escHtml(reqRow.email) + "</div>" +
-            "</div></div>" +
+            "</div>" +
+            (reqRow.department ? '<div class="dept-badge">' + escHtml(reqRow.department) + "</div>" : "") +
+            "</div>" +
             '<div class="row-card-body" style="display:block;">' +
             '<div class="row-actions">' +
             '<button type="button" class="row-btn btn-reject">ปฏิเสธ</button>' +

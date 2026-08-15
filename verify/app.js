@@ -108,6 +108,7 @@
         const sentTo      = document.getElementById("sent-to")
         const requestStep = document.getElementById("request-step")
         const reqName     = document.getElementById("reqname")
+        const reqDept     = document.getElementById("reqdept")
         const reqEmail    = document.getElementById("req-email")
         const requestSubmit = document.getElementById("request-submit")
         const requestBack = document.getElementById("request-back")
@@ -120,6 +121,17 @@
         // that doesn't apply, for the traceability bind after OTP succeeds —
         // one liff.getIDToken() call, not two.
         let capturedIdToken = null
+
+        // Populate the department dropdown from the shared list (assets/shared.js)
+        // once, at load — nothing here is a roster of physicians, so there is no
+        // repeat of the list_all_physicians() PII concern the name field's comment
+        // above it documents.
+        for (const dept of P4P.DEPARTMENTS) {
+            const opt = document.createElement("option")
+            opt.value = dept
+            opt.textContent = dept
+            reqDept.appendChild(opt)
+        }
 
         // ── Helpers ───────────────────────────────────────────────────────────
         const showError  = (text) => { msg.className = "msg error";  msg.textContent = text }
@@ -417,7 +429,7 @@
             emailInput.focus()
         })
 
-        // ── Step 2b — submit an access request (name + email) ─────────────────
+        // ── Step 2b — submit an access request (name + department + email) ────
         requestStep.addEventListener("submit", async (e) => {
             e.preventDefault()
             clearMsg()
@@ -426,9 +438,14 @@
                 showError("กรุณากรอกชื่อ-นามสกุลของท่าน")
                 return
             }
+            const department = reqDept.value
+            if (!department) {
+                showError("กรุณาเลือกกลุ่มงานของท่าน")
+                return
+            }
             busy(requestSubmit, true, "กำลังส่ง...")
             try {
-                await db.rpc("log_access_request", { p_email: currentEmail, p_name: name })
+                await db.rpc("log_access_request", { p_email: currentEmail, p_name: name, p_department: department })
                 requestStep.classList.add("hidden")
                 showNotice("ส่งคำขอเรียบร้อยแล้ว ผู้ดูแลจะเพิ่มสิทธิ์ให้ท่านเร็ว ๆ นี้ กรุณากลับมายืนยันอีกครั้งภายหลัง")
             } catch (err) {
@@ -443,6 +460,7 @@
             requestStep.classList.add("hidden")
             emailStep.classList.remove("hidden")
             reqName.value = ""
+            reqDept.value = ""
             emailInput.focus()
         })
       })()

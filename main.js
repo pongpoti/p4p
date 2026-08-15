@@ -651,17 +651,26 @@ app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req, 
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
     const reqRow = await axios.get(
-      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name",
+      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name,department",
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
     )
     const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
+    const department = (reqRow.data && reqRow.data[0] && reqRow.data[0].department) || null
 
     // Upsert rather than insert: the email may already exist (e.g. a
     // previously revoked physician re-requesting) — approving should
     // re-activate that row, not fail on the primary key.
+    //
+    // department is omitted from the body entirely when the request never
+    // captured one (a request logged before this field existed) — merge-
+    // duplicates only overwrites columns present in the payload, so leaving
+    // it out preserves whatever department the physicians row already has
+    // rather than clobbering it with null.
+    const upsertBody = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
+    if (department) upsertBody.department = department
     await axios.post(
       SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
-      { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() },
+      upsertBody,
       {
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY,

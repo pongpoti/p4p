@@ -42,6 +42,13 @@
     "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
   ]
 
+  // Canonical hospital department list, in the hand-maintained Thai-dictionary
+  // order used everywhere else (INTERN forced last). status/app.js and
+  // admin/app.js each still hold their own copy of this array — a pre-existing
+  // duplication tracked in web/lib/__tests__/parity.test.ts — but verify/app.js
+  // reads it from here rather than adding a fourth.
+  var DEPARTMENTS = ["กุมารเวชกรรม", "จักษุวิทยา", "จิตเวชและยาเสพติด", "เทคนิคการแพทย์และพยาธิวิทยาคลินิก", "นิติเวช", "ผู้ป่วยนอก", "พยาธิวิทยากายวิภาค", "รังสีวิทยา", "วิสัญญีวิทยา", "เวชกรรมฟื้นฟู", "เวชกรรมสังคม", "เวชศาสตร์ฉุกเฉิน", "ศัลยกรรม", "ศัลยกรรมออร์โธปิดิกส์", "สูติ-นรีเวชกรรม", "โสต ศอ นาสิก", "อาชีวเวชกรรม", "อายุรกรรม", "INTERN"]
+
   // Escape text before inserting it into innerHTML (prevents HTML/script injection).
   function escHtml(s) {
     return String(s)
@@ -70,6 +77,7 @@
     COLOR_ARRAY: COLOR_ARRAY,
     THAI_MONTHS: THAI_MONTHS,
     THAI_MONTHS_SHORT: THAI_MONTHS_SHORT,
+    DEPARTMENTS: DEPARTMENTS,
     escHtml: escHtml,
   }
 })(window)
