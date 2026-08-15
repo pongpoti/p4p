@@ -19,9 +19,6 @@ export const SUPABASE_ANON_KEY =
 /** Cookie holding {at, rt} for the physician session. */
 export const SESSION_COOKIE = "p4p_rt"
 
-/** Redirect-loop backstop counter (see lib/gate/loop.ts). */
-export const BIND_LOOP_COOKIE = "p4p_bindloop"
-
 /** Admin dashboard session cookie. */
 export const ADMIN_COOKIE = "p4p_admin"
 
@@ -34,39 +31,20 @@ export const COOKIE_BASE = {
 } as const
 
 /**
- * Staged rollout switch for the LINE second factor.
+ * Server-only secrets. Throwing here would break the whole app at import
+ * time, so these return undefined and each caller decides what that means.
  *
- *   unset/false — DETECT ONLY. A bind is still verified against LINE and a
- *                 mismatch refused, but page access keeps the existing rules
- *                 including the "3 failures then let them through" fail-open.
- *   "true"      — ENFORCE. A gated page requires that THIS SESSION proved its
- *                 LINE identity, and the fail-opens are switched off.
- *
- * Read as a function, not a module constant, so tests can flip it.
+ * Physician auth (email OTP + LINE binding) does not appear here at all —
+ * LINE ID-token verification and the `physicians` write happen in the
+ * Supabase Edge Function (supabase/functions/line-verify), which is called
+ * directly from the browser and gets its own service-role key injected by
+ * the Edge Functions runtime. See scripts/auth-rewrite-2026-08.sql.
  */
-export function lineBindEnforce(): boolean {
-  return process.env.LINE_BIND_ENFORCE === "true"
-}
-
-/** Three failed binds, then the user is let through with an admin alert. */
-export const BIND_ATTEMPT_LIMIT = 3
-
-/**
- * Hard cap on consecutive bind_required redirects for one browser, independent
- * of anything the database or the client reports. One above the intended 3 real
- * attempts, as slack.
- */
-export const BIND_LOOP_MAX = 4
-
-/** Server-only secrets. Throwing here would break the whole app at import
- *  time, so these return undefined and each caller decides what that means. */
 export const serverEnv = {
   lineAccessToken: () => process.env.LINE_ACCESS_TOKEN,
   lineChannelSecret: () => process.env.LINE_CHANNEL_SECRET,
-  lineLoginChannelId: () => process.env.LINE_LOGIN_CHANNEL_ID,
   supabaseServiceRoleKey: () => process.env.SUPABASE_SERVICE_ROLE_KEY,
   telegramBotToken: () => process.env.TELEGRAM_BOT_TOKEN,
-  telegramWebhookSecret: () => process.env.TELEGRAM_WEBHOOK_SECRET,
   /** The single LINE userId allowed into /admin/. Not a secret in itself — a
    *  LINE userId identifies an account but cannot authenticate as one. */
   adminLineUserId: () =>

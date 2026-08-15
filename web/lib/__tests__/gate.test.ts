@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { jwtExp, jwtPayload, isExpiring } from "../gate/jwt"
 import { readSessionCookie, resolveAccessToken } from "../gate/session"
-import { gateDecision, type GateStatus } from "../gate/status"
-import { BIND_LOOP_MAX } from "../config"
+import { gateDecision, isCurrentUserAllowlisted } from "../gate/status"
 
 /** Build an unsigned JWT with the given payload — only the body is ever read. */
 function fakeJwt(payload: Record<string, unknown>): string {
@@ -136,107 +135,36 @@ describe("resolveAccessToken", () => {
   })
 })
 
-// ── The branch tree that decides whether someone gets in ────────────────────
+// ── The gate is now a single boolean ─────────────────────────────────────
+// Whether a LINE account is bound plays no part in reaching a page — that's
+// traceability recorded by supabase/functions/line-verify, never a login
+// condition. See scripts/auth-rewrite-2026-08.sql.
 describe("gateDecision", () => {
-  const base: GateStatus = {
-    is_blocked: false,
-    is_bound: true,
-    attempts: 0,
-    session_verified: true,
-    session_revoked: false,
-    enforce_eligible: true,
-  }
-  const decide = (status: GateStatus | null, enforce = false, loopCount = 0) =>
-    gateDecision({ status, enforce, loopCount, loopMax: BIND_LOOP_MAX })
-
-  it("serves a bound, verified, unblocked session", () => {
-    expect(decide(base).type).toBe("serve")
+  it("serves when the email is allow-listed", () => {
+    expect(gateDecision(true).type).toBe("serve")
   })
 
-  it("bounces a denylisted email even with a valid session", () => {
-    expect(decide({ ...base, is_blocked: true }).type).toBe("blocked")
+  it("bounces to blocked when it is not", () => {
+    expect(gateDecision(false).type).toBe("blocked")
+  })
+})
+
+describe("isCurrentUserAllowlisted", () => {
+  it("returns the RPC's boolean result", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => true })
+    expect(await isCurrentUserAllowlisted("token", fetchImpl as never)).toBe(true)
+
+    fetchImpl.mockResolvedValue({ ok: true, json: async () => false })
+    expect(await isCurrentUserAllowlisted("token", fetchImpl as never)).toBe(false)
   })
 
-  it("checks the denylist before anything else", () => {
-    // Blocked wins over revoked and unbound alike.
-    expect(decide({ ...base, is_blocked: true, session_revoked: true, is_bound: false }).type).toBe(
-      "blocked",
-    )
-  })
+  it("fails OPEN on a non-ok response or a network error", async () => {
+    // A transient Supabase hiccup must not lock out a whole hospital; RLS is
+    // still the real data barrier regardless of what this returns.
+    const notOk = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    expect(await isCurrentUserAllowlisted("token", notOk as never)).toBe(true)
 
-  it("treats a revoked session as expired in both modes", () => {
-    expect(decide({ ...base, session_revoked: true }).type).toBe("expired")
-    expect(decide({ ...base, session_revoked: true }, true).type).toBe("expired")
-  })
-
-  describe("detect-only mode (LINE_BIND_ENFORCE unset)", () => {
-    it("fails OPEN when the gate RPC is unreachable", () => {
-      // A transient Supabase hiccup must not lock out a whole hospital.
-      expect(decide(null).type).toBe("serve")
-    })
-
-    it("redirects an unbound session under the attempt limit", () => {
-      expect(decide({ ...base, is_bound: false, attempts: 0 }).type).toBe("bind_required")
-      expect(decide({ ...base, is_bound: false, attempts: 2 }).type).toBe("bind_required")
-    })
-
-    it("lets an unbound session through once the attempt limit is reached", () => {
-      expect(decide({ ...base, is_bound: false, attempts: 3 }).type).toBe("serve")
-    })
-
-    it("ignores session_verified", () => {
-      expect(decide({ ...base, session_verified: false }).type).toBe("serve")
-    })
-  })
-
-  describe("enforce mode", () => {
-    it("refuses to serve when the gate RPC is unreachable", () => {
-      expect(decide(null, true).type).toBe("gate_unavailable")
-    })
-
-    it("requires this session to have proved its LINE identity", () => {
-      expect(decide({ ...base, session_verified: false }, true).type).toBe("bind_required")
-      expect(decide({ ...base, session_verified: true }, true).type).toBe("serve")
-    })
-
-    it("ignores the attempts fail-open for eligible users", () => {
-      // The whole point of enforcement: 3 failures no longer buys entry.
-      expect(
-        decide({ ...base, session_verified: false, attempts: 99 }, true).type,
-      ).toBe("bind_required")
-    })
-
-    it("keeps the old rules for users who have never proved", () => {
-      // enforce_eligible=false phases the factor in, so switching the env var on
-      // cannot bounce every physician at once if the LIFF app is missing the
-      // openid scope.
-      const neverProved = { ...base, enforce_eligible: false, session_verified: false }
-      expect(decide(neverProved, true).type).toBe("serve") // bound, so no redirect
-      expect(decide({ ...neverProved, is_bound: false, attempts: 3 }, true).type).toBe("serve")
-      expect(decide({ ...neverProved, is_bound: false, attempts: 0 }, true).type).toBe(
-        "bind_required",
-      )
-    })
-  })
-
-  describe("redirect-loop backstop", () => {
-    const unbound = { ...base, is_bound: false, attempts: 0 }
-
-    it("still redirects below the cap", () => {
-      expect(decide(unbound, false, BIND_LOOP_MAX - 1).type).toBe("bind_required")
-    })
-
-    it("serves instead of redirecting once the cap is hit", () => {
-      // Pure server state, deliberately independent of Supabase, LINE, and the
-      // client's own retry accounting. This is what stops the 2026-08 loop.
-      expect(decide(unbound, false, BIND_LOOP_MAX).type).toBe("serve")
-      expect(decide(unbound, false, BIND_LOOP_MAX + 5).type).toBe("serve")
-    })
-
-    it("applies in enforce mode too", () => {
-      expect(
-        decide({ ...base, session_verified: false }, true, BIND_LOOP_MAX).type,
-      ).toBe("serve")
-    })
+    const throws = vi.fn().mockRejectedValue(new Error("offline"))
+    expect(await isCurrentUserAllowlisted("token", throws as never)).toBe(true)
   })
 })

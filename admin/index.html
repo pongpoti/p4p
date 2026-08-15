@@ -75,6 +75,24 @@
             transition: background .15s;
         }
         #logout-btn:active { background: rgba(255,255,255,.28); }
+        #header-actions { display: flex; align-items: center; gap: 8px; }
+        #requests-btn {
+            position: relative;
+            background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.3); color: #fff;
+            border-radius: 999px; padding: 7px 14px; font-size: .78rem; font-weight: 600; cursor: pointer;
+        }
+        #requests-btn:active { background: rgba(255,255,255,.28); }
+        #requests-badge {
+            display: inline-block; min-width: 16px; padding: 1px 5px; margin-left: 4px;
+            background: var(--danger); color: #fff; border-radius: 999px; font-size: .68rem; font-weight: 700;
+        }
+
+        /* Access-request cards reuse .row-card's look via shared classes below */
+        #requests-panel { padding: 0 14px 10px; }
+        #requests-panel .row-card-name { font-weight: 600; }
+        #requests-panel .req-email { font-size: .82rem; color: var(--text-muted); margin-top: 2px; }
+        .btn-approve { background: var(--ok-soft); color: var(--ok); }
+        .btn-reject { background: var(--danger-soft); color: var(--danger); }
 
         /* Sticky filter bar */
         #filter-bar {
@@ -301,7 +319,14 @@
     <div id="app" class="hidden">
         <div id="header">
             <h1>Roster Admin</h1>
-            <button id="logout-btn" type="button">ออกจากระบบ</button>
+            <div id="header-actions">
+                <button id="requests-btn" type="button">คำขอเข้าใช้งาน<span id="requests-badge" class="hidden">0</span></button>
+                <button id="logout-btn" type="button">ออกจากระบบ</button>
+            </div>
+        </div>
+        <div id="requests-panel" class="hidden">
+            <div id="requests-list"></div>
+            <div id="requests-empty" class="hidden" style="padding:14px 0;color:var(--text-muted);font-size:.85rem;">ไม่มีคำขอค้างอยู่</div>
         </div>
         <div id="filter-bar">
             <select id="table_select"></select>

@@ -62,6 +62,20 @@ already-applied file is safe.
     `scripts/auth-hook-restrict-signups.sql` — both explicitly marked
     "TEMPLATE — verify before enabling" in-file; review before running.
 
+14. `scripts/auth-rewrite-2026-08.sql` — **the current auth model**, replacing
+    steps 6 (its `physician_directory`/`blocked_emails`/allow-list-union half)
+    and 9-10 (the LINE-bind-as-second-factor machinery) with a single
+    `physicians` table (email, LINE binding, active flag, all in one row) and
+    a trigger that auto-provisions a row the moment the email-matching
+    pipeline confirms a submission sender. `is_sender_allowlisted` /
+    `is_current_user_allowlisted` keep their names (so RLS policies and
+    `provision_month` need no changes) but their bodies now read only
+    `physicians`. Run AFTER step 6 and step 9-10 (it migrates data out of
+    what they created) and BEFORE deploying the app version that assumes it —
+    see the file's own Block 6 for the post-deploy cleanup step. Also
+    replaces `notify_access_request()` (drops the Telegram approve/reject
+    buttons — approval now happens in the `/admin/` dashboard).
+
 ## Superseded — do NOT run
 
 - **`scripts/security-rls.sql`** — the original anon-open RLS model,
@@ -94,6 +108,30 @@ having `provision_month()` assert the `trg_secure_new_roster`-installed
 shape instead of re-deriving a competing one (see the file's own header
 comment). This ledger exists so the next schema change doesn't reintroduce
 the same class of drift.
+
+## Retired by `scripts/auth-rewrite-2026-08.sql`
+
+These already ran in production at some point (they're not hazardous to
+re-run the way `security-rls.sql` is), but the tables/functions they created
+are superseded by `physicians` and dropped in step 14's post-deploy Block 6.
+No need to run them on a fresh project; kept for history:
+
+- `scripts/bind-line-user.sql`, `scripts/line-user-id-columns.sql`,
+  `scripts/line-bind-gate.sql`, `scripts/line-bind-verified.sql`,
+  `scripts/line-binding-status-view.sql` — the LINE-bind-as-second-factor
+  machinery (`line_user_bindings`, `line_bind_attempts`,
+  `line_verified_sessions`, the `bind_line_user_id*` /
+  `get_line_bind_gate_status*` functions). Traceability now lives on
+  `physicians.line_user_id`, updated in-app on every login, no DB-side
+  gating logic involved.
+- `scripts/telegram-approve-buttons.sql`,
+  `scripts/telegram-approve-sender-display-name.sql`,
+  `scripts/telegram-approve-name-match.sql` — the Telegram inline
+  Approve/Reject flow. Approval now happens in `/admin/` (authenticated,
+  service-role write), not a bearer token in `callback_data`
+  (see SECURITY_ANALYSIS.md §2c).
+- `scripts/list-all-physicians.sql` — already unused by the app (see its own
+  in-file deprecation header); dropped in step 14's Block 6.
 
 ## Health check — catching this class of bug automatically
 

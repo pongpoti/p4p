@@ -59,22 +59,35 @@ submission email) to the physician identity it was matched to.
   `service_role` or the `SECURITY DEFINER` allow-list functions.
 - Migration: `automation/sql/sender_physician_match.sql`.
 
-## `physician_directory`
+## `physicians`
 
-**Purpose:** Admin-maintained allow-list of physicians permitted to log in,
-independent of whether they've ever emailed a submission (covers new hires
-with no submission history yet).
+**Purpose:** The whole auth system in one table — who's allowed to log in,
+what LINE account belongs to their email, and whether that's currently
+revoked. Replaces `physician_directory`, the auth-relevant half of
+`sender_physician_match`, `blocked_emails`, and `line_user_bindings`.
 
-- **Columns:** `email` (PK), `full_name`, `department`, `active` (bool),
-  `created_at`.
-- Effective login allow-list is
-  `physician_directory UNION sender_physician_match`. Toggling `active =
-  false` revokes a directory-based entry without deleting it.
-- Seeded once from `sender_physician_match` (matched senders only).
+- **Columns:** `email` (PK), `full_name`, `department`, `line_user_id`
+  (unique, nullable), `line_display_name`, `active` (bool — `false` IS the
+  denylist, no separate table), `source` (`'directory'` — an admin added it
+  by hand — or `'matched_sender'` — auto-provisioned, see below),
+  `created_at`, `updated_at`, `last_login_at`.
+- **Auto-provisioning:** a trigger on `sender_physician_match`
+  (`sync_physician_from_match()`) upserts a row here every time the
+  email-matching pipeline confirms a submission sender (`matched = true`) —
+  this is the mechanism behind "a physician who already emailed a submission
+  can log in immediately, no admin step." The upsert never resurrects a row
+  an admin has set `active = false` on.
+- **LINE binding is traceability, not a security factor.** `line_user_id` /
+  `line_display_name` are refreshed on every login that carries a LINE ID
+  token (last-write-wins) — there is deliberately no mismatch detection, no
+  attempt counter, and no per-session proof table. A missing or changed
+  binding never blocks page access; email OTP is the sole auth factor.
 - **Access:** RLS, no anon/authenticated policies — reachable only via
   `SECURITY DEFINER` functions (`is_sender_allowlisted`,
-  `is_current_user_allowlisted`) or `service_role`.
-- Migration: `scripts/security-rls-auth.sql` (Block 0a).
+  `is_current_user_allowlisted`, same names as before so RLS policies and
+  `provision_month()` needed no changes) or `service_role` (main.js,
+  `/admin/api/access-requests`).
+- Migration: `scripts/auth-rewrite-2026-08.sql`.
 
 ## `access_requests`
 
@@ -83,46 +96,19 @@ allow-list, so an admin can see who still needs to be added (visibility only,
 not an approval gate).
 
 - **Columns:** `email` (PK), `name` (self-reported), `requested_at`,
-  `request_count`, `resolved` (bool), plus `approve_token` (added by
-  `scripts/telegram-approve-buttons.sql`) for one-tap Telegram approve/reject.
+  `request_count`, `resolved` (bool). (`approve_token` is dropped by
+  `scripts/auth-rewrite-2026-08.sql` — approval no longer travels through
+  Telegram `callback_data`.)
 - Written via the `log_access_request()` RPC, called from `/verify/` when a
   user's email fails the allow-list check.
-- Optional triggers (`scripts/notify-access-request.sql`,
-  `scripts/telegram-approve-buttons.sql`) fire a Telegram alert on INSERT with
-  inline Approve/Reject buttons; approving inserts the physician into
-  `physician_directory` via `approve_access_request()`.
-- **Access:** RLS, no anon/authenticated SELECT — insert-only via the RPC.
-- Migration: `scripts/security-rls-auth.sql` (Block 0a).
-
-## `blocked_emails`
-
-**Purpose:** Revocation/denylist that overrides both allow-list branches
-(`physician_directory` and `sender_physician_match`) without deleting
-underlying data.
-
-- **Columns:** `email` (PK), `reason`, `blocked_at`.
-- Checked first in `is_sender_allowlisted()` — if present, access is denied
-  regardless of directory/match status. Used to revoke a departed physician's
-  access while preserving their historical submission/match rows.
-- **Access:** RLS, fully locked — admin edits only via Table Editor /
-  `service_role`.
-- Migration: `scripts/security-rls-auth.sql` (Block 0a).
-
-## `line_user_bindings`
-
-**Purpose:** Pure traceability — records which LINE account (from the LIFF
-app) is behind a given verified email, for admin investigation. Explicitly
-**not** an auth factor.
-
-- **Columns:** `email` (PK), `line_user_id`, `line_display_name`, `bound_at`.
-- Written via the `bind_line_user_id()` RPC right after a successful OTP
-  verification; the function takes the email from the caller's own JWT, so a
-  user can only ever bind their own account. First-verification-wins:
-  `line_user_id`/`bound_at` never get overwritten after the initial bind
-  (only display name refreshes).
-- **Access:** RLS, no anon/authenticated SELECT — write only via the RPC
-  (`authenticated` role); read only by `service_role` / dashboard.
-- Migration: `scripts/bind-line-user.sql`.
+- `scripts/notify-access-request.sql`'s trigger fires an informational
+  Telegram alert on INSERT (no buttons). An admin approves or rejects from
+  `/admin/`'s Access Requests panel — `POST /admin/api/access-requests/:email`
+  (service-role write, upserts into `physicians` and marks `resolved`).
+- **Access:** RLS, no anon/authenticated SELECT — insert-only via the RPC;
+  the admin panel reads/writes it via `service_role`.
+- Migration: `scripts/security-rls-auth.sql` (Block 0a),
+  `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`).
 
 ## `email_sent_log`
 
@@ -149,8 +135,10 @@ These tables split into two groups:
    `dept_heads`, `sender_physician_match`, `email_sent_log` — driven by the
    email-processing automation.
 2. **Auth / allow-list plumbing** for the `/verify/` OTP login gate —
-   `physician_directory`, `access_requests`, `blocked_emails`,
-   `line_user_bindings`.
+   `physicians` (allow-list + LINE binding + revocation, all one table) and
+   `access_requests`. A trigger on `sender_physician_match` keeps `physicians`
+   in sync with the automation's matches; nothing else crosses the boundary
+   between the two groups.
 
 All of it is guarded by `SECURITY DEFINER` RPCs, so the underlying email/name
 data is never exposed directly to `anon`/`authenticated` clients — only

@@ -1,0 +1,14 @@
+# Minimal Supabase CLI config — only what's needed to deploy
+# supabase/functions/line-verify. This repo has no local Supabase dev stack;
+# migrations are still applied by hand via the SQL Editor (see
+# SUPABASE_MIGRATIONS.md), and this file exists solely so `supabase
+# functions deploy line-verify` knows which project to target.
+project_id = "zjeizbrzcltkgtlmkbji"
+
+[functions.line-verify]
+# Must be callable with NO Supabase session yet — the "silent" mode runs
+# before one exists, verifying identity via LINE's id_token instead of a
+# Supabase JWT. The function authenticates every caller itself (LINE for the
+# id_token, GoTrue's /auth/v1/user for an access_token in "bind" mode); it is
+# not left open the way an unauthenticated route normally would be.
+verify_jwt = false

@@ -17,10 +17,12 @@ import { ADMIN_COOKIE, serverEnv } from "../config"
  * "purpose" is mixed into the HMAC so a short-lived login token can never be
  * replayed as a long-lived session cookie or vice versa.
  *
- * KNOWN LIMITATION (see REACT_REWRITE_PLAN.md §13): a session token is valid
- * for 90 days and cannot be revoked without rotating one of the two secrets it
- * is derived from, which would break the rest of the system. Carried across
- * from the Express implementation unchanged, pending a decision.
+ * A session token cannot be revoked without rotating one of the two secrets
+ * it is derived from, which would break the rest of the system — its
+ * lifetime (ADMIN_SESSION_DAYS) is the only real defense against a lost or
+ * handed-down phone. Shortened from 90 to 7 days for exactly that reason;
+ * re-authenticating is a single "admin" DM to the bot, trivial for the one
+ * person who ever needs to.
  */
 export type TokenPurpose = "login" | "session"
 
@@ -73,7 +75,7 @@ export function verifyAdminToken(purpose: TokenPurpose, token: string | undefine
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
-export const ADMIN_SESSION_DAYS = 90
+export const ADMIN_SESSION_DAYS = 7
 
 export function adminSessionCookie(): { name: string; value: string; maxAge: number } {
   const maxAge = ADMIN_SESSION_DAYS * 24 * 3600

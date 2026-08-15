@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { INERT_FRAGMENT, canonicalPath, verifyBounce, type BounceReason } from "../gate/targets"
 
-const REASONS: BounceReason[] = [
-  "no_session",
-  "expired",
-  "blocked",
-  "gate_unavailable",
-  "bind_required",
-]
+const REASONS: BounceReason[] = ["no_session", "expired", "blocked"]
 
 /**
  * The trailing fragment is the entire point of this module. It is invisible in
@@ -56,14 +50,14 @@ describe("verifyBounce", () => {
   })
 
   it("percent-encodes a return path that carries its own query", () => {
-    const target = verifyBounce("bind_required", "/status/?sheetname=2569_04")
-    expect(target).toBe("/verify/?return=%2Fstatus%2F%3Fsheetname%3D2569_04&reason=bind_required#_")
+    const target = verifyBounce("no_session", "/status/?sheetname=2569_04")
+    expect(target).toBe("/verify/?return=%2Fstatus%2F%3Fsheetname%3D2569_04&reason=no_session#_")
 
     // And it must survive being read back out.
     const query = target.slice(target.indexOf("?") + 1, -INERT_FRAGMENT.length)
     const parsed = new URLSearchParams(query)
     expect(parsed.get("return")).toBe("/status/?sheetname=2569_04")
-    expect(parsed.get("reason")).toBe("bind_required")
+    expect(parsed.get("reason")).toBe("no_session")
   })
 
   it("omits the return path for terminal reasons", () => {

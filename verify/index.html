@@ -3,7 +3,6 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="p4p-session" content="__P4P_ACCESS_TOKEN__">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ยืนยันอีเมล — SAKHONMSO P4P</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -146,23 +145,6 @@
 
         .hidden { display: none !important; }
 
-        #bind-debug-log {
-            margin-top: 14px;
-            padding: 10px 12px;
-            background: var(--tertiary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            font-family: ui-monospace, "SF Mono", Consolas, monospace;
-            font-size: 0.72rem;
-            line-height: 1.5;
-            color: var(--text-muted);
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 220px;
-            overflow-y: auto;
-            text-align: left;
-        }
-
         .spinner {
             display: inline-block;
             width: 14px; height: 14px;
@@ -172,12 +154,6 @@
             animation: spin .7s linear infinite;
             vertical-align: middle;
             margin-right: 6px;
-        }
-        /* Dark variant for use on light backgrounds (e.g. inside .hint text,
-           not inside a dark button like the default white spinner is). */
-        .spinner.spinner-dark {
-            border-color: rgba(75, 61, 51, .25);
-            border-top-color: var(--secondary);
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -279,13 +255,6 @@
                 <p class="hint">อีเมล <b id="req-email"></b> ยังไม่ได้ลงทะเบียน กรุณากรอกชื่อ-นามสกุลของท่านเพื่อให้ผู้ดูแลเพิ่มสิทธิ์ให้ท่าน</p>
                 <button id="request-back" type="button" class="link-btn">ใช้อีเมลอื่น</button>
             </form>
-
-            <!-- Step 3: silent LINE-account binding (no user input — automatic) -->
-            <div id="bind-step" class="hidden">
-                <p class="hint" id="bind-status-text"><span class="spinner spinner-dark"></span>กำลังยืนยันบัญชี LINE ของท่าน โปรดรอสักครู่...</p>
-                <button id="bind-retry-btn" type="button" class="hidden">ลองอีกครั้ง</button>
-                <pre id="bind-debug-log" class="hidden"></pre>
-            </div>
 
             <div id="msg" class="msg"></div>
         </div>

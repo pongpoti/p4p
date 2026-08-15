@@ -1,5 +1,17 @@
 # P4P — App Data Security Analysis
 
+> **Superseded (2026-08).** The auth system this document analyzes —
+> email OTP + LINE-bind-as-second-factor with staged enforcement, bind
+> attempts, and per-session proof — was deliberately replaced by a much
+> simpler design: email OTP is the sole auth factor, and LINE binding is
+> traceability only (see `scripts/auth-rewrite-2026-08.sql`,
+> `supabase/functions/line-verify`, and the `physicians` table in
+> `SUPABASE_TABLES.md`). Section 1's MFA recommendations (P1, P2, P12) are
+> a description of what the OLD design did — they do not apply to the
+> current one, which never claims a second factor in the first place. The
+> rate-limiting (§2) and anomaly-detection (§3) findings are independent of
+> that redesign and still describe real, live gaps.
+
 **Scope:** MFA · rate limiting · anomaly detection
 **Reviewed:** `main.js`, `verify/`, `assets/`, `status|list|ranking/`, `scripts/*.sql`, `automation/`
 **Live project verified:** `zjeizbrzcltkgtlmkbji` (P4P, ap-southeast-1, Postgres 17.6)

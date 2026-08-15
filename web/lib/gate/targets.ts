@@ -43,12 +43,7 @@ export function canonicalPath(page: string, search: string): string {
   return `/${page}/${search}${INERT_FRAGMENT}`
 }
 
-export type BounceReason =
-  | "no_session"
-  | "expired"
-  | "blocked"
-  | "gate_unavailable"
-  | "bind_required"
+export type BounceReason = "no_session" | "expired" | "blocked"
 
 /**
  * Off to /verify/. `returnTo` is omitted for terminal reasons (blocked,
