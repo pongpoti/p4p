@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { resolveAccessToken } from "./lib/gate/session"
-import { isCurrentUserAllowlisted } from "./lib/gate/status"
+import { gateDecision, isCurrentUserAllowlisted } from "./lib/gate/status"
 import { canonicalPath, verifyBounce } from "./lib/gate/targets"
 import { redirectResponse, type CookieSpec } from "./lib/gate/redirect"
 
@@ -125,11 +125,9 @@ export async function middleware(request: NextRequest) {
   }
 
   const allowed = await isCurrentUserAllowlisted(resolved.at)
-  const rotated: CookieSpec[] = resolved.rotated
-    ? [sessionCookie(resolved.rotated.at, resolved.rotated.rt)]
-    : []
+  const action = gateDecision(allowed)
 
-  if (!allowed) {
+  if (action.type === "blocked") {
     return redirect(verifyBounce("blocked"), [clearedSession])
   }
 
@@ -140,10 +138,6 @@ export async function middleware(request: NextRequest) {
 }
 
 // ── Cookie helpers ──────────────────────────────────────────────────────────
-function sessionCookie(at: string, rt: string): CookieSpec {
-  return { name: "p4p_rt", value: JSON.stringify({ at, rt }), maxAge: 34_560_000 }
-}
-
 function setSessionOn(response: NextResponse, at: string, rt: string): void {
   response.cookies.set("p4p_rt", JSON.stringify({ at, rt }), {
     httpOnly: true,
