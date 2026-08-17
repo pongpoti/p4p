@@ -123,24 +123,32 @@ not an approval gate).
 
 ## `liff_access_log`
 
-**Purpose:** Audit trail (and the Telegram alert's source) for every rich-menu
-LIFF open — `status`/`list`/`ranking` opened directly, or `verify` when a
-session was missing/expired/blocked and main.js bounced the tap there instead.
+**Purpose:** Audit trail (and the Telegram alert's source) for a rich-menu
+LIFF open. Currently only wired up on `verify` — the bounce target for a
+session that was missing/expired/blocked, and the only page a *failed*
+rich-menu tap ever reaches.
 
-- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify`),
-  `line_user_id`, `line_display_name` (best-effort, from `liff.getProfile()`
-  — traceability only, same posture as `physicians.line_user_id`, nothing
-  here is verified against an ID token), `auth_pass`, `matched_email` /
-  `matched_full_name` / `matched_department` (populated only when
-  `auth_pass`), `bounce_reason` (`verify`-only: `no_session`/`expired`/
+`status`/`list`/`ranking` (opened directly, always auth-passed) do NOT report
+to this yet: a first pass added the LIFF SDK + a beacon there too, but those
+3 pages had never called `liff.init()` before, and the first-ever handshake
+caused a visible double page-reload for every physician — reverted pending
+confirming the `profile` scope on those LIFF apps and understanding the
+reload. The schema below (`page` still allows all 4 values) is unchanged so
+it needs no migration when they're added back.
+
+- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify` —
+  only `verify` is written today), `line_user_id`, `line_display_name`
+  (best-effort, from `liff.getProfile()` — traceability only, same posture as
+  `physicians.line_user_id`, nothing here is verified against an ID token),
+  `auth_pass`, `matched_email` / `matched_full_name` / `matched_department`
+  (populated only when `auth_pass`), `bounce_reason` (`no_session`/`expired`/
   `blocked`), `client_error` (a LIFF init/profile failure on the caller's
   side, if any).
 - Written via the `log_liff_access()` RPC, called once per page load from
-  `assets/liff-access-log.js` (status/list/ranking) or `verify/app.js`
-  (verify). `auth_pass`/`matched_*` are derived by the RPC itself from
-  `auth.jwt()`, never taken from the caller — status/list/ranking always call
-  it authenticated (the page wouldn't have been served otherwise), verify
-  calls it with the anon key before any login exists.
+  `verify/app.js`, with the anon key (before any login exists) — so
+  `auth_pass` is currently always `false` and `matched_*` always empty; the
+  RPC still derives both from `auth.jwt()` rather than trusting the caller,
+  ready for when an authenticated caller (status/list/ranking) uses it again.
 - Throttled per `(line_user_id, page)`: a repeat open within 10 minutes is
   dropped silently (no row, no alert) so a physician re-tapping the menu
   doesn't flood the chat. Not throttled when `line_user_id` is null (a LIFF
