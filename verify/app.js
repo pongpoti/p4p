@@ -250,6 +250,44 @@
         const bounceReason = new URLSearchParams(location.search).get("reason")
         const reasonShown = bounceReason === "expired" || bounceReason === "blocked"
 
+        // ── Telegram access-log beacon ──────────────────────────────────────
+        // /verify/ is the ONLY page a failed rich-menu tap ever reaches — a
+        // valid session goes straight through to status/list/ranking, and a
+        // missing/expired/blocked one is redirected here by main.js before
+        // any other page's JS ever runs. So this is where the "auth did NOT
+        // pass" alerts come from; see assets/liff-access-log.js for the
+        // "auth passed" side on the other three pages. Fire-and-forget: any
+        // failure here must never affect the login flow above it.
+        liffReady.then(async (inited) => {
+            let userId = null
+            let displayName = null
+            let clientError = null
+            if (!inited) {
+                clientError = "liff.init failed"
+            } else if (!liff.isLoggedIn()) {
+                clientError = "liff not logged in"
+            } else {
+                try {
+                    const profile = await liff.getProfile()
+                    userId = profile.userId
+                    displayName = profile.displayName
+                } catch (err) {
+                    clientError = "getProfile failed: " + (err && err.message)
+                }
+            }
+            try {
+                await db.rpc("log_liff_access", {
+                    p_page: "verify",
+                    p_line_user_id: userId,
+                    p_line_display_name: displayName,
+                    p_client_error: clientError,
+                    p_bounce_reason: bounceReason,
+                })
+            } catch (err) {
+                console.warn("liff access-log report failed:", err)
+            }
+        })
+
         function showEmailForm() {
             emailInput.disabled = false
             emailLoadingDots.classList.add("hidden")

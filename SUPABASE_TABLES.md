@@ -121,6 +121,36 @@ not an approval gate).
 - Migration: `scripts/security-rls-auth.sql` (Block 0a),
   `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`).
 
+## `liff_access_log`
+
+**Purpose:** Audit trail (and the Telegram alert's source) for every rich-menu
+LIFF open — `status`/`list`/`ranking` opened directly, or `verify` when a
+session was missing/expired/blocked and main.js bounced the tap there instead.
+
+- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify`),
+  `line_user_id`, `line_display_name` (best-effort, from `liff.getProfile()`
+  — traceability only, same posture as `physicians.line_user_id`, nothing
+  here is verified against an ID token), `auth_pass`, `matched_email` /
+  `matched_full_name` / `matched_department` (populated only when
+  `auth_pass`), `bounce_reason` (`verify`-only: `no_session`/`expired`/
+  `blocked`), `client_error` (a LIFF init/profile failure on the caller's
+  side, if any).
+- Written via the `log_liff_access()` RPC, called once per page load from
+  `assets/liff-access-log.js` (status/list/ranking) or `verify/app.js`
+  (verify). `auth_pass`/`matched_*` are derived by the RPC itself from
+  `auth.jwt()`, never taken from the caller — status/list/ranking always call
+  it authenticated (the page wouldn't have been served otherwise), verify
+  calls it with the anon key before any login exists.
+- Throttled per `(line_user_id, page)`: a repeat open within 10 minutes is
+  dropped silently (no row, no alert) so a physician re-tapping the menu
+  doesn't flood the chat. Not throttled when `line_user_id` is null (a LIFF
+  failure) — those are rarer and worth seeing every time.
+- `scripts/liff-access-alert-2026-08.sql`'s trigger fires a Telegram alert on
+  every (non-throttled) INSERT, reusing the same Vault secrets
+  (`telegram_bot_token`/`telegram_chat_id`) as `notify_access_request()`.
+- **Access:** RLS, no anon/authenticated policies — insert-only via the RPC.
+- Migration: `scripts/liff-access-alert-2026-08.sql`.
+
 ## `email_sent_log`
 
 **Purpose:** Dedup/audit log for the monthly score-report emailer — prevents
@@ -150,6 +180,10 @@ These tables split into two groups:
    `access_requests`. A trigger on `sender_physician_match` keeps `physicians`
    in sync with the automation's matches; nothing else crosses the boundary
    between the two groups.
+3. **Access monitoring** — `liff_access_log`, the Telegram-alert trail for
+   every rich-menu LIFF open. Reads `physicians` (to resolve `matched_*`) but
+   nothing else writes to it, so it sits alongside group 2 rather than inside
+   it.
 
 All of it is guarded by `SECURITY DEFINER` RPCs, so the underlying email/name
 data is never exposed directly to `anon`/`authenticated` clients — only
