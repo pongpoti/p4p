@@ -262,7 +262,11 @@
             let userId = null
             let displayName = null
             let clientError = null
-            if (inited && liff.isLoggedIn()) {
+            if (!inited) {
+                clientError = "liff.init failed"
+            } else if (!liff.isLoggedIn()) {
+                clientError = "liff not logged in"
+            } else {
                 try {
                     const profile = await liff.getProfile()
                     userId = profile.userId
@@ -270,8 +274,6 @@
                 } catch (err) {
                     clientError = "getProfile failed: " + (err && err.message)
                 }
-            } else if (!inited) {
-                clientError = "liff.init failed"
             }
             try {
                 await db.rpc("log_liff_access", {
