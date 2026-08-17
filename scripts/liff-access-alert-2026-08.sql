@@ -8,14 +8,22 @@
 --
 --  Why
 --  ---
---  status/list/ranking (opened via the rich menu) and verify/ (the bounce
---  target for a failed/expired/blocked session — the only page a FAILED
---  rich-menu tap ever reaches) each report one "I was opened" beacon per page
---  load — see assets/liff-access-log.js and verify/app.js. This file is that
---  beacon's landing spot: a table for the audit trail, plus a trigger that
---  turns each row into a Telegram message. Reuses the same bot/chat as
---  notify_access_request() (Database → Vault secrets: telegram_bot_token,
---  telegram_chat_id) — no new bot to set up.
+--  verify/ (the bounce target for a failed/expired/blocked session — the only
+--  page a FAILED rich-menu tap ever reaches) reports one "I was opened" beacon
+--  per page load — see verify/app.js. This file is that beacon's landing
+--  spot: a table for the audit trail, plus a trigger that turns each row into
+--  a Telegram message. Reuses the same bot/chat as notify_access_request()
+--  (Database → Vault secrets: telegram_bot_token, telegram_chat_id) — no new
+--  bot to set up.
+--
+--  status/list/ranking do NOT call this yet. A first pass added the LIFF SDK
+--  + a matching beacon (assets/liff-access-log.js) to those 3 pages too, but
+--  they had never called liff.init() before, and the first-ever handshake
+--  caused a visible double page-reload for every physician tapping the rich
+--  menu — reverted (see git history for assets/liff-access-log.js) until the
+--  `profile` scope is confirmed on those 3 LIFF apps and the reload is
+--  understood. The table/RPC/trigger below are unchanged and still needed
+--  for verify/'s beacon.
 --
 --  Trust model
 --  -----------
@@ -31,14 +39,14 @@
 --  Setup
 --  -----
 --    1. Run this file (creates the table, the RPC, and the trigger).
---    2. Confirm the `profile` scope is enabled, in the LINE Developers
---       console, on the 3 rich-menu LIFF apps (2008561527-a0xP1XmY / status,
---       2008561527-wyje9amz / list, 2008561527-BXrxUUDb / ranking) — unlike
---       /verify/'s app, nothing has ever called liff.getProfile() on these
---       three before now, so it needs confirming rather than assuming.
---    3. Test: open each rich-menu button as a bound physician, then force an
---       expired/blocked session and confirm the auth_pass=false alert on
---       /verify/.
+--    2. Test: force an expired/blocked session (or just don't log in) and tap
+--       a rich-menu button; confirm the auth_pass=false alert on /verify/.
+--
+--  Re-enabling status/list/ranking later needs, at minimum: confirming the
+--  `profile` scope on the 3 rich-menu LIFF apps (2008561527-a0xP1XmY /
+--  status, 2008561527-wyje9amz / list, 2008561527-BXrxUUDb / ranking) in the
+--  LINE Developers console, AND understanding why liff.init() caused a
+--  double reload there before trying again.
 -- ============================================================================
 
 create table if not exists public.liff_access_log (
