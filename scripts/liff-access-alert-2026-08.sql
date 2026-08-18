@@ -17,19 +17,23 @@
 --  notify_access_request() (Database → Vault secrets: telegram_bot_token,
 --  telegram_chat_id) — no new bot to set up.
 --
---  UPDATE (2026-08-18, resolved): status/list/ranking's live LIFF capture
---  (calling liff.init() client-side, same as verify/'s approach) caused a
---  visible double page-reload the first time it shipped — those 3 pages had
---  never called liff.init() before. It was hotfixed to derive identity from
---  the physicians row instead (no LIFF SDK at all), via
+--  UPDATE (2026-08-18): status/list/ranking's live LIFF capture (calling
+--  liff.init() client-side, same as verify/'s approach) caused a visible
+--  double page-reload the first time it shipped — those 3 pages had never
+--  called liff.init() before. Hotfixed to derive identity from the
+--  physicians row instead (no LIFF SDK at all), via
 --  scripts/liff-access-server-side-2026-08.sql, which MUST be run after this
---  file. A single-page trial then confirmed the reload only happens ONCE
---  per device (the normal first-time LIFF login handshake, not a persistent
---  problem), so live capture was restored to all three — see
---  assets/liff-access-log.js. The physicians-row lookup in
---  liff-access-server-side-2026-08.sql's log_liff_access() was kept as a
---  fallback for when live capture fails, not removed — that file still
---  describes the current function body.
+--  file — that is the CURRENT state. A single-page trial on ranking/ alone
+--  then seemed to show the reload was a one-time per-device handshake
+--  (settled after one tap), so live capture was restored to all three — but
+--  broader testing immediately after showed it reloading on EVERY tap, on
+--  EVERY page, including the previously-"clean" ranking/, so it was
+--  reverted a second time, same day, back to the physicians-row-derived
+--  design. Root cause unconfirmed — leading theory is the `profile` scope
+--  never having been verified enabled on these 3 LIFF apps' channels, but
+--  this was inferred from production behavior, never proven with real
+--  diagnostics. Do not re-attempt live capture on status/list/ranking
+--  without that diagnosis; it has failed twice.
 --
 --  Trust model
 --  -----------

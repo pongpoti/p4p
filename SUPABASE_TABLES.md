@@ -128,27 +128,34 @@ LIFF open — `status`/`list`/`ranking` opened directly (always auth-passed —
 main.js already gated the request before serving the page), or `verify` when
 a session was missing/expired/blocked and the tap bounced there instead.
 
-All four pages capture LINE identity live via the LIFF SDK
-(`liff.getProfile()`). This went through two false starts, worth knowing if
-touching this again: the original rollout caused a visible double page-reload
-on every tap for status/list/ranking (they'd never called `liff.init()`
-before); it was hotfixed to a no-LIFF design where `log_liff_access()`
-derived identity purely from the stored `physicians.line_user_id`/
-`line_display_name` instead. A single-page trial on `ranking` alone then
-confirmed the reload only ever happens ONCE per device — the normal,
-expected first-time LIFF login handshake (same as `verify/`'s own LIFF app
-has always done), not a persistent problem — so live capture was restored to
-all three (2026-08-18). The stored-`physicians` lookup in `log_liff_access()`
-was left in place as a fallback (see below), not removed.
+status/list/ranking's beacon does NOT use the LIFF SDK. History, worth
+reading in full before touching this again: the original rollout (2026-08-17)
+had all three call `liff.init()`/`liff.getProfile()` client-side and caused a
+visible double page-reload on every tap — hotfixed same-day to derive
+identity purely from the stored `physicians.line_user_id`/`line_display_name`
+instead (this file's current state). A single-page trial on `ranking` alone
+then seemed to show the reload was a one-time per-device handshake (settled
+after one tap), so live capture was restored to all three (2026-08-18) — but
+broader testing immediately after showed it reloading on **every** tap, on
+**every** page, including the previously-"clean" `ranking`, so it was
+reverted a second time, back to this no-LIFF design, same day. Root cause
+still unconfirmed — the leading theory is the `profile` scope never having
+been verified as actually enabled on these 3 LIFF apps' channels (only
+`verify/`'s own LIFF app is confirmed to have it), but this was never proven
+either way with real diagnostics (browser console access, scope
+confirmation) — only inferred from production behavior. Do not re-attempt
+live capture here without that diagnosis; it has now failed twice.
 
-- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify`),
-  `line_user_id`, `line_display_name` (best-effort, live from
-  `liff.getProfile()` on every page — traceability only, same posture as
-  `physicians.line_user_id`, nothing here is verified against an ID token),
-  `auth_pass`, `matched_email` / `matched_full_name` / `matched_department`
-  (populated only when `auth_pass`), `bounce_reason` (`verify`-only:
-  `no_session`/`expired`/`blocked`), `client_error` (a LIFF init/profile
-  failure on the caller's side, if any), `throttle_key` (see below).
+- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify` —
+  only `verify` captures LINE identity live today), `line_user_id`,
+  `line_display_name` (best-effort — live from `liff.getProfile()` on
+  `verify`, or the stored value on `physicians` for the other three;
+  traceability only, same posture as `physicians.line_user_id`, nothing here
+  is verified against an ID token), `auth_pass`, `matched_email` /
+  `matched_full_name` / `matched_department` (populated only when
+  `auth_pass`), `bounce_reason` (`verify`-only: `no_session`/`expired`/
+  `blocked`), `client_error` (a LIFF init/profile failure on `verify`'s
+  side, if any), `throttle_key` (see below).
 - Written via the `log_liff_access()` RPC, called once per page load.
   `auth_pass`/`matched_*` are derived by the RPC itself from `auth.jwt()`,
   never taken from the caller. If the caller doesn't supply a LINE identity
