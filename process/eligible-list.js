@@ -64,6 +64,21 @@ function escHtml(s) {
 //  provisioned by provision-month.yml the day before this runs).
 // ═══════════════════════════════════════════════════════════════════
 function getTargetMonth() {
+  // Manual override (workflow_dispatch "target_month" input) — force a
+  // specific month instead of "whatever month it is right now in Bangkok".
+  // Format: "<BE year>-<month>", e.g. "2569-07" for July 2026 CE.
+  const override = process.env.TARGET_MONTH?.trim();
+  if (override) {
+    const m = /^(\d{4})-(\d{1,2})$/.exec(override);
+    const beYear = m && Number(m[1]);
+    const month  = m && Number(m[2]);
+    if (!m || month < 1 || month > 12) {
+      throw new Error(`Invalid TARGET_MONTH "${override}" — expected "<BE year>-<month>", e.g. "2569-07".`);
+    }
+    const mm = String(month).padStart(2, '0');
+    return { key: `${beYear}_${mm}`, beYear, month, fileName: `eligible_${beYear}-${mm}.pdf` };
+  }
+
   const now    = new Date(Date.now() + 7 * 60 * 60 * 1000); // Bangkok = UTC+7
   const beYear = now.getUTCFullYear() + 543;
   const month  = now.getUTCMonth() + 1;

@@ -215,6 +215,13 @@ const NON_NAME_THAI = new Set([
   "เวชศาสตร์ฉุกเฉิน", "ผู้ป่วยนอก", "จิตเวช",
 ]);
 
+// Common words that follow "ณ" in ordinary prose — "ณ" is also the everyday
+// preposition "on/at" (e.g. "ณ วันที่ 15" = "on the 15th"), not just the
+// surname-connector particle ("ณ สงขลา"). Checked only by the ณ-compound-
+// surname pattern below, not the general NON_NAME_THAI set, so it can't
+// suppress an otherwise-valid Pattern 2/3 match elsewhere in the text.
+const NA_PREPOSITION_FOLLOWERS = new Set(["วันที่", "วันนี้", "เวลา", "สถานที่"]);
+
 // Canonical month strings (≥ 4 chars) used as fuzzy-match targets.
 // Short abbreviations (≤ 3 chars) are covered by exact NON_NAME_THAI.has() and
 // their floor(len/4) threshold would be 0, so they give no fuzzy benefit.
@@ -338,6 +345,25 @@ function extractNameFromText(text) {
     /เดือน(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/g,
     "เดือน $1"
   );
+
+  // Pattern 1.5: "ณ"-compound surnames — a single-character connector
+  // particle ("ณ สงขลา", "ณ อยุธยา", "ณ นคร", …) is invisible to the
+  // {2,}-char word matchers above and below (Pattern 1's optional second
+  // group and Pattern 2's twoWordRe both require ≥2 Thai chars per token),
+  // so on its own it gets skipped and the surname's tail word ends up
+  // paired with whatever token follows instead (e.g. a trailing month name).
+  // Real case: "P4P-Intern อภิษฎา ณ  สงขลา _ กรกฎาคม.xlsx" resolved to just
+  // "สงขลา", which then failed to fuzzy-match the roster.
+  const naSurnameRe = /([฀-๿]{2,})[\s_\-.,]+ณ[\s_\-.,]+([฀-๿]{2,})/;
+  const mNa = text3.match(naSurnameRe);
+  if (
+    mNa &&
+    !isNonName(mNa[1]) &&
+    !isNonName(mNa[2]) &&
+    !NA_PREPOSITION_FOLLOWERS.has(mNa[2])
+  ) {
+    return `${mNa[1]} ณ ${mNa[2]}`;
+  }
 
   // Pattern 2: two consecutive Thai-character sequences (min 2 chars each),
   // separated by one of: space, underscore, dash, dot, comma — but NOT a digit

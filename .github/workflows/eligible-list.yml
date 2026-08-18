@@ -9,6 +9,11 @@ on:
     # fires at 01:00 Bangkok on the 1st), so the table is guaranteed to exist.
     - cron: '0 2 1 * *'
   workflow_dispatch: # allow manual trigger from GitHub UI
+    inputs:
+      target_month:
+        description: 'Force a specific month instead of the current one (BE year-month, e.g. 2569-07 for July 2026). Leave blank to use the current month.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -47,4 +52,5 @@ jobs:
           # Drive folder for the monthly eligible-physicians PDF. Was hardcoded
           # in eligible-list.js while this repo was public.
           P4P_ELIGIBLE_FOLDER_ID: ${{ secrets.P4P_ELIGIBLE_FOLDER_ID }}
+          TARGET_MONTH: ${{ inputs.target_month }}
         run: node eligible-list.js
