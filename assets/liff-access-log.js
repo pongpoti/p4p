@@ -1,19 +1,20 @@
 /**
- * liff-access-log.js — live LINE identity capture + Telegram-alert beacon
- * for the status/list/ranking rich-menu pages.
+ * liff-access-log.js — reports one "page opened" beacon per load to the
+ * log_liff_access() RPC, for the Telegram access-alert
+ * (scripts/liff-access-alert-2026-08.sql +
+ * scripts/liff-access-server-side-2026-08.sql).
  *
- * History: the original rollout (PR #150) caused a visible double
- * page-reload on every tap and was hotfixed to a no-LIFF, server-derived-
- * identity fallback (PR #151/#152). A single-page trial on ranking/ alone
- * (PR #153) confirmed the reload happens ONCE per device — the normal,
- * expected first-time LIFF login handshake, same as verify/'s own LIFF app
- * has always done — not a persistent problem. This restores live capture to
- * all three pages (2026-08-18).
- *
- * log_liff_access() (scripts/liff-access-server-side-2026-08.sql) still
- * falls back to the physician's last-known stored LINE identity if this
- * ever fails to report one (a genuine LIFF/network error, or a visitor not
- * logged into LIFF) — that safety net is unchanged and still worth having.
+ * Deliberately does NOT touch the LIFF SDK. An earlier version called
+ * liff.init()/liff.getProfile() here to capture a live LINE identity, but
+ * status/list/ranking had never initialized LIFF before, and the first-ever
+ * login handshake caused a visible double page-reload in production
+ * (reverted same-day). This version sends only the page name — P4P.db
+ * already carries the server-injected access token (see auth-guard.js), and
+ * log_liff_access() derives the physician's LINE identity itself from
+ * whatever physicians.line_user_id/line_display_name was captured the last
+ * time they actually logged in and bound LINE. Trade-off, accepted
+ * deliberately: the LINE name/ID shown is "as of their last login", not
+ * captured fresh on this exact tap.
  *
  * Never blocks or affects the page: any failure is caught and logged to the
  * console only.
@@ -21,53 +22,17 @@
 ;(function (global) {
   "use strict"
 
-  // Each rich-menu button opens its own dedicated LIFF app (Endpoint URL
-  // fixed to this exact path in the LINE Developers console) — see
-  // scripts/setup-richmenu.mjs and main.js's createStatusSublist().
-  var LIFF_IDS = {
-    "/status/": "2008561527-a0xP1XmY",
-    "/list/": "2008561527-wyje9amz",
-    "/ranking/": "2008561527-BXrxUUDb",
-  }
-
+  var PAGES = ["/status/", "/list/", "/ranking/"]
   var path = global.location.pathname
-  var liffId = LIFF_IDS[path]
-  if (!liffId || !global.P4P || !global.P4P.db || !global.liff) return
+  if (PAGES.indexOf(path) === -1 || !global.P4P || !global.P4P.db) return
   var page = path.replace(/\//g, "")
 
-  function report(lineUserId, lineDisplayName, clientError) {
-    global.P4P.db
-      .rpc("log_liff_access", {
-        p_page: page,
-        p_line_user_id: lineUserId || null,
-        p_line_display_name: lineDisplayName || null,
-        p_client_error: clientError || null,
-      })
-      .then(function (res) {
-        if (res && res.error) console.warn("[liff-access-log] rpc error:", res.error)
-      })
-      .catch(function (err) {
-        console.warn("[liff-access-log] report failed:", err)
-      })
-  }
-
-  global.liff
-    .init({ liffId: liffId })
-    .then(function () {
-      if (!global.liff.isLoggedIn()) {
-        report(null, null, "liff not logged in")
-        return
-      }
-      return global.liff
-        .getProfile()
-        .then(function (profile) {
-          report(profile.userId, profile.displayName, null)
-        })
-        .catch(function (err) {
-          report(null, null, "getProfile failed: " + (err && err.message))
-        })
+  global.P4P.db
+    .rpc("log_liff_access", { p_page: page })
+    .then(function (res) {
+      if (res && res.error) console.warn("[liff-access-log] rpc error:", res.error)
     })
     .catch(function (err) {
-      report(null, null, "liff.init failed: " + (err && err.message))
+      console.warn("[liff-access-log] report failed:", err)
     })
 })(window)

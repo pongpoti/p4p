@@ -13,28 +13,31 @@
 --  assets/liff-access-log.js). Only verify/app.js's beacon (which already
 --  had a working LIFF app before any of this) was left in place.
 --
---  THE FIX (at the time this file was written)
---  --------------------------------------------
---  status/list/ranking's beacon sent only p_page — no LIFF SDK, no
---  liff.init(), nothing that could cause a reload. log_liff_access() derives
+--  THE FIX — still the current, live state
+--  -----------------------------------------
+--  status/list/ranking's beacon sends only p_page — no LIFF SDK, no
+--  liff.init(), nothing that can cause a reload. log_liff_access() derives
 --  the physician's LINE identity itself, from whatever
 --  physicians.line_user_id/line_display_name was captured the last time they
 --  actually logged in and bound LINE — the same "traceability, not security,
 --  last-write-wins" data this schema already relies on elsewhere (see
---  SUPABASE_TABLES.md's `physicians` section). verify/app.js was unchanged:
+--  SUPABASE_TABLES.md's `physicians` section). verify/app.js is unchanged:
 --  it always captured live via its own LIFF app (there's no session yet to
 --  look anything up by), and its p_line_user_id/p_line_display_name still
---  take priority when supplied.
+--  take priority when supplied — this file's function body already handled
+--  that case correctly, which is why it needed no changes on the second
+--  revert below.
 --
---  UPDATE (2026-08-18, resolved): a single-page trial on ranking/ confirmed
---  the reload only ever happened ONCE per device — the normal first-time
---  LIFF login handshake, not a persistent problem — so live capture (via
---  liff.getProfile()) was restored to status/list/ranking too. This file's
---  function body BELOW is unchanged and still current: the physicians-row
---  lookup is still exactly how a live-capture failure (or a caller that
---  never sends one) degrades gracefully, rather than being removed. Only
---  the "why status/list/ranking send no LINE identity" framing above is
---  historical — they do send one again now, live, same as verify/.
+--  UPDATE (2026-08-18): a single-page trial on ranking/ alone seemed to
+--  confirm the reload was a one-time per-device handshake (settled after one
+--  tap), so live capture was briefly restored to status/list/ranking too —
+--  see git history for assets/liff-access-log.js. Broader testing
+--  immediately after showed it reloading on EVERY tap instead, on every
+--  page including ranking/, so it was reverted a second time, same day,
+--  back to the design this file describes. Root cause unconfirmed (leading
+--  theory: the `profile` scope was never actually verified enabled on those
+--  3 LIFF apps' channels) — do not re-attempt live capture there without
+--  real diagnostics first; it has failed twice.
 --
 --  Also fixes a throttle gap: the original throttle key was line_user_id
 --  alone, so a physician who never completed a LINE bind (line_user_id
