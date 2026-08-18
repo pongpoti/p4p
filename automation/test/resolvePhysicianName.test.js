@@ -117,6 +117,33 @@ test("พ.ค. month abbreviation is not mistaken for a one-letter prefix", () =
   );
 });
 
+// ── "ณ"-compound surnames ─────────────────────────────────────────────────────
+// Real case (run on 2026-08-18): "P4P-Intern อภิษฎา ณ  สงขลา _ กรกฎาคม.xlsx"
+// resolved to just "สงขลา" — the single-character "ณ" was invisible to the
+// {2,}-char word matchers, so "สงขลา" paired with the trailing month instead
+// of joining "อภิษฎา ณ" as the surname. That truncated name then failed to
+// fuzzy-match the roster and triggered a false "physician not found" alert.
+
+test("ณ-compound surname is extracted whole from a filename", () => {
+  assert.equal(
+    resolvePhysicianName("P4P-Intern อภิษฎา ณ  สงขลา _ กรกฎาคม.xlsx", "", ""),
+    "อภิษฎา ณ สงขลา"
+  );
+});
+
+test("ณ-compound surname is extracted whole from a subject line", () => {
+  assert.equal(
+    resolvePhysicianName("", "P4P Int อภิษฎา ณ สงขลา July", ""),
+    "อภิษฎา ณ สงขลา"
+  );
+});
+
+test("ณ-compound surname with a non-name firstname is rejected", () => {
+  // "ผลงาน" (a NON_NAME_THAI word) must not be accepted as a firstname just
+  // because "ณ" follows it, e.g. "ส่งผลงาน ณ วันที่ 15" style phrasing.
+  assert.equal(resolvePhysicianName("", "", "ส่งผลงาน ณ วันที่ 15 กค"), null);
+});
+
 // ── Multi-source candidates ──────────────────────────────────────────────────
 
 test("subject name is kept as a candidate when the filename differs", () => {
