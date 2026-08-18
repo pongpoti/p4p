@@ -17,16 +17,19 @@
 --  notify_access_request() (Database → Vault secrets: telegram_bot_token,
 --  telegram_chat_id) — no new bot to set up.
 --
---  UPDATE (same day): a first pass had status/list/ranking call the LIFF SDK
---  client-side to capture a live LINE identity, matching verify/'s approach.
---  Those 3 pages had never called liff.init() before, and the first-ever
---  handshake caused a visible double page-reload in production — reverted,
---  then replaced by scripts/liff-access-server-side-2026-08.sql, which MUST
---  be run after this file. That follow-up changes log_liff_access() to
---  derive status/list/ranking's LINE identity from the physicians row
---  instead of a live capture, so those 3 pages never touch the LIFF SDK at
---  all. The table/function bodies below are what that follow-up patches —
---  read this file for the overall shape, that one for the current behavior.
+--  UPDATE (2026-08-18, resolved): status/list/ranking's live LIFF capture
+--  (calling liff.init() client-side, same as verify/'s approach) caused a
+--  visible double page-reload the first time it shipped — those 3 pages had
+--  never called liff.init() before. It was hotfixed to derive identity from
+--  the physicians row instead (no LIFF SDK at all), via
+--  scripts/liff-access-server-side-2026-08.sql, which MUST be run after this
+--  file. A single-page trial then confirmed the reload only happens ONCE
+--  per device (the normal first-time LIFF login handshake, not a persistent
+--  problem), so live capture was restored to all three — see
+--  assets/liff-access-log.js. The physicians-row lookup in
+--  liff-access-server-side-2026-08.sql's log_liff_access() was kept as a
+--  fallback for when live capture fails, not removed — that file still
+--  describes the current function body.
 --
 --  Trust model
 --  -----------

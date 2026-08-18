@@ -13,25 +13,28 @@
 --  assets/liff-access-log.js). Only verify/app.js's beacon (which already
 --  had a working LIFF app before any of this) was left in place.
 --
---  THE FIX
---  -------
---  status/list/ranking's beacon (assets/liff-access-log.js, rewritten) now
---  sends only p_page — no LIFF SDK, no liff.init(), nothing that can cause a
---  reload, because nothing new loads in the browser at all. log_liff_access()
---  derives the physician's LINE identity itself, from whatever
+--  THE FIX (at the time this file was written)
+--  --------------------------------------------
+--  status/list/ranking's beacon sent only p_page — no LIFF SDK, no
+--  liff.init(), nothing that could cause a reload. log_liff_access() derives
+--  the physician's LINE identity itself, from whatever
 --  physicians.line_user_id/line_display_name was captured the last time they
 --  actually logged in and bound LINE — the same "traceability, not security,
 --  last-write-wins" data this schema already relies on elsewhere (see
---  SUPABASE_TABLES.md's `physicians` section). verify/app.js is UNCHANGED:
---  it still captures live via its own LIFF app (there's no session yet to
---  look anything up by) and its p_line_user_id/p_line_display_name still
+--  SUPABASE_TABLES.md's `physicians` section). verify/app.js was unchanged:
+--  it always captured live via its own LIFF app (there's no session yet to
+--  look anything up by), and its p_line_user_id/p_line_display_name still
 --  take priority when supplied.
 --
---  Trade-off, accepted deliberately: the LINE name/ID shown for
---  status/list/ranking is "as of their last login", not fresh on this exact
---  tap, and there's no client_error to report for those 3 pages anymore
---  (nothing runs there that can fail in a LIFF-specific way). Both are the
---  cost of never touching LIFF on those pages again.
+--  UPDATE (2026-08-18, resolved): a single-page trial on ranking/ confirmed
+--  the reload only ever happened ONCE per device — the normal first-time
+--  LIFF login handshake, not a persistent problem — so live capture (via
+--  liff.getProfile()) was restored to status/list/ranking too. This file's
+--  function body BELOW is unchanged and still current: the physicians-row
+--  lookup is still exactly how a live-capture failure (or a caller that
+--  never sends one) degrades gracefully, rather than being removed. Only
+--  the "why status/list/ranking send no LINE identity" framing above is
+--  historical — they do send one again now, live, same as verify/.
 --
 --  Also fixes a throttle gap: the original throttle key was line_user_id
 --  alone, so a physician who never completed a LINE bind (line_user_id
