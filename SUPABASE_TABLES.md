@@ -123,41 +123,54 @@ not an approval gate).
 
 ## `liff_access_log`
 
-**Purpose:** Audit trail (and the Telegram alert's source) for a rich-menu
-LIFF open. Currently only wired up on `verify` — the bounce target for a
-session that was missing/expired/blocked, and the only page a *failed*
-rich-menu tap ever reaches.
+**Purpose:** Audit trail (and the Telegram alert's source) for every rich-menu
+LIFF open — `status`/`list`/`ranking` opened directly (always auth-passed —
+main.js already gated the request before serving the page), or `verify` when
+a session was missing/expired/blocked and the tap bounced there instead.
 
-`status`/`list`/`ranking` (opened directly, always auth-passed) do NOT report
-to this yet: a first pass added the LIFF SDK + a beacon there too, but those
-3 pages had never called `liff.init()` before, and the first-ever handshake
-caused a visible double page-reload for every physician — reverted pending
-confirming the `profile` scope on those LIFF apps and understanding the
-reload. The schema below (`page` still allows all 4 values) is unchanged so
-it needs no migration when they're added back.
+status/list/ranking's beacon deliberately does NOT use the LIFF SDK — a first
+pass did, and the first-ever `liff.init()` handshake on those 3
+never-before-initialized LIFF apps caused a visible double page-reload in
+production (reverted same-day). `scripts/liff-access-server-side-2026-08.sql`
+replaced it: those pages now send only the page name, and `log_liff_access()`
+derives the physician's LINE identity itself from whatever
+`physicians.line_user_id`/`line_display_name` was captured the last time they
+actually logged in and bound LINE — nothing new loads in the browser, so
+nothing can cause a reload. Trade-off, accepted deliberately: the LINE
+name/ID shown is "as of their last login", not captured fresh on that tap,
+and there's no `client_error` to report for those 3 pages (nothing runs there
+that can fail in a LIFF-specific way). `verify/app.js` is unaffected — it
+still captures live via its own (pre-existing, working) LIFF app, since
+there's no session yet to look anything up by.
 
-- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify` —
-  only `verify` is written today), `line_user_id`, `line_display_name`
-  (best-effort, from `liff.getProfile()` — traceability only, same posture as
+- **Columns:** `accessed_at`, `page` (`status`/`list`/`ranking`/`verify`),
+  `line_user_id`, `line_display_name` (best-effort — live from
+  `liff.getProfile()` on `verify`, or the stored value on `physicians` for
+  the other three; traceability only, same posture as
   `physicians.line_user_id`, nothing here is verified against an ID token),
   `auth_pass`, `matched_email` / `matched_full_name` / `matched_department`
-  (populated only when `auth_pass`), `bounce_reason` (`no_session`/`expired`/
-  `blocked`), `client_error` (a LIFF init/profile failure on the caller's
-  side, if any).
-- Written via the `log_liff_access()` RPC, called once per page load from
-  `verify/app.js`, with the anon key (before any login exists) — so
-  `auth_pass` is currently always `false` and `matched_*` always empty; the
-  RPC still derives both from `auth.jwt()` rather than trusting the caller,
-  ready for when an authenticated caller (status/list/ranking) uses it again.
-- Throttled per `(line_user_id, page)`: a repeat open within 10 minutes is
-  dropped silently (no row, no alert) so a physician re-tapping the menu
-  doesn't flood the chat. Not throttled when `line_user_id` is null (a LIFF
+  (populated only when `auth_pass`), `bounce_reason` (`verify`-only:
+  `no_session`/`expired`/`blocked`), `client_error` (a LIFF init/profile
+  failure on `verify`'s side, if any), `throttle_key` (see below).
+- Written via the `log_liff_access()` RPC, called once per page load.
+  `auth_pass`/`matched_*` are derived by the RPC itself from `auth.jwt()`,
+  never taken from the caller. status/list/ranking call it authenticated (the
+  page wouldn't have been served otherwise) and send no LINE identity at all;
+  verify calls it with the anon key, before any login exists, and sends its
+  own live-captured identity, which wins via `coalesce()` when present.
+- Throttled per `throttle_key`, which is the LINE user id when there is one,
+  otherwise the physician's own email (always present for an authenticated
+  call) — closes a gap where a physician who never completed a LINE bind
+  would never throttle at all under a `line_user_id`-only key. A repeat open
+  within 10 minutes is dropped silently (no row, no alert). Not throttled
+  when neither is available (an anonymous `verify` call with a LIFF
   failure) — those are rarer and worth seeing every time.
 - `scripts/liff-access-alert-2026-08.sql`'s trigger fires a Telegram alert on
   every (non-throttled) INSERT, reusing the same Vault secrets
   (`telegram_bot_token`/`telegram_chat_id`) as `notify_access_request()`.
 - **Access:** RLS, no anon/authenticated policies — insert-only via the RPC.
-- Migration: `scripts/liff-access-alert-2026-08.sql`.
+- Migration: `scripts/liff-access-alert-2026-08.sql`, then
+  `scripts/liff-access-server-side-2026-08.sql`.
 
 ## `email_sent_log`
 
