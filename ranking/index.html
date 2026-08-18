@@ -319,15 +319,12 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0/dist/umd/supabase.js" integrity="sha384-K0oxqktRvaThvYgGL4G+OK2Ih6VS6Uyu7j3+7WJgp/uWM0Yv6Xi4YEiw0BB+mPfi" crossorigin="anonymous"></script>
     <script src="/assets/shared.js"></script>
     <script src="/assets/auth-guard.js"></script>
-    <!-- TRIAL (this page only — see assets/liff-access-log-live-trial.js):
-         live LINE identity via the LIFF SDK, to test whether the 2026-08-17
-         double-reload regression was a one-time per-device handshake or a
-         persistent problem. status/list still use the no-LIFF
-         assets/liff-access-log.js and are unaffected either way.
-         No integrity= on the LIFF SDK: LINE's "edge" channel is
-         intentionally unversioned. -->
+    <!-- LIFF SDK — see assets/liff-access-log.js for why this page loads it.
+         No integrity=: LINE's documented "edge" channel is intentionally
+         unversioned, and pinning an SRI hash against it would break the page
+         the next time LINE ships an SDK update. -->
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-    <script src="/assets/liff-access-log-live-trial.js"></script>
+    <script src="/assets/liff-access-log.js"></script>
     <script src="app.js"></script>
 </body>
 
