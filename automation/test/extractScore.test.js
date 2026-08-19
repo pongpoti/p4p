@@ -271,6 +271,28 @@ test("declared score column also settles the grand-total row", () => {
   assert.match(method, /grand-total/);
 });
 
+test("reconstructs the total from daily cells when every formula in the sheet is uncached", () => {
+  // Real-world case (พุฒิพงศ์ พร้อมคุณธรรม, มิ.ย./ก.ค. 2569): the workbook's
+  // SUM formulas were uncached everywhere — not just the grand-total row
+  // (Tier 1) or some sub-totals (Tier 2), but every line item's own
+  // count/total cells too. Tiers 1/2 had nothing to sum, so resolveScore
+  // fell back to extractScoreFromRows's "largest in sheet" — which returned
+  // 1320, the flat per-position rate for an unfilled department-head role,
+  // instead of the real total (8266 / 9279 in production). Only the daily
+  // D1-D31 cells (typed by hand, never formulas) and the per-unit "แต้ม" rate
+  // survive uncached — Tier 3 rebuilds each line's total from those.
+  const rows = [
+    { col_1: "ประเภทงาน", col_2: "กิจกรรม", col_3: "D1", col_4: "D2", col_5: "D3", col_6: "แต้ม", col_7: "จำนวนราย", col_8: "รวมแต้ม" },
+    { col_2: "หัวหน้ากลุ่มงาน", col_6: 1320, col_7: 0, col_8: 0 },  // unfilled role — no days, must not count
+    { col_2: "ตรวจผู้ป่วยนอก", col_3: 100, col_4: 100, col_5: 100, col_6: 5, col_7: null, col_8: null },
+    { col_2: "รวม บริการ OPD", col_8: null },
+    { col_2: "รวมแต้มทั้งหมด", col_8: null },
+  ];
+  const { score, method } = resolveScore(rows);
+  assert.equal(score, 1500);   // 5 (แต้ม) × (100+100+100 days) — not the stray 1320 weight
+  assert.match(method, /reconstructed from daily cells/);
+});
+
 test("sheets with no header row keep the previous behaviour", () => {
   // No row declares a score column, so nothing changes: the year filter still
   // governs, and the largest non-year number wins.

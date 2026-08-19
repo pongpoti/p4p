@@ -827,8 +827,61 @@ export function extractScoreFromRows(rows) {
   return { score: null, method: "no candidates found" };
 }
 
+// ── Day-cell reconstruction (Tier 3) ──────────────────────────────────────
+// Some workbooks have every formula cell uncached — not just the grand-total
+// and sub-total rows (Tiers 1/2 below), but each line item's own "จำนวนราย"
+// (count) and "รวมแต้ม" (line total) cells too. Tiers 1/2 have nothing to sum
+// from in that case (every sub-total row reads as empty), so resolveScore
+// fell through to extractScoreFromRows's last-resort "largest in sheet" —
+// which just returns a stray literal, e.g. the flat per-position rate for an
+// unfilled admin role (1320), instead of anything resembling a total.
+//
+// The one thing that's never a formula in this template is the daily D1-D31
+// entry — physicians type those by hand. So each line's total can be rebuilt
+// independently as (per-unit rate) × (sum of its D1-D31 cells), locating the
+// rate column and day columns from the header row by label rather than a
+// fixed offset (different sheets place them differently).
+const DAY_COL_RE = /^D([1-9]|[12]\d|3[01])$/;
+
+function findHeaderRow(rows) {
+  for (const row of rows) {
+    const vals = Object.values(row).map((v) => String(v ?? "").trim());
+    if (vals.includes("แต้ม") && vals.some((v) => DAY_COL_RE.test(v))) return row;
+  }
+  return null;
+}
+
+/** @returns {number|null} reconstructed grand total, or null if the sheet has no usable header/day columns */
+function reconstructFromDailyCells(rows) {
+  const header = findHeaderRow(rows);
+  if (!header) return null;
+
+  const weightCol = Object.keys(header).find((k) => String(header[k]).trim() === "แต้ม");
+  const dayCols   = Object.keys(header).filter((k) => DAY_COL_RE.test(String(header[k] ?? "").trim()));
+  if (!weightCol || dayCols.length === 0) return null;
+
+  let total = 0;
+  for (const row of rows) {
+    if (row === header) continue;
+    // Skip sub-total/grand-total rows — their own (possibly cached) figures
+    // would double-count what this pass already reconstructs from raw cells.
+    const isTotalRow = Object.values(row).some((v) => TOTAL_LABELS.some((lbl) => includesLabel(String(v ?? ""), lbl)));
+    if (isTotalRow) continue;
+
+    const weight = toNum(row[weightCol]);
+    if (isNaN(weight) || weight <= 0) continue;
+
+    const daySum = dayCols.reduce((s, k) => {
+      const v = toNum(row[k]);
+      return !isNaN(v) && v > 0 ? s + v : s;
+    }, 0);
+    if (daySum > 0) total += weight * daySum;
+  }
+  return total > 0 ? total : null;
+}
+
 /**
- * Wraps extractScoreFromRows with a two-tier fallback for files where
+ * Wraps extractScoreFromRows with a three-tier fallback for files where
  * fix_p4p_score.py (openpyxl) wrote =SUM(...) formulas without caching
  * a <v> value. In those files the grand-total cell parses as empty, so
  * extractScoreFromRows falls back to the largest plain number in the sheet
@@ -841,6 +894,10 @@ export function extractScoreFromRows(rows) {
  *   Detect the score column (last numeric column) from whichever sub-total
  *   rows are populated, then sum that column from individual data rows only
  *   (sub-total and grand-total rows are excluded to avoid double-counting).
+ *
+ * Tier 3 — every sub-total row is ALSO uncached (Tiers 1/2 both find nothing
+ *   to sum): rebuild each line's total from its own raw D1-D31 cells × its
+ *   rate column, via reconstructFromDailyCells above.
  */
 export function resolveScore(rows) {
   const { score: jsScore, method: jsMethod } = extractScoreFromRows(rows);
@@ -900,12 +957,15 @@ export function resolveScore(rows) {
     }
   }
 
-  const best = Math.max(subtotalSum, dataRowSum);
-  if (best > 0 && best > (jsScore ?? 0)) {
-    const method = dataRowSum >= subtotalSum
-      ? "sum of score-column data rows (sub-totals partially uncached)"
-      : "sum of sub-total rows (grand-total formula uncached)";
-    return { score: best, method };
+  const candidates = [
+    { value: subtotalSum, method: "sum of sub-total rows (grand-total formula uncached)" },
+    { value: dataRowSum,  method: "sum of score-column data rows (sub-totals partially uncached)" },
+    { value: reconstructFromDailyCells(rows) ?? 0, method: "reconstructed from daily cells × rate (sub-totals also uncached)" },
+  ];
+  const best = candidates.reduce((a, b) => (b.value > a.value ? b : a));
+
+  if (best.value > 0 && best.value > (jsScore ?? 0)) {
+    return { score: best.value, method: best.method };
   }
 
   return { score: jsScore, method: jsMethod };
