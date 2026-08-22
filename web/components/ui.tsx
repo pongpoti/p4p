@@ -1,6 +1,15 @@
 "use client"
 
 import { useEffect, useState, type ReactNode } from "react"
+import Box from "@mui/material/Box"
+import CircularProgress from "@mui/material/CircularProgress"
+import Fab from "@mui/material/Fab"
+import Fade from "@mui/material/Fade"
+import MuiSkeleton from "@mui/material/Skeleton"
+import Typography from "@mui/material/Typography"
+import CheckBoxIcon from "@mui/icons-material/CheckBox"
+import ErrorIcon from "@mui/icons-material/Error"
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp"
 
 /**
  * The small shared primitives. Each of these exists three or four times across
@@ -34,36 +43,57 @@ export function StateBox({
   sub?: string
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 1,
+        px: 3,
+        py: 7,
+        textAlign: "center",
+      }}
+    >
       {kind === "loading" ? (
-        <Spinner dark />
+        <CircularProgress size={32} sx={{ color: "var(--color-secondary)" }} />
+      ) : kind === "error" ? (
+        <ErrorIcon sx={{ fontSize: 32, color: "var(--color-danger)" }} />
       ) : (
-        <svg
-          viewBox="0 0 24 24"
-          aria-hidden
-          className={`h-8 w-8 ${kind === "error" ? "fill-[var(--color-danger)]" : "fill-[var(--color-muted)]"}`}
-        >
-          {kind === "error" ? (
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-          ) : (
-            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" />
-          )}
-        </svg>
+        <CheckBoxIcon sx={{ fontSize: 32, color: "var(--color-muted)" }} />
       )}
-      <div className="font-[family-name:var(--font-manrope)] text-sm font-semibold text-[var(--color-secondary)]">
+      <Typography
+        sx={{
+          fontFamily: "var(--font-manrope)",
+          fontSize: "0.875rem",
+          fontWeight: 600,
+          color: "var(--color-secondary)",
+        }}
+      >
         {title}
-      </div>
-      {sub ? <div className="text-xs text-[var(--color-ink-muted)]">{sub}</div> : null}
-    </div>
+      </Typography>
+      {sub ? (
+        <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>{sub}</Typography>
+      ) : null}
+    </Box>
   )
 }
 
 /** Grey placeholder used while the month header resolves. */
-export function Skeleton({ className = "" }: { className?: string }) {
+export function Skeleton({
+  width = "100%",
+  height = 16,
+}: {
+  width?: number | string
+  height?: number | string
+}) {
   return (
-    <span
+    <MuiSkeleton
       aria-hidden
-      className={`inline-block animate-pulse rounded-[var(--radius-card)] bg-[var(--color-line)] ${className}`}
+      variant="rounded"
+      width={width}
+      height={height}
+      sx={{ borderRadius: "var(--radius-card)", bgcolor: "var(--color-line)" }}
     />
   )
 }
@@ -81,18 +111,27 @@ export function BackToTop({ threshold = 200 }: { threshold?: number }) {
   }, [threshold])
 
   return (
-    <button
-      type="button"
-      aria-label="กลับขึ้นด้านบน"
-      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-      className={`fixed right-4 bottom-4 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-secondary)] text-white shadow-lg transition-opacity ${
-        visible ? "opacity-100" : "pointer-events-none opacity-0"
-      }`}
-    >
-      <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current" aria-hidden>
-        <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
-      </svg>
-    </button>
+    <Fade in={visible}>
+      <Fab
+        aria-label="กลับขึ้นด้านบน"
+        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        sx={{
+          position: "fixed",
+          right: 16,
+          bottom: 16,
+          zIndex: 50,
+          width: 44,
+          height: 44,
+          minHeight: 44,
+          bgcolor: "var(--color-secondary)",
+          color: "white",
+          boxShadow: 3,
+          "&:hover": { bgcolor: "var(--color-secondary)" },
+        }}
+      >
+        <KeyboardArrowUpIcon />
+      </Fab>
+    </Fade>
   )
 }
 

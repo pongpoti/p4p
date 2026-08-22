@@ -1,6 +1,20 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
+import Box from "@mui/material/Box"
+import Button from "@mui/material/Button"
+import IconButton from "@mui/material/IconButton"
+import MenuItem from "@mui/material/MenuItem"
+import Stack from "@mui/material/Stack"
+import Table from "@mui/material/Table"
+import TableBody from "@mui/material/TableBody"
+import TableCell from "@mui/material/TableCell"
+import TableHead from "@mui/material/TableHead"
+import TableRow from "@mui/material/TableRow"
+import TextField from "@mui/material/TextField"
+import Typography from "@mui/material/Typography"
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft"
+import ChevronRightIcon from "@mui/icons-material/ChevronRight"
 import DesktopBlock, { useDeviceGate } from "@/components/DesktopBlock"
 import { BackToTop, StateBox } from "@/components/ui"
 import { monthColorHex } from "@/lib/colors"
@@ -113,29 +127,60 @@ export default function ListClient({
 
   return (
     <>
-      <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-neutral)]/95 backdrop-blur">
-        <div className="mx-auto max-w-[640px] px-4 py-3">
-          <div className="font-[family-name:var(--font-manrope)] text-base font-bold text-[var(--color-secondary)]">
+      <Box
+        component="header"
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 40,
+          borderBottom: "1px solid var(--color-line)",
+          bgcolor: "color-mix(in srgb, var(--color-neutral) 95%, transparent)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        <Box sx={{ mx: "auto", maxWidth: 640, px: 2, py: 1.5 }}>
+          <Typography
+            sx={{
+              fontFamily: "var(--font-manrope)",
+              fontSize: "1rem",
+              fontWeight: 700,
+              color: "var(--color-secondary)",
+            }}
+          >
             SAKHONMSO P4P
-          </div>
-          <div className="text-xs text-[var(--color-ink-muted)]">ข้อมูลแพทย์รายเดือน</div>
+          </Typography>
+          <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>
+            ข้อมูลแพทย์รายเดือน
+          </Typography>
 
-          <div className="mt-3 flex gap-2">
-            <select
+          <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+            <TextField
+              select
               value={month}
               onChange={(e) => setMonth(e.target.value)}
-              className="min-w-0 flex-1 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-3 py-2 text-sm"
+              size="small"
+              sx={{
+                minWidth: 0,
+                flex: 1,
+                "& .MuiOutlinedInput-root": {
+                  bgcolor: "white",
+                  borderRadius: "var(--radius-card)",
+                  fontSize: "0.875rem",
+                  "& fieldset": { borderColor: "var(--color-line)" },
+                },
+              }}
+              slotProps={{ select: { displayEmpty: true } }}
             >
-              <option value="" disabled>
+              <MenuItem value="" disabled>
                 เลือกเดือน...
-              </option>
+              </MenuItem>
               {months.map((key) => (
-                <option key={key} value={key}>
+                <MenuItem key={key} value={key}>
                   {thaiLabelFromKey(key)}
-                </option>
+                </MenuItem>
               ))}
-            </select>
-            <input
+            </TextField>
+            <TextField
               type="search"
               value={query}
               disabled={!people}
@@ -144,33 +189,60 @@ export default function ListClient({
                 setPage(1)
               }}
               placeholder="ค้นหาชื่อหรือแผนก..."
-              className="min-w-0 flex-1 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-3 py-2 text-sm disabled:opacity-60"
+              size="small"
+              sx={{
+                minWidth: 0,
+                flex: 1,
+                "& .MuiOutlinedInput-root": {
+                  bgcolor: "white",
+                  borderRadius: "var(--radius-card)",
+                  fontSize: "0.875rem",
+                  "& fieldset": { borderColor: "var(--color-line)" },
+                },
+              }}
             />
-          </div>
-        </div>
-      </header>
+          </Stack>
+        </Box>
+      </Box>
 
-      <main className="mx-auto max-w-[640px] px-4 py-4">
+      <Box component="main" sx={{ mx: "auto", maxWidth: 640, px: 2, py: 2 }}>
         {people ? (
-          <div className="mb-3 grid grid-cols-3 gap-2">
+          <Box sx={{ mb: 1.5, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}>
             <Stat value={people.length.toLocaleString()} label="แพทย์ทั้งหมด" />
             <Stat value={String(uniqueDepartments)} label="แผนก" />
             {query ? <Stat value={String(filtered.length)} label="ผลการค้นหา" /> : null}
-          </div>
+          </Box>
         ) : null}
 
-        <div
-          className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white"
-          style={{ borderTop: `3px solid ${accent}` }}
+        <Box
+          sx={{
+            overflow: "hidden",
+            borderRadius: "var(--radius-card)",
+            border: "1px solid var(--color-line)",
+            bgcolor: "white",
+            borderTop: `3px solid ${accent}`,
+          }}
         >
-          <div className="flex items-center justify-between border-b border-[var(--color-line)] px-3 py-2">
-            <span className="font-[family-name:var(--font-manrope)] text-sm font-semibold text-[var(--color-secondary)]">
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ borderBottom: "1px solid var(--color-line)", px: 1.5, py: 1 }}
+          >
+            <Typography
+              sx={{
+                fontFamily: "var(--font-manrope)",
+                fontSize: "0.875rem",
+                fontWeight: 600,
+                color: "var(--color-secondary)",
+              }}
+            >
               รายชื่อแพทย์
-            </span>
-            <span className="text-xs text-[var(--color-ink-muted)]">
-              <strong>{people ? filtered.length : DASH}</strong> รายการ
-            </span>
-          </div>
+            </Typography>
+            <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>
+              <Box component="strong">{people ? filtered.length : DASH}</Box> รายการ
+            </Typography>
+          </Stack>
 
           {!month ? (
             <StateBox kind="empty" title="เลือกเดือนเพื่อดูข้อมูล" />
@@ -182,12 +254,22 @@ export default function ListClient({
             <StateBox kind="empty" title="ไม่พบข้อมูล" sub="ลองเปลี่ยนคำค้นหา" />
           ) : (
             <>
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr style={{ background: accent }}>
-                    <th className="w-10 px-2 py-2 text-left font-[family-name:var(--font-manrope)] text-xs text-[var(--color-secondary)]">
+              <Table sx={{ width: "100%", tableLayout: "fixed" }} size="small">
+                <TableHead>
+                  <TableRow sx={{ bgcolor: accent }}>
+                    <TableCell
+                      sx={{
+                        width: 40,
+                        px: 1,
+                        py: 1,
+                        fontFamily: "var(--font-manrope)",
+                        fontSize: "0.75rem",
+                        color: "var(--color-secondary)",
+                        border: 0,
+                      }}
+                    >
                       #
-                    </th>
+                    </TableCell>
                     <SortHeader
                       label="ชื่อ-นามสกุล"
                       column="name"
@@ -202,32 +284,50 @@ export default function ListClient({
                       onSort={setSort}
                       onPage={setPage}
                     />
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
                   {rows.map((person, i) => (
-                    <tr key={`${person.name}-${start + i}`} className="border-b border-[var(--color-line)]/60 last:border-0">
-                      <td className="px-2 py-2 text-xs text-[var(--color-faint)]">{start + i + 1}</td>
-                      <td className="px-2 py-2 break-words">
+                    <TableRow
+                      key={`${person.name}-${start + i}`}
+                      sx={{
+                        "&:not(:last-of-type) td": {
+                          borderBottom: "1px solid color-mix(in srgb, var(--color-line) 60%, transparent)",
+                        },
+                        "&:last-of-type td": { border: 0 },
+                      }}
+                    >
+                      <TableCell sx={{ px: 1, py: 1, fontSize: "0.75rem", color: "var(--color-faint)" }}>
+                        {start + i + 1}
+                      </TableCell>
+                      <TableCell sx={{ px: 1, py: 1, fontSize: "0.875rem", wordBreak: "break-word" }}>
                         {person.name === DASH ? <Faint /> : person.name}
-                      </td>
-                      <td className="px-2 py-2 break-words">
+                      </TableCell>
+                      <TableCell sx={{ px: 1, py: 1, fontSize: "0.875rem", wordBreak: "break-word" }}>
                         {person.department === DASH ? <Faint /> : person.department}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-3 py-2">
-                <span className="text-xs text-[var(--color-ink-muted)]">
-                  <strong>
-                    {showAll ? 1 : start + 1}–{showAll ? filtered.length : Math.min(start + PAGE_SIZE, filtered.length)}
-                  </strong>{" "}
-                  จาก <strong>{filtered.length}</strong>
-                </span>
+              <Stack
+                direction="row"
+                flexWrap="wrap"
+                alignItems="center"
+                justifyContent="space-between"
+                gap={1}
+                sx={{ borderTop: "1px solid var(--color-line)", px: 1.5, py: 1 }}
+              >
+                <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>
+                  <Box component="strong">
+                    {showAll ? 1 : start + 1}–
+                    {showAll ? filtered.length : Math.min(start + PAGE_SIZE, filtered.length)}
+                  </Box>{" "}
+                  จาก <Box component="strong">{filtered.length}</Box>
+                </Typography>
 
-                <div className="flex flex-wrap items-center gap-1">
+                <Stack direction="row" flexWrap="wrap" alignItems="center" gap={0.5}>
                   <PagerButton
                     active={showAll}
                     accent={accent}
@@ -241,15 +341,21 @@ export default function ListClient({
 
                   {!showAll ? (
                     <>
-                      <PagerButton disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>
-                        ‹
-                      </PagerButton>
+                      <PagerIconButton
+                        disabled={currentPage === 1}
+                        onClick={() => setPage(currentPage - 1)}
+                        icon={<ChevronLeftIcon fontSize="small" />}
+                        label="ก่อนหน้า"
+                      />
                       {(narrow ? pageRangeMobile : pageRange)(currentPage, totalPages).map(
                         (token: PageToken, i) =>
                           token === "…" ? (
-                            <span key={`gap-${i}`} className="px-1 text-xs text-[var(--color-muted)]">
+                            <Typography
+                              key={`gap-${i}`}
+                              sx={{ px: 0.5, fontSize: "0.75rem", color: "var(--color-muted)" }}
+                            >
                               …
-                            </span>
+                            </Typography>
                           ) : (
                             <PagerButton
                               key={token}
@@ -261,24 +367,24 @@ export default function ListClient({
                             </PagerButton>
                           ),
                       )}
-                      <PagerButton
+                      <PagerIconButton
                         disabled={currentPage === totalPages}
                         onClick={() => setPage(currentPage + 1)}
-                      >
-                        ›
-                      </PagerButton>
+                        icon={<ChevronRightIcon fontSize="small" />}
+                        label="ถัดไป"
+                      />
                     </>
                   ) : null}
-                </div>
-              </div>
+                </Stack>
+              </Stack>
             </>
           )}
-        </div>
+        </Box>
 
-        <p className="mt-6 text-center text-xs text-[var(--color-muted)]">
+        <Typography sx={{ mt: 3, textAlign: "center", fontSize: "0.75rem", color: "var(--color-muted)" }}>
           องค์กรแพทย์ โรงพยาบาลสมุทรสาคร
-        </p>
-      </main>
+        </Typography>
+      </Box>
 
       <BackToTop />
     </>
@@ -286,17 +392,33 @@ export default function ListClient({
 }
 
 function Faint() {
-  return <span className="text-[var(--color-faint)]">{DASH}</span>
+  return <Box component="span" sx={{ color: "var(--color-faint)" }}>{DASH}</Box>
 }
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-2 py-2 text-center">
-      <div className="font-[family-name:var(--font-manrope)] text-base font-bold text-[var(--color-secondary)]">
+    <Box
+      sx={{
+        borderRadius: "var(--radius-card)",
+        border: "1px solid var(--color-line)",
+        bgcolor: "white",
+        px: 1,
+        py: 1,
+        textAlign: "center",
+      }}
+    >
+      <Typography
+        sx={{
+          fontFamily: "var(--font-manrope)",
+          fontSize: "1rem",
+          fontWeight: 700,
+          color: "var(--color-secondary)",
+        }}
+      >
         {value}
-      </div>
-      <div className="text-[0.65rem] text-[var(--color-ink-muted)]">{label}</div>
-    </div>
+      </Typography>
+      <Typography sx={{ fontSize: "0.65rem", color: "var(--color-ink-muted)" }}>{label}</Typography>
+    </Box>
   )
 }
 
@@ -315,22 +437,40 @@ function SortHeader({
 }) {
   const active = sort?.column === column
   return (
-    <th className="px-2 py-2 text-left font-[family-name:var(--font-manrope)] text-xs text-[var(--color-secondary)]">
-      <button
+    <TableCell
+      sx={{
+        px: 1,
+        py: 1,
+        fontFamily: "var(--font-manrope)",
+        fontSize: "0.75rem",
+        color: "var(--color-secondary)",
+        border: 0,
+      }}
+    >
+      <Button
         type="button"
+        disableRipple
         aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
         onClick={() => {
           onSort({ column, dir: active && sort.dir === "asc" ? "desc" : "asc" })
           onPage(1)
         }}
-        className="flex items-center gap-1"
+        sx={{
+          minWidth: 0,
+          p: 0,
+          gap: 0.5,
+          fontFamily: "var(--font-manrope)",
+          fontSize: "0.75rem",
+          textTransform: "none",
+          color: "var(--color-secondary)",
+        }}
       >
         {label}
-        <span aria-hidden className="text-[0.6rem]">
+        <Box component="span" aria-hidden sx={{ fontSize: "0.6rem" }}>
           {active ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
-        </span>
-      </button>
-    </th>
+        </Box>
+      </Button>
+    </TableCell>
   )
 }
 
@@ -341,23 +481,68 @@ function PagerButton({
   disabled = false,
   accent,
 }: {
-  children: React.ReactNode
+  children: ReactNode
   onClick: () => void
   active?: boolean
   disabled?: boolean
   accent?: string
 }) {
   return (
-    <button
+    <Button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      style={active && accent ? { background: accent, borderColor: accent } : undefined}
-      className={`min-w-8 rounded-[var(--radius-card)] border border-[var(--color-line)] px-2 py-1 text-xs ${
-        active ? "font-semibold text-[var(--color-secondary)]" : "text-[var(--color-ink-muted)]"
-      } disabled:opacity-40`}
+      disableRipple
+      sx={{
+        minWidth: 32,
+        borderRadius: "var(--radius-card)",
+        border: "1px solid",
+        borderColor: active && accent ? accent : "var(--color-line)",
+        bgcolor: active && accent ? accent : "transparent",
+        px: 1,
+        py: 0.5,
+        fontSize: "0.75rem",
+        textTransform: "none",
+        fontWeight: active ? 600 : 400,
+        color: active ? "var(--color-secondary)" : "var(--color-ink-muted)",
+        "&:hover": { bgcolor: active && accent ? accent : "transparent" },
+        "&.Mui-disabled": { opacity: 0.4 },
+      }}
     >
       {children}
-    </button>
+    </Button>
+  )
+}
+
+function PagerIconButton({
+  icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: ReactNode
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <IconButton
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      size="small"
+      sx={{
+        minWidth: 32,
+        borderRadius: "var(--radius-card)",
+        border: "1px solid var(--color-line)",
+        px: 1,
+        py: 0.5,
+        color: "var(--color-ink-muted)",
+        "&.Mui-disabled": { opacity: 0.4 },
+      }}
+    >
+      {icon}
+    </IconButton>
   )
 }
