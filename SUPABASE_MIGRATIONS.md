@@ -81,6 +81,22 @@ already-applied file is safe.
     auto-provisioned from a matched submission) landed in `physicians` with
     no department at all — the request form never asked for one before this.
     Run AFTER step 14.
+16. `scripts/liff-access-alert-2026-08.sql` — `liff_access_log` table +
+    `log_liff_access()` RPC + `notify_liff_access()` trigger: one Telegram
+    alert per rich-menu page open (status/list/ranking/verify). Requires
+    `pg_net` + the same Vault secrets (`telegram_bot_token`,
+    `telegram_chat_id`) as `notify_access_request()`.
+17. `scripts/liff-access-server-side-2026-08.sql` — **required companion to
+    step 16, run immediately after it**: rewrites `log_liff_access()` to
+    derive LINE identity from `physicians.line_user_id`/`line_display_name`
+    for status/list/ranking's beacon (which sends only `p_page`, no LIFF
+    SDK). Without this file, those 3 pages' Telegram alerts show `—` for
+    LINE name/ID even for a fully bound, `auth_pass = true` physician,
+    because the step-16 version only ever inserted whatever
+    `p_line_user_id`/`p_line_display_name` the caller passed — confirmed
+    live in prod (2026-08-22) via
+    `select pg_get_functiondef('public.log_liff_access(text,text,text,text,text)'::regprocedure)`.
+    Also fixes a throttle gap (see the file's own header).
 
 ## Superseded — do NOT run
 
