@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next"
 import { Manrope, Noto_Sans_Thai_Looped, Work_Sans } from "next/font/google"
+import ThemeRegistry from "@/components/ThemeRegistry"
 import "./globals.css"
 
 /**
@@ -48,7 +49,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang="th"
       className={`${manrope.variable} ${workSans.variable} ${notoSansThai.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        <ThemeRegistry>{children}</ThemeRegistry>
+      </body>
     </html>
   )
 }

@@ -1,6 +1,26 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Box from "@mui/material/Box"
+import Chip from "@mui/material/Chip"
+import FormControlLabel from "@mui/material/FormControlLabel"
+import InputAdornment from "@mui/material/InputAdornment"
+import MenuItem from "@mui/material/MenuItem"
+import Radio from "@mui/material/Radio"
+import RadioGroup from "@mui/material/RadioGroup"
+import Stack from "@mui/material/Stack"
+import TextField from "@mui/material/TextField"
+import Typography from "@mui/material/Typography"
+import Accordion from "@mui/material/Accordion"
+import AccordionSummary from "@mui/material/AccordionSummary"
+import AccordionDetails from "@mui/material/AccordionDetails"
+import List from "@mui/material/List"
+import ListItem from "@mui/material/ListItem"
+import ListItemText from "@mui/material/ListItemText"
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore"
+import SearchIcon from "@mui/icons-material/Search"
+import CheckIcon from "@mui/icons-material/Check"
+import CloseIcon from "@mui/icons-material/Close"
 import DesktopBlock, { useDeviceGate } from "@/components/DesktopBlock"
 import { BackToTop, Skeleton, StateBox } from "@/components/ui"
 import { departmentLabel, fullName, sortDepartments } from "@/lib/departments"
@@ -104,33 +124,58 @@ export default function StatusClient({
 
   return (
     <>
-      <header className="sticky top-0 z-40 border-b border-[var(--color-line)] bg-[var(--color-neutral)]/95 backdrop-blur">
-        <div className="mx-auto max-w-[640px] px-4 py-3">
-          <div className="flex items-center gap-2">
+      <Box
+        component="header"
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 40,
+          borderBottom: "1px solid var(--color-line)",
+          bgcolor: "color-mix(in srgb, var(--color-neutral) 95%, transparent)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        <Box sx={{ mx: "auto", maxWidth: 640, px: 2, py: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
             {monthLabel ? (
-              <span
-                className="rounded-[var(--radius-card)] px-2.5 py-1 font-[family-name:var(--font-manrope)] text-sm font-bold text-[var(--color-ink)]"
-                style={{ background: accent }}
-              >
-                {monthLabel}
-              </span>
+              <Chip
+                label={monthLabel}
+                sx={{
+                  bgcolor: accent,
+                  borderRadius: "var(--radius-card)",
+                  fontFamily: "var(--font-manrope)",
+                  fontSize: "0.875rem",
+                  fontWeight: 700,
+                  color: "var(--color-ink)",
+                  height: "auto",
+                  px: 0.5,
+                  py: 0.5,
+                }}
+              />
             ) : (
-              <span className="font-[family-name:var(--font-manrope)] text-sm font-bold text-[var(--color-secondary)]">
-                {monthKey === null ? "ไม่พบพารามิเตอร์" : <Skeleton className="h-5 w-28" />}
-              </span>
+              <Typography
+                sx={{
+                  fontFamily: "var(--font-manrope)",
+                  fontSize: "0.875rem",
+                  fontWeight: 700,
+                  color: "var(--color-secondary)",
+                }}
+              >
+                {monthKey === null ? "ไม่พบพารามิเตอร์" : <Skeleton width={112} height={20} />}
+              </Typography>
             )}
             {entries ? (
-              <span className="text-xs text-[var(--color-ink-muted)]">
+              <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>
                 (ส่ง {sent.length} จาก {entries.length} ราย)
-              </span>
+              </Typography>
             ) : monthKey ? (
-              <Skeleton className="h-4 w-24" />
+              <Skeleton width={96} height={16} />
             ) : null}
-          </div>
+          </Stack>
 
           {monthKey ? (
-            <div className="mt-3 space-y-2">
-              <input
+            <Stack spacing={1} sx={{ mt: 1.5 }}>
+              <TextField
                 type="search"
                 value={query}
                 disabled={!entries}
@@ -140,57 +185,104 @@ export default function StatusClient({
                 }}
                 placeholder="พิมพ์เพื่อค้นหา.."
                 autoComplete="off"
-                className="w-full rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-3 py-2 text-sm disabled:opacity-60"
+                fullWidth
+                size="small"
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" sx={{ color: "var(--color-muted)" }} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+                sx={{
+                  "& .MuiOutlinedInput-root": {
+                    bgcolor: "white",
+                    borderRadius: "var(--radius-card)",
+                    fontSize: "0.875rem",
+                    "& fieldset": { borderColor: "var(--color-line)" },
+                  },
+                }}
               />
-              <p className="text-[0.7rem] text-[var(--color-muted)]">
+              <Typography sx={{ fontSize: "0.7rem", color: "var(--color-muted)" }}>
                 พิมพ์เว้นวรรคเพื่อดูรายชื่อทั้งหมดเรียงตามกลุ่มงาน
-              </p>
+              </Typography>
 
-              <div className="flex items-center gap-4 text-xs">
+              <RadioGroup
+                row
+                name="search_by"
+                value={searchBy}
+                onChange={(e) => {
+                  setSearchBy(e.target.value as SearchBy)
+                  setQuery("")
+                  setDepartment("")
+                }}
+                sx={{ gap: 2 }}
+              >
                 {(["name", "department"] as const).map((mode) => (
-                  <label key={mode} className="flex items-center gap-1.5">
-                    <input
-                      type="radio"
-                      name="search_by"
-                      checked={searchBy === mode}
-                      disabled={!entries}
-                      onChange={() => {
-                        setSearchBy(mode)
-                        setQuery("")
-                        setDepartment("")
-                      }}
-                    />
-                    <span className={entries ? "text-[var(--color-secondary)]" : "text-[var(--color-muted)]"}>
-                      {mode === "name" ? "ชื่อแพทย์" : "ชื่อกลุ่มงาน"}
-                    </span>
-                  </label>
+                  <FormControlLabel
+                    key={mode}
+                    value={mode}
+                    disabled={!entries}
+                    control={
+                      <Radio
+                        size="small"
+                        sx={{
+                          p: 0.5,
+                          color: "var(--color-line)",
+                          "&.Mui-checked": { color: "var(--color-primary)" },
+                        }}
+                      />
+                    }
+                    label={
+                      <Typography
+                        sx={{
+                          fontSize: "0.75rem",
+                          color: entries ? "var(--color-secondary)" : "var(--color-muted)",
+                        }}
+                      >
+                        {mode === "name" ? "ชื่อแพทย์" : "ชื่อกลุ่มงาน"}
+                      </Typography>
+                    }
+                  />
                 ))}
-              </div>
+              </RadioGroup>
 
               {searchBy === "department" ? (
-                <select
+                <TextField
+                  select
                   value={department}
                   disabled={!entries}
                   onChange={(e) => {
                     setDepartment(e.target.value)
                     setQuery("")
                   }}
-                  className="w-full rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white px-3 py-2 text-sm disabled:opacity-60"
+                  fullWidth
+                  size="small"
+                  sx={{
+                    "& .MuiOutlinedInput-root": {
+                      bgcolor: "white",
+                      borderRadius: "var(--radius-card)",
+                      fontSize: "0.875rem",
+                      "& fieldset": { borderColor: "var(--color-line)" },
+                    },
+                  }}
                 >
-                  <option value="">ทุกกลุ่มงาน</option>
+                  <MenuItem value="">ทุกกลุ่มงาน</MenuItem>
                   {departments.map((d) => (
-                    <option key={d} value={d}>
+                    <MenuItem key={d} value={d}>
                       {departmentLabel(d)}
-                    </option>
+                    </MenuItem>
                   ))}
-                </select>
+                </TextField>
               ) : null}
-            </div>
+            </Stack>
           ) : null}
-        </div>
-      </header>
+        </Box>
+      </Box>
 
-      <main className="mx-auto max-w-[640px] px-4 py-4">
+      <Box component="main" sx={{ mx: "auto", maxWidth: 640, px: 2, py: 2 }}>
         {monthKey === null ? (
           <StateBox kind="error" title="ไม่พบพารามิเตอร์" sub="กรุณาเปิดจากเมนูเลือกเดือนใน LINE" />
         ) : error ? (
@@ -200,12 +292,12 @@ export default function StatusClient({
         ) : view.mode === "filtered" ? (
           <GroupedList entries={view.entries} />
         ) : (
-          <div className="space-y-3">
+          <Stack spacing={1.5}>
             <Section title="รายชื่อผู้ที่ยังไม่ได้ส่ง" entries={pending} defaultOpen />
             <Section title="รายชื่อผู้ที่ส่งแล้ว" entries={sent} />
-          </div>
+          </Stack>
         )}
-      </main>
+      </Box>
 
       <BackToTop threshold={20} />
     </>
@@ -224,19 +316,46 @@ function Section({
   defaultOpen?: boolean
 }) {
   return (
-    <details
-      open={defaultOpen}
-      className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white"
+    <Accordion
+      defaultExpanded={defaultOpen}
+      disableGutters
+      square
+      sx={{
+        overflow: "hidden",
+        borderRadius: "var(--radius-card)",
+        border: "1px solid var(--color-line)",
+        bgcolor: "white",
+        "&:before": { display: "none" },
+      }}
     >
-      <summary className="cursor-pointer bg-[var(--color-secondary)] px-3 py-2.5 font-[family-name:var(--font-manrope)] text-sm font-semibold text-white">
-        {title} ({entries.length})
-      </summary>
-      <ul>
-        {entries.map((entry, i) => (
-          <Row key={`${entry.name}-${i}`} entry={entry} showDepartment />
-        ))}
-      </ul>
-    </details>
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}
+        sx={{
+          bgcolor: "var(--color-secondary)",
+          color: "white",
+          minHeight: 0,
+          "& .MuiAccordionSummary-content": { my: 1 },
+        }}
+      >
+        <Typography
+          sx={{
+            fontFamily: "var(--font-manrope)",
+            fontSize: "0.875rem",
+            fontWeight: 600,
+            color: "white",
+          }}
+        >
+          {title} ({entries.length})
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}>
+        <List disablePadding>
+          {entries.map((entry, i) => (
+            <Row key={`${entry.name}-${i}`} entry={entry} showDepartment />
+          ))}
+        </List>
+      </AccordionDetails>
+    </Accordion>
   )
 }
 
@@ -256,53 +375,81 @@ function GroupedList({ entries }: { entries: Entry[] }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white">
+    <Box
+      sx={{
+        overflow: "hidden",
+        borderRadius: "var(--radius-card)",
+        border: "1px solid var(--color-line)",
+        bgcolor: "white",
+      }}
+    >
       {groups.map(({ dep, rows }) => (
-        <section key={dep}>
-          <h2 className="bg-[var(--color-tertiary)] px-3 py-2 text-xs font-semibold text-[var(--color-secondary)]">
+        <Box component="section" key={dep}>
+          <Typography
+            component="h2"
+            sx={{
+              bgcolor: "var(--color-tertiary)",
+              px: 1.5,
+              py: 1,
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              color: "var(--color-secondary)",
+            }}
+          >
             {dep ? departmentLabel(dep) : "ไม่ระบุกลุ่มงาน"}
-          </h2>
-          <ul>
+          </Typography>
+          <List disablePadding>
             {rows.map((entry, i) => (
               <Row key={`${entry.name}-${i}`} entry={entry} />
             ))}
-          </ul>
-        </section>
+          </List>
+        </Box>
       ))}
-    </div>
+    </Box>
   )
 }
 
 function Row({ entry, showDepartment = false }: { entry: Entry; showDepartment?: boolean }) {
   return (
-    <li className="flex items-center gap-2 border-b border-[var(--color-line)]/60 px-3 py-2 last:border-0">
-      <div className="min-w-0 flex-1">
-        <p className={`truncate text-sm ${entry.sent ? "" : "text-[var(--color-ink-muted)]"}`}>
-          {entry.name || "—"}
-        </p>
-        {showDepartment && entry.department ? (
-          <p className="truncate text-[0.7rem] text-[var(--color-muted)]">{entry.department}</p>
-        ) : null}
-      </div>
+    <ListItem
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1,
+        borderBottom: "1px solid color-mix(in srgb, var(--color-line) 60%, transparent)",
+        px: 1.5,
+        py: 1,
+        "&:last-of-type": { borderBottom: "none" },
+      }}
+    >
+      <ListItemText
+        sx={{ minWidth: 0, flex: 1, my: 0 }}
+        primary={entry.name || "—"}
+        primaryTypographyProps={{
+          noWrap: true,
+          sx: { fontSize: "0.875rem", color: entry.sent ? undefined : "var(--color-ink-muted)" },
+        }}
+        secondary={showDepartment && entry.department ? entry.department : undefined}
+        secondaryTypographyProps={{
+          noWrap: true,
+          sx: { fontSize: "0.7rem", color: "var(--color-muted)" },
+        }}
+      />
       <StatusIcon sent={entry.sent} />
-    </li>
+    </ListItem>
   )
 }
 
 function StatusIcon({ sent }: { sent: boolean }) {
+  const Icon = sent ? CheckIcon : CloseIcon
   return (
-    <svg
-      viewBox="0 0 24 24"
-      role="img"
+    <Icon
       aria-label={sent ? "ส่งแล้ว" : "ยังไม่ได้ส่ง"}
-      className={`h-4 w-4 shrink-0 ${sent ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"}`}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {sent ? <path d="M20 6 9 17l-5-5" /> : <path d="M18 6 6 18M6 6l12 12" />}
-    </svg>
+      sx={{
+        flexShrink: 0,
+        fontSize: 18,
+        color: sent ? "var(--color-success)" : "var(--color-danger)",
+      }}
+    />
   )
 }
