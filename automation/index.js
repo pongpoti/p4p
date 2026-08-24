@@ -872,9 +872,22 @@ async function main() {
   // uploadFile always overwrite unconditionally. Sorting oldest-first here
   // ensures the last write for a given physician+month is the most recent
   // email, not an arbitrary one.
-  const fetchedMessages = await Promise.all(
+  //
+  // Promise.allSettled (not Promise.all) — a single message failing to fetch
+  // (deleted mid-run, transient network error) must not abort the whole batch.
+  // With Promise.all, one rejection discards every already-fulfilled fetch and
+  // no message gets processed at all; allSettled keeps the rest going.
+  const fetchResults = await Promise.allSettled(
     messages.map(async (m) => ({ ...m, ...(await gmail.getMessageWithAttachments(m.id)) }))
   );
+  const fetchedMessages = [];
+  fetchResults.forEach((r, idx) => {
+    if (r.status === "fulfilled") {
+      fetchedMessages.push(r.value);
+    } else {
+      console.error(`⚠️  Failed to fetch message ${messages[idx].id}: ${r.reason?.message ?? r.reason}`);
+    }
+  });
   fetchedMessages.sort((a, b) => {
     const da = new Date(a.msg.date).getTime();
     const db = new Date(b.msg.date).getTime();
