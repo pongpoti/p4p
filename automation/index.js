@@ -865,9 +865,25 @@ async function main() {
 
   console.log(`\n📬  ${messages.length} message(s) found (${inboxMessages.length} inbox, ${spamMessages.length} spam/junk):\n`);
 
-  for (let i = 0; i < messages.length; i++) {
-    const { id, _sourceLabel } = messages[i];
-    const { msg, attachments } = await gmail.getMessageWithAttachments(id);
+  // Fetch full message data up front so we can process chronologically.
+  // Gmail's messages.list has no orderBy and returns newest-first; without
+  // resorting, a same-run correction (processed first) would get silently
+  // overwritten by the older original (processed later) since saveScore/
+  // uploadFile always overwrite unconditionally. Sorting oldest-first here
+  // ensures the last write for a given physician+month is the most recent
+  // email, not an arbitrary one.
+  const fetchedMessages = await Promise.all(
+    messages.map(async (m) => ({ ...m, ...(await gmail.getMessageWithAttachments(m.id)) }))
+  );
+  fetchedMessages.sort((a, b) => {
+    const da = new Date(a.msg.date).getTime();
+    const db = new Date(b.msg.date).getTime();
+    if (isNaN(da) || isNaN(db)) return 0; // unparseable date — keep original relative order
+    return da - db;
+  });
+
+  for (let i = 0; i < fetchedMessages.length; i++) {
+    const { id, _sourceLabel, msg, attachments } = fetchedMessages[i];
 
     const msgBody   = msg.body?.trim() ?? "";
     const fromRaw   = msg.from ?? "";
