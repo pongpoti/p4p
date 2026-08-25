@@ -6,7 +6,7 @@
  *
  * @param {object} data
  * @param {string} data.safeFilename    Attachment filename(s) (may be empty)
- * @param {"wrong_extension"|"file_link"|"wrong_date"|"physician_not_found"|"other"} data.errorType
+ * @param {"wrong_extension"|"file_link"|"temp_file"|"wrong_date"|"physician_not_found"|"other"} data.errorType
  * @param {string} [data.detectedDate]  Date string extracted from file, shown when errorType="wrong_date"
  * @param {string} [data.detectedName]  Name extracted from file, shown when errorType="physician_not_found"
  */
@@ -37,6 +37,11 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
       bannerTitle  : "ตรวจพบลิงก์ไฟล์แทนไฟล์จริง",
       bannerBody   : "ระบบไม่สามารถเข้าถึงไฟล์ผ่านลิงก์ได้<br>กรุณาแนบไฟล์ <strong>.xlsx</strong> โดยตรงในอีเมล",
       instruction  : "กรุณาดาวน์โหลดไฟล์ก่อน แล้วแนบไฟล์ <strong>.xlsx</strong> โดยตรงในอีเมล — ไม่ใช่ลิงก์",
+    },
+    temp_file: {
+      bannerTitle  : "ตรวจพบไฟล์ชั่วคราวของ Excel แทนไฟล์จริง",
+      bannerBody   : "ไฟล์ที่แนบมาเป็นไฟล์ชั่วคราวที่ Excel สร้างขึ้นระหว่างที่ไฟล์ต้นฉบับยังเปิดอยู่ (ชื่อไฟล์ขึ้นต้นด้วย <strong>~$</strong>)<br>ไม่ใช่ไฟล์ข้อมูลจริง ระบบจึงไม่สามารถอ่านได้",
+      instruction  : "กรุณาปิดไฟล์ต้นฉบับใน Microsoft Excel ให้เรียบร้อย (ไฟล์ ~$ จะหายไปเอง) แล้วแนบไฟล์จริงส่งมาใหม่อีกครั้ง",
     },
     zero_score: {
       bannerTitle  : "คะแนนรวมเป็นศูนย์",

@@ -57,6 +57,15 @@ function isExcelFile(mimeType, filename) {
   return path.extname(filename).toLowerCase() === ".xlsx";
 }
 
+// Excel creates a hidden "~$<name>.xlsx" lock/owner file next to any workbook
+// that's still open on the sender's machine — a few hundred bytes, not a real
+// zip/xlsx. Mail clients or folder syncs sometimes attach it alongside (or
+// instead of) the real file, which otherwise surfaces as a confusing "Can't
+// find end of central directory" parse error deep in the pipeline.
+function isOfficeLockFile(filename) {
+  return typeof filename === "string" && path.basename(filename).startsWith("~$");
+}
+
 function formatSize(bytes) {
   if (bytes < 1024)    return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -400,6 +409,7 @@ async function extractFirstSheetBuffer(buffer) {
 const ALERT_SUBJECTS = {
   wrong_extension     : "[แจ้งข้อผิดพลาด] ประเภทไฟล์ไม่ถูกต้อง",
   file_link           : "[แจ้งข้อผิดพลาด] ตรวจพบลิงก์ไฟล์แทนไฟล์จริง",
+  temp_file           : "[แจ้งข้อผิดพลาด] ตรวจพบไฟล์ชั่วคราวของ Excel แทนไฟล์จริง",
   zero_score          : "[แจ้งข้อผิดพลาด] คะแนนรวมเป็นศูนย์",
   wrong_date          : "[แจ้งข้อผิดพลาด] วันที่/เดือน/ปีในไฟล์ไม่ถูกต้อง",
   physician_not_found : "[แจ้งข้อผิดพลาด] ไม่พบชื่อแพทย์ในระบบ",
@@ -410,7 +420,7 @@ const ALERT_SUBJECTS = {
  * Send an alert-themed HTML reply to the original sender.
  * Silently no-ops if replyTo or messageId is missing.
  *
- * @param {"wrong_extension"|"file_link"|"wrong_date"|"physician_not_found"|"other"} errorType
+ * @param {"wrong_extension"|"file_link"|"temp_file"|"wrong_date"|"physician_not_found"|"other"} errorType
  * @param {string} safeFilename   HTML-escaped filename (may be empty)
  * @param {string} [detectedDate] Shown for wrong_date errors
  * @param {string} [detectedName] Shown for physician_not_found errors
@@ -771,6 +781,18 @@ async function processAttachment(att, messageId, context, gmail) {
   console.log(`│        Excel?    : ${excel ? "✅  Yes" : "❌  No — skipping"}`);
 
   if (!excel) return false;
+
+  if (isOfficeLockFile(att.filename)) {
+    console.warn(`│        ⏭️   Excel lock/temp file — the real workbook was likely still open when this was sent. Skipping.`);
+    await sendAlertReply({
+      errorType   : "temp_file",
+      safeFilename: att.filename ?? "",
+      replyTo     : context.replyTo,
+      messageId,
+      gmail,
+    });
+    return "replied";
+  }
 
   if (att.size > MAX_ATTACHMENT_SIZE_BYTES) {
     console.warn(`│        ⚠️  Attachment exceeds ${formatSize(MAX_ATTACHMENT_SIZE_BYTES)} limit — skipping download.`);
