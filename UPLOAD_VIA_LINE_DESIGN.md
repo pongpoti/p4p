@@ -72,41 +72,70 @@ machines with different secrets — and that separation is worth keeping.
  │  3. RPC  enqueue_p4p_upload(object_path, month_key, filename, size)    │
  │     → validates, resolves identity, inserts p4p_upload_queue row       │
  │     ← { queue_id, roster_match, deadline, is_late }                    │
+ │                                                                        │
+ │  4. POST /upload/score  (main.js — §7.7)                               │
+ │     download object (service_role) → resolveScore() confidence gate    │
+ │     high tier → saveScore() + logSubmission() now, ~1–2 s               │
+ │     low tier  → skip scoring here; row stays for the async path below  │
+ │     ← { score, month, late } | { pending: true }                       │
+ │                                                                        │
+ │  5. liff.sendMessages(text)                     ◀ FREE, as the user   │
  └────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
  ┌─ SUPABASE ─────────────────────────────────────────────────────────────┐
  │  storage: p4p-uploads (private, 5 MB cap, xlsx-only, insert-only)      │
- │  table  : p4p_upload_queue  (pending → processing → done | failed)     │
+ │  table  : p4p_upload_queue                                             │
+ │           status: pending → processing → done | failed | rejected      │
+ │           archive_status: archive_pending → archived (§7.7 rec 2)      │
  └────────────────────────────────────────────────────────────────────────┘
-                                    │  claimed within ~10 s
-                                    ▼
- ┌─ GITHUB ACTIONS — automation/ (where the secrets already live) ────────┐
- │  4. claim_p4p_upload()          FOR UPDATE SKIP LOCKED                 │
- │  5. download object (service_role)                                     │
- │  6. processBuffer(buffer, { source:"line-upload", identity, monthKey })│
- │        firstSheetToRows → analyseJson → (identity known: no fuzzy)     │
- │        → extractFirstSheetBuffer → drive.uploadFile → saveScore        │
- │        → logSubmission                                                 │
- │  7. mark done/failed · LINE push to the physician · Telegram on error  │
- │  8. delete the storage object                                          │
- └────────────────────────────────────────────────────────────────────────┘
+      │ webhook (from step 5) — §7.5           │  claimed within ~10 s (§7.3)
+      ▼                                         ▼
+ ┌─ main.js /line ──────────────┐   ┌─ GITHUB ACTIONS — automation/ ──────────┐
+ │ reply (FREE) with a          │   │  6. claim archive_pending row            │
+ │ "ดูผลคะแนน" postback button   │   │     FOR UPDATE SKIP LOCKED               │
+ │                               │   │  7. extractFirstSheetBuffer → Drive      │
+ │ tap → fresh reply token →     │   │  8. if score was never resolved above    │
+ │ reply (FREE) with the score   │   │     (low-confidence tier): processBuffer │
+ │ receipt read from the row,    │   │     runs analyseJson + saveScore too     │
+ │ or the reason if it failed    │   │  9. mark archived · LINE PUSH on         │
+ │                               │   │     failure only · Telegram either way  │
+ └───────────────────────────────┘   │ 10. delete the storage object            │
+                                      └──────────────────────────────────────────┘
 ```
+
+The two right-hand branches at step 5/6 both exist because §7.7's confidence
+gate is not all-or-nothing: most files resolve at the high-confidence tier and
+get their score in step 4, in which case step 8 is a no-op and the archive
+worker only moves bytes. A file that lands on the low-confidence tier gets no
+score in step 4 — the page shows "กำลังตรวจสอบ" — and the archive worker falls
+back to the full `processBuffer()` pipeline (Claude included) exactly as
+originally designed, before pushing the result rather than waiting for a tap.
 
 Properties worth naming, because each one is a decision:
 
-- **No new secret in Vercel, no new dependency in the root `package.json`.**
-  The Express app gains one gated page and one static mount. That is all.
-- **File bytes go browser → Supabase directly.** C3's 4.5 MB body cap and the
-  function timeout stop being relevant instead of being worked around.
+- **No new secret in Vercel.** `saveScore`/`logSubmission` still go through
+  `SUPABASE_SERVICE_ROLE_KEY`, which Vercel already holds. `exceljs` **is** a
+  new root dependency (lazy-`require`d, §7.7 rec 4) — the claim that nothing
+  changes in the root build no longer holds since §7.7; what's preserved is
+  narrower and stated correctly there: no Anthropic key, no Google credential,
+  and no `googleapis`/`@anthropic-ai/sdk` reach Vercel.
+- **The browser's upload of file bytes still goes straight to Supabase.**
+  C3's 4.5 MB body cap on *that* PUT stays irrelevant. What changed with §7.7
+  is that `main.js` now fetches the same bytes back from Storage
+  server-to-server to score them — real work, on a real execution budget,
+  which is exactly why §7.7's timeout wrap (rec 3) is a precondition and not a
+  nicety.
 - **One pipeline, not two.** `processBuffer()` gains parameters; it is not
   forked. `automation/excel-parse.js`'s own header documents what happened last
   time this logic was copy-pasted — a fix in one copy had no way to reach the
   other. That mistake is not worth repeating at a larger scale.
-- **The score is computed synchronously; only the Drive archive is queued.**
-  See §7.7 — that variant is the chosen one, and it changes what the queue
-  carries. The rest of this document describes the pipeline the queue feeds,
-  which is unchanged either way.
+- **Two things can be queued, not one.** For the common (high-confidence)
+  case, only the Drive archive waits. For the uncommon (low-confidence) case,
+  §7.7's gate defers scoring itself to the same worker, which then runs the
+  full `processBuffer()` pipeline — Claude included — exactly as originally
+  designed. The diagram above is the complete picture; the rest of this
+  document describes the pipeline both branches ultimately feed.
 - **The queue is the durability boundary.** Once the row exists the submission
   is safe: the workflow can fail, the runner can die, Drive can be down, and
   the file is still there with `received_at` recorded.
@@ -1172,38 +1201,71 @@ triggers use.
 
 ## 13. Rollout
 
+**Phase −1 — the one thing to know before writing any code: the log audit.**
+§7.7's whole fast path stands or falls on how often `resolveScore()`'s
+labelled-total tier disagrees with Claude. This costs nothing to check —
+`p4p-cron.yml`'s existing Actions logs already print both numbers side by
+side — and it should happen before Phase 0, not during Phase 1, because the
+answer decides whether §7.7 ships as designed, ships with Claude still in the
+synchronous call, or doesn't ship at all.
+
 **Phase 0 — prerequisites** (each has a human owner and blocks what follows)
 
 1. **Register LIFF app #5** in the LINE Developers console: endpoint
    `https://p4p-sakhonmso.vercel.app/upload/`, scopes `profile` + `openid`,
    same channel (`2008561527`). This is the same console access
    `web/README.md` has been blocked on — worth resolving once, for both.
+   While in there: confirm `chat_message.write` is grantable for §7.5's
+   `liff.sendMessages()` path, and add a `liff.getContext()` +
+   `sendMessages` probe to `/preflight` per §7.5's closing note.
 2. Create the bucket and run the SQL in §6 (SQL Editor, per
-   `SUPABASE_MIGRATIONS.md`).
+   `SUPABASE_MIGRATIONS.md`) — including the `archive_pending` lifecycle
+   from §7.7's recommendation on drawback 2, not just the original four
+   states.
 3. Check the LINE Official Account's message-quota plan against the push
-   budget in §7.4. No new secret is needed — `LINE_ACCESS_TOKEN` /
-   `LINE_TOKEN` are already GitHub Actions secrets.
+   budget in §7.4, which settles open question 7 (push vs. pull). No new
+   secret either way — `LINE_ACCESS_TOKEN` / `LINE_TOKEN` are already GitHub
+   Actions secrets.
 
-**Phase 1 — backend, testable with no UI.** Queue table, RPCs, worker,
-workflow. Verify by inserting a queue row by hand against a file uploaded with
-the service-role key: the whole path from claim to LINE push is exercised
-before a single line of page code exists.
+**Phase 1 — the synchronous score path, testable with no UI.**
+This is now the core of the feature, not the worker — §7.7 moved it here.
+`POST /upload/score` in `main.js`: lazy-`require("exceljs")`, the zip-guard +
+parse timeout from §7.7/§11, `resolveScore()`'s confidence gate, `saveScore()`
++ `logSubmission()` via service role. Verify by POSTing a file with a
+service-role-authenticated request before any page code exists. This is also
+where the vendored-copy-plus-parity-test from §7.7's recommendation 5 gets
+built, alongside the `automation/` copy it must never drift from.
 
-**Phase 2 — the page.** `upload/index.html`, `upload/app.js`, the `gatedPages`
+**Phase 2 — the archive worker and the free-notification loop.**
+The long-polling drain (§7.3) now claims `archive_pending` rows only —
+`extractFirstSheetBuffer` → `drive.uploadFile`, retried indefinitely, never
+terminal, per §7.7's recommendation 2. Alongside it: the `sendMessages` →
+free-reply-with-postback → free-reply-with-receipt chain from §7.5, plus its
+rich-menu-postback fallback, built and tested regardless of which the
+`/preflight` probe from Phase 0 recommends.
+
+**Phase 3 — the page.** `upload/index.html`, `upload/app.js`, the `gatedPages`
 entry, the static mount, `vercel.json`. Reachable by URL, not linked from
-anywhere. Test with two or three volunteers.
+anywhere. Test with two or three volunteers — this is the first point real
+physicians touch any of it.
 
-**Phase 3 — the rich menu.** Edit the SVG and `setup-richmenu.mjs`, run it
+**Phase 4 — the rich menu.** Edit the SVG and `setup-richmenu.mjs`, run it
 once. This is the moment the feature exists for everyone; everything behind it
 is already proven.
 
-**Phase 4 — optional.** `physicians.roster_name` (§6.6); instant dispatch
-(§7.3); an admin queue panel in `/admin/`; the `web/app/upload/` port.
+**Phase 5 — optional.** `physicians.roster_name` (§6.6); an `/admin/` panel
+for `archive_pending` age (§7.7 rec 2) and re-upload counts (§7.7's policy
+question) if Phase 3/4 usage suggests either is needed; the `web/app/upload/`
+port.
 
-**Tests** (`automation/test/`, `node:test`, matching what is there):
-month-window and deadline/late computation; `.xlsx` / `~$` / magic-byte
-rejection; the zip-entry guard; `processBuffer` routing with `identity` set vs
-null, using a `notify` double; the reaper's timeout arithmetic.
+**Tests** (`automation/test/`, `node:test`, matching what is there, plus a
+root-level suite for Phase 1's vendored copy): month-window and
+deadline/late computation; `.xlsx` / `~$` / magic-byte rejection; the
+zip-entry guard and the parse-timeout fallback; the confidence-tier gate
+against fixtures for each of `resolveScore()`'s methods; `processBuffer`
+routing with `identity` set vs null, using a `notify` double; the archive
+reaper's retry/backoff arithmetic; the parity test between the root and
+`automation/` copies of the scoring functions.
 
 ---
 
@@ -1275,19 +1337,22 @@ repo-scoped token in the browser. Never.
 | File | Change |
 |---|---|
 | `src/richmenu.svg` | `2500×1686`, fourth full-width block, fourth gradient |
-| `scripts/setup-richmenu.mjs` | menu size + fourth area → the upload LIFF URI |
-| `upload/index.html`, `upload/app.js` | **new** — the page |
+| `scripts/setup-richmenu.mjs` | menu size + fourth area → the upload LIFF URI; a `ดูผลล่าสุด` postback area if §7.5's fallback submenu is needed |
+| `upload/index.html`, `upload/app.js` | **new** — the page; calls `POST /upload/score` and `liff.sendMessages()` |
 | `assets/shared.js` | month window / deadline / file-validation helpers (shared with the eventual `web/` port) |
-| `main.js` | `gatedPages` += `"upload"`; `app.use("/upload", express.static("upload"))` |
+| `package.json` (root) | **new dependency** — `exceljs`, lazy-`require`d only inside the upload handler (§7.7 rec 4) |
+| `lib/p4p-score.js` (root, **new**) | vendored copy of `resolveScore`/`extractScoreFromRows` + the zip-guard/parse-timeout wrapper — kept honest by the parity test below (§7.7 rec 5) |
+| `main.js` | `gatedPages` += `"upload"`; static mount; **new** `POST /upload/score` route (parse → confidence gate → `saveScore`/`logSubmission` via service role, §7.7); `/line` handler gains the trigger-text / postback branch (§7.5) |
 | `vercel.json` | `includeFiles` += `"upload/**"` |
-| `scripts/line-upload-2026-09.sql` | **new** — bucket, policies, `p4p_upload_queue`, the four RPCs |
+| `scripts/line-upload-2026-09.sql` | **new** — bucket, policies, `p4p_upload_queue` (with the `archive_pending` lifecycle, not the original four states — §7.7 rec 2), the RPCs |
 | `automation/index.js` | `processBuffer()` gains `source` / `identity` / `monthKey` / `notify`; email path passes `null` and is unchanged |
-| `automation/upload-queue.js` | **new** — claim / complete / fail / delete-object |
-| `automation/line-push.js` | **new** — LINE push transport (mirrors `telegram.js`) |
+| `automation/upload-queue.js` | **new** — claims `archive_pending` rows only; indefinite backoff retry, never terminal (§7.7 rec 2) |
+| `automation/line-push.js` | **new** — LINE push transport for the failure case only; success is a free reply (§7.5), not a push |
 | `automation/templates/line-receipt.js` | **new** — the success/failure Flex bubbles (§7.4), alongside `reply.js` / `error-reply.js` |
-| `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.5); email-path output unchanged |
-| `automation/scripts/drain-uploads.mjs` | **new** — the drain loop |
+| `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.6); email-path output unchanged |
+| `automation/scripts/drain-uploads.mjs` | **new** — long-polling archive drain (§7.3), plus the `archive_pending` age alert (§7.7 rec 2) |
 | `.github/workflows/upload-drain.yml` | **new** — hourly relay + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
-| `automation/test/*` | new tests per §13 |
+| `automation/test/*`, root-level test suite | new tests per §13, including the root/`automation/` parity test for `lib/p4p-score.js` |
+| `/admin/` (`AdminClient.tsx` or `admin/app.js`, `web/app/admin/api/…`) | new panel for `archive_pending` age and re-upload counts (§7.7 rec 2 and the policy question) — Phase 5, built only if usage shows it's needed |
 | `SUPABASE_TABLES.md`, `DATA_EXPOSURE_ANALYSIS.md`, `SECURITY_ANALYSIS.md` | document the queue table and the bucket |
 | `REACT_REWRITE_PLAN.md` | add `/upload/` to the phase list |
