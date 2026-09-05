@@ -654,6 +654,86 @@ A middle setting exists and is probably the right one if it comes to that:
 **pull for success, push for failure.** Successes are the common case and the
 physician has no action to take; failures are rare and demand one.
 
+#### The pull workflow, step by step
+
+```
+①  UPLOAD                                    in the LIFF page
+    physician picks month + file → ส่งไฟล์
+    page → Storage + enqueue_p4p_upload()
+    page → liff.sendMessages(text)                      ◀ FREE (sent as the user)
+
+    the chat now shows, on the physician's own side:
+      ╭─────────────────────────────────╮
+      │  ส่งไฟล์ P4P มิถุนายน 2569        │
+      ╰─────────────────────────────────╯
+
+②  ACK                                       webhook, ~1 second later
+    that text fires a webhook carrying a replyToken
+    main.js /line → find this LINE user's latest queue row
+                  → reply                              ◀ FREE
+      ╭─────────────────────────────────╮
+      │ 📥 รับไฟล์แล้ว                   │
+      │ กำลังตรวจสอบ ประมาณ 10 นาที      │
+      │        [ ดูผลคะแนน ]            │   ← postback button
+      ╰─────────────────────────────────╯
+
+③  PROCESS                                   GitHub Actions, ~10 min
+    drain → analyseJson → Drive → saveScore
+    queue row: pending → done (1,842.50)
+    ── sends nothing ──                                ◀ where the push used to be
+
+④  TAP                                       whenever the physician wants
+    [ ดูผลคะแนน ] → postback event with a FRESH replyToken
+    main.js /line → read the row → reply               ◀ FREE
+      done    → the §7.4 score receipt
+      pending → "ยังตรวจสอบไม่เสร็จ" + the same button again
+      failed  → the reason + [ ส่งไฟล์อีกครั้ง ]
+```
+
+**Why step ① exists at all.** The button has to get into the chat somehow, and
+the bot cannot put it there on its own without spending a push. A message from
+the *user* is what earns the bot a free reply — so the page makes the user
+"say" something, and the bot's answer carries the button. That is the entire
+mechanism.
+
+**The text is a trigger, not data.** The bot ignores what it says and resolves
+the row from `source.userId` → `physicians.line_user_id` → the latest
+`p4p_upload_queue` row. Nothing in the message is trusted. A useful side
+effect: a physician who types "ส่งไฟล์ P4P" by hand gets the same answer, so
+this doubles as a free status command with no extra code.
+
+**Authorisation.** The postback's `data` carries the queue id; the handler
+still checks the row's `line_user_id` against `event.source.userId` before
+answering. Postback data comes from a button the bot itself sent and the
+webhook is signature-verified, so this is defence in depth rather than the
+primary control — but it is two lines.
+
+**If `liff.sendMessages()` turns out not to work from a rich-menu launch**
+(the unverified assumption in §7.5), the fallback needs no LIFF capability at
+all: make the rich menu's upload block a `richmenuswitch` to a small submenu
+with two areas — `ส่งไฟล์` (uri → the LIFF app) and `ดูผลล่าสุด` (**postback**).
+A rich-menu postback fires the same webhook with the same free reply token.
+Worse discovery — the physician has to think to go look — but it cannot fail
+for capability reasons, and it is the same `richmenuswitch` pattern the month
+picker already uses.
+
+Build both: `sendMessages` as progressive enhancement, the menu entry as the
+path that is always there.
+
+**What it costs.** If the physician never taps, they never learn the result.
+Three things soften that — the button stays in the chat indefinitely, the
+upload page's history list shows the same state, and `/status/` already shows
+their `submitted_at` — but "never told" is still the trade being made. Which is
+why **failures should still push**: a success needs no action from the
+physician, a failure does.
+
+**One risk to measure before committing to this.** Reply tokens are short-lived
+and steps ② and ④ both spend one after a Supabase lookup, on a Vercel function
+that may be cold. Two queries on a warm function is a few hundred milliseconds;
+a cold start plus two queries is the case to time. If it proves marginal, reply
+first with a static acknowledgement and resolve the row only on the postback,
+where the physician's own tap has already warmed the function.
+
 #### What to verify on a device before designing around this
 
 `liff.sendMessages()` requires a LIFF app launched **from a chat**. Our entry
