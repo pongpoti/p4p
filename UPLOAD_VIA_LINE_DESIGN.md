@@ -198,7 +198,13 @@ design everywhere else in this document, only §4.2's `bounds` change.
 
 ### 4.2 Script changes
 
-`scripts/setup-richmenu.mjs`, `mainPayload`:
+`scripts/setup-richmenu.mjs`, `mainPayload` — **written, not illustrative.**
+The id comes from a required `UPLOAD_LIFF_ID` env var, validated at the top of
+the script alongside `LINE_TOKEN`: Step 1 already creates a month-picker menu
+and reassigns its alias, so a check placed next to the payload that uses it
+would abort halfway and leave a new picker live with the main menu never
+updated. A dead fourth block pushed to every user is worse than no fourth
+block.
 
 ```js
 size: { width: 2500, height: 1686 },
@@ -214,10 +220,32 @@ areas: [
 ],
 ```
 
-`src/richmenu.svg`: `viewBox="0 0 2500 1686"`, a fourth full-width block, and a
-fourth gradient alongside `copper` / `gold` / `sage`. Use the design-system
-primary `#A68966` on `#4B3D33` (`design.md`) so the new block reads as part of
-the same family without being mistaken for one of the three read-only ones.
+`src/richmenu.svg` — **built, rendered and eyeballed, not just specified.**
+`viewBox="0 0 2500 1686"`, the three existing cards untouched at their
+original coordinates, and a fourth full-width card in row 2 on a new `clay`
+gradient (`#A68966` → `#5C4632`, design.md's own primary into its secondary
+rather than a fourth invented hue — this is the only block that *writes*, so
+it should read as the house colour, not as a fourth sibling).
+
+Two things came out of actually rendering it rather than reasoning about it:
+
+- **Row 2 is laid out horizontally — icon-left / text / chevron-right — where
+  the three above stack vertically.** The first attempt centred an icon+text
+  pair in the card, which left roughly a thousand pixels of void on the right
+  and read as unfinished. The row grammar fills 2388px honestly, and the
+  contrast against the vertical cards is doing useful work: those three go to
+  a page, this one starts a task. The upload circle is aligned to card 1's
+  circle (`cx=435`) so the two form a column rather than two unrelated
+  placements.
+- **The trophy's star was a tofu box (▯) in production and nobody had
+  noticed.** It was a `&#9733;` `<text>` node; Noto Sans Thai has no glyph for
+  U+2605, and `render.mjs` sets `loadSystemFonts:false` deliberately (for
+  deterministic output across dev machines and CI runners), so there was no
+  fallback font to rescue it. Replaced with a drawn `<polygon>`, which has no
+  font dependency at all. Pre-existing bug, fixed in passing.
+
+Rendered size is ~570 KB against LINE's 1 MB cap for rich-menu images — worth
+re-checking after any future edit, since the cap is on the PNG, not the SVG.
 
 ### 4.3 Operational notes
 
@@ -1861,8 +1889,9 @@ repo-scoped token in the browser. Never.
 
 | File | Change |
 |---|---|
-| `src/richmenu.svg` | `2500×1686`, fourth full-width block, fourth gradient |
-| `scripts/setup-richmenu.mjs` | menu size + fourth area → the upload LIFF URI; a `ดูผลล่าสุด` postback area if §7.5's fallback submenu is needed |
+| `src/richmenu.svg` | **done** — `2500×1686`, fourth full-width block on a new `clay` gradient, row-2 horizontal composition, and the trophy's tofu-box star replaced with a drawn polygon (§4.2) |
+| `src/richmenu_bg.png` | **done** — regenerated from the SVG (~570 KB, within LINE's 1 MB cap). Not read by any code; `setup-richmenu.mjs` renders the SVG at upload time. Kept as the checked-in preview of what actually ships |
+| `scripts/setup-richmenu.mjs` | **done** — `2500×1686`, fourth area → `UPLOAD_LIFF_ID`, validated up front; a `ดูผลล่าสุด` postback area still to add *only if* §7.5's fallback submenu proves necessary |
 | `upload/index.html`, `upload/app.js` | **new** — the page; calls `POST /upload/score` and `liff.sendMessages()`. Also carries the same `/Line\//` desktop guard the other three pages use, and a best-effort `line-verify` `mode:"bind"` call on boot so OTP-only physicians get a `line_user_id` (both §5.5) |
 | `assets/shared.js` | month window / deadline / file-validation helpers (shared with the eventual `web/` port) |
 | `package.json` (root) | **new dependency** — `exceljs`, lazy-`require`d only inside the upload handler (§7.7 rec 4) |

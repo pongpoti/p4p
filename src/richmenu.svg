@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 2500 843" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 2500 1686" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#FAF9F6"/>
@@ -28,6 +28,14 @@
       <stop offset="0%" stop-color="#6A9070"/>
       <stop offset="100%" stop-color="#446050"/>
     </linearGradient>
+    <!-- Block 4: Clay — design.md's primary #A68966 into its secondary #4B3D33.
+         Deliberately the design system's own pair rather than a fourth invented
+         hue: this is the only block that WRITES, and it should read as the
+         house colour rather than as a fourth sibling. -->
+    <linearGradient id="clay" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#A68966"/>
+      <stop offset="100%" stop-color="#5C4632"/>
+    </linearGradient>
     <radialGradient id="lens" cx="38%" cy="30%" r="60%">
       <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.50"/>
       <stop offset="70%" stop-color="#FFFFFF" stop-opacity="0"/>
@@ -40,7 +48,14 @@
     </filter>
   </defs>
 
-  <rect width="2500" height="843" fill="url(#bg)"/>
+  <rect width="2500" height="1686" fill="url(#bg)"/>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       ROW 1 (y 0–843) — the three read-only pages, unchanged in position,
+       size and artwork. Physicians open these every month; the whole point of
+       growing the menu downward instead of re-flowing it into four columns is
+       that none of these three moves a pixel.
+       ═══════════════════════════════════════════════════════════════════════ -->
 
   <!-- ═══ CARD 1: สถานะการส่ง P4P ═══ -->
   <rect x="56"  y="56" width="759" height="731" rx="30" fill="url(#glass)" stroke="#B86A44" stroke-opacity="0.30" stroke-width="1.5" filter="url(#cs)"/>
@@ -71,7 +86,14 @@
     <line x1="0" y1="64" x2="0" y2="82"/>
     <line x1="-32" y1="82" x2="32" y2="82"/>
   </g>
-  <text x="1250" y="360" text-anchor="middle" font-size="54" fill="#FFFFFF" opacity="0.9">&#9733;</text>
+  <!-- The star inside the cup is DRAWN, not typed. It used to be a &#9733;
+       <text> node, and Noto Sans Thai has no glyph for U+2605 — with
+       loadSystemFonts:false (render.mjs, deliberately, for deterministic
+       output) there is no fallback font either, so it rendered as a tofu box
+       in the middle of the trophy. A polygon has no font dependency. -->
+  <polygon transform="translate(1250,338)"
+    points="0,-30 7.5,-10.3 28.5,-9.3 12.1,3.9 17.6,24.3 0,12.7 -17.6,24.3 -12.1,3.9 -28.5,-9.3 -7.5,-10.3"
+    fill="#FFFFFF" opacity="0.92"/>
   <text x="1250" y="640" text-anchor="middle"
     font-family="'Noto Sans Thai',sans-serif"
     font-size="82" font-weight="700" fill="#2D2218">อันดับการส่ง P4P</text>
@@ -92,4 +114,49 @@
     font-family="'Noto Sans Thai',sans-serif"
     font-size="82" font-weight="700" fill="#2D2218">ผู้มีสิทธิ์รับ P4P</text>
   <rect x="1996" y="666" width="140" height="5" rx="2.5" fill="#6A9070" opacity="0.6"/>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       ROW 2 (y 843–1686) — ส่งไฟล์ P4P. Full width, and laid out HORIZONTALLY
+       (icon beside text) where the three above stack vertically. That contrast
+       is deliberate: the three above navigate to a page, this one starts a
+       task, and it should not read as a fourth sibling of the row above it.
+       Same card grammar though — same glass, same rx, same 56px gutters, same
+       circle radius — so it belongs to the set rather than looking bolted on.
+       ═══════════════════════════════════════════════════════════════════════ -->
+
+  <rect x="56" y="899" width="2388" height="731" rx="30" fill="url(#glass)" stroke="#A68966" stroke-opacity="0.38" stroke-width="1.5" filter="url(#cs)"/>
+  <rect x="56" y="899" width="2388" height="330" rx="30" fill="url(#sheen)"/>
+
+  <!-- Icon column is aligned to card 1's circle (cx=435), so the two read as a
+       column rather than two unrelated placements. Composition is icon-left /
+       text-centre / chevron-right — the standard tappable-row grammar, which
+       is what actually fills 2388px of width honestly. A centred icon+text
+       pair left a ~1000px void on the right and read as unfinished. -->
+  <circle cx="435" cy="1264" r="200" fill="url(#clay)" filter="url(#is)"/>
+  <circle cx="435" cy="1264" r="200" fill="url(#lens)"/>
+  <!-- Upload glyph: an arrow rising out of an open tray. Chosen over a
+       document-with-arrow because card 1 already owns the document silhouette
+       (the clipboard) and these two sit on the same menu. -->
+  <g transform="translate(435,1262) scale(1.62)" fill="none" stroke="#FFFFFF" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M-64,24 v34 q0,16 16,16 h96 q16,0 16,-16 v-34"/>
+    <line x1="0" y1="44" x2="0" y2="-48"/>
+    <polyline points="-36,-14 0,-50 36,-14" stroke-width="8.2"/>
+  </g>
+
+  <text x="760" y="1236"
+    font-family="'Noto Sans Thai',sans-serif"
+    font-size="124" font-weight="700" fill="#2D2218">ส่งไฟล์ P4P</text>
+  <rect x="764" y="1276" width="168" height="7" rx="3.5" fill="#A68966" opacity="0.75"/>
+  <text x="760" y="1372"
+    font-family="'Noto Sans Thai',sans-serif"
+    font-size="58" font-weight="400" fill="#6E5C49">แตะเพื่อส่งไฟล์ Excel ประจำเดือน</text>
+
+  <!-- Right-edge affordance. The three cards above are destinations you look
+       at; this row is an action you start, and a chevron is the cheapest
+       honest way to say "this opens something" while anchoring the right end
+       of a very wide card. -->
+  <g transform="translate(2250,1264)" fill="none" stroke="#A68966" stroke-opacity="0.5"
+     stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="-24,-48 26,0 -24,48"/>
+  </g>
 </svg>
