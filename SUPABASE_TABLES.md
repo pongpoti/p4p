@@ -27,6 +27,59 @@ physician has emailed in, across all months.
   writes only via `service_role`.
 - Migration: `automation/sql/p4p_submissions.sql`.
 
+## `p4p_upload_queue`
+
+**Purpose:** Coordinates the LINE rich-menu upload path
+(`UPLOAD_VIA_LINE_DESIGN.md`) — the second way a physician can submit a
+scorecard, alongside email. One row per submitted file, carrying two
+**independent** lifecycles:
+
+- `status` (scoring): `pending → processing → done | failed | rejected`.
+  Usually cleared in ~1-2 s by `POST /upload/score` in `main.js`, which scores
+  a confidence-gated subset of files synchronously; anything it will not
+  guess at stays `pending` for `claim_p4p_score_fallback()`.
+- `archive_status` (Drive copy): `NULL → archive_pending → archived`. No
+  failure value on purpose — once the score is saved the physician has nothing
+  left to fix, so this retries on a backoff indefinitely rather than ever
+  becoming terminal.
+
+- **Columns:** identity snapshotted at enqueue (`email` FK → `physicians`,
+  `full_name`, `department`, `line_user_id`, `roster_index`), the submission
+  (`month_key`, `object_path`, `filename`, `size_bytes`, `received_at`),
+  the scoring lifecycle (`status`, `attempts`, `claimed_at`, `finished_at`,
+  `error_type`, `error_detail`, `score`, `score_method`, `notified_at`) and
+  the archive lifecycle (`archive_status`, `archive_attempts`,
+  `archive_last_attempt_at`, `archived_at`).
+- `received_at` is THE punctuality timestamp — when the physician handed the
+  file over, never when a runner got to it.
+- A partial unique index on `(email, month_key) WHERE status IN
+  ('pending','processing')` makes queue flooding structurally impossible:
+  one in-flight upload per physician per month.
+- **Access:** RLS enabled with **no** `anon`/`authenticated` policies at all.
+  Physicians reach it only through three `SECURITY DEFINER` RPCs that read
+  identity from `auth.jwt()` rather than taking it as a parameter —
+  `enqueue_p4p_upload()` (the only way a row is created),
+  `my_p4p_identity()`, `my_p4p_uploads()`. The two claim functions
+  (`claim_p4p_score_fallback()`, `claim_p4p_archive()`) are granted to
+  `service_role` only; they exist as RPCs because `FOR UPDATE SKIP LOCKED` is
+  not expressible through PostgREST.
+- Migration: `scripts/line-upload-2026-09.sql`.
+
+## Storage bucket `p4p-uploads`
+
+**Purpose:** A write-only drop box for the same path — the browser PUTs the
+`.xlsx` straight here (bypassing Vercel's body limits) and nothing else.
+
+- Private, 5 MB per object, `.xlsx` MIME type only.
+- Object key: `<auth.uid()>/<month_key>/<uuid>.xlsx`. The bucket name is not
+  part of it (`storage.objects` keeps that in `bucket_id`).
+- **Access:** exactly one policy — `INSERT` for `authenticated` into their own
+  `auth.uid()` folder. No `SELECT`/`UPDATE`/`DELETE` policy exists, so a
+  physician can drop a file in and can never read one back, their own
+  included. Only `service_role` (the worker, and `/upload/score`) reads.
+- **Transient by design:** the object is deleted once `archive_status =
+  'archived'`, so the raw file lives here for minutes, not indefinitely.
+
 ## `dept_heads`
 
 **Purpose:** Maps each hospital department to its department head's email
@@ -199,7 +252,10 @@ These tables split into two groups:
 
 1. **Operational data** for the P4P workflow — `p4p_submissions`,
    `dept_heads`, `sender_physician_match`, `email_sent_log` — driven by the
-   email-processing automation.
+   email-processing automation, plus `p4p_upload_queue` (and its
+   `p4p-uploads` bucket), which is the LINE upload path's own coordination
+   table. Both paths converge on `p4p_submissions` and the roster tables, so
+   the queue is a front door, not a second store of record.
 2. **Auth / allow-list plumbing** for the `/verify/` OTP login gate —
    `physicians` (allow-list + LINE binding + revocation, all one table) and
    `access_requests`. A trigger on `sender_physician_match` keeps `physicians`

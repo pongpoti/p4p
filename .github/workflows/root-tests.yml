@@ -1,0 +1,56 @@
+name: root tests
+
+# The parity guard between lib/p4p-score.js and automation/claude-analyst.js
+# only guards anything if it actually runs: a vendored copy that nothing
+# checks is just two files that will disagree eventually (see
+# lib/__tests__/parity.test.mjs).
+on:
+  push:
+    paths:
+      - "lib/**"
+      - "main.js"
+      - "assets/**"
+      - "upload/**"
+      - "src/**"
+      - "automation/claude-analyst.js"
+      - "package.json"
+      - ".github/workflows/root-tests.yml"
+  pull_request:
+    paths:
+      - "lib/**"
+      - "main.js"
+      - "assets/**"
+      - "upload/**"
+      - "src/**"
+      - "automation/claude-analyst.js"
+      - "package.json"
+      - ".github/workflows/root-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      # The behavioural half of the parity test imports automation/'s own copy,
+      # which pulls in that project's dependency tree. Without this the test
+      # skips that half and only the textual comparison runs.
+      - name: Install automation dependencies (for the parity test)
+        run: npm ci
+        working-directory: automation
+
+      - run: npm test
+
+      - run: npx eslint lib upload assets

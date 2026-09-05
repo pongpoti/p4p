@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="p4p-session" content="__P4P_ACCESS_TOKEN__">
+    <meta name="p4p-upload-liff" content="__P4P_UPLOAD_LIFF_ID__">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ส่งไฟล์ P4P</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --primary: #A68966;
+            --secondary: #4B3D33;
+            --tertiary: #F5F5F0;
+            --neutral: #FAF9F6;
+            --text: #2d2d2d;
+            --text-muted: #6b6b6b;
+            --muted: #9A8A7A;
+            --border: #d9d2c8;
+            --danger: #c0392b;
+            --warn: #B8860B;
+            --ok: #2E7D5B;
+            --radius: 6px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Work Sans", "Noto Sans Thai Looped", sans-serif;
+            background: var(--neutral);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            padding-bottom: 40px;
+        }
+
+        /* ── Desktop block ───────────────────────────────────── */
+        #desktop-block {
+            display: none;
+            position: fixed; inset: 0;
+            background: var(--neutral);
+            flex-direction: column;
+            align-items: center; justify-content: center;
+            text-align: center; padding: 32px; z-index: 999;
+        }
+        #desktop-block h2 {
+            font-family: 'Manrope', 'Noto Sans Thai Looped', sans-serif;
+            font-size: 1.35rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
+        }
+        #desktop-block p { color: var(--muted); font-size: .95rem; }
+
+        header {
+            background: var(--tertiary);
+            padding: 18px 20px 16px;
+            box-shadow: 0 2px 8px rgba(75, 61, 51, .08);
+        }
+        header h1 {
+            font-family: 'Manrope', 'Noto Sans Thai Looped', sans-serif;
+            font-size: 1.2rem; font-weight: 700; color: var(--secondary);
+        }
+        #identity { margin-top: 6px; font-size: .95rem; color: var(--text-muted); }
+        #identity strong { color: var(--text); font-weight: 600; }
+
+        main { padding: 16px; max-width: 640px; margin: 0 auto; }
+
+        section {
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 14px;
+        }
+        section h2 {
+            font-size: .8rem; font-weight: 600; letter-spacing: .04em;
+            text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+        }
+
+        /* ── Month chips ─────────────────────────────────────── */
+        #months { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        .chip {
+            border: 1.5px solid var(--border);
+            border-radius: var(--radius);
+            background: #fff;
+            padding: 10px 12px;
+            text-align: left;
+            font: inherit;
+            cursor: pointer;
+            display: block;
+            width: 100%;
+        }
+        .chip[aria-pressed="true"] { border-color: var(--secondary); box-shadow: inset 0 0 0 1px var(--secondary); }
+        .chip .m-name { font-weight: 600; font-size: .95rem; display: flex; align-items: center; gap: 6px; }
+        .chip .m-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+        .chip .m-sub { font-size: .75rem; color: var(--text-muted); margin-top: 3px; }
+
+        .notice {
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            font-size: .85rem;
+            line-height: 1.45;
+            margin-top: 12px;
+        }
+        .notice.info { background: #F0F4F3; color: #35564B; }
+        .notice.warn { background: #FDF6E3; color: #7A5C11; }
+        .notice.err  { background: #FBEDEC; color: #8C2F26; }
+        .notice.ok   { background: #EEF6F1; color: #22604A; }
+        .notice a { color: inherit; }
+
+        /* ── File picker ─────────────────────────────────────── */
+        #file-input { display: none; }
+        .filebtn {
+            display: block; width: 100%;
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius);
+            background: var(--tertiary);
+            padding: 18px 12px;
+            text-align: center;
+            font: inherit; color: var(--secondary); cursor: pointer;
+        }
+        #file-name { margin-top: 10px; font-size: .9rem; word-break: break-all; }
+        #file-name .sz { color: var(--text-muted); font-size: .8rem; }
+
+        .btn {
+            display: block; width: 100%;
+            border: none; border-radius: var(--radius);
+            background: var(--secondary); color: #fff;
+            font: inherit; font-weight: 600;
+            padding: 14px; cursor: pointer;
+        }
+        .btn[disabled] { background: var(--muted); cursor: default; }
+        .btn.secondary { background: #fff; color: var(--secondary); border: 1.5px solid var(--border); }
+
+        #confirm-line { font-size: .9rem; line-height: 1.5; margin-bottom: 12px; }
+        #confirm-line b { color: var(--secondary); }
+
+        /* ── Progress ────────────────────────────────────────── */
+        #progress-wrap { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+        #progress-bar { height: 100%; width: 0; background: var(--primary); transition: width .15s linear; }
+        #progress-label { margin-top: 8px; font-size: .85rem; color: var(--text-muted); }
+
+        /* ── Result ──────────────────────────────────────────── */
+        #result-score { font-size: 2.1rem; font-weight: 700; color: var(--secondary); font-family: 'Manrope', sans-serif; }
+        #result-rows { margin-top: 10px; font-size: .9rem; }
+        #result-rows div { display: flex; justify-content: space-between; padding: 4px 0; }
+        #result-rows span:first-child { color: var(--text-muted); }
+
+        /* ── History ─────────────────────────────────────────── */
+        #history-list { list-style: none; }
+        #history-list li {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: .88rem;
+        }
+        #history-list li:last-child { border-bottom: none; }
+        .status-chip { font-size: .75rem; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+        .status-chip.done { background: #EEF6F1; color: var(--ok); }
+        .status-chip.pending { background: #FDF6E3; color: var(--warn); }
+        .status-chip.failed { background: #FBEDEC; color: var(--danger); }
+        .h-when { color: var(--text-muted); font-size: .78rem; }
+
+        .hidden { display: none !important; }
+        .skeleton { color: transparent; background: var(--border); border-radius: 4px; animation: pulse 1.4s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: .9 } }
+        #probe { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .72rem; }
+    </style>
+</head>
+
+<body>
+    <div id="desktop-block">
+        <h2>ไม่รองรับการใช้งานบนคอมพิวเตอร์</h2>
+        <p>กรุณาเปิดลิงก์นี้ผ่านแอปพลิเคชัน LINE บนโทรศัพท์มือถือ</p>
+    </div>
+
+    <header>
+        <h1>ส่งไฟล์ P4P</h1>
+        <div id="identity" class="skeleton">กำลังโหลดข้อมูล…</div>
+    </header>
+
+    <main>
+        <div id="roster-notice" class="notice info hidden"></div>
+
+        <!-- ── Month ─────────────────────────────────────────── -->
+        <section id="step-month">
+            <h2>เลือกเดือนของผลงาน</h2>
+            <div id="months"></div>
+            <div id="deadline-notice" class="notice info"></div>
+        </section>
+
+        <!-- ── File ──────────────────────────────────────────── -->
+        <section id="step-file">
+            <h2>เลือกไฟล์ Excel</h2>
+            <input type="file" id="file-input"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+            <button type="button" class="filebtn" id="file-button">แตะเพื่อเลือกไฟล์ (.xlsx)</button>
+            <div id="file-name" class="hidden"></div>
+            <div id="file-error" class="notice err hidden"></div>
+        </section>
+
+        <!-- ── Confirm ───────────────────────────────────────── -->
+        <section id="step-confirm" class="hidden">
+            <h2>ยืนยันการส่ง</h2>
+            <div id="confirm-line"></div>
+            <button type="button" class="btn" id="submit-button">ส่งไฟล์</button>
+            <div class="notice info">ส่งซ้ำได้ — ระบบจะใช้ไฟล์ล่าสุด แต่เวลาส่งจะนับจากครั้งแรก</div>
+        </section>
+
+        <!-- ── Uploading ─────────────────────────────────────── -->
+        <section id="step-uploading" class="hidden">
+            <h2>กำลังส่งไฟล์</h2>
+            <div id="progress-wrap"><div id="progress-bar"></div></div>
+            <div id="progress-label">กำลังอัปโหลด…</div>
+        </section>
+
+        <!-- ── Result ────────────────────────────────────────── -->
+        <section id="step-result" class="hidden">
+            <h2 id="result-title">ผลการส่ง</h2>
+            <div id="result-body"></div>
+            <button type="button" class="btn secondary hidden" id="again-button">ส่งไฟล์อีกครั้ง</button>
+        </section>
+
+        <!-- ── History ───────────────────────────────────────── -->
+        <section id="step-history">
+            <h2>ประวัติการส่ง</h2>
+            <ul id="history-list"></ul>
+            <div id="history-empty" class="notice info hidden">ยังไม่มีประวัติการส่งไฟล์</div>
+        </section>
+
+        <!-- ?probe=1 — LIFF capability dump, see design §7.5 -->
+        <section id="step-probe" class="hidden">
+            <h2>LIFF probe</h2>
+            <div id="probe"></div>
+            <button type="button" class="btn secondary" id="probe-send">ทดสอบ sendMessages()</button>
+        </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0/dist/umd/supabase.js" integrity="sha384-K0oxqktRvaThvYgGL4G+OK2Ih6VS6Uyu7j3+7WJgp/uWM0Yv6Xi4YEiw0BB+mPfi" crossorigin="anonymous"></script>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script src="/assets/shared.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/lib/line-receipt-flex.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>

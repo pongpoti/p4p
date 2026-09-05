@@ -163,6 +163,40 @@ export async function matchName(name, date, threshold = SIMILARITY_THRESHOLD) {
 }
 
 /**
+ * Fetch one roster row by its primary key, in the same shape matchName()
+ * returns. The upload path already knows which row it is writing to —
+ * enqueue_p4p_upload() resolved it from the authenticated identity — so it
+ * needs the row's canonical spelling and department, not a fuzzy search.
+ * `similarity: 1` records that this was an exact, server-resolved hit rather
+ * than a guess.
+ *
+ * @returns {Promise<{ matchedName, prefix, department, index, similarity } | null>}
+ */
+export async function getRosterRowByIndex(date, index) {
+  if (!isValidDate(date)) return null;
+  if (index === null || index === undefined) return null;
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from(date)
+    .select("index, firstname, lastname, prefix, department")
+    .eq("index", index)
+    .limit(1);
+
+  if (error) throw new Error(`Supabase query error on table "${date}": ${error.message}`);
+  const row = data?.[0];
+  if (!row) return null;
+
+  return {
+    matchedName: `${row.firstname ?? ""} ${row.lastname ?? ""}`.trim(),
+    prefix     : row.prefix     ?? "",
+    department : row.department ?? "",
+    index      : row.index,
+    similarity : 1,
+  };
+}
+
+/**
  * Log a successful P4P submission to the p4p_submissions table.
  * Uses ON CONFLICT DO NOTHING so re-processing the same email never overwrites
  * the first (earliest) submission row for a given physician + work month.

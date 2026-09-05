@@ -49,6 +49,121 @@
   // reads it from here rather than adding a fourth.
   var DEPARTMENTS = ["กุมารเวชกรรม", "จักษุวิทยา", "จิตเวชและยาเสพติด", "เทคนิคการแพทย์และพยาธิวิทยาคลินิก", "นิติเวช", "ผู้ป่วยนอก", "พยาธิวิทยากายวิภาค", "รังสีวิทยา", "วิสัญญีวิทยา", "เวชกรรมฟื้นฟู", "เวชกรรมสังคม", "เวชศาสตร์ฉุกเฉิน", "ศัลยกรรม", "ศัลยกรรมออร์โธปิดิกส์", "สูติ-นรีเวชกรรม", "โสต ศอ นาสิก", "อาชีวเวชกรรม", "อายุรกรรม", "INTERN"]
 
+  // ── Month window / deadline / upload-file helpers ────────────────────────
+  // Used by /upload/ (see UPLOAD_VIA_LINE_DESIGN.md §5.4: these live here
+  // rather than inline in upload/app.js so the eventual web/app/upload/ port
+  // is a re-import rather than a rewrite, and so the existing parity test has
+  // one place to watch).
+
+  // The six months the pages offer, most recent first, as "2569_06" keys.
+  // Derived rather than tabulated — the same single rule src/constants.cjs's
+  // MONTH_ITERATOR encodes: the i-th most recent month before month m is
+  // (m - i) mod 12, crossing into the previous year when m - i goes negative.
+  function recentMonthKeys(count, now) {
+    var d = now || new Date()
+    var m = d.getMonth()
+    var beYear = d.getFullYear() + 543
+    var out = []
+    for (var i = 0; i < (count || 6); i++) {
+      var idx = ((m - i) % 12 + 12) % 12
+      var year = beYear + ((m - i) < 0 ? -1 : 0)
+      out.push(year + "_" + String(idx + 1).padStart(2, "0"))
+    }
+    return out
+  }
+
+  // "2569_06" -> "มิถุนายน 2569"
+  function monthKeyDisplay(key) {
+    var parts = String(key || "").split("_")
+    var name = THAI_MONTHS[parseInt(parts[1], 10) - 1]
+    return name ? name + " " + parts[0] : String(key || "")
+  }
+
+  // The 10th of the month AFTER the work month, 23:59:59 Asia/Bangkok — the
+  // same instant web/lib/months.ts's deadlineISO() and the enqueue RPC's SQL
+  // compute. Ranking counts a submission late past this (§9).
+  function deadlineDate(key) {
+    var parts = String(key || "").split("_")
+    var beYear = parseInt(parts[0], 10)
+    var month = parseInt(parts[1], 10)
+    if (!beYear || !month) return null
+    // month is 1-based, so using it as a 0-based index already means "the
+    // following month"; December rolls into the next year by itself.
+    return new Date(Date.UTC(beYear - 543, month, 10, 16, 59, 59))
+  }
+
+  // "10 ก.ค. 23:59" — always rendered in Bangkok time, whatever the device says.
+  function deadlineDisplay(key) {
+    var d = deadlineDate(key)
+    if (!d) return ""
+    var parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok", day: "numeric", month: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d).reduce(function (acc, p) { acc[p.type] = p.value; return acc }, {})
+    return parseInt(parts.day, 10) + " " + THAI_MONTHS_SHORT[parseInt(parts.month, 10) - 1] +
+      " " + parts.hour + ":" + parts.minute
+  }
+
+  function isLateFor(key, when) {
+    var d = deadlineDate(key)
+    if (!d) return false
+    return (when ? new Date(when) : new Date()).getTime() > d.getTime()
+  }
+
+  // "2026-06-12T07:32:00Z" -> "12 มิ.ย. 14:32" (Bangkok)
+  function shortDateTime(iso) {
+    var d = new Date(iso)
+    if (isNaN(d.getTime())) return ""
+    var parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok", day: "numeric", month: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d).reduce(function (acc, p) { acc[p.type] = p.value; return acc }, {})
+    return parseInt(parts.day, 10) + " " + THAI_MONTHS_SHORT[parseInt(parts.month, 10) - 1] +
+      " " + parts.hour + ":" + parts.minute
+  }
+
+  var MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+  // Synchronous picker checks (§5.3). UX only — enqueue_p4p_upload() and the
+  // worker re-check everything; these exist so the common mistakes fail in a
+  // second with a clear reason instead of twenty minutes later over LINE.
+  function validateUploadFile(file) {
+    if (!file) return { ok: false, error: "no_file", message: "กรุณาเลือกไฟล์" }
+    var name = String(file.name || "")
+    var base = name.split(/[\\/]/).pop()
+    if (base.indexOf("~$") === 0) {
+      return { ok: false, error: "temp_file", message: "ไฟล์นี้เป็นไฟล์ชั่วคราวของ Excel (~$) กรุณาปิดไฟล์แล้วเลือกไฟล์จริง" }
+    }
+    if (!/\.xlsx$/i.test(name)) {
+      return { ok: false, error: "wrong_extension", message: "รองรับเฉพาะไฟล์ Excel (.xlsx) เท่านั้น" }
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return { ok: false, error: "oversize", message: "ไฟล์ใหญ่เกิน 5 MB กรุณาลดขนาดไฟล์" }
+    }
+    if (file.size <= 0) {
+      return { ok: false, error: "other", message: "ไฟล์ว่าง กรุณาเลือกไฟล์ใหม่" }
+    }
+    return { ok: true }
+  }
+
+  // Every .xlsx is a zip, so its first four bytes are PK\x03\x04. Catches a
+  // renamed .xls or a truncated download before it costs a round trip.
+  function checkMagicBytes(file) {
+    return new Promise(function (resolve) {
+      try {
+        var reader = new FileReader()
+        reader.onload = function () {
+          var b = new Uint8Array(reader.result)
+          resolve(b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04)
+        }
+        reader.onerror = function () { resolve(true) } // unreadable slice: let the server decide
+        reader.readAsArrayBuffer(file.slice(0, 4))
+      } catch {
+        resolve(true)
+      }
+    })
+  }
+
   // Escape text before inserting it into innerHTML (prevents HTML/script injection).
   function escHtml(s) {
     return String(s)
@@ -79,5 +194,14 @@
     THAI_MONTHS_SHORT: THAI_MONTHS_SHORT,
     DEPARTMENTS: DEPARTMENTS,
     escHtml: escHtml,
+    MAX_UPLOAD_BYTES: MAX_UPLOAD_BYTES,
+    recentMonthKeys: recentMonthKeys,
+    monthKeyDisplay: monthKeyDisplay,
+    deadlineDate: deadlineDate,
+    deadlineDisplay: deadlineDisplay,
+    isLateFor: isLateFor,
+    shortDateTime: shortDateTime,
+    validateUploadFile: validateUploadFile,
+    checkMagicBytes: checkMagicBytes,
   }
 })(window)

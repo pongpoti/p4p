@@ -11,8 +11,8 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet } from "./claude-analyst.js";
-import { matchName, saveScore, logSubmission, bumpSenderMatch } from "./supabase-client.js";
+import { analyseJson, resolveBeMonth, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet } from "./claude-analyst.js";
+import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
@@ -21,6 +21,7 @@ import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, M
 import { MONTH_TOKENS_BY_NUM }          from "./months.js";
 import log                              from "./logger.js";
 import * as path                        from "path";
+import { pathToFileURL }                from "url";
 import ExcelJS                          from "exceljs";
 // override:true ensures .env values win over stale system-level env vars
 // (e.g. ANTHROPIC_API_KEY="" set at OS level would otherwise shadow the real key)
@@ -265,7 +266,7 @@ async function stripFormulasFromBuffer(inputBuffer) {
  *
  * Returns a Buffer, or null if no usable sheet is found.
  */
-async function extractFirstSheetBuffer(buffer) {
+export async function extractFirstSheetBuffer(buffer) {
   const JSZip = (await import("jszip")).default;
 
   // ── Step 1: determine which sheet index to use (0-based) ──────────────
@@ -456,6 +457,15 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
  * Process a single xlsx buffer through Claude → Supabase → Telegram → Drive.
  * Returns true if the full pipeline completed (Claude succeeded), false otherwise.
  *
+ * ONE pipeline, two callers. The email path (identity === null) behaves
+ * exactly as it always has, byte for byte. The LINE-upload path
+ * (UPLOAD_VIA_LINE_DESIGN.md §7.1) passes an already-verified identity and an
+ * already-chosen month, so the three things that are only true of email —
+ * identity from name resolution, month from filename/subject/body, feedback
+ * as a Gmail reply — become parameters instead of assumptions. This is a
+ * seam, not a fork: a second copy of the pipeline for uploads is the exact
+ * mistake automation/excel-parse.js's header documents, at ten times the size.
+ *
  * @param {Buffer} buffer
  * @param {object} context
  * @param {string} context.subject
@@ -464,21 +474,65 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
  * @param {string} context.replyTo      Sender email address for auto-reply
  * @param {string} context.messageId    Gmail message ID for thread reply
  * @param {object} context.gmail        Shared Gmail client instance
+ * @param {"email"|"line-upload"} [context.source]
+ * @param {null|{email,fullName,department,rosterIndex,lineUserId,attempt}} [context.identity]
+ *   Set → the physician is already known (verified session); Claude's name
+ *   output becomes a cross-check, never a routing decision.
+ * @param {null|string} [context.monthKey]  "2569_06" — set → routing skips
+ *   month inference, but the file's own month is still computed and compared.
+ * @param {null|{ok,fail}} [context.notify]  Replaces the inline Gmail replies
+ *   when identity is set. The pipeline stops knowing which channel it is.
  */
-async function processBuffer(buffer, { subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail }) {
-  /** Shorthand: fire an "other" alert reply for unexpected pipeline errors. */
+export async function processBuffer(buffer, { subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null }) {
+  const isUpload = identity !== null;
+
+  // Telegram context for the upload path — the admin's question changes from
+  // "did the fuzzy match pick the right person?" to "did the file agree with
+  // what the physician claimed?" (§7.6). Null on the email path, whose
+  // messages stay byte-identical.
+  const uploadCtx = isUpload
+    ? {
+        source      : source === "line-upload" ? "LINE upload" : source,
+        accountName : identity.fullName ?? "",
+        email       : identity.email ?? "",
+        monthKey,
+        rosterMatch : identity.rosterIndex != null ? "exact" : null,
+        nameInFile  : null,   // filled in after Claude has read the sheet
+        monthInFile : null,
+        attempt     : identity.attempt ?? null,
+        maxAttempts : 3,
+      }
+    : null;
+  const tgError = (extra) => (uploadCtx ? { ...uploadCtx, ...extra } : null);
+
+  /**
+   * One failure channel for both callers: a Gmail alert reply on the email
+   * path, notify.fail() on the upload path (which pushes a LINE bubble and
+   * writes the queue row's error_type).
+   */
   // sendAlertReply -> buildHtmlErrorReply now escapes safeFilename/detectedDate/
   // detectedName internally (single escaping point) — pass raw values below,
   // not pre-escaped ones, to avoid double-escaping ("&" -> "&amp;amp;").
-  const otherReply = () => sendAlertReply({
-    errorType   : "other",
-    safeFilename: filename ?? "",
-    replyTo, messageId, gmail,
-  });
+  const notifyFailure = async (errorType = "other", { detail = "", detectedDate = "", detectedName = "" } = {}) => {
+    if (isUpload) {
+      if (notify?.fail) await notify.fail(errorType, detail || detectedDate || detectedName || "");
+      return;
+    }
+    await sendAlertReply({
+      errorType,
+      safeFilename: filename ?? "",
+      detectedDate, detectedName,
+      replyTo, messageId, gmail,
+    });
+  };
+  const otherReply = (detail = "") => notifyFailure("other", { detail });
 
-  // Resolve target month from filename/subject/body before parsing workbook —
-  // needed to pick the correct sheet in multi-month workbooks.
-  const targetMonth = resolveBeMonth(filename ?? "", subject, body);
+  // Sheet selection still needs a month number even when routing does not:
+  // a physician who accumulates every month in one workbook uploads the same
+  // file each time, and the right sheet is the one for the month they chose.
+  const targetMonth = monthKey
+    ? parseInt(String(monthKey).slice(5), 10)
+    : resolveBeMonth(filename ?? "", subject, body);
 
   // Parse workbook
   let rows, allSheets, chosenSheet;
@@ -486,8 +540,8 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
     ({ rows, allSheets, chosenSheet } = await firstSheetToRows(buffer, { targetMonth }));
   } catch (err) {
     console.error(`│        ❌  Failed to parse workbook: ${err.message}`);
-    await sendTelegram(formatErrorMessage(`Workbook parse failed: ${err.message}`, filename)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    await otherReply();
+    await sendTelegram(formatErrorMessage(`Workbook parse failed: ${err.message}`, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    await otherReply(`ไม่สามารถอ่านไฟล์ได้: ${err.message}`);
     return "replied";
   }
 
@@ -499,8 +553,8 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
   if (rows.length === 0) {
     const msg = "Workbook parsed but contains no data rows — file may be empty or corrupt.";
     console.error(`│        ❌  ${msg}`);
-    await sendTelegram(formatErrorMessage(msg, filename)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    await otherReply();
+    await sendTelegram(formatErrorMessage(msg, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    await otherReply("ไฟล์ไม่มีข้อมูล (0 แถว)");
     return "replied";
   }
 
@@ -510,12 +564,37 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
   if (nonNullCount < 3) {
     const msg = `Workbook has only ${nonNullCount} non-null cell(s) — likely corrupt or blank.`;
     console.error(`│        ❌  ${msg}`);
-    await sendTelegram(formatErrorMessage(msg, filename)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    await otherReply();
+    await sendTelegram(formatErrorMessage(msg, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    await otherReply(`ไฟล์มีข้อมูลไม่ครบ (${nonNullCount} ช่อง)`);
     return "replied";
   }
 
   console.log(`│        Non-null cells: ${nonNullCount} ✅`);
+
+  // ── Month cross-check (upload path only) ─────────────────────────────────
+  // A file whose contents say July, uploaded under June, is the one mistake
+  // this path can still make — everything else about it came from a verified
+  // session. Deliberately reads the FILENAME and the sheet only, never
+  // `subject`: the caller puts the selected month there as context for
+  // Claude, so including it here would compare the selection against itself.
+  // Only a month or year that actually resolved counts; an unstated month is
+  // not a disagreement. Runs before Claude so a mismatch costs no API call.
+  if (monthKey) {
+    const fileMonth = resolveBeMonth(filename ?? "", "", "");
+    const fileYear  = resolveBeYear(filename ?? "", "", "") ?? resolveBeYearFromRows(rows);
+    const selMonth  = parseInt(String(monthKey).slice(5), 10);
+    const selYear   = parseInt(String(monthKey).slice(0, 4), 10);
+    if ((fileMonth && fileMonth !== selMonth) || (fileYear && fileYear !== selYear)) {
+      const inferredKey = `${fileYear ?? selYear}_${String(fileMonth ?? selMonth).padStart(2, "0")}`;
+      const detail = `ไฟล์ระบุเดือน ${inferredKey} แต่เลือกส่งเดือน ${monthKey}`;
+      console.error(`│        ❌  month_mismatch: ${detail}`);
+      if (uploadCtx) uploadCtx.monthInFile = inferredKey;
+      await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_mismatch" })))
+        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+      await notifyFailure("month_mismatch", { detail });
+      return "rejected";
+    }
+  }
 
   const intermediate = {
     _email_subject  : subject,
@@ -538,18 +617,62 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
     console.log(`│        ✅  Score     : ${analysis.score.toFixed(2)}`);
     if (analysis.score <= 0) throw new Error("Score is 0 — cannot save a zero score.");
   } catch (err) {
+    const isZero = /score is 0/i.test(err.message);
     console.error(`│        ❌  Claude analysis failed: ${err.message}`);
-    await sendTelegram(formatErrorMessage(err.message, filename)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    if (/score is 0/i.test(err.message)) {
-      await sendAlertReply({ errorType: "zero_score", safeFilename: filename ?? "", replyTo, messageId, gmail });
+    await sendTelegram(formatErrorMessage(err.message, filename, tgError({ errorType: isZero ? "zero_score" : "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    if (isZero) {
+      await notifyFailure("zero_score", { detail: "ไม่พบคะแนนรวมในไฟล์" });
     } else {
-      await otherReply();
+      await otherReply(err.message);
     }
     return "replied";
   }
 
-  // ── Fuzzy name match (lookup only — score saved after Drive succeeds) ──
+  // The month everything downstream writes to. On the upload path the
+  // physician picked it and the cross-check above already confirmed the file
+  // does not contradict it, so Claude's own date is never the routing answer.
+  const workMonth = monthKey ?? analysis.date;
+
+  // ── Roster resolution ────────────────────────────────────────────────────
+  // Upload path: identity is already verified, so there is nothing to fuzzy-
+  // match. The row comes from the exact match enqueue_p4p_upload() already
+  // made, or — when that deferred (a name spelled differently in `physicians`
+  // than in the roster, or two physicians sharing a name) — from ONE
+  // matchName() call against the authenticated name. Claude's name output is
+  // compared and reported, never routed on: a physician can legitimately
+  // submit a workbook whose header carries a colleague's name if they copied
+  // a template, and the score still belongs to the account that uploaded it.
+  // `physician_not_found` is therefore structurally impossible here (§8).
   let match = null;
+  if (isUpload) {
+    if (uploadCtx) uploadCtx.nameInFile = analysis.name ?? null;
+    try {
+      if (identity.rosterIndex !== null && identity.rosterIndex !== undefined) {
+        match = await getRosterRowByIndex(workMonth, identity.rosterIndex);
+        if (match) console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (exact, from enqueue)`);
+      }
+      if (!match) {
+        match = await matchName(identity.fullName, workMonth);
+        if (match) {
+          if (uploadCtx) uploadCtx.rosterMatch = `fuzzy ${(match.similarity * 100).toFixed(0)}%`;
+          console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
+        } else {
+          if (uploadCtx) uploadCtx.rosterMatch = "none";
+          console.warn(`│        ⚠️  "${identity.fullName}" is not in roster table "${workMonth}" — score cannot be written`);
+        }
+      }
+      if (match && analysis.name && match.matchedName && analysis.name.trim() !== match.matchedName.trim()) {
+        console.warn(`│        ⚠️  Name in file "${analysis.name}" ≠ account "${match.matchedName}" — writing to the authenticated account (cross-check only)`);
+      }
+    } catch (dbErr) {
+      console.error(`│        ❌  Supabase match error: ${dbErr.message}`);
+      await sendTelegram(formatErrorMessage(`Supabase match error: ${dbErr.message}`, filename, tgError({ errorType: "other" })))
+        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+      await otherReply(dbErr.message);
+      return "replied";
+    }
+  } else {
+  // ── Fuzzy name match (lookup only — score saved after Drive succeeds) ──
   console.log(`│        🔍  Fuzzy-matching name in Supabase table "${analysis.date}"…`);
   try {
     match = await matchName(analysis.name, analysis.date);
@@ -608,14 +731,25 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
       }
     }
   }
+  } // end email-only identity resolution
 
   // ── Upload to Google Drive (must succeed before saving score / archiving) ─
   const drive = getDrive();
   if (drive) {
     if (!match) {
-      console.warn(`│        ⚠️  Name mismatch — Drive upload skipped for "${analysis.name}".`);
+      // On the upload path this is `not_in_roster`, not a name mismatch:
+      // the account is verified, it simply has no row in this month's roster
+      // to hang a score on — an admin problem, not the physician's.
+      const who = isUpload ? identity.fullName : analysis.name;
+      console.warn(`│        ⚠️  No roster row — Drive upload skipped for "${who}".`);
       await sendTelegram(
-        formatErrorMessage(`Name mismatch: "${analysis.name}" not found in table "${analysis.date}" — Drive upload skipped.`, filename)
+        formatErrorMessage(
+          isUpload
+            ? `Not in roster: "${who}" has no row in table "${workMonth}" — Drive upload skipped.`
+            : `Name mismatch: "${analysis.name}" not found in table "${analysis.date}" — Drive upload skipped.`,
+          filename,
+          tgError({ errorType: "not_in_roster" })
+        )
       ).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     } else {
       const uploadName = match.matchedName;
@@ -626,8 +760,8 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
         if (!uploadBuffer) {
           const msg = "First sheet is blank — Drive upload aborted.";
           console.warn(`│        ⚠️  ${msg}`);
-          await sendTelegram(formatErrorMessage(msg, filename)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-          await otherReply();
+          await sendTelegram(formatErrorMessage(msg, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+          await otherReply(msg);
           return "replied";
         }
 
@@ -635,7 +769,7 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
         const { fileName, replaced } = await drive.uploadFile(
           uploadBuffer,
           uploadName,
-          analysis.date
+          workMonth
         );
         console.log(`│        ✅  Drive upload: "${fileName}" (${replaced ? "replaced existing" : "new file"})`);
       } catch (driveErr) {
@@ -658,9 +792,9 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
   let scoreSaved = false;
   if (match) {
     try {
-      await saveScore(analysis.date, match.index, analysis.score, ts.toISOString())
+      await saveScore(workMonth, match.index, analysis.score, ts.toISOString())
       scoreSaved = true;
-      console.log(`│        💾  Score ${analysis.score.toFixed(2)} saved → table "${analysis.date}", row ${match.index}`);
+      console.log(`│        💾  Score ${analysis.score.toFixed(2)} saved → table "${workMonth}", row ${match.index}`);
     } catch (dbErr) {
       console.error(`│        ❌  Supabase save error: ${dbErr.message}`);
     }
@@ -672,7 +806,7 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
       await logSubmission({
         physicianName: match.matchedName,
         department   : match.department ?? "",
-        workMonth    : analysis.date,
+        workMonth,
         submittedAt  : ts.toISOString(),
         threadId     : threadId ?? null,
         filename     : filename ?? null,
@@ -683,7 +817,11 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
     }
 
     // ── Record sender → physician match (feeds the Telegram approve message) ──
-    try {
+    // Email path only: this table exists to learn which sender address belongs
+    // to which physician. On the upload path that mapping is already known and
+    // verified (it is the session), and there is no sender address to learn
+    // from — `replyTo` is empty.
+    if (!isUpload) try {
       await bumpSenderMatch({
         senderEmail       : replyTo,
         senderDisplayName,
@@ -705,16 +843,42 @@ async function processBuffer(buffer, { subject = "", body = "", filename, replyT
       name       : analysis.name,
       matchedName: match?.matchedName ?? null,
       similarity : match?.similarity  ?? null,
-      date       : analysis.date,
+      date       : workMonth,
       score      : analysis.score.toFixed(2),
       saved      : scoreSaved,
-    }, filename));
+    }, filename, uploadCtx));
     console.log(`│        ✅  Telegram message sent.`);
   } catch (tgErr) {
     console.error(`│        ❌  Telegram error: ${tgErr.message}`);
   }
 
-  // ── Auto-reply to sender ──────────────────────────────────────────────
+  // ── Tell the physician ────────────────────────────────────────────────
+  // Upload path: the caller's notify hooks own delivery (a LINE bubble, or
+  // nothing at all when the physician is expected to pull the result from
+  // the chat button they already have — §7.5). The pipeline stops knowing
+  // which channel it is talking to here.
+  if (isUpload) {
+    if (!match) {
+      await notifyFailure("not_in_roster", {
+        detail: `ไม่พบรายชื่อของท่านในทะเบียนแพทย์เดือน ${workMonth}`,
+      });
+      return "replied";
+    }
+    if (notify?.ok) {
+      await notify.ok({
+        matchedName: match.matchedName,
+        prefix     : match.prefix ?? "",
+        department : match.department ?? "",
+        monthKey   : workMonth,
+        score      : analysis.score,
+        scoreSaved,
+        receivedAt : ts.toISOString(),
+      });
+    }
+    return true;
+  }
+
+  // ── Auto-reply to sender (email path) ─────────────────────────────────
   if (replyTo && messageId) {
     if (!match) {
       await sendAlertReply({
@@ -1134,7 +1298,13 @@ async function main() {
   console.log(`\n✅  Done.`);
 }
 
-main().catch((err) => {
-  console.error("\n❌  Fatal error:", err.message);
-  process.exit(1);
-});
+// Run the Gmail poller only when this file IS the program being run. It also
+// exports processBuffer()/extractFirstSheetBuffer() for the LINE-upload drain
+// (scripts/drain-uploads.mjs), and importing those must not start polling
+// Gmail — the ESM equivalent of `require.main === module`.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("\n❌  Fatal error:", err.message);
+    process.exit(1);
+  });
+}

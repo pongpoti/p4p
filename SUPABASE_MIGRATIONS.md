@@ -98,6 +98,20 @@ already-applied file is safe.
     `select pg_get_functiondef('public.log_liff_access(text,text,text,text,text)'::regprocedure)`.
     Also fixes a throttle gap (see the file's own header).
 
+18. `scripts/line-upload-2026-09.sql` — the LINE rich-menu upload path
+    (`UPLOAD_VIA_LINE_DESIGN.md`): the `p4p-uploads` storage bucket and its
+    single INSERT policy, the `p4p_upload_queue` table (two independent
+    lifecycles — `status` for scoring, `archive_status` for the Drive copy),
+    and five functions: `enqueue_p4p_upload()`, `my_p4p_identity()`,
+    `my_p4p_uploads()` (all `authenticated`, all self-scoped from
+    `auth.jwt()`), plus `claim_p4p_score_fallback()` and
+    `claim_p4p_archive()` (`service_role` only — they exist as RPCs because
+    `FOR UPDATE SKIP LOCKED` is not expressible through PostgREST).
+    Depends on step 6's `is_current_user_allowlisted()` and step 14's
+    `physicians` table. Idempotent like the rest; safe to re-run after a fix.
+    Read the file's own header before running it — it records exactly what
+    was and was not verified.
+
 ## Superseded — do NOT run
 
 - **`scripts/security-rls.sql`** — the original anon-open RLS model,

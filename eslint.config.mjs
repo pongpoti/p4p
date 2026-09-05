@@ -45,6 +45,7 @@ export default [
       "list/**/*.js",
       "ranking/**/*.js",
       "admin/**/*.js",
+      "upload/**/*.js",
     ],
     languageOptions: {
       sourceType: "script",
@@ -56,6 +57,29 @@ export default [
         liff: "readonly",
         P4P: "writable",
       },
+    },
+  },
+
+  // lib/ is loaded from BOTH runtimes: main.js require()s these files and the
+  // /upload/ page loads line-receipt-flex.js with a <script src>. Hence both
+  // sets of globals — the UMD-lite wrapper in that file genuinely reads
+  // `module`, `require` and `self` in the same source.
+  {
+    files: ["lib/*.js"],
+    languageOptions: {
+      sourceType: "commonjs",
+      ecmaVersion: "latest",
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+
+  // Root test suite (node:test, ESM).
+  {
+    files: ["lib/__tests__/**/*.mjs"],
+    languageOptions: {
+      sourceType: "module",
+      ecmaVersion: "latest",
+      globals: { ...globals.node },
     },
   },
 
