@@ -34,7 +34,22 @@
   var receipt = P4P.receipt
 
   var BUCKET = "p4p-uploads"
-  var PROBE = new URLSearchParams(location.search).get("probe") === "1"
+
+  // LIFF often nests an already percent-encoded querystring inside
+  // liff.state (e.g. "?liff.state=%3Fprobe%3D1"), so reading
+  // location.search directly finds nothing — status/app.js documents the
+  // same trap. A stray "%" that isn't a valid escape makes
+  // decodeURIComponent throw URIError, and this runs at top level, so the
+  // decode is guarded: a page that can't read its own query string should
+  // still load.
+  var queryString
+  try {
+    queryString = decodeURIComponent(location.search).replace("?liff.state=", "")
+  } catch (e) {
+    console.warn("Failed to decode location.search:", e)
+    queryString = location.search.replace("?liff.state=", "")
+  }
+  var PROBE = new URLSearchParams(queryString).get("probe") === "1"
 
   // The access token the server injected (assets/auth-guard.js already used
   // it to build P4P.db; we need the raw one for Storage's REST endpoint and
