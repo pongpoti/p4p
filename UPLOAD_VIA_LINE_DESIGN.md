@@ -23,16 +23,27 @@ LINE rich menu
                       ├── เดือนที่ส่ง: [มิ.ย. 69 ▾]  กำหนดส่ง 10 ก.ค.  ← month, picked, not guessed
                       ├── [ เลือกไฟล์ .xlsx ]                        ← LINE's own file picker
                       ├── [ ส่งไฟล์ ]
-                      └── "รับไฟล์แล้ว กำลังตรวจสอบ — จะแจ้งผลทาง LINE"
+                      │
+                      ▼  common case — the file's total is stated outright (§7.7)
+                      "✅ บันทึกคะแนนเดือนมิถุนายน 2569 แล้ว: 1,842.50"   ← ON THE PAGE, ~1–2 s
+                      + the same receipt in the chat, free (§7.5)
+                      (Drive archiving happens after this, invisibly)
+                      │
+                      ▼  uncommon case — the file's total needs Claude to read it
+                      "กำลังตรวจสอบ — จะแจ้งผลทางแชท"
                                     │
-                                    ▼  (under a minute, §7.3)
-                      LINE push: "✅ บันทึกคะแนนเดือนมิถุนายน 2569 แล้ว: 1,842.50"
-                                 หรือ  "❌ ไฟล์ไม่ถูกต้อง: <เหตุผล> กรุณาส่งใหม่"
+                                    ▼  under a minute (§7.3), free — no tap needed
+                                       until the result arrives; then one tap (§7.5)
+                      "✅ บันทึกคะแนน…" หรือ "❌ ไฟล์ไม่ถูกต้อง: <เหตุผล> กรุณาส่งใหม่"
 ```
 
 Three things are *known* on this path that are *guessed* on the email path —
 who is submitting, which month, and whether the sender is a real physician.
-That is where most of the value is; see §8.
+That is where most of the value is; see §8. A fourth thing, decided later in
+this document (§7.7), turns out to matter as much as any of them: on this
+path the *score itself* can usually be read straight off the file with no
+inference at all, which is what makes the common case instant rather than
+"under a minute."
 
 ---
 
@@ -79,7 +90,11 @@ machines with different secrets — and that separation is worth keeping.
  │     low tier  → skip scoring here; row stays for the async path below  │
  │     ← { score, month, late } | { pending: true }                       │
  │                                                                        │
- │  5. liff.sendMessages(text)                     ◀ FREE, as the user   │
+ │  5. liff.sendMessages(…)                        ◀ FREE, as the user   │
+ │     high tier → the real Flex receipt, done (§7.5's whole mechanism    │
+ │                  below is for the OTHER branch)                        │
+ │     low tier  → a trigger-text line; the free reply/postback dance     │
+ │                  in §7.5 picks up from there                           │
  └────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -92,25 +107,31 @@ machines with different secrets — and that separation is worth keeping.
       │ webhook (from step 5) — §7.5           │  claimed within ~10 s (§7.3)
       ▼                                         ▼
  ┌─ main.js /line ──────────────┐   ┌─ GITHUB ACTIONS — automation/ ──────────┐
- │ reply (FREE) with a          │   │  6. claim archive_pending row            │
- │ "ดูผลคะแนน" postback button   │   │     FOR UPDATE SKIP LOCKED               │
- │                               │   │  7. extractFirstSheetBuffer → Drive      │
- │ tap → fresh reply token →     │   │  8. if score was never resolved above    │
- │ reply (FREE) with the score   │   │     (low-confidence tier): processBuffer │
- │ receipt read from the row,    │   │     runs analyseJson + saveScore too     │
- │ or the reason if it failed    │   │  9. mark archived · LINE PUSH on         │
- │                               │   │     failure only · Telegram either way  │
- └───────────────────────────────┘   │ 10. delete the storage object            │
+ │ reply (FREE) with a          │   │  6. claim_p4p_archive() first —          │
+ │ "ดูผลคะแนน" postback button   │   │     the common case, no Claude needed    │
+ │                               │   │     → extractFirstSheetBuffer → Drive    │
+ │ tap → fresh reply token →     │   │     → archived · no push, ever (§7.2)    │
+ │ reply (FREE) with the score   │   │                                          │
+ │ receipt read from the row,    │   │  7. else claim_p4p_score_fallback() —    │
+ │ or the reason if it failed    │   │     the rare case, score not yet known   │
+ │                               │   │     → full processBuffer(): Claude,      │
+ │                               │   │       Drive, saveScore together          │
+ │                               │   │     → done (pulled, §7.5) | failed×3     │
+ │                               │   │       (PUSHED — §7.2/§12, §7.6 Telegram) │
+ └───────────────────────────────┘   │  8. delete the object once archived      │
                                       └──────────────────────────────────────────┘
 ```
 
-The two right-hand branches at step 5/6 both exist because §7.7's confidence
-gate is not all-or-nothing: most files resolve at the high-confidence tier and
-get their score in step 4, in which case step 8 is a no-op and the archive
-worker only moves bytes. A file that lands on the low-confidence tier gets no
-score in step 4 — the page shows "กำลังตรวจสอบ" — and the archive worker falls
-back to the full `processBuffer()` pipeline (Claude included) exactly as
-originally designed, before pushing the result rather than waiting for a tap.
+The two right-hand branches exist because §7.7's confidence gate is not
+all-or-nothing. Most files resolve at the high-confidence tier in step 4 and
+never touch step 7 at all — the archive worker (step 6) only moves bytes, and
+never pushes, because the physician already has the receipt from step 5. A
+file that lands on the low-confidence tier gets no score in step 4 — the page
+shows "กำลังตรวจสอบ" — and step 7 falls back to the full `processBuffer()`
+pipeline (Claude included). Even there, success is still *pulled* via the
+same postback step 5 already placed (§7.5); step 7 only ever pushes on a
+terminal failure (§7.2/§12) — the one outcome nothing else in this design
+will ever tell the physician about otherwise.
 
 Properties worth naming, because each one is a decision:
 
@@ -243,8 +264,10 @@ everything else Supabase.
 | **File** | `<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">` — LINE's own picker, which reaches Files / Drive / iCloud. Client-side checks in §5.3. |
 | **Confirm** | One sentence naming all three facts: *"ส่งไฟล์ `<name>` เป็นผลงานเดือน `<month>` ในชื่อ นพ. สมชาย ใจดี"* — the point where a wrong month or a wrong account is caught by the one person who can tell. |
 | **Uploading** | XHR progress. These files are tens of KB; the bar exists for a bad connection, not a big file. |
-| **Accepted** | "รับไฟล์แล้ว กำลังตรวจสอบ — ระบบจะแจ้งผลทาง LINE" + the live queue status, polled from `my_p4p_uploads()`. |
-| **History** | Last 10 uploads: month, time, status chip (รอตรวจ / สำเร็จ + คะแนน / ไม่สำเร็จ + เหตุผล). This is also the fallback if a LINE push fails to arrive. |
+| **Result — instant** | The common case (§7.7): `POST /upload/score` returns a score in ~1–2 s. Show it immediately — the same four facts as the LINE receipt (§7.4) — with no "please wait" in between. The page does not know or care that Drive archiving is still pending; that never surfaces here (§7.7 rec 2). |
+| **Result — deferred** | The uncommon case: the response is `{ pending: true }` (§7.8). "กำลังตรวจสอบ — ระบบจะแจ้งผลทางแชท" + the live queue status, polled from `my_p4p_uploads()`, as a fallback for a physician still watching the page. The primary path to the result is the free chat message (§7.5), not this poll. |
+| **Result — rejected** | The response is an `error` (§7.8) — e.g. `month_mismatch`. Show the reason and the retry affordance from the error taxonomy (§10) immediately; nothing was queued. |
+| **History** | Last 10 uploads: month, time, status chip (รอตรวจ / สำเร็จ + คะแนน / ไม่สำเร็จ + เหตุผล). This is also the fallback if the chat notification is missed or dismissed. |
 
 Resubmission is normal and the copy should say so: *"ส่งซ้ำได้ — ระบบจะใช้ไฟล์
 ล่าสุด แต่เวลาส่งจะนับจากครั้งแรก"* (§9).
@@ -279,10 +302,25 @@ watched by `web/lib/__tests__/parity.test.ts`) rather than inline in
 
 ## 6. Data model
 
-> Every SQL block below is a **sketch for review**, in the same spirit as
-> `scripts/notify-access-request.sql`'s "VERIFY BEFORE ENABLING" header. None of
-> it has been run. Migrations in this project are applied by hand via the SQL
-> Editor (`SUPABASE_MIGRATIONS.md`).
+> The SQL fragments below are excerpts for following the design's reasoning
+> inline; the actual, complete, runnable migration is
+> `scripts/line-upload-2026-09.sql` — same "VERIFY BEFORE ENABLING" spirit as
+> `scripts/notify-access-request.sql`, but further along than a first draft:
+> every statement in it has been executed against a real Postgres 16
+> instance (bucket, table, both indexes, all five functions, all their
+> grants), and its trickier logic — the enqueue happy path, the double-submit
+> guard, a deferred roster match, three rejection classes, both claim
+> functions' locking, and the archive backoff schedule at its exact hour
+> boundaries — was exercised with real test data, not just read for
+> plausibility. That is what caught the two real bugs the file's own header
+> now documents: a missing `GRANT` on `p4p_upload_queue` for `service_role`
+> (table-level grants and RLS's `BYPASSRLS` are two different things, and
+> only testing under a role with neither surfaced the gap), and an off-by-one
+> between the documented "1h, 2h, 4h…" archive backoff and what the original
+> formula actually computed ("2h, 4h, 8h…"). Still not verified against a
+> *real* Supabase project's actual `auth.jwt()`/PostgREST request shape or
+> this project's real data — that step remains, per the file's own header
+> and `SUPABASE_MIGRATIONS.md`'s hand-apply-via-SQL-Editor convention.
 
 ### 6.1 Storage bucket — a write-only drop box
 
@@ -310,6 +348,14 @@ has no listing surface. Only `service_role` (the worker) reads it.
 
 ### 6.2 `p4p_upload_queue`
 
+Two independent lifecycles live on this one row, because §7.7 split them:
+**scoring** (`status`) — did the number get read and saved — and **archiving**
+(`archive_status`) — did the file reach Drive. A row can be scored (`status =
+'done'`) for minutes or hours while `archive_status` is still catching up;
+that gap is invisible to the physician by design (§7.7 rec 2) and is exactly
+what the two columns exist to represent without conflating "scored" with
+"fully processed."
+
 ```sql
 create table public.p4p_upload_queue (
   id            uuid primary key default gen_random_uuid(),
@@ -327,7 +373,13 @@ create table public.p4p_upload_queue (
   -- THE punctuality timestamp: when the physician handed the file over,
   -- not when a runner happened to pick it up. See §9.
   received_at   timestamptz not null default now(),
-  -- lifecycle
+
+  -- ── scoring lifecycle ──────────────────────────────────────────────────
+  -- Set to 'done' either by /upload/score directly (service_role, the common
+  -- high-confidence-tier case, §7.7/§7.8) or by claim_p4p_score_fallback()
+  -- (§6.5, the uncommon low-confidence-tier case). enqueue_p4p_upload()
+  -- itself never advances this past its 'pending' default — admitting a row
+  -- is not scoring it.
   status        text        not null default 'pending'
                 check (status in ('pending','processing','done','failed','rejected')),
   attempts      smallint    not null default 0,
@@ -336,14 +388,38 @@ create table public.p4p_upload_queue (
   error_type    text,                          -- mirrors automation ALERT_SUBJECTS keys
   error_detail  text,
   score         numeric,                       -- what was saved, for the history list
-  notified_at   timestamptz
+  score_method  text,                          -- resolveScore()'s method tag — which
+                                                -- confidence tier resolved it (§7.7)
+  notified_at   timestamptz,
+
+  -- ── archive lifecycle — independent of `status` once scoring succeeds ──
+  -- NULL until status='done'; then 'archive_pending' until Drive succeeds,
+  -- then 'archived'. Deliberately NO failure value: per §7.7's recommendation
+  -- on drawback 2, once the score is saved the physician has nothing left to
+  -- fix, so this retries on backoff (§6.5) rather than ever terminating.
+  archive_status          text
+                check (archive_status in ('archive_pending','archived')),
+  archive_attempts        smallint    not null default 0,
+  archive_last_attempt_at timestamptz,
+  archived_at             timestamptz
 );
 
 create index p4p_upload_queue_drain_idx
-  on public.p4p_upload_queue (status, received_at);
+  on public.p4p_upload_queue (status, received_at)
+  where status = 'pending';
+
+-- Mirrors the index above for the other claim function (§6.5). Ordering by
+-- received_at keeps both queues FIFO; the backoff check in the claim query
+-- itself decides which archive_pending rows are actually due.
+create index p4p_upload_queue_archive_idx
+  on public.p4p_upload_queue (received_at)
+  where archive_status = 'archive_pending';
 
 -- One in-flight upload per physician per month. Makes queue flooding
--- structurally impossible rather than rate-limited.
+-- structurally impossible rather than rate-limited — see §11 for the
+-- narrower angle this doesn't cover (a scripted caller resubmitting as fast
+-- as each row clears 'pending', now that clearing can take ~1-2 s instead of
+-- however long a full pipeline run used to take).
 create unique index p4p_upload_queue_one_inflight
   on public.p4p_upload_queue (email, month_key)
   where status in ('pending','processing');
@@ -376,6 +452,29 @@ Checks, in order — each maps to an error the physician sees immediately:
 
 Returns `{ queue_id, roster_match: 'exact'|'deferred'|'none', deadline, is_late }`.
 
+**What this RPC does *not* do: score anything.** On insert, `status` takes its
+`'pending'` default and `archive_status` is left `NULL` — a freshly-enqueued
+row is admitted, not scored. Clearing `'pending'` is `/upload/score`'s job
+(§7.8, the common case) or `claim_p4p_score_fallback()`'s (§6.5, the uncommon
+one); `enqueue_p4p_upload()` returns before either runs.
+
+**Why `/upload/score` needs no RPC of its own for its writes.** It runs inside
+`main.js`, which already holds `SUPABASE_SERVICE_ROLE_KEY` (C4) — the same key
+`/admin/api/*` already uses for direct REST calls today. So its writes
+(`UPDATE p4p_upload_queue`, `saveScore()`, `logSubmission()`) go straight
+through that key, exactly like the admin routes, needing no `SECURITY
+DEFINER` wrapper. RPCs in this design exist only where the caller holds
+nothing but the *user's* JWT: this function, `my_p4p_identity`, and
+`my_p4p_uploads`.
+
+**Concurrency note.** Step 5's pre-check and the `INSERT` are not atomic — a
+double-tap on "ส่งไฟล์" (an easy thing to do waiting on a mobile network) can
+pass the check twice before either row lands. The partial unique index in
+§6.2 is the actual guarantee; the function body must catch `unique_violation`
+around its own `INSERT` and re-raise it as the same friendly "ส่งไฟล์เดือนนี้
+ไปแล้ว กำลังตรวจสอบ" the pre-check produces — not let a raw constraint
+violation reach the physician as an unhandled 500.
+
 > **One fuzzy matcher, in JS.** `automation/supabase-client.js`'s
 > `matchName()` — normalise → single-token fast path → Levenshtein → 0.6
 > threshold — stays the only fuzzy matcher in the system. A `pg_trgm`
@@ -401,7 +500,15 @@ whose data comes back. `my_p4p_identity` is what lets the page block on "not in
 this month's roster" up front; `my_p4p_uploads` drives the history list and the
 post-upload status poll.
 
-### 6.5 `claim_p4p_upload()` — service_role only
+### 6.5 Two claim functions, service_role only
+
+One worker (§7.2), two things it might claim, with different predicates and
+different retry rules — so two functions, not one flag on a shared one.
+
+**`claim_p4p_score_fallback()`** — the uncommon, low-confidence-tier files
+`/upload/score` deferred (§7.7 rec 1). For this slice the worker still *is*
+the original single-pipeline design: full `processBuffer()`, three attempts,
+then terminal.
 
 ```sql
 update public.p4p_upload_queue q
@@ -415,10 +522,52 @@ update public.p4p_upload_queue q
 returning q.*;
 ```
 
+**`claim_p4p_archive()`** — every row with a saved score still waiting on
+Drive, regardless of which tier scored it. No attempt cap and no terminal
+state (§7.7 rec 2): once the score is saved the physician has nothing left to
+fix, so this backs off rather than giving up — 1 h, 2 h, 4 h … capped at 24 h
+between attempts on any one row.
+
+```sql
+update public.p4p_upload_queue q
+   set archive_attempts = archive_attempts + 1,
+       archive_last_attempt_at = now()
+ where q.id = (
+   select id from public.p4p_upload_queue
+    where archive_status = 'archive_pending'
+      and (archive_last_attempt_at is null
+           or archive_last_attempt_at
+              < now() - make_interval(hours => least(24, 2 ^ archive_attempts)))
+    order by received_at
+    limit 1
+    for update skip locked)
+returning q.*;
+```
+
 `FOR UPDATE SKIP LOCKED` is not expressible through PostgREST, which is why
-this is an RPC rather than a client-side query. It makes two overlapping drains
-(the hourly relay overlapping a still-running loop) safe by construction
-rather than by a `concurrency:` group alone.
+both are RPCs rather than a client-side query — not privilege elevation:
+`automation/`'s worker already calls Supabase as `service_role`, which
+bypasses RLS on its own. It makes two overlapping drains (the hourly relay
+overlapping a still-running loop) safe by construction rather than by a
+`concurrency:` group alone.
+
+**One drain loop, two claims, in a fixed order.** `drain-uploads.mjs` (§7.2)
+tries `claim_p4p_archive()` first on every tick — the common case, and the
+cheaper job: no Claude, no roster matching, just bytes to Drive — and falls
+through to `claim_p4p_score_fallback()` only when that returns nothing. A row
+the fallback claims runs the *full* `processBuffer()`, Drive upload included,
+so it never separately enters the archive queue; one worker pass covers both
+steps for that rare case.
+
+**On indefinite retry and the object's lifetime.** "Never terminal" (rec 2)
+should not quietly become "retain the raw file forever" — that widens §11's
+retention posture without anyone deciding to. The backoff above already caps
+the *interval* at 24 h; it does not cap the *count*. Past 30 days
+(`received_at`, checked by the alerting step, not the claim query — retries
+keep running), escalate the existing age-based alert from "look at this" to
+"this needs a human decision," but do not stop retrying and do not delete the
+object out from under it. Whether to actually give up is deliberately left to
+a person, not a query.
 
 ### 6.6 Optional — `physicians.roster_name`
 
@@ -481,11 +630,31 @@ automation/scripts/drain-uploads.mjs  the drain loop
 .github/workflows/upload-drain.yml    schedule + workflow_dispatch
 ```
 
-`drain-uploads.mjs`, per iteration: `claim_p4p_upload()` → download the object
-with the service-role key → `processBuffer(..., { source:"line-upload", ... })`
-→ mark `done` (with the score) or `failed` (with `error_type`) → push the
-result to LINE → delete the object. Loop until the claim returns nothing or a
-per-run cap (say 25) is hit.
+`drain-uploads.mjs`, per iteration (§6.5 has the two claim queries this
+alternates between):
+
+1. `claim_p4p_archive()` — the common case. Download the object
+   (service_role) → `extractFirstSheetBuffer` → `drive.uploadFile` →
+   `archive_status = 'archived'` → delete the object. **No LINE message here**
+   — the physician already has their receipt from `/upload/score` (§7.5/§7.8);
+   this step is invisible by design (§7.7 rec 2). A failure leaves
+   `archive_status = 'archive_pending'` for the next backoff-eligible attempt
+   — never a push, never a Telegram beyond the age-based alert.
+2. If (1) claims nothing, `claim_p4p_score_fallback()` — the uncommon case.
+   Download the object → `processBuffer(..., { source:"line-upload", ... })`,
+   which scores *and* archives in one pass (`status = 'done'` +
+   `archive_status = 'archived'` together, or `status = 'failed'` with
+   `error_type` after the third attempt) → delete the object on success.
+   **Notification follows the same rule as everywhere else (§7.5): push on
+   failure, pull on success.** The postback button (§7.5 step ②) was already
+   placed in the chat at upload time, before either claim function runs — it
+   does not need a score to exist yet, only a queued row — so a success here
+   needs no push; the physician's next tap (or the page's own poll) reads the
+   now-`'done'` row same as the common case. Only `status = 'failed'` pushes,
+   because that is the one outcome the physician cannot simply wait out.
+
+Loop until both claims return nothing or a per-run cap (say 25 across both) is
+hit.
 
 ### 7.3 Latency — where the time actually goes
 
@@ -520,8 +689,8 @@ concurrency:
   cancel-in-progress: false
 ```
 
-`drain-uploads.mjs` does not exit after one pass. It polls
-`claim_p4p_upload()` every ~10 seconds for ~65 minutes, then exits and lets the
+`drain-uploads.mjs` does not exit after one pass. It polls its two claim
+functions (§6.5) every ~10 seconds for ~65 minutes, then exits and lets the
 next hourly run take over. Runs overlap deliberately — the 65-minute loop
 against a 60-minute schedule means a delayed start is covered by the previous
 run still being alive, and `FOR UPDATE SKIP LOCKED` (§6.5) makes the overlap
@@ -620,43 +789,66 @@ text from the error taxonomy (§10), and a button chosen by `error_type`:
 physician cannot fix alone (`not_in_roster`, repeated `other`). A retry button
 on an unretryable error is worse than no button.
 
-**Quota: replies are free, pushes are not — and this result can only be a
-push.** LINE counts push / multicast / narrowcast / broadcast against the
-Official Account's monthly quota and does **not** count reply messages (the
-ones sent with a `replyToken` in answer to a user's own message) at all.
-Two rules follow from how the counting works:
+**Quota — and this whole subsection turned out to apply to a minority of
+submissions, not all of them.** Everything below was written before §7.7
+existed, when every result was async and every result therefore needed an
+OA-sent message of some kind. §7.7 changes the premise: the common
+(high-confidence) tier's score is known *synchronously*, inside the same page
+load the physician is already looking at — it needs no reply, no push, and
+not even the ACK/postback mechanism in §7.5. The page shows the score, and
+`liff.sendMessages()` fires once, carrying the *actual* Flex receipt as the
+physician's own message — free, and not a "reply" or a "push" in the sense
+below at all (§7.5's table). Everything that follows here — the reply/push
+distinction, the budget estimate, the push-only-on-failure lever — describes
+the uncommon, low-confidence tier only: the files `/upload/score` defers to
+`claim_p4p_score_fallback()` (§6.5), where the result genuinely isn't known
+until a GitHub runner produces it later.
+
+LINE counts push / multicast / narrowcast / broadcast against the Official
+Account's monthly quota and does **not** count reply messages (the ones sent
+with a `replyToken` in answer to a user's own message) at all. Two rules
+follow from how the counting works:
 
 - **A message is one delivery to one person, not one message object.** A push
   carrying a Flex bubble *and* a text note to one physician costs **1**, the
   same as either alone. So the receipt can be as rich as it needs to be —
   there is no reason to compress two ideas into one bubble to save quota.
-- **A reply is not available here.** A `replyToken` only exists in answer to a
-  webhook event and expires within about a minute; this result is produced
-  under a minute later by a GitHub runner that never saw an event. There is no
-  way to make the async receipt free by turning it into a reply.
+- **A reply is not available for the deferred tier's result.** A `replyToken`
+  only exists in answer to a webhook event and expires within about a minute;
+  the deferred tier's result is produced under a minute later by a GitHub
+  runner that never saw an event. There is no way to make that receipt free
+  by turning it into a reply — which is exactly why §7.5's pull mechanism
+  exists: not to make the *reply* free (it already is), but to make getting a
+  *button into the chat* free, so the eventual answer can ride a fresh reply
+  token whenever the physician taps it.
 
-Budget: at full adoption, one push per physician per month — order of 200 —
-plus retries and failure notices. That shares a quota with
+Budget: **only the deferred tier counts against quota, and only its terminal
+failures at that** (§7.2/§12 — a deferred-tier success is pulled, never
+pushed, via the same postback the ACK reply already placed). If the log audit
+(§13 Phase −1) shows most files resolve at the high-confidence tier — the
+premise the whole gate is built on — realistic push volume approaches the
+poison-file rate alone: a handful a month, not one per physician. The
+~200/physician/month estimate below is the number to plan against only if
+that audit comes back the other way, or as a worst case:
+
+at full adoption, if every submission somehow landed in the deferred tier and
+every one of them pushed on both success and failure — the shape the design
+had before §7.7 — that's one push per physician per month, order of 200, plus
+retries and failure notices. That shares a quota with
 `scripts/broadcast-flex.mjs`, where **one** carousel broadcast costs one
 message *per follower* (another ~200). Two broadcasts plus a month of upload
-receipts is already ~600. Check the plan in LINE Official Account Manager
-before rollout; Thailand's free tier has historically been 500 messages/month,
-with paid plans well above that, but the number moves and is not worth
-designing against from memory.
+receipts at that worst case is already ~600. Check the plan in LINE Official
+Account Manager before rollout regardless of which number applies; Thailand's
+free tier has historically been 500 messages/month, with paid plans well
+above that, but the number moves and is not worth designing against from
+memory.
 
-If the quota turns out to be tight, the lever is to **push only when it
-matters** rather than to drop the receipt:
-
-- always push on **failure** — the physician has to act, and failures are rare;
-- on success, push only if the physician is no longer watching. The page
-  already polls `my_p4p_uploads()`; have it record a "seen" timestamp on the
-  row, and let the worker skip the push when the result was already read on
-  screen. Steady-state cost falls to roughly the number of people who closed
-  LINE while waiting.
-
-That is a real complexity cost for a saving that may not be needed, so it is
-deliberately **not** in the first cut — it is the thing to reach for if the
-plan check comes back tight.
+**The lever this subsection used to propose as a fallback — push only on
+failure, pull on success — is not a fallback anymore; §7.2/§7.5 already build
+it as the default for the deferred tier.** It earns its keep more cheaply now
+than it would have pre-§7.7, for the same reason the budget above shrank: it
+only has to cover the minority of submissions the confidence gate defers, not
+every submission.
 
 The failure mode either way is silent: the API rejects the push and the
 physician simply never hears back. The queue row and the page's history list
@@ -690,26 +882,40 @@ of the user into the chat the LIFF app was opened from, needs the
 from a chat. It is not the OA sending anything, so it does not draw on the OA's
 message quota. Up to 5 message objects, Flex included.
 
-Two documented limits decide how far it gets us:
+**On the common (high-confidence) tier, this is the entire mechanism, end to
+end.** §7.7's `/upload/score` already has the score by the time the page
+calls this — it returns before `liff.sendMessages()` fires (§3, step 4 then
+5) — so the page sends the *actual* Flex receipt directly, as the physician,
+once. No trigger text, no webhook, no reply, no postback, no tap: everything
+below exists to solve a problem — making an *asynchronous* result free — that
+this tier simply does not have.
+
+Everything from here on is about the tier that does have that problem: the
+uncommon, low-confidence files `/upload/score` defers to
+`claim_p4p_score_fallback()` (§6.5), where the score genuinely is not known
+yet at the moment the page would otherwise announce it. Two documented limits
+decide how far `liff.sendMessages()` gets us *there*:
 
 - **A Flex or template sent this way fires no webhook.** LINE sends a webhook
   for the other message types but not for those two. So the clever chain —
   page posts a Flex as the user → bot receives it → bot replies free — does not
   exist. A **text** message does fire a webhook, and that reply token is real
   and free.
-- **The page can only send what it already knows.** This is the real
-  constraint, and it is ours, not LINE's: at the moment the page is still open,
-  the file has only been queued. The score arrives seconds later from a
-  GitHub runner. `liff.sendMessages()` can post *"📤 ส่งไฟล์ P4P เดือนมิถุนายน
-  2569"* for free; it cannot post a score that does not exist yet.
+- **The page can only send what it already knows.** For this tier
+  specifically: at the moment the page is still open, the file has only been
+  deferred to the queue — the score arrives under a minute later from a
+  GitHub runner (§7.3), not from this request. `liff.sendMessages()` can post
+  *"📤 ส่งไฟล์ P4P เดือนมิถุนายน 2569"* for free; it cannot post a score that
+  does not exist yet.
 
-So the split is: **the acknowledgement can be free, the score receipt cannot** —
-not while scoring is asynchronous.
+So the split, for the deferred tier only: **the acknowledgement can be free,
+the score receipt cannot** — not while scoring is asynchronous.
 
-#### The genuinely zero-push variant: pull instead of push
+#### The genuinely zero-push variant: pull instead of push (deferred tier only)
 
-If the quota check comes back tight, this removes the last push without giving
-up the chat receipt:
+If the quota check comes back tight, this removes the last push — for the
+deferred tier, the only one capable of pushing at all post-§7.7 (§7.4) —
+without giving up the chat receipt:
 
 1. On upload, the page calls `liff.sendMessages()` with a **text** line —
    *"ส่งไฟล์ P4P เดือนมิถุนายน 2569"*. Free, and it leaves a visible record in
@@ -730,7 +936,7 @@ A middle setting exists and is probably the right one if it comes to that:
 **pull for success, push for failure.** Successes are the common case and the
 physician has no action to take; failures are rare and demand one.
 
-#### The pull workflow, step by step
+#### The pull workflow, step by step (deferred tier only)
 
 ```
 ①  UPLOAD                                    in the LIFF page
@@ -913,7 +1119,7 @@ physician taps ส่งไฟล์
    │     ← { score, month, late }                      ~1–2 s
    ├─ page shows the score
    ├─ page → liff.sendMessages(Flex receipt)           free AND instant
-   └─ queue row enqueued with status 'archive_pending'
+   └─ queue row updated: status='done', archive_status='archive_pending'
          │
          └─ long-poll worker → extractFirstSheetBuffer → drive.uploadFile
 ```
@@ -1061,6 +1267,86 @@ per-`(email, month_key)` upload count either way — it's one column and one
 of months actually shows repeat-uploading being used to game the number rather
 than to fix a typo. A limit designed before the behavior is observed is a
 guess wearing a policy's clothes.
+
+### 7.8 `POST /upload/score` — request and response contract
+
+The one new HTTP endpoint this design adds to `main.js`. Everything else the
+browser talks to is either Supabase directly (Storage, the RPCs) or existing
+Express routes. Every earlier section that says "the page calls
+`/upload/score`" means exactly this.
+
+**Auth.** Sits behind the same gate as every physician page (§5.1): session
+cookie → refreshed access token → `is_current_user_allowlisted()`. Not a
+separate check — reuse `resolveAccessToken`/the allowlist call `servePage()`
+already makes, applied to this route too.
+
+**Request**
+
+```
+POST /upload/score
+Content-Type: application/json
+
+{ "queue_id": "3fae1c9e-…-…-…-…" }
+```
+
+Deliberately just the id. Every fact this route needs — `object_path`,
+`month_key`, `roster_index`, `email`, `full_name`, `department`,
+`line_user_id` — is already on the row `enqueue_p4p_upload()` built (§6.3).
+Accepting any of those again as request fields here would reopen exactly the
+"identity/month as a client-supplied parameter" hole §11 closes everywhere
+else — the id is the only thing the browser gets to name.
+
+**What the handler does, in order:**
+
+1. Re-fetch the row by `id` under `service_role`. 404 if missing, 409 if
+   `status` is not `'pending'` (a retry of an already-resolved request, or a
+   replayed one — either way there is nothing left to do).
+2. Confirm the row's `email` matches the caller's own JWT email. The id is an
+   opaque UUID handed back from the browser's own `enqueue` call moments
+   earlier, not a secret — this check, not the lookup, is the actual access
+   control, mirroring how `object_path` ownership is checked at enqueue time.
+3. Download the object from Storage (`service_role`).
+4. Everything from here down runs inside the guard from §11 and the
+   `Promise.race` timeout from §7.7 rec 3 — a hostile or pathological file
+   never reaches step 5 with the request still open.
+5. `resolveScore()` → the confidence gate (§7.7 rec 1) branches:
+   - **High-confidence tier:** cross-check the file's own inferred month
+     against `month_key` (§7.1's `month_mismatch` check) →
+     `saveScore()` + `logSubmission()` (service role) →
+     `UPDATE … SET status='done', score=…, score_method=…,
+     archive_status='archive_pending', finished_at=now()` → respond with the
+     score.
+   - **Low-confidence tier, or the parse timeout fired:** touch nothing —
+     leave `status='pending'` exactly as `enqueue_p4p_upload()` left it, so
+     `claim_p4p_score_fallback()` (§6.5) picks the row up on the worker's next
+     pass → respond `{ pending: true }`.
+   - **A rejection** (`month_mismatch`, or the same corruption checks
+     `processBuffer` already runs — no rows, < 3 non-null cells): `UPDATE …
+     SET status='rejected', error_type=…, error_detail=…, finished_at=now()`
+     → respond with the error. No retry follows a `rejected` row on either
+     claim function — same as an enqueue-time rejection, nothing was ever
+     eligible to begin with.
+
+**Response shapes** — the page (§5.2) branches on exactly these three:
+
+```json
+// success — show the score now (Result — instant)
+{ "score": 1842.50, "month_key": "2569_06", "is_late": false,
+  "display_date": "มิถุนายน 2569" }
+
+// deferred — poll my_p4p_uploads() (Result — deferred)
+{ "pending": true }
+
+// rejected — show the reason now, HTTP 422 (Result — rejected)
+{ "error": "month_mismatch",
+  "detail": "ไฟล์ระบุเดือน 2569_05 แต่เลือกส่งเดือน 2569_06" }
+```
+
+**What this route does not do.** It never calls Claude and never touches
+Drive — both stay exclusively in `automation/`'s hands (C2), reached only
+through the two claim functions in §6.5. A file this route can't confidently
+score is deferred, never guessed at.
+
 ---
 
 ## 8. What this path deletes
@@ -1125,10 +1411,10 @@ both paths, plus three that only an upload can produce:
 | `wrong_extension` | not `.xlsx` | picker (§5.3), re-checked by `isExcelFile()` |
 | `temp_file` | `~$…` lock file | picker, re-checked by `isOfficeLockFile()` |
 | `file_link` | a share link instead of a file | n/a — impossible on this path |
-| `zero_score` | extracted score ≤ 0 | worker, unchanged |
+| `zero_score` | extracted score ≤ 0 | `/upload/score` (§7.8) for the high-confidence tier, `claim_p4p_score_fallback()`'s worker otherwise — same check either way, just two possible call sites now |
 | `wrong_date` | month table missing | n/a — validated at enqueue |
 | `physician_not_found` | no roster match | n/a — validated at enqueue |
-| `other` | workbook unreadable / no rows / < 3 non-null cells | worker, unchanged |
+| `other` | workbook unreadable / no rows / < 3 non-null cells | `/upload/score` or the fallback worker, same split as `zero_score` above |
 | **`month_mismatch`** *(new)* | file contents say a different month than the one picked | worker, §7.1 |
 | **`not_in_roster`** *(new)* | physician absent from that month's roster | enqueue RPC, surfaced in the UI |
 | **`oversize`** *(new)* | > 5 MB | picker + bucket limit + RPC |
@@ -1152,50 +1438,95 @@ stops it.
 | Submitting to an arbitrary/ancient month | RPC validates `month_key` against the six-month window **and** `to_regclass`. |
 | Path traversal / claiming someone's object | `object_path` must start with the caller's own uid and must resolve to an existing `storage.objects` row owned by them. A crafted path fails both checks. |
 | Bucket used as file storage / data leak | No `SELECT`, `UPDATE` or `DELETE` policy for `authenticated`. Write-only, no listing, no read-back. Objects are deleted after processing (§12). |
-| Queue flooding | Partial unique index: one in-flight upload per physician per month. Plus the 5 MB bucket cap and the `attempts < 3` claim filter. |
-| **Zip bomb / hostile `.xlsx`** | Genuinely new exposure: today's workbooks arrive through Gmail, which scans them; these arrive raw. Before `ExcelJS.load()`, enumerate the zip with the JSZip dependency the pipeline already has and reject > 200 entries or > 50 MB uncompressed. **Put this in the shared loader so the email path gets it too** — it has the same weakness, just with a filter in front. |
-| Service-role key exposure | Stays in GitHub Actions, unchanged. Vercel gains nothing; the browser never sees it; the RPCs are `SECURITY DEFINER` with no key involved. |
-| PII in a new place | Scorecards contain physician names and workload. They already live in Drive and Supabase. The bucket adds a *transient* copy — minutes for a success, at most 7 days for a failure — with a stricter policy than anything else in the system. Add it to `DATA_EXPOSURE_ANALYSIS.md` when this ships. |
-| Replay of an old upload | `object_path` is unique; a completed row cannot be re-claimed (`status != 'pending'`); the object is gone. |
-| A repo-write token in the database | Avoided in the recommended design — that is exactly why §7.3 recommends the cron over `repository_dispatch`. |
+| Queue flooding | Partial unique index: one in-flight upload per physician per month (§6.2), enforced on `status`, not on `archive_status` — archiving retries don't compete for the slot. Plus the 5 MB bucket cap and the `attempts < 3` claim filter on `claim_p4p_score_fallback()` specifically (`claim_p4p_archive()` has no attempt cap by design, §6.5/§7.7 rec 2, and doesn't need one — it isn't gated by `email`/`month_key` at all). |
+| **Rapid resubmission, now that scoring is fast** | A sharper version of the row above: the high-confidence tier clears `'pending'` in ~1–2 s (§7.7), so the unique index's throttle window is now seconds, not minutes — a scripted caller with valid credentials could enqueue-and-score the same month dozens of times a minute, something the pre-§7.7 design's slower worker throttled for free. Mitigated, not open: every attempt still needs a real file `PUT` to Storage under a JWT `is_current_user_allowlisted()` already gated, which is nontrivial to script at volume without credentials that are themselves gated — but if `/admin/`'s upload-count visibility (§7.7's policy question) ever shows this happening, the fix is a per-user rate limit on `enqueue_p4p_upload()` itself, not a schema change. |
+| **Zip bomb / hostile `.xlsx`** | Genuinely new exposure: today's workbooks arrive through Gmail, which scans them; these arrive raw. Before `ExcelJS.load()`, enumerate the zip with the JSZip dependency the pipeline already has and reject > 200 entries or > 50 MB uncompressed. **Put this in the shared loader so the email path gets it too** — it has the same weakness, just with a filter in front. On the Vercel side specifically this guard is paired with a parse timeout (§7.7 rec 3, §7.8 step 4) — the size/entry guard bounds memory, the timeout bounds CPU, and only Vercel's leg needs the second one, since a GitHub Actions runner has no request holding a physician's phone open while it works. |
+| **Untrusted parsing runs inside a privileged process** | New with §7.7: a hostile workbook used to be opened only on a disposable GitHub runner; `/upload/score` (§7.8) now opens the same untrusted bytes inside the `main.js` Vercel function that holds `SUPABASE_SERVICE_ROLE_KEY` for the rest of its lifetime. The zip-guard and parse timeout above are the actual mitigation — this row exists so a security reviewer of just this table sees the exposure §7.7's own narrative already argues for, rather than needing to have read that section first. |
+| Service-role key exposure | Stays in GitHub Actions and (as of §7.7) in Vercel's existing env — `/upload/score` reuses `SUPABASE_SERVICE_ROLE_KEY`, which `/admin/api/*` already holds there; nothing new is provisioned. The browser never sees it; the browser-facing RPCs stay `SECURITY DEFINER` with no key involved. |
+| PII in a new place | Scorecards contain physician names and workload. They already live in Drive and Supabase. The bucket adds a *transient* copy, deleted once `archive_status = 'archived'` (§12) — ordinarily minutes, since scoring (which triggers `archive_pending`) is now itself fast. A stuck archive retries for up to 30 days before escalating to a human (§6.5) rather than deleting early or retaining silently forever — a deliberate middle point between "delete on a timer regardless of outcome" and "keep it indefinitely." Add it to `DATA_EXPOSURE_ANALYSIS.md` when this ships. |
+| Replay of an old upload | `object_path` is unique. On the scoring track, a `status` past `'pending'` cannot be re-claimed by `claim_p4p_score_fallback()`. On the archive track, `archive_status = 'archived'` is excluded from `claim_p4p_archive()`'s predicate the same way — the object is gone by then regardless, so there is nothing left to replay against. |
+| A repo-write token in the database | Avoided in the recommended design — that is exactly why §7.3 recommends the long-polling drain over `repository_dispatch`. |
 
 ---
 
 ## 12. Failure modes
 
-**Queue state machine.**
-`pending → processing → done | failed | rejected`. `rejected` is a validation
-refusal (never retried); `failed` is an execution failure after `attempts = 3`.
+**Two state machines on one row, because §7.7 split scoring from archiving —
+§6.2 has both columns, §6.5 has both claim functions.**
 
-**At-least-once, not exactly-once.** A runner that dies mid-`processBuffer`
-leaves a row `processing` forever. A reaper in the same script releases rows
-`processing` for > 15 minutes back to `pending`. Because the whole pipeline is
-idempotent per `(physician, month)` — `saveScore` overwrites, `uploadFile`
-replaces by name, `logSubmission` ignores duplicates — a double-processed file
-produces exactly the same end state. That property is what makes at-least-once
-acceptable here, and it is worth not breaking.
+*Scoring* (`status`): `pending → processing → done | failed | rejected`.
+`rejected` is a validation refusal, at enqueue time or inside `/upload/score`
+(§7.8) — never retried, on either claim function. `failed` is
+`claim_p4p_score_fallback()` giving up after `attempts = 3` — a track that
+only runs for the low-confidence tier §7.7 defers. The common,
+high-confidence tier goes `pending → done` directly inside `/upload/score`'s
+own request; there is no `processing` state on that leg, because there is
+nothing to crash mid-way through — one synchronous call either finishes or it
+doesn't, and a timeout (§7.7 rec 3) demotes it to the deferred case rather
+than leaving it half-done.
 
-**Poison file.** Three attempts, then `failed`, then a Telegram alert to the
-admin (reusing `formatErrorMessage`) and a LINE message to the physician. The
-object is kept 7 days for diagnosis, then removed by a cleanup step in the same
-workflow. A file that kills the worker never blocks the queue: the claim filter
-is `attempts < 3`.
+*Archiving* (`archive_status`): `NULL → archive_pending → archived`, entered
+the moment `status` becomes `done`, by whichever leg got it there. **No
+failure value, on purpose** (§7.7 rec 2): once the score is saved the
+physician has nothing left to fix, so this track backs off (§6.5) rather than
+ever giving up.
 
-**Concurrent drains.** `FOR UPDATE SKIP LOCKED` (§6.5) plus a `concurrency:`
-group. Two runners cannot claim the same row.
+**At-least-once, not exactly-once, on both tracks — for different reasons.**
+On the scoring-fallback track, a runner that dies mid-`processBuffer` leaves a
+row `processing` forever; a reaper in the same script releases rows
+`processing` for > 15 minutes back to `pending`. On the archive track there is
+no analogous stuck state to reap: claiming only ever increments
+`archive_attempts` and stamps `archive_last_attempt_at` (§6.5) — it never
+marks a row in a way that needs undoing, so a dead runner simply leaves the
+next backoff window to expire on schedule. Both tracks share the reason this
+is safe at all: the pipeline is idempotent per `(physician, month)` —
+`saveScore` overwrites, `uploadFile` replaces by name, `logSubmission` ignores
+duplicates — so a double-processed file produces exactly the same end state
+either way.
 
-**Drive or Claude down.** Existing behaviour: `processBuffer` returns without
-saving a score. Here it also leaves the row for retry — strictly better than
-the email path, where a failed run depends on the message still being unread.
+**Poison file (scoring-fallback track only).** Three attempts, then `failed`,
+then a Telegram alert to the admin (reusing `formatErrorMessage`) and a LINE
+push to the physician (§7.2) — the one row on this whole design where success
+*and* failure both need a push, since nothing else will ever notify this
+physician about this file. The object is kept 7 days for diagnosis, then
+removed by a cleanup step in the same workflow. A file that kills the worker
+never blocks the queue: the claim filter is `attempts < 3`.
+
+**Poison folder (archive track).** A permanently-missing Drive month folder
+retries forever by design — no attempt cap exists to trip. The age-based
+alert (§7.7 rec 2: an hour, escalated at 30 days per §6.5) is what turns
+"will retry forever" into "someone eventually looked," not a claim-side
+cutoff — and it never touches `status`, so the physician's receipt is
+unaffected regardless of how long archiving takes.
+
+**Concurrent drains.** `FOR UPDATE SKIP LOCKED` on both claim functions
+(§6.5), plus a `concurrency:` group on the workflow. Two runners cannot claim
+the same row on either track.
+
+**Drive or Claude down.**
+Scoring-fallback track: existing behaviour — `processBuffer` returns without
+saving a score, and the row stays `pending` for the next claim.
+Archive track: Drive down simply delays archiving. The score is already saved
+and the physician already has their receipt; this is invisible to them by
+design (§7.7 rec 2), which is exactly the point of separating the two tracks.
 
 **Supabase Storage down at upload time.** The file never leaves the phone and
 the physician sees an error immediately with a retry button. No half-state: the
 queue row is only created *after* the object exists.
 
-**The workflow is disabled or broken.** Rows accumulate as `pending` and
-nothing is lost; the page shows "รอตรวจ" honestly. Worth an alert: a
-`pending` row older than 2 hours should fire the same Telegram path the other
-triggers use.
+**The workflow is disabled or broken.** Rows accumulate — `pending` on the
+scoring-fallback track, `archive_pending` on the archive track — and nothing
+is lost. Worth an alert on both, not just one: a `pending` row older than 2
+hours, or an `archive_pending` row older than a day, should fire the same
+Telegram path the other triggers use.
+
+**When does the storage object actually get deleted?** Only once
+`archive_status` reaches `'archived'` — never merely on `status = 'done'`,
+since the archive worker still needs the bytes after scoring finishes. A row
+stuck in `archive_pending` keeps its object for as long as retries continue
+(§6.5's 30-day escalation, not a deletion). Worth stating plainly here because
+§11's "objects are deleted after processing" reads as "after scoring" if you
+don't already know the two tracks are separate.
 
 ---
 
@@ -1222,10 +1553,11 @@ synchronous call, or doesn't ship at all.
    `SUPABASE_MIGRATIONS.md`) — including the `archive_pending` lifecycle
    from §7.7's recommendation on drawback 2, not just the original four
    states.
-3. Check the LINE Official Account's message-quota plan against the push
-   budget in §7.4, which settles open question 7 (push vs. pull). No new
-   secret either way — `LINE_ACCESS_TOKEN` / `LINE_TOKEN` are already GitHub
-   Actions secrets.
+3. Check the LINE Official Account's message-quota plan against the worst-case
+   budget in §7.4 — a sanity floor now, not a blocking decision, since §7.7
+   means only deferred-tier terminal failures ever push (open question 7). No
+   new secret either way — `LINE_ACCESS_TOKEN` / `LINE_TOKEN` are already
+   GitHub Actions secrets.
 
 **Phase 1 — the synchronous score path, testable with no UI.**
 This is now the core of the feature, not the worker — §7.7 moved it here.
@@ -1236,13 +1568,18 @@ service-role-authenticated request before any page code exists. This is also
 where the vendored-copy-plus-parity-test from §7.7's recommendation 5 gets
 built, alongside the `automation/` copy it must never drift from.
 
-**Phase 2 — the archive worker and the free-notification loop.**
-The long-polling drain (§7.3) now claims `archive_pending` rows only —
-`extractFirstSheetBuffer` → `drive.uploadFile`, retried indefinitely, never
-terminal, per §7.7's recommendation 2. Alongside it: the `sendMessages` →
-free-reply-with-postback → free-reply-with-receipt chain from §7.5, plus its
-rich-menu-postback fallback, built and tested regardless of which the
-`/preflight` probe from Phase 0 recommends.
+**Phase 2 — the worker and the deferred-tier notification chain.**
+The long-polling drain (§7.3) tries `claim_p4p_archive()` first on every tick
+— `extractFirstSheetBuffer` → `drive.uploadFile`, retried indefinitely, never
+terminal, per §7.7's recommendation 2 — and falls through to
+`claim_p4p_score_fallback()` (full `processBuffer()`, three attempts) only
+when that finds nothing (§6.5/§7.2). Alongside it, for the deferred tier
+only: the `sendMessages`(trigger text) → free-reply-with-postback →
+free-reply-with-receipt-or-failure chain from §7.5, plus its rich-menu-postback
+fallback, built and tested regardless of which the `/preflight` probe from
+Phase 0 recommends. The common tier's notification (§7.5: the page sends the
+real receipt directly, once, as soon as Phase 1's `/upload/score` returns)
+needs no chain at all and ships with Phase 1, not here.
 
 **Phase 3 — the page.** `upload/index.html`, `upload/app.js`, the `gatedPages`
 entry, the static mount, `vercel.json`. Reachable by URL, not linked from
@@ -1271,12 +1608,25 @@ reaper's retry/backoff arithmetic; the parity test between the root and
 
 ## 14. Rejected alternatives
 
-**Process the file inside the Vercel request.** Needs `ANTHROPIC_API_KEY`, the
-Google refresh token and `P4P_FOLDER_ID` copied into Vercel, plus `exceljs`,
-`jszip`, `googleapis` and `@anthropic-ai/sdk` in the **root** `package.json` —
-which is what production builds from (C8). It also has to finish inside the
-function's execution budget while Claude and Drive take their time (C3).
-Rejected on all three counts.
+**Process the *full pipeline* inside the Vercel request.** Needs
+`ANTHROPIC_API_KEY`, the Google refresh token and `P4P_FOLDER_ID` copied into
+Vercel, plus `exceljs`, `jszip`, `googleapis` and `@anthropic-ai/sdk` in the
+**root** `package.json` — which is what production builds from (C8). It also
+has to finish inside the function's execution budget while Claude and Drive
+take their time (C3). Rejected on all three counts.
+
+**This is not what §7.7 later adopts, and it's worth being explicit about
+why not.** §7.7 moves only the JS-only, no-network scoring arithmetic into
+Vercel — for a confidence-gated subset of files, with a hard timeout — and
+Claude and Drive both stay exactly where this section leaves them, reached
+only through `automation/`'s two claim functions (§6.5). None of the three
+objections above apply to that narrower slice: no Anthropic or Google
+credential moves, no `googleapis`/`@anthropic-ai/sdk` enters the root build
+(only `exceljs`, conceded and gated in §7.7 rec 4), and the execution budget
+holds because there is no Claude round-trip or Drive upload inside the
+request — which is exactly why §7.7 rec 3 still wraps even that narrower
+slice in its own timeout rather than trusting the absence of a network call
+to bound it.
 
 **Send the file to the bot in chat instead of a rich-menu page.** LINE supports
 file messages, and the webhook could fetch the bytes from
@@ -1319,16 +1669,27 @@ repo-scoped token in the browser. Never.
 4. **Notification fallback.** For a physician with no `line_user_id`, is an
    email reply the right fallback (§7.4), or should the page simply be the
    record and no message go out?
-5. **Retention.** 7 days for failed uploads, immediate deletion on success —
-   or keep every uploaded object for a month as an audit trail? The security
-   posture in §11 assumes the former.
+5. **Retention — substantially settled, one number left to pick.** §6.5/§12
+   now answer the shape of it: delete on `archived_at`, not on `status='done'`
+   or on a fixed 7-day timer; a stuck archive backs off for up to 30 days
+   before escalating to a human, and retries (not the object) continue past
+   that point until someone decides otherwise. What's left is just the
+   number — is 30 days the right point to escalate, or should it be sooner,
+   given the object is a physician's scorecard sitting in a bucket the whole
+   time?
 6. **The long-polling drain (§7.3)** gets pickup to ~10 seconds with no new
    token, at the cost of a job that idles waiting for work. Comfortable with
    that reading of GitHub's Actions policy, or fall back to a `*/5` cron and
    a 3–8 minute wait?
-7. **Push or pull for the result?** The unprompted push costs quota; the
-   pull variant in §7.5 costs nothing but needs a tap. Answer depends
-   entirely on what the OA's plan check in §7.4 comes back with.
+7. **Push or pull for the result — mostly moot now, worth confirming once.**
+   §7.7 means only the low-confidence tier's *terminal failures* ever push at
+   all (§7.2/§7.4/§12) — everything else is either the free instant receipt
+   or a free pull. Realistic volume is close to the poison-file rate, not the
+   ~200/physician/month this question originally asked about. Still worth the
+   one-time plan check in §7.4 as a sanity floor — mainly to catch the case
+   where the confidence gate is defeating itself and most files are landing
+   in the deferred tier, which is also exactly what Phase −1's log audit is
+   for.
 
 ---
 
@@ -1342,13 +1703,14 @@ repo-scoped token in the browser. Never.
 | `assets/shared.js` | month window / deadline / file-validation helpers (shared with the eventual `web/` port) |
 | `package.json` (root) | **new dependency** — `exceljs`, lazy-`require`d only inside the upload handler (§7.7 rec 4) |
 | `lib/p4p-score.js` (root, **new**) | vendored copy of `resolveScore`/`extractScoreFromRows` + the zip-guard/parse-timeout wrapper — kept honest by the parity test below (§7.7 rec 5) |
-| `main.js` | `gatedPages` += `"upload"`; static mount; **new** `POST /upload/score` route (parse → confidence gate → `saveScore`/`logSubmission` via service role, §7.7); `/line` handler gains the trigger-text / postback branch (§7.5) |
+| `main.js` | `gatedPages` += `"upload"`; static mount; **new** `POST /upload/score` route per the §7.8 contract; `/line` handler gains the deferred-tier trigger-text / postback branch (§7.5) |
 | `vercel.json` | `includeFiles` += `"upload/**"` |
-| `scripts/line-upload-2026-09.sql` | **new** — bucket, policies, `p4p_upload_queue` (with the `archive_pending` lifecycle, not the original four states — §7.7 rec 2), the RPCs |
+| `scripts/line-upload-2026-09.sql` | **written and execution-tested against a real (stubbed) Postgres 16** — bucket, policies, `p4p_upload_queue` (both `status` and `archive_status` lifecycles, §6.2), `enqueue_p4p_upload`, `my_p4p_identity`, `my_p4p_uploads`, `claim_p4p_score_fallback`, `claim_p4p_archive` (§6.3–6.5). Not yet run against a real Supabase project — see the file's own header. |
 | `automation/index.js` | `processBuffer()` gains `source` / `identity` / `monthKey` / `notify`; email path passes `null` and is unchanged |
-| `automation/upload-queue.js` | **new** — claims `archive_pending` rows only; indefinite backoff retry, never terminal (§7.7 rec 2) |
+| `automation/upload-queue.js` | **new** — thin wrapper over `claim_p4p_archive()` and `claim_p4p_score_fallback()` (§6.5); the archive claim retries indefinitely on backoff, the fallback claim terminates at 3 attempts (§7.7 rec 2) |
 | `automation/line-push.js` | **new** — LINE push transport for the failure case only; success is a free reply (§7.5), not a push |
-| `automation/templates/line-receipt.js` | **new** — the success/failure Flex bubbles (§7.4), alongside `reply.js` / `error-reply.js` |
+| `lib/line-receipt-flex.js` (root, **new**) | The success-receipt builder (§7.4's visual spec), written with no `window`/`document` reference so it loads two ways from one file: `require()`d by `main.js` (same root tree, no isolation boundary — needed for the deferred tier's postback-triggered reply, §7.5 step ④) and `<script src="/lib/line-receipt-flex.js">`'d by `upload/index.html` (needed for the common tier's own `liff.sendMessages()` call, §7.5). Root and browser can share this way because nothing isolates them from each other (unlike `automation/`, C8) — one file, one visual spec, two runtimes. |
+| `automation/templates/line-receipt.js` | **new**, and **not** the same file as the row above — `automation/`'s C8 isolation means it cannot `require()` anything under root `lib/` regardless of module format. Builds the one thing this runtime ever sends: the failure bubble pushed for a terminal fallback-tier failure (§7.2/§12). A small, presentation-only duplication of the success bubble's *shape*, accepted rather than solved — lower-stakes than `resolveScore()`'s duplication (§7.7 rec 5), which is why it doesn't get the same parity-test treatment. |
 | `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.6); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **new** — long-polling archive drain (§7.3), plus the `archive_pending` age alert (§7.7 rec 2) |
 | `.github/workflows/upload-drain.yml` | **new** — hourly relay + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
