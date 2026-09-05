@@ -1,0 +1,71 @@
+name: "! drain LINE uploads"
+
+on:
+  schedule:
+    # Hourly RELAY, not a polling interval: each run long-polls the queue for
+    # ~60 minutes (see automation/scripts/drain-uploads.mjs), so one run hands
+    # over to the next and the queue is never unattended for more than a few
+    # seconds. :05 keeps it clear of the top-of-hour crowd.
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+# Never two drains at once. Both claim functions take FOR UPDATE SKIP LOCKED
+# so an overlap would be safe rather than corrupting — but a second runner
+# would spend Claude calls racing the first for the same handful of rows.
+concurrency:
+  group: upload-drain
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    # Slightly longer than DRAIN_MINUTES so the loop exits on its own clock
+    # and the job never has to be killed mid-upload.
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: automation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: automation/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Drain the upload queue
+        env:
+          # Claude + Drive: the two things /upload/score deliberately does not
+          # do inside a Vercel request, which is why this job exists at all.
+          GOOGLE_CLIENT_ID      : ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET  : ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN  : ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          ANTHROPIC_API_KEY     : ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL    : ${{ secrets.ANTHROPIC_BASE_URL }}
+          CLAUDE_MODEL          : ${{ secrets.CLAUDE_MODEL }}
+          P4P_FOLDER_ID         : ${{ secrets.P4P_FOLDER_ID }}
+          # SUPABASE_KEY is the service-role key here: the claim functions are
+          # granted to service_role only, and the bucket has no read policy
+          # for anyone else.
+          SUPABASE_URL          : ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY          : ${{ secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN    : ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID      : ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Push transport for terminal failures only (§7.2). No new secret:
+          # send-carousel.yml already resolves this same pair.
+          LINE_ACCESS_TOKEN     : ${{ secrets.LINE_ACCESS_TOKEN }}
+          LINE_TOKEN            : ${{ secrets.LINE_TOKEN }}
+          # Turns the failure bubble's button into a real retry link.
+          UPLOAD_LIFF_ID        : ${{ secrets.UPLOAD_LIFF_ID }}
+          DRAIN_MINUTES         : "60"
+        run: node scripts/drain-uploads.mjs

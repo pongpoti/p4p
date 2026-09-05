@@ -59,6 +59,12 @@ const SUPABASE_ANON = "sb_publishable_TcCSpznim4fi0Y7E_zuAsg_op19VZQ-"
 const RT_COOKIE = "p4p_rt"
 const COOKIE_BASE = "HttpOnly; Secure; SameSite=Lax; Path=/"
 const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
+// The LIFF app whose registered endpoint is /upload/ (the rich menu's fourth
+// block opens it). Injected into the page the same way the access token is,
+// so the id lives in one place — the env var scripts/setup-richmenu.mjs
+// already requires — rather than being hardcoded in two.
+const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
+const UPLOAD_LIFF_ID = process.env.UPLOAD_LIFF_ID || ""
 
 // Same-origin <script src> gets a content hash appended at boot, so a deploy
 // that changes page logic actually reaches LINE's in-app WebView.
@@ -96,7 +102,7 @@ function stampAssets(html, pageDir) {
 
 // Gated pages cached as templates; the server fills the token placeholder per
 // request. Files never change at runtime.
-const gatedPages = ["status", "list", "ranking"]
+const gatedPages = ["status", "list", "ranking", "upload"]
 const pageTemplates = {}
 for (const p of gatedPages) {
   pageTemplates[p] = stampAssets(fs.readFileSync(path.join(__dirname, p, "index.html"), "utf8"), p)
@@ -366,7 +372,11 @@ function servePage(name) {
     // script URL that was current when it was stored, which is how a stale
     // ranking/app.js survives a deploy (see stampAssets above).
     res.setHeader("Cache-Control", "no-store")
-    res.send(pageTemplates[name].replace(PAGE_TOKEN_PLACEHOLDER, at))
+    res.send(
+      pageTemplates[name]
+        .replace(PAGE_TOKEN_PLACEHOLDER, at)
+        .replace(UPLOAD_LIFF_PLACEHOLDER, UPLOAD_LIFF_ID)
+    )
   }
 }
 
@@ -709,12 +719,308 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req, r
   }
 })
 
+// ── /upload/ — submit a scorecard from the LINE rich menu ───────────────────
+// See UPLOAD_VIA_LINE_DESIGN.md. The page itself is served by servePage()
+// like every other gated page (it is in `gatedPages` above); the file bytes
+// never pass through here — the browser PUTs them straight to Supabase
+// Storage and calls enqueue_p4p_upload(). This one route is what makes the
+// common case *instant*: it scores a confidence-gated subset of files
+// synchronously (§7.7/§7.8) so the physician sees a number before the page
+// closes, instead of waiting on a GitHub runner.
+//
+// It never calls Claude and never touches Drive — both stay in automation/'s
+// hands, reached through the two claim functions. A file this route cannot
+// confidently score is left `pending` for the worker, never guessed at.
+const UPLOAD_BUCKET = "p4p-uploads"
+// Same env var scripts/setup-richmenu.mjs requires — the LIFF app whose
+// endpoint is /upload/. Only used to build a "ส่งไฟล์อีกครั้ง" button; a
+// missing value degrades that button to "ติดต่อผู้ดูแล", never a crash.
+const UPLOAD_LIFF_URL = UPLOAD_LIFF_ID ? "https://liff.line.me/" + UPLOAD_LIFF_ID : ""
+
+const receipt = require("./lib/line-receipt-flex")
+
+function serviceHeaders(extra) {
+  return Object.assign({
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+  }, extra || {})
+}
+
+// The 10th of the month AFTER month_key, 23:59:59 Asia/Bangkok — the same
+// instant web/lib/months.ts's deadlineISO() and enqueue_p4p_upload()'s own
+// SQL compute. Punctuality is measured against `received_at` (when the
+// physician handed the file over), never against processing time (§9).
+function monthDeadlineMs(monthKey) {
+  const [beYear, month] = String(monthKey || "").split("_").map(Number)
+  if (!beYear || !month) return NaN
+  // month is 1-based, so passing it as a 0-based index already means "the
+  // following month"; December rolls into the next year on its own.
+  return Date.UTC(beYear - 543, month, 10, 16, 59, 59)
+}
+function isLateUpload(monthKey, receivedAt) {
+  const deadline = monthDeadlineMs(monthKey)
+  const received = new Date(receivedAt).getTime()
+  if (isNaN(deadline) || isNaN(received)) return false
+  return received > deadline
+}
+
+async function fetchQueueRow(filter) {
+  const r = await axios.get(
+    SUPABASE_URL + "/rest/v1/p4p_upload_queue?" + filter + "&select=*",
+    { headers: serviceHeaders(), timeout: 8000 }
+  )
+  return (r.data && r.data[0]) || null
+}
+
+// `extraFilter` exists for one reason: the worker and this route can both be
+// looking at the same row. The claim query gives the browser a head start
+// (§6.5's race guard), but a slow download or parse can outlast it, and by
+// then claim_p4p_score_fallback() may have moved the row to 'processing'.
+// Adding `&status=eq.pending` makes every write here a no-op in that case
+// instead of flipping a row the worker is actively holding.
+async function patchQueueRow(id, patch, extraFilter) {
+  const r = await axios.patch(
+    SUPABASE_URL + "/rest/v1/p4p_upload_queue?id=eq." + encodeURIComponent(id) + (extraFilter || ""),
+    patch,
+    {
+      headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }),
+      timeout: 8000,
+    }
+  )
+  return Array.isArray(r.data) ? r.data.length : 0
+}
+
+app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
+  // Deliberately just the id: every other fact this route needs is already
+  // on the row enqueue_p4p_upload() built from the caller's own JWT. Taking
+  // identity or month as a parameter here would reopen the hole every other
+  // layer closes.
+  const queueId = String((req.body && req.body.queue_id) || "")
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(queueId)) {
+    return res.status(400).json({ error: "bad_request", detail: "queue_id must be a uuid" })
+  }
+
+  // Same gate as every physician page, but NOT servePage(): that answers a
+  // failed check with a 302 to /verify/, which a fetch() follows
+  // transparently — the page would get HTML back with a 200 and throw on
+  // res.json(). A 401 with a JSON body lets the page decide.
+  const { at, reason } = await resolveAccessToken(req, res)
+  if (!at) return res.status(401).json({ error: "no_session", reason })
+  if (!(await isCurrentUserAllowlisted(at))) {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: "blocked" })
+  }
+  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+
+  let row
+  try {
+    row = await fetchQueueRow("id=eq." + encodeURIComponent(queueId))
+  } catch (e) {
+    console.error("[upload] queue lookup failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    return res.status(500).json({ error: "lookup_failed" })
+  }
+  if (!row) return res.status(404).json({ error: "not_found" })
+  // The id is an opaque uuid the browser just received from its own enqueue
+  // call, not a secret — THIS check is the access control, mirroring how
+  // object_path ownership is checked at enqueue time.
+  if (String(row.email).toLowerCase() !== callerEmail) {
+    return res.status(403).json({ error: "forbidden" })
+  }
+  // A retry of an already-resolved request, or one the worker got to first.
+  if (row.status !== "pending") return res.status(409).json({ error: "already_processed", status: row.status })
+
+  const monthKey = row.month_key
+  const monthNum = parseInt(String(monthKey).slice(5), 10)
+  const beYear = parseInt(String(monthKey).slice(0, 4), 10)
+
+  // Reject (terminal, no retry on either claim function) — same shape as an
+  // enqueue-time refusal: nothing here was ever eligible.
+  async function reject(errorType, detail, status) {
+    try {
+      await patchQueueRow(row.id, {
+        status: "rejected",
+        error_type: errorType,
+        error_detail: detail || null,
+        finished_at: new Date().toISOString(),
+      }, "&status=eq.pending")
+    } catch (e) {
+      console.error("[upload] reject patch failed:", e.message)
+    }
+    return res.status(status || 422).json({ error: errorType, detail: detail || "" })
+  }
+
+  // Defer to claim_p4p_score_fallback(): stamp the losing tier's method (it
+  // is useful data in its own right, and it is what makes the row claimable
+  // immediately instead of waiting out the claim query's 30s race guard) and
+  // leave status='pending' exactly as enqueue left it.
+  async function defer(method) {
+    try {
+      await patchQueueRow(row.id, { score_method: method })
+    } catch (e) {
+      console.error("[upload] defer patch failed:", e.message)
+    }
+    return res.json({ pending: true })
+  }
+
+  let buffer
+  try {
+    const objectUrl = SUPABASE_URL + "/storage/v1/object/" + UPLOAD_BUCKET + "/" +
+      String(row.object_path).split("/").map(encodeURIComponent).join("/")
+    const r = await axios.get(objectUrl, { headers: serviceHeaders(), responseType: "arraybuffer", timeout: 15000 })
+    buffer = Buffer.from(r.data)
+  } catch (e) {
+    // Transient: leave the row pending, the worker will pick it up. The
+    // physician sees "กำลังตรวจสอบ" rather than an error they can't act on.
+    console.error("[upload] object download failed:", e.response ? e.response.status : e.message)
+    return res.json({ pending: true })
+  }
+
+  // Everything from here runs behind the zip-entry/size guard and the parse
+  // timeout (§7.7 rec 3, §11): the guard bounds memory, the timeout bounds
+  // CPU, and a file that trips either is deferred or rejected rather than
+  // left holding the request open against Vercel's execution limit.
+  const score = require("./lib/p4p-score")
+  let rows
+  try {
+    ({ rows } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, timeoutMs: 7000 }))
+  } catch (e) {
+    if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
+    console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
+    return reject("other", "ไม่สามารถอ่านไฟล์ได้: " + e.message)
+  }
+
+  // The same two corruption checks processBuffer() already runs.
+  if (!rows || rows.length === 0) {
+    return reject("other", "ไฟล์ไม่มีข้อมูล (0 แถว)")
+  }
+  const nonNullCount = rows.reduce((n, r) => n + Object.values(r).filter((v) => v !== null).length, 0)
+  if (nonNullCount < 3) {
+    return reject("other", "ไฟล์มีข้อมูลไม่ครบ (" + nonNullCount + " ช่อง)")
+  }
+
+  // Month cross-check — the one mistake this path can still make is a file
+  // whose contents say July uploaded under June. Only a month or year that
+  // actually resolved counts: an unstated month is not a mismatch.
+  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "")
+  const inferredYear = score.resolveBeYear(row.filename || "", "", "") || score.resolveBeYearFromRows(rows)
+  if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
+    const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")
+    return reject("month_mismatch", "ไฟล์ระบุเดือน " + inferredKey + " แต่เลือกส่งเดือน " + monthKey)
+  }
+
+  const { score: value, method } = score.resolveScore(rows)
+
+  // The confidence gate (§7.7 rec 1). Two conditions, not one: a confident
+  // score is necessary but not sufficient — saveScore() throws outright on a
+  // null roster index, and resolving that is matchName()'s job, in the
+  // worker, by design.
+  if (!score.isHighConfidence(method) || row.roster_index === null || row.roster_index === undefined) {
+    return defer(method)
+  }
+  if (!(value > 0)) {
+    return reject("zero_score", "ไม่พบคะแนนรวมในไฟล์")
+  }
+
+  // The roster row is the canonical spelling of the name and department —
+  // p4p_submissions is keyed on it, and so is the Drive filename the worker
+  // will use later.
+  let rosterRow = null
+  try {
+    const r = await axios.get(
+      SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) +
+        "?index=eq." + encodeURIComponent(row.roster_index) + "&select=index,prefix,firstname,lastname,department",
+      { headers: serviceHeaders(), timeout: 8000 }
+    )
+    rosterRow = (r.data && r.data[0]) || null
+  } catch (e) {
+    console.error("[upload] roster lookup failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+  }
+  if (!rosterRow) return defer(method)
+
+  const matchedName = [rosterRow.firstname, rosterRow.lastname].filter(Boolean).join(" ").trim()
+  const department = rosterRow.department || row.department || ""
+  const submittedAt = new Date(row.received_at).toISOString()
+
+  try {
+    // saveScore(): the score column on the month's roster row. `Prefer:
+    // return=representation` so a filter that matched nothing surfaces here
+    // rather than being reported to the physician as saved.
+    const saved = await axios.patch(
+      SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(row.roster_index),
+      { score: value, submitted_at: submittedAt },
+      { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
+    )
+    if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+  } catch (e) {
+    // Fall back to the queue rather than telling the physician a number that
+    // was not written.
+    console.error("[upload] saveScore failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    return defer(method)
+  }
+
+  try {
+    // logSubmission(): first submission's timestamp wins (ignore-duplicates),
+    // so fixing a file never costs punctuality (§9).
+    await axios.post(
+      SUPABASE_URL + "/rest/v1/p4p_submissions?on_conflict=physician_name,work_month",
+      {
+        physician_name: matchedName,
+        department: department || null,
+        work_month: monthKey,
+        submitted_at: submittedAt,
+        thread_id: null,
+        filename: row.filename || null,
+      },
+      { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "resolution=ignore-duplicates,return=minimal" }), timeout: 8000 }
+    )
+  } catch (e) {
+    // Non-fatal, exactly as on the email path: the score is saved either way.
+    console.warn("[upload] logSubmission skipped:", e.response ? JSON.stringify(e.response.data) : e.message)
+  }
+
+  try {
+    const updated = await patchQueueRow(row.id, {
+      status: "done",
+      score: value,
+      score_method: method,
+      finished_at: new Date().toISOString(),
+      archive_status: "archive_pending",
+    }, "&status=eq.pending")
+    if (updated === 0) {
+      // The worker claimed it while this request was reading the file. The
+      // score above is already written and is the same file's number either
+      // way; the worker's own pass will close the row.
+      console.warn("[upload] queue row " + row.id + " was claimed by the worker mid-request")
+    }
+  } catch (e) {
+    // The score is already in the roster table; losing this write means the
+    // worker re-scores the row later and writes the same number again.
+    console.error("[upload] queue completion patch failed:", e.message)
+  }
+
+  const displayName = [rosterRow.prefix, matchedName].filter(Boolean).join(" ").trim()
+  res.json({
+    score: Number(value.toFixed(2)),
+    month_key: monthKey,
+    is_late: isLateUpload(monthKey, row.received_at),
+    display_date: receipt.displayMonth(monthKey),
+    display_name: displayName,
+    department,
+    received_at: submittedAt,
+  })
+})
+
 app.use("/status", express.static("status"))
 app.use("/list", express.static("list"))
 app.use("/ranking", express.static("ranking"))
 app.use("/verify", express.static("verify"))
 app.use("/admin", express.static("admin"))
 app.use("/assets", express.static("assets"))
+app.use("/upload", express.static("upload"))
+// /lib holds the one browser-loadable module that main.js also require()s
+// (lib/line-receipt-flex.js — see its header). Nothing here is gated: it is
+// the same Flex-building code the bot itself sends, with no data in it.
+app.use("/lib", express.static("lib"))
 
 app.post("/line", line.middleware(config), (req, res) => {
   Promise
@@ -726,7 +1032,62 @@ app.post("/line", line.middleware(config), (req, res) => {
     })
 })
 
+// The chat-side answer for one queue row, whatever state it is in (§7.5
+// step ④). A missing row is answered too — "nothing here yet" is a real
+// answer to a tap, and silence looks like a broken button.
+function buildUploadResultMessage(row) {
+  if (!row) return { type: "text", text: "ยังไม่พบไฟล์ที่ส่งเข้ามาในระบบ" }
+  if (row.status === "done") {
+    return receipt.buildScoreReceipt({
+      displayName: row.full_name,
+      department: row.department,
+      monthKey: row.month_key,
+      score: row.score,
+      receivedAt: row.received_at,
+      isLate: isLateUpload(row.month_key, row.received_at),
+    })
+  }
+  if (row.status === "failed" || row.status === "rejected") {
+    return receipt.buildFailureBubble({
+      monthKey: row.month_key,
+      errorType: row.error_type || "other",
+      detail: row.error_detail || "",
+      uploadLiffUrl: UPLOAD_LIFF_URL,
+    })
+  }
+  return receipt.buildPendingBubble({ monthKey: row.month_key, queueId: row.id, ack: false })
+}
+
 const handleEvent = async (event) => {
+  // ── Upload result, pulled rather than pushed (§7.5) ──────────────────────
+  // The bot cannot put a button in the chat without spending a push, so the
+  // upload page makes the physician "say" a trigger line (free, sent as
+  // them), the bot answers that webhook with an ACK carrying this postback
+  // button (free), and the physician taps whenever they like — which gives
+  // the bot a FRESH reply token to answer with the real receipt (free). Total
+  // OA quota: zero.
+  if (event.type === "postback") {
+    const data = String((event.postback && event.postback.data) || "")
+    if (!data.startsWith("p4p_result=")) return Promise.resolve(null)
+    const queueId = decodeURIComponent(data.slice("p4p_result=".length))
+    let row = null
+    if (/^[0-9a-f-]{36}$/i.test(queueId)) {
+      try {
+        row = await fetchQueueRow("id=eq." + encodeURIComponent(queueId))
+      } catch (e) {
+        console.error("[upload] postback lookup failed:", e.message)
+      }
+    }
+    // Defence in depth: this postback came from a button the bot itself sent
+    // over a signature-verified webhook, so the id is not attacker-chosen —
+    // but the row names its owner, so check it rather than assume it.
+    if (row && row.line_user_id !== event.source.userId) row = null
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildUploadResultMessage(row)],
+    })
+  }
+
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null)
   }
@@ -771,6 +1132,30 @@ const handleEvent = async (event) => {
     return client.replyMessage({
       "replyToken": event.replyToken,
       "messages": [{ "type": "text", "text": "ลิงก์เข้าสู่ระบบแอดมิน (ใช้ได้ 10 นาที):\n" + url }]
+    })
+  }
+  // §7.5 step ②: the upload page sends this line as the physician, which is
+  // what earns the bot a free reply. THE TEXT IS A TRIGGER, NOT DATA — the
+  // row is resolved from source.userId, never from what the message says. A
+  // physician who types it by hand gets the same answer, so this doubles as
+  // a free status command.
+  if (message.startsWith("ส่งไฟล์ p4p") || message === "ดูผลคะแนน" || message === "ผลคะแนน") {
+    let row = null
+    try {
+      row = await fetchQueueRow(
+        "line_user_id=eq." + encodeURIComponent(event.source.userId) + "&order=received_at.desc&limit=1"
+      )
+    } catch (e) {
+      console.error("[upload] trigger lookup failed:", e.message)
+    }
+    const stillWorking = row && (row.status === "pending" || row.status === "processing")
+    return client.replyMessage({
+      "replyToken": event.replyToken,
+      "messages": [
+        stillWorking
+          ? receipt.buildPendingBubble({ monthKey: row.month_key, queueId: row.id, ack: true })
+          : buildUploadResultMessage(row),
+      ],
     })
   }
   return Promise.resolve(null)
