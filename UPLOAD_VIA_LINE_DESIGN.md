@@ -597,7 +597,75 @@ already send. We know their address; it is the PK of `physicians`.
 `LINE_TOKEN` is what the rich-menu workflows use. `automation/line-push.js`
 reads the same pair.
 
-### 7.5 What the admin gets — the Telegram message
+### 7.5 Three ways a message can reach the chat — and what each costs
+
+"Reply or push" is the wrong split; there are three mechanisms, and the LIFF
+page has access to one the bot does not.
+
+| Mechanism | Who it appears from | Quota | Usable for the result? |
+|---|---|---|---|
+| `liff.sendMessages()` | **the physician** — their own message, right-hand side of the chat | Not an OA message, so not against the OA's quota | Only for what the page knows *now* |
+| Reply (`replyToken`) | the OA | **Free** | No — token is short-lived, the result is ~10 min later |
+| Push (`/message/push`) | the OA | **Counted** | Yes |
+
+**`liff.sendMessages()` is free, and the page can use it.** It sends on behalf
+of the user into the chat the LIFF app was opened from, needs the
+`chat_message.write` scope, and works only inside the LIFF browser launched
+from a chat. It is not the OA sending anything, so it does not draw on the OA's
+message quota. Up to 5 message objects, Flex included.
+
+Two documented limits decide how far it gets us:
+
+- **A Flex or template sent this way fires no webhook.** LINE sends a webhook
+  for the other message types but not for those two. So the clever chain —
+  page posts a Flex as the user → bot receives it → bot replies free — does not
+  exist. A **text** message does fire a webhook, and that reply token is real
+  and free.
+- **The page can only send what it already knows.** This is the real
+  constraint, and it is ours, not LINE's: at the moment the page is still open,
+  the file has only been queued. The score arrives ~10 minutes later from a
+  GitHub runner. `liff.sendMessages()` can post *"📤 ส่งไฟล์ P4P เดือนมิถุนายน
+  2569"* for free; it cannot post a score that does not exist yet.
+
+So the split is: **the acknowledgement can be free, the score receipt cannot** —
+not while scoring is asynchronous.
+
+#### The genuinely zero-push variant: pull instead of push
+
+If the quota check comes back tight, this removes the last push without giving
+up the chat receipt:
+
+1. On upload, the page calls `liff.sendMessages()` with a **text** line —
+   *"ส่งไฟล์ P4P เดือนมิถุนายน 2569"*. Free, and it leaves a visible record in
+   the physician's own chat history.
+2. That text fires a webhook. `main.js`'s `/line` handler replies — **free** —
+   with an acknowledgement bubble carrying a `postback` quick-reply:
+   `[ ดูผลคะแนน ]`.
+3. Whenever the physician taps it, the postback arrives with a **fresh** reply
+   token, so the bot answers — **free** — with the §7.4 receipt read straight
+   out of `p4p_upload_queue`, or "ยังตรวจสอบไม่เสร็จ" if it is still pending.
+
+Total OA quota consumed: **zero**. The cost is that the physician has to tap to
+learn the result instead of being told, and some will not. Push is worth its
+quota precisely because an unprompted answer is the product; this variant
+trades that away, and should only be taken if the plan check forces it.
+
+A middle setting exists and is probably the right one if it comes to that:
+**pull for success, push for failure.** Successes are the common case and the
+physician has no action to take; failures are rare and demand one.
+
+#### What to verify on a device before designing around this
+
+`liff.sendMessages()` requires a LIFF app launched **from a chat**. Our entry
+point is the rich menu, which lives inside the 1:1 chat with the OA, so the
+context should be `utou` and the call should work — but "should" is exactly the
+word that preceded the `openid`-scope failure, the double-reload beacon
+incident, and the fragment-stripping redirect loop in this project's history.
+`/preflight` exists for this: add a `liff.getContext()` dump and a
+`sendMessages` probe to it and confirm on a real phone, launched from the rich
+menu, before any of this is load-bearing.
+
+### 7.6 What the admin gets — the Telegram message
 
 `automation/telegram.js` already fires on **every** submission, success
 (`formatResultMessage`) and failure (`formatErrorMessage`) alike. The upload
@@ -902,6 +970,9 @@ repo-scoped token in the browser. Never.
    posture in §11 assumes the former.
 6. **Turnaround.** Is ≤ 10 minutes (typical) / 30 (worst case) acceptable, or
    is the instant-dispatch trade in §7.3 worth its token?
+7. **Push or pull for the result?** The unprompted push costs quota; the
+   pull variant in §7.5 costs nothing but needs a tap. Answer depends
+   entirely on what the OA's plan check in §7.4 comes back with.
 
 ---
 
