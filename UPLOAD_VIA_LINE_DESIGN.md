@@ -920,14 +920,41 @@ options are to keep Claude in the synchronous call (adds ~2–10 s, still far
 better than a queue) or to show the instant number as provisional, which gives
 up most of what this variant is for.
 
+**Recommendation: gate eligibility on `resolveScore()`'s own confidence tag,
+run the log audit to confirm, and never overwrite a sent receipt.**
+`resolveScore()` already tells you how sure it is — its `method` string
+distinguishes a declared grand-total/free-text label (`"grand-total label row
+(all columns)"`, `"free-text summary line"`) from the three uncached-formula
+fallback tiers (`"sum of sub-total rows…"`,
+`"reconstructed from daily cells × rate…"`). Take the synchronous path **only**
+on the labelled-total tier — the case where the workbook itself states the
+number and Claude's job is closest to a formality. Route everything else
+(uncached formulas, reconstructed totals) through the existing queued path
+with Claude still in the loop, and show "กำลังตรวจสอบ" rather than a number.
+Then run the log audit anyway, scoped to that labelled-total tier specifically
+— it should show near-zero disagreement, and if it doesn't, the gate is wrong,
+not just the drawback. On the queued path, if a Claude cross-check disagrees
+after a receipt already went out, that is a Telegram alert for the admin to
+resolve by hand, never an auto-correction to a number the physician has
+already screenshotted.
+
 **2. A score can now exist with no archived file.** Today Drive-before-score is
 an invariant; this breaks it. `drive-client.js` deliberately does not
 auto-create folders — a missing month folder throws. Today that failure is
 loud: nothing saves. Afterwards it is quiet: every score saves and every
 archive fails, while `process/`'s SK03/merge step silently builds a month
-missing those files. **Add a "scored but not archived" panel to `/admin/`,
-and alert on any `archive_pending` row older than an hour.** The queue
-guarantees retries; it does not guarantee anyone looks.
+missing those files.
+
+**Recommendation: split "archive failed" from "processing failed" as a
+lifecycle, not just a label, and never bounce it back to the physician.**
+Once the score is saved, the physician has nothing left to fix — a missing
+Drive folder or a Google API hiccup is entirely an operations problem now,
+not a submission problem, so `attempts < 3` → terminal `failed` (§6.5) is the
+wrong shape for this state. Retry `archive_pending` indefinitely on a backoff
+(hourly, say, capped at daily), add a "scored but not archived" panel to
+`/admin/` sorted by age, and alert on the first row that crosses an hour and
+again daily after that. The queue guarantees retries; it does not guarantee
+anyone looks, and nobody outside `/admin/` should ever see this state.
 
 **3. Untrusted xlsx parsing moves into the web server.** Today a hostile
 workbook is parsed on a disposable GitHub runner. Afterwards it is parsed
@@ -936,11 +963,35 @@ zip-entry / uncompressed-size guard in §11 stops being a nice-to-have and
 becomes a precondition — enforced **before** `ExcelJS.load()`, alongside the
 5 MB cap.
 
+**Recommendation: the guard is necessary but not sufficient — wrap the parse
+itself in a timeout, and fail closed to the queue rather than making the
+physician wait on it.** A file that passes the entry-count/size guard can
+still be pathological in ways that cost CPU rather than memory (deeply nested
+shared-formula chains, for instance) — the guard bounds the input, not the
+work. `Promise.race` the parse against ~5–8 s; on timeout, skip the
+synchronous score, enqueue the row for the async path exactly as if it had
+been a large file, and tell the physician "กำลังตรวจสอบ" instead of leaving
+the request hanging against Vercel's own execution limit. This turns "slow
+enough to be suspicious" into a graceful downgrade instead of a 504.
+
 **4. `exceljs` enters the production build.** This is C8, conceded knowingly:
 it is pure JS with no native build, unlike `googleapis`. But `vercel.json`
 routes *every* path to the single `main.js` function, so a top-level
 `require("exceljs")` would put its import cost on `/status/`, `/list/` and
-`/verify/` too. **Require it lazily, inside the upload handler only.**
+`/verify/` too.
+
+**Recommendation: lazy `require` first, measure before reaching for
+anything bigger.** `require("exceljs")` inside the upload handler (not at
+module top level) keeps the parse/eval cost off every route that isn't
+`/upload/score` — cheap and immediate. Be precise about what it does and does
+not fix: `@vercel/nft` traces the whole file's reachable imports into the
+bundle regardless, so this is a cold-start-latency win on unrelated routes,
+not a bundle-size win. Measure cold start on `/status/` before and after
+before deciding it's solved. If it turns out `exceljs` still measurably taxes
+every route, the next lever is giving `/upload/score` its own Vercel function
+in `vercel.json` rather than routing through the shared one — but that is a
+second moving part, worth it only if the measurement says so, not on
+suspicion.
 
 **5. Two places now parse workbooks, and more code, not less.** The scoring
 functions must move to one shared module that both Vercel and `automation/`
@@ -949,6 +1000,21 @@ now with a second runtime to drift against. Extend the parity guard to cover
 it. And the async path does not go away: a slow phone, a big file or a cold
 function still needs the "still working, we will notify you" fallback, so both
 paths are maintained rather than one replaced.
+
+**Recommendation: follow the pattern this repo already uses for exactly this
+problem — a vendored copy plus an automated parity test — rather than
+reaching for npm workspaces.** `automation/`, `process/` and the root are
+deliberately isolated (C8); merging their dependency trees to get real code
+sharing is a bigger structural change than this feature justifies, and
+`web/lib/__tests__/parity.test.ts` already establishes the cheaper answer for
+this exact situation (three legacy copies of month/department/colour data,
+kept honest by a test that reads all of them and diffs). Do the same here:
+`automation/claude-analyst.js` stays canonical (it's what the test suite in
+`automation/test/` exercises), the root gets its own copy of just
+`resolveScore`/`extractScoreFromRows`, and a root-level test hashes both
+files' relevant exports and fails the build the moment they diverge. Cheaper
+to build than a shared package, and it fails loudly in CI instead of quietly
+in production.
 
 #### One consequence worth a policy decision
 
@@ -959,6 +1025,13 @@ they like. That is either "good, they can fix their own mistakes quickly" or
 "score-shopping", and it is a policy call rather than a technical one. If it
 matters, the cheap control is to count uploads per `(email, month_key)` on the
 queue and surface the count in `/admin/` — visibility rather than a limit.
+
+**Recommendation: visibility, not a limit, and not in the first cut.** Log the
+per-`(email, month_key)` upload count either way — it's one column and one
+`WHERE` clause. Don't gate on it unless `/admin/` usage over the first couple
+of months actually shows repeat-uploading being used to game the number rather
+than to fix a typo. A limit designed before the behavior is observed is a
+guess wearing a policy's clothes.
 ---
 
 ## 8. What this path deletes
