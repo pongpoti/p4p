@@ -12,8 +12,11 @@ const TOKEN = process.env.LINE_TOKEN
 if (!TOKEN) { console.error('Missing LINE_TOKEN env var'); process.exit(1) }
 
 // The /upload/ LIFF app has its own registration (endpoint /upload/, scopes
-// profile + openid, same Login channel as /verify/ — see
-// UPLOAD_VIA_LINE_DESIGN.md §13 Phase 0). Validated HERE, alongside the token
+// profile + openid + chat_message.write, same Login channel as /verify/ —
+// see UPLOAD_VIA_LINE_DESIGN.md §13 Phase 0; `openid` is what makes
+// getIDToken() work for the opportunistic bind, and `chat_message.write` is
+// what lets the page put the receipt in the chat for free).
+// Validated HERE, alongside the token
 // and before any side effect, not next to the payload that consumes it:
 // Step 1 below already creates a month-picker menu and reassigns its alias,
 // so a check placed further down would abort halfway, leaving a new picker
@@ -24,7 +27,8 @@ if (!UPLOAD_LIFF_ID) {
   console.error(
     'Missing UPLOAD_LIFF_ID env var — the /upload/ LIFF app id.\n' +
     'Register it in the LINE Developers console first (endpoint /upload/,\n' +
-    'scopes profile + openid, same Login channel as /verify/), then re-run.'
+    'scopes profile + openid + chat_message.write, same Login channel as\n' +
+    '/verify/), then re-run.'
   )
   process.exit(1)
 }
