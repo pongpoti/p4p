@@ -25,7 +25,7 @@ LINE rich menu
                       ├── [ ส่งไฟล์ ]
                       └── "รับไฟล์แล้ว กำลังตรวจสอบ — จะแจ้งผลทาง LINE"
                                     │
-                                    ▼  (≤ ~10–30 min, §7)
+                                    ▼  (under a minute, §7.3)
                       LINE push: "✅ บันทึกคะแนนเดือนมิถุนายน 2569 แล้ว: 1,842.50"
                                  หรือ  "❌ ไฟล์ไม่ถูกต้อง: <เหตุผล> กรุณาส่งใหม่"
 ```
@@ -79,7 +79,7 @@ machines with different secrets — and that separation is worth keeping.
  │  storage: p4p-uploads (private, 5 MB cap, xlsx-only, insert-only)      │
  │  table  : p4p_upload_queue  (pending → processing → done | failed)     │
  └────────────────────────────────────────────────────────────────────────┘
-                                    │  polled every 10 min
+                                    │  claimed within ~10 s
                                     ▼
  ┌─ GITHUB ACTIONS — automation/ (where the secrets already live) ────────┐
  │  4. claim_p4p_upload()          FOR UPDATE SKIP LOCKED                 │
@@ -384,7 +384,7 @@ returning q.*;
 
 `FOR UPDATE SKIP LOCKED` is not expressible through PostgREST, which is why
 this is an RPC rather than a client-side query. It makes two overlapping drains
-(the 10-minute cron overlapping a slow previous run) safe by construction
+(the hourly relay overlapping a still-running loop) safe by construction
 rather than by a `concurrency:` group alone.
 
 ### 6.6 Optional — `physicians.roster_name`
@@ -454,36 +454,79 @@ with the service-role key → `processBuffer(..., { source:"line-upload", ... })
 result to LINE → delete the object. Loop until the claim returns nothing or a
 per-run cap (say 25) is hit.
 
-### 7.3 Latency, and why a 10-minute cron
+### 7.3 Latency — where the time actually goes
+
+The extraction is **not** slow. Parse + `resolveScore`/Claude + Drive + two
+Supabase writes is well under a minute per file, which is what the email
+pipeline already does per thread. Every earlier "~10 minutes" in this document
+was **queue wait** — an artefact of choosing a polling cron — and none of it
+was processing. The two must not be conflated, because only one of them is a
+law of physics:
+
+| | |
+|---|---|
+| Wait for the cron to fire | 0–10 min, plus GitHub's own scheduling delay |
+| Runner boot + checkout + `npm ci` | ~40–60 s |
+| **Actual work** (parse → Claude → Drive → save) | **~20–40 s** |
+
+So 95% of the wait was the trigger, and the trigger is the thing to fix.
+
+For scale: an emailing physician waits up to **two hours** today
+(`p4p-cron.yml` is `17 */2 * * *`) for that same sub-minute job. Anything here
+is an improvement; that is not a reason to settle for one.
+
+#### Recommended: a long-polling drain, not a cron
 
 ```yaml
 # .github/workflows/upload-drain.yml
 on:
-  schedule:    [ { cron: "*/10 * * * *" } ]
+  schedule:    [ { cron: "5 * * * *" } ]      # hourly relay, not the trigger
   workflow_dispatch:
 concurrency:
   group: p4p-upload-drain
   cancel-in-progress: false
 ```
 
-Expected turnaround ≤ 10 minutes; worst case ~30, because GitHub delays
-scheduled runs under load — the same behaviour `process-pipeline.yml`'s own
-comment describes and works around with an off-the-hour minute. **The UI
-promises "ภายใน 30 นาที" and under-promises deliberately.** For a submission
-made once a month, against a deadline measured in days, that is fine.
+`drain-uploads.mjs` does not exit after one pass. It polls
+`claim_p4p_upload()` every ~10 seconds for ~65 minutes, then exits and lets the
+next hourly run take over. Runs overlap deliberately — the 65-minute loop
+against a 60-minute schedule means a delayed start is covered by the previous
+run still being alive, and `FOR UPDATE SKIP LOCKED` (§6.5) makes the overlap
+harmless.
 
-The obvious upgrade is instant dispatch: a trigger on
-`p4p_upload_queue` insert → `pg_net` → `POST /repos/{owner}/{repo}/dispatches`,
-exactly the shape `notify_access_request()` already uses, taking turnaround to
-seconds. It is **not** in the recommended first cut, for one reason: that call
-needs a GitHub token with repository write in Supabase Vault, on a public
-repository. Trading a token that can write to the repo for 10 minutes of
-latency on a monthly task is a bad trade. Phase 4, with eyes open, if the wait
-turns out to bother anyone.
+**Pickup latency: ~10 seconds. End to end: under a minute**, matching what the
+email pipeline achieves per thread, with the runner already warm so the
+`npm ci` cost is paid once an hour instead of on every file.
 
-Runner cost: 144 runs/day of roughly a minute, free on a public repository.
-Add an early bail — count `pending` rows first, exit if zero — so the common
-run is checkout + `npm ci` + one query.
+Two honest caveats:
+
+- **Free, but a grey area.** Actions minutes are unlimited on a public
+  repository, and a job that idles polling this project's own queue is
+  cheaper in wall-clock than 288 cold starts a day. It is still a
+  long-running job kept alive to wait for work, which is not what a CI runner
+  is nominally for. Worth a look at GitHub's Actions policy before committing,
+  and worth dropping to a `*/5` cron (3–8 min) if that reading comes back
+  uncomfortable.
+- **A gap is possible** if GitHub delays the hourly start past the previous
+  loop's exit. Uploads wait, they are not lost — the queue holds them and the
+  next run drains them in order.
+
+#### Rejected: instant dispatch from the database
+
+A trigger on insert → `pg_net` → GitHub, the shape `notify_access_request()`
+already uses, would fire in seconds. The blocker is the token, and it is worse
+than it first looks: **both** dispatch APIs need `contents: write` on a
+fine-grained PAT — `repository_dispatch` documented as such, and
+`workflow_dispatch` reported to need Contents as well rather than Actions
+alone. There is no narrower token to reach for.
+
+`contents: write` means push access. Push access means editing
+`.github/workflows/`, and those workflows run with `ANTHROPIC_API_KEY`,
+`GOOGLE_REFRESH_TOKEN` and `SUPABASE_KEY`. So a token in Vault that leaks
+escalates from "database access" to "every credential the automation holds" —
+on a public repository. The long-poll loop above gets to the same latency for
+no token at all, which makes this trade unnecessary rather than merely
+unattractive.
 
 ### 7.4 What the physician gets back — the LINE Flex receipt
 
@@ -556,7 +599,7 @@ Two rules follow from how the counting works:
   there is no reason to compress two ideas into one bubble to save quota.
 - **A reply is not available here.** A `replyToken` only exists in answer to a
   webhook event and expires within about a minute; this result is produced
-  ~10 minutes later by a GitHub runner that never saw an event. There is no
+  under a minute later by a GitHub runner that never saw an event. There is no
   way to make the async receipt free by turning it into a reply.
 
 Budget: at full adoption, one push per physician per month — order of 200 —
@@ -605,7 +648,7 @@ page has access to one the bot does not.
 | Mechanism | Who it appears from | Quota | Usable for the result? |
 |---|---|---|---|
 | `liff.sendMessages()` | **the physician** — their own message, right-hand side of the chat | Not an OA message, so not against the OA's quota | Only for what the page knows *now* |
-| Reply (`replyToken`) | the OA | **Free** | No — token is short-lived, the result is ~10 min later |
+| Reply (`replyToken`) | the OA | **Free** | No — token expires long before the result |
 | Push (`/message/push`) | the OA | **Counted** | Yes |
 
 **`liff.sendMessages()` is free, and the page can use it.** It sends on behalf
@@ -623,7 +666,7 @@ Two documented limits decide how far it gets us:
   and free.
 - **The page can only send what it already knows.** This is the real
   constraint, and it is ours, not LINE's: at the moment the page is still open,
-  the file has only been queued. The score arrives ~10 minutes later from a
+  the file has only been queued. The score arrives seconds later from a
   GitHub runner. `liff.sendMessages()` can post *"📤 ส่งไฟล์ P4P เดือนมิถุนายน
   2569"* for free; it cannot post a score that does not exist yet.
 
@@ -673,11 +716,11 @@ physician has no action to take; failures are rare and demand one.
                   → reply                              ◀ FREE
       ╭─────────────────────────────────╮
       │ 📥 รับไฟล์แล้ว                   │
-      │ กำลังตรวจสอบ ประมาณ 10 นาที      │
+      │ กำลังตรวจสอบ สักครู่              │
       │        [ ดูผลคะแนน ]            │   ← postback button
       ╰─────────────────────────────────╯
 
-③  PROCESS                                   GitHub Actions, ~10 min
+③  PROCESS                                   GitHub Actions, ~30 s
     drain → analyseJson → Drive → saveScore
     queue row: pending → done (1,842.50)
     ── sends nothing ──                                ◀ where the push used to be
@@ -1048,8 +1091,10 @@ repo-scoped token in the browser. Never.
 5. **Retention.** 7 days for failed uploads, immediate deletion on success —
    or keep every uploaded object for a month as an audit trail? The security
    posture in §11 assumes the former.
-6. **Turnaround.** Is ≤ 10 minutes (typical) / 30 (worst case) acceptable, or
-   is the instant-dispatch trade in §7.3 worth its token?
+6. **The long-polling drain (§7.3)** gets pickup to ~10 seconds with no new
+   token, at the cost of a job that idles waiting for work. Comfortable with
+   that reading of GitHub's Actions policy, or fall back to a `*/5` cron and
+   a 3–8 minute wait?
 7. **Push or pull for the result?** The unprompted push costs quota; the
    pull variant in §7.5 costs nothing but needs a tap. Answer depends
    entirely on what the OA's plan check in §7.4 comes back with.
@@ -1073,7 +1118,7 @@ repo-scoped token in the browser. Never.
 | `automation/templates/line-receipt.js` | **new** — the success/failure Flex bubbles (§7.4), alongside `reply.js` / `error-reply.js` |
 | `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.5); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **new** — the drain loop |
-| `.github/workflows/upload-drain.yml` | **new** — `*/10` schedule + `workflow_dispatch` |
+| `.github/workflows/upload-drain.yml` | **new** — hourly relay + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
 | `automation/test/*` | new tests per §13 |
 | `SUPABASE_TABLES.md`, `DATA_EXPOSURE_ANALYSIS.md`, `SECURITY_ANALYSIS.md` | document the queue table and the bucket |
 | `REACT_REWRITE_PLAN.md` | add `/upload/` to the phase list |
