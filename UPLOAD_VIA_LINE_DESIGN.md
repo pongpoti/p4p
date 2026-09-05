@@ -485,24 +485,156 @@ Runner cost: 144 runs/day of roughly a minute, free on a public repository.
 Add an early bail — count `pending` rows first, exit if zero — so the common
 run is checkout + `npm ci` + one query.
 
-### 7.4 Result notification
+### 7.4 What the physician gets back — the LINE Flex receipt
 
-`automation/line-push.js` → `POST https://api.line.me/v2/bot/message/push`
-with `to: line_user_id`, a Flex bubble on success (month, score, and a deep
-link to `/status/?sheetname=<month_key>` reusing the existing month accent
-colours) and a plain text message on failure carrying the same Thai wording the
-email path's `error-reply.js` already uses.
+**Yes, with the extracted score — but only the score that was actually
+saved.** The bubble is sent *after* `saveScore()` succeeds, never before. If
+extraction worked and the write did not (Drive failed, roster row missing),
+the physician gets the failure message, not a number. A score shown in LINE is
+a receipt for a row in the database, and physicians will screenshot it as
+proof; it must never be a preview of something that did not land.
+
+It carries the same four facts as the email auto-reply (`templates/reply.js`) —
+name, department, month/year, total score — because a physician should get the
+same answer whichever way they submitted, in the medium that path uses.
+
+```
+altText: "บันทึกคะแนน P4P เดือนมิถุนายน 2569 — 1,842.50"   ← the push preview
+         answers the question without opening the app
+
+┌──────────────────────────────────────┐
+│ ✅ บันทึกคะแนน P4P แล้ว                │  header  #4B3D33, white
+│ องค์กรแพทย์ โรงพยาบาลสมุทรสาคร          │  sub     #ffffa0
+├══════════════════════════════════════┤  hero    5px, month accent
+│ ชื่อแพทย์      นพ. สมชาย  ใจดี         │  body    #F5F5F0
+│ กลุ่มงาน       อายุรกรรม               │
+│ เดือน / ปี     มิถุนายน 2569           │
+│ ──────────────────────────────────── │
+│ คะแนนรวม                   1,842.50  │  size xxl, bold, #4B3D33
+│ ──────────────────────────────────── │
+│ ส่งเมื่อ 5 ก.ค. 69 14:32 · ตรงเวลา     │  or "เกินกำหนด" in #B03A2E
+├──────────────────────────────────────┤
+│         [ ดูสถานะการส่ง ]             │  → the month's status page
+└──────────────────────────────────────┘
+  หากส่งไฟล์ใหม่ ระบบจะใช้ไฟล์ล่าสุดแทน      footer, small
+```
+
+Details that are decisions, not decoration:
+
+- **The palette is the bot's existing one.** `#4B3D33` header, `#ffffa0`
+  subtitle, `#81A7AE` hero rule, `#F5F5F0` body — the exact tokens
+  `createStatusList()` in `main.js` already uses for the month picker, so the
+  receipt reads as the same bot rather than a new one. The hero rule takes the
+  month's accent from `COLOR_ARRAY`, matching the month tab the button opens.
+- **The button reuses the URI the month picker already builds:**
+  `https://liff.line.me/2008561527-a0xP1XmY?sheetname=<month_key>&color=<tw>`.
+  No new deep-link format.
+- **Score formatting is `toFixed(2)` plus a thousands separator** — the same
+  string `buildHtmlReply()` puts in the email, so the two channels can never
+  disagree about the number.
+- **`ตรงเวลา` / `เกินกำหนด` is computed from `received_at` vs the month's
+  deadline** (§9), not from the drain time. It is the same comparison
+  `/ranking/` makes, stated once here so the physician is not surprised by
+  their position later.
+
+**Failure** uses the same skeleton with a `#B03A2E` header, the Thai reason
+text from the error taxonomy (§10), and a button chosen by `error_type`:
+`ส่งไฟล์อีกครั้ง` → the upload LIFF for a fixable file (`wrong_extension`,
+`temp_file`, `month_mismatch`, `zero_score`), `ติดต่อผู้ดูแล` for one the
+physician cannot fix alone (`not_in_roster`, repeated `other`). A retry button
+on an unretryable error is worse than no button.
+
+**Push quota is an operational constraint worth checking before rollout.**
+Push messages are metered against the LINE Official Account's plan; reply
+messages (sent in response to a user's own message) are not. At full adoption
+this is roughly one push per physician per month — order of 200, plus retries
+and failure notices. Confirm the OA's plan covers that, because the failure
+mode is silent: the API rejects the push and the physician simply never hears
+back. The queue row and the page's history list are the fallback either way,
+and `notified_at` stays null so the gap is visible rather than invisible.
+
+**When there is no `line_user_id`** — the physician logged in by OTP but never
+had a LINE ID token captured (the `openid`-scope problem in
+`SUPABASE_TABLES.md`) — fall back to the **email** reply the pipeline can
+already send. We know their address; it is the PK of `physicians`.
 
 One new GitHub Actions secret: `LINE_ACCESS_TOKEN` (the value Vercel already
-has). Failure modes:
+holds).
 
-- `line_user_id` is null — the physician logged in by OTP but never had a LINE
-  ID token captured (the `openid`-scope problem in `SUPABASE_TABLES.md`). Fall
-  back to the **email** reply the pipeline can already send: we know their
-  address, it is the PK of `physicians`.
-- The push API errors — record it, leave `notified_at` null, and let the page's
-  history list carry the result. The queue row is the source of truth; the push
-  is a convenience.
+### 7.5 What the admin gets — the Telegram message
+
+`automation/telegram.js` already fires on **every** submission, success
+(`formatResultMessage`) and failure (`formatErrorMessage`) alike. The upload
+path keeps that, with the fields changed to match what is actually worth
+checking on this path.
+
+On the email path the admin's question is *"did the fuzzy match pick the right
+person?"* — hence `👤 Name` (what Claude read) versus `🔗 Matched` (who it was
+matched to) and a similarity percentage. On the upload path there is no fuzzy
+match to doubt: identity came from a verified session. The interesting question
+becomes *"did the file agree with what the physician claimed?"*
+
+```
+📋 P4P Workload Report
+
+📥 Source   : LINE upload
+👤 Account  : สมชาย ใจดี <somchai@example.com>
+🔗 Roster   : สมชาย ใจดี (exact)          ← or "(fuzzy 87%)" when deferred
+📅 Month    : 2569_06 (เลือกเอง)
+🏅 Score    : 1842.50
+💾 ✅ Score saved to DB
+
+📎 File: P4P_มิย69.xlsx
+```
+
+with warning lines appended only when the file disagrees with the account —
+the one class of mistake this path can still produce, and the reason to send a
+Telegram at all:
+
+```
+⚠️ Name in file : สมหญิง ใจดี (≠ account)
+⚠️ Month in file: 2569_05 (≠ 2569_06 selected)
+```
+
+The first is informational — a physician can legitimately submit a file whose
+header carries a colleague's name if they copied a template, and the write goes
+to the authenticated identity regardless (§7.1). The second is a rejection
+(`month_mismatch`), and the message says so.
+
+Failures:
+
+```
+❌ P4P Upload Error
+
+📥 Source : LINE upload
+👤 Account: สมชาย ใจดี <somchai@example.com>
+📅 Month  : 2569_06
+🚫 Type   : month_mismatch
+💬 Error  : ไฟล์ระบุเดือน 2569_05 แต่เลือกส่งเดือน 2569_06
+🔁 Attempt: 3/3 — ยุติการลองใหม่
+
+📎 File: P4P_มิย69.xlsx
+```
+
+Shape notes:
+
+- **Plain text, no `parse_mode`.** `sendTelegram()`'s own comment records why:
+  Markdown renders literally in this setup. Thai names contain characters that
+  MarkdownV2 would require escaping anyway.
+- **`formatResultMessage` / `formatErrorMessage` gain an optional
+  `source`/`account` block** rather than being replaced. The email path passes
+  nothing new and its messages stay byte-identical — the admin's eye is trained
+  on that layout.
+- **`🔁 Attempt: n/3`** appears only on the upload path, because only it
+  retries (§12). It is the difference between "this will come back" and "this
+  is over, someone has to look".
+- **The account email is included** — consistent with
+  `notify_access_request()`, which already sends addresses to the same private
+  chat. If that chat's membership ever widens, this is one of the lines to cut
+  first; it is the only field here that is not already in the message.
+- **Volume does not change materially.** A physician submits once a month by
+  one path or the other, and both paths notify. The new traffic is retries and
+  the two new warning classes.
 
 ---
 
@@ -748,7 +880,9 @@ repo-scoped token in the browser. Never.
 | `scripts/line-upload-2026-09.sql` | **new** — bucket, policies, `p4p_upload_queue`, the four RPCs |
 | `automation/index.js` | `processBuffer()` gains `source` / `identity` / `monthKey` / `notify`; email path passes `null` and is unchanged |
 | `automation/upload-queue.js` | **new** — claim / complete / fail / delete-object |
-| `automation/line-push.js` | **new** — LINE push (mirrors `telegram.js`) |
+| `automation/line-push.js` | **new** — LINE push transport (mirrors `telegram.js`) |
+| `automation/templates/line-receipt.js` | **new** — the success/failure Flex bubbles (§7.4), alongside `reply.js` / `error-reply.js` |
+| `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.5); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **new** — the drain loop |
 | `.github/workflows/upload-drain.yml` | **new** — `*/10` schedule + `workflow_dispatch` |
 | `automation/test/*` | new tests per §13 |
