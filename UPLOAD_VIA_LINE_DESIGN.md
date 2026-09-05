@@ -1730,18 +1730,27 @@ synchronous call, or doesn't ship at all.
 
 **Phase 0 — prerequisites** (each has a human owner and blocks what follows)
 
-1. **Register LIFF app #5** in the LINE Developers console: endpoint
-   `https://p4p-sakhonmso.vercel.app/upload/`, scopes `profile` + `openid`,
-   same channel (`2008561527`). This is the same console access
-   `web/README.md` has been blocked on — worth resolving once, for both.
-   While in there: confirm `chat_message.write` is grantable for §7.5's
-   `liff.sendMessages()` path. The `liff.getContext()` + `sendMessages` probe
-   §7.5 calls for needs somewhere to live first — `/preflight` is in the
-   undeployed `web/` app, so see §7.5's closing note for the two options.
-2. Create the bucket and run the SQL in §6 (SQL Editor, per
-   `SUPABASE_MIGRATIONS.md`) — including the `archive_pending` lifecycle
-   from §7.7's recommendation on drawback 2, not just the original four
-   states.
+1. **Register LIFF app #5** in the LINE Developers console — **done**:
+   `2008561527-sj7tuMLL`, on the same Login channel (`2008561527`) as the
+   other four. Scopes must include `chat_message.write` alongside
+   `profile` + `openid`: the first is what lets the page put the receipt in
+   the chat for free (§7.5), the second is what makes `getIDToken()` — and
+   therefore the opportunistic bind (§5.5 gap 1) — work at all. The id is
+   not a secret (it ships in the rich menu's `uri` action and in the page's
+   own HTML), so `main.js` and `drain-uploads.mjs` both carry it as a
+   fallback with `UPLOAD_LIFF_ID` overriding, rather than failing silently
+   when an env var is missed. The `liff.getContext()` + `sendMessages` probe
+   §7.5 calls for lives at `/upload/?probe=1`.
+2. Create the bucket and run the SQL in §6 — **done** (applied to the live
+   project 2026-09-05, and listed as step 18 in `SUPABASE_MIGRATIONS.md`).
+   Verified after the fact rather than assumed: all five function bodies
+   hash-identical to the repo file, both claim functions returning a genuinely
+   empty set on an empty queue, the deadline arithmetic matching
+   `deadlineISO()`'s two documented cases, and the enqueue gate refusing an
+   unauthenticated caller, a foreign `object_path`, and a non-roster
+   `p_month`. Measured at the same time, since it decides how often the fast
+   path actually fires: **178 of 222** active physicians exact-match the
+   current month's roster, 0 are ambiguous, and 45 have a `line_user_id`.
 3. Check the LINE Official Account's message-quota plan against the worst-case
    budget in §7.4 — a sanity floor now, not a blocking decision, since §7.7
    means only deferred-tier terminal failures ever push (open question 7). No

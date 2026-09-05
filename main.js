@@ -64,7 +64,15 @@ const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
 // so the id lives in one place — the env var scripts/setup-richmenu.mjs
 // already requires — rather than being hardcoded in two.
 const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
-const UPLOAD_LIFF_ID = process.env.UPLOAD_LIFF_ID || ""
+// Hardcoded fallback for the same reason ADMIN_LINE_USER_ID and
+// ADMIN_BASE_URL have one: a LIFF id is not a secret. This exact string is
+// already public in the rich menu's own `uri` action and in every copy of
+// this page's HTML. Making it a required env var bought nothing and cost a
+// silent failure — with it unset, liff.init() never runs, so the chat
+// receipt and the opportunistic LINE bind both quietly do nothing while the
+// page otherwise looks fine. The env var still wins where it is set, which
+// is what a preview deployment pointing at a second LIFF app needs.
+const UPLOAD_LIFF_ID = process.env.UPLOAD_LIFF_ID || "2008561527-sj7tuMLL"
 
 // Same-origin <script src> gets a content hash appended at boot, so a deploy
 // that changes page logic actually reaches LINE's in-app WebView.

@@ -41,7 +41,10 @@ dotenvConfig({ override: true });
 
 const POLL_MS       = parseInt(process.env.DRAIN_POLL_MS ?? "10000", 10);
 const RUN_MINUTES   = parseInt(process.env.DRAIN_MINUTES ?? "60", 10);
-const UPLOAD_LIFF   = process.env.UPLOAD_LIFF_ID ? `https://liff.line.me/${process.env.UPLOAD_LIFF_ID}` : "";
+// Same public-identifier fallback as main.js — without it a terminal failure
+// pushes a bubble whose "ส่งไฟล์อีกครั้ง" button degrades to "ติดต่อผู้ดูแล"
+// purely because a CI secret was never added.
+const UPLOAD_LIFF   = `https://liff.line.me/${process.env.UPLOAD_LIFF_ID || "2008561527-sj7tuMLL"}`;
 const STUCK_HOURS   = parseInt(process.env.DRAIN_STUCK_HOURS ?? "1", 10);
 
 let _drive = null;
