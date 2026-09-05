@@ -239,16 +239,31 @@ the same family without being mistaken for one of the three read-only ones.
 ```
 main.js:  const gatedPages = ["status", "list", "ranking", "upload"]
           app.use("/upload", express.static("upload"))
-vercel.json:  includeFiles += "upload/**"
-new files:    upload/index.html   upload/app.js
+          app.use("/lib",    express.static("lib"))          // ← §16's Flex builder
+          app.post("/upload/score", express.json({limit:"8kb"}), …)  // ← §7.8
+vercel.json:  includeFiles += "upload/**", "lib/**"
+new files:    upload/index.html   upload/app.js   lib/line-receipt-flex.js
 ```
 
-That is the entire server-side change. `servePage("upload")` already does the
-trailing-slash canonicalisation with its `#`, the cookie → access-token
-refresh, the `is_current_user_allowlisted()` check, the `no-store` header and
-the `stampAssets` cache-busting. `assets/auth-guard.js` already turns the
+**The GET page really is a fourth consumer of machinery that already
+exists** — `servePage("upload")` does the trailing-slash canonicalisation
+with its `#`, the cookie → access-token refresh, the
+`is_current_user_allowlisted()` check, the `no-store` header and the
+`stampAssets` cache-busting, and `assets/auth-guard.js` already turns the
 injected `<meta name="p4p-session">` token into an authenticated `P4P.db`
-client. The upload page is a fourth consumer of machinery that exists.
+client. Two things beyond that page are **not** free, and an earlier draft
+of this section claimed they were:
+
+- **`/lib` needs its own static mount and its own `includeFiles` entry.**
+  `main.js` mounts exactly `status`, `list`, `ranking`, `verify`, `admin`,
+  `assets` — nothing serves `/lib/`, so §16's
+  `<script src="/lib/line-receipt-flex.js">` would 404 in production while
+  working fine locally against a dev server that serves the repo root.
+  (`stampAssets` already resolves a leading-slash `src` from the repo root,
+  so cache-busting needs no change — only the mount and the bundle entry.)
+- **`POST /upload/score` is a route of its own, not part of `gatedPages`.**
+  That loop registers `app.get` handlers only, and body parsing is per-route
+  here (§7.8) — neither comes for free by adding `"upload"` to the array.
 
 CSP: unchanged. `connect-src https://*.supabase.co` already covers
 `/storage/v1/…` and `/rest/v1/rpc/…` — Storage is the same origin as
@@ -339,7 +354,23 @@ create policy "p4p_uploads_own_folder_insert"
 -- Deliberately NO select / update / delete policy for `authenticated`.
 ```
 
-Object path: `p4p-uploads/<auth.uid()>/<month_key>/<uuid>.xlsx`.
+Object path — and the bucket name is **not** part of it:
+
+```
+storage.objects.name  =  <auth.uid()>/<month_key>/<uuid>.xlsx
+      bucket_id       =  'p4p-uploads'   (a separate column)
+```
+
+Worth stating explicitly because the two are easy to conflate and the
+mistake is silent-ish: `supabase.storage.from('p4p-uploads').upload(path,
+file)` takes a path *within* the bucket, `storage.objects` stores that key in
+`name` with `bucket_id` alongside it, and `(storage.foldername(name))[1]` in
+the policy above is therefore the **uid**, not the bucket. `object_path` as
+passed to `enqueue_p4p_upload()` (§6.3) follows the same convention — a
+browser that helpfully prefixes `p4p-uploads/` would fail that RPC's
+ownership check on every single upload, with an error message
+("object_path does not belong to caller") that points at permissions rather
+than at the extra path segment actually causing it.
 
 The missing `SELECT` policy is the point. A physician can drop a file in and
 can never read one back — not their own, not anyone else's. The bucket cannot
@@ -516,11 +547,27 @@ update public.p4p_upload_queue q
  where q.id = (
    select id from public.p4p_upload_queue
     where status = 'pending' and attempts < 3
+      and (score_method is not null
+           or received_at < now() - interval '30 seconds')
     order by received_at
     limit 1
     for update skip locked)
 returning q.*;
 ```
+
+**That last clause closes a race, it is not a refinement.**
+`enqueue_p4p_upload()` inserts the row as `'pending'` and the browser calls
+`POST /upload/score` a second or two later (§3, steps 3 → 4). Without a
+guard, a drain tick landing in that window claims the row first — so a file
+the synchronous path would have scored in ~1 s goes down the slow Claude
+path instead, and `/upload/score` gets back a 409 the page has no good way
+to explain to the physician. A plain age check alone would fix that but
+delay *every* genuinely-deferred row by the same window, pushing the
+deferred tier past the "under a minute" §7.3 promises. So `/upload/score`
+stamps `score_method` on its deferral branch (the losing tier's own method
+string — real data, and doubling as "the synchronous path has already looked
+at this row"), and those rows stay claimable immediately. Only rows nobody
+has looked at yet wait.
 
 **`claim_p4p_archive()`** — every row with a saved score still waiting on
 Drive, regardless of which tier scored it. No attempt cap and no terminal
@@ -576,7 +623,19 @@ differently from the roster's `firstname`/`lastname` — which is common enough
 that `matchName()` exists at all. Adding a nullable `physicians.roster_name`,
 written by the worker the first time its fuzzy match succeeds, turns every
 later month into an exact hit and lets the UI answer "are you in this roster?"
-correctly for everyone. Self-healing, one column, no new matcher. Phase 4.
+correctly for everyone. Self-healing, one column, no new matcher.
+
+**Re-rank this once §7.7 landed: it is not really optional any more.** A null
+`roster_index` sends the row down the deferred path regardless of how
+confident the score was (§7.8 step 5), because `saveScore()` cannot write
+without a roster primary key. So every physician whose name is spelled
+differently in the two places gets the slow path *every single month*,
+permanently — not as a one-off. `roster_name` is what converts that from a
+standing condition into a one-time cost per physician. If the Phase −1 log
+audit is what decides whether the fast path is safe, this is what decides
+how often it actually fires; worth measuring alongside it (one query:
+how many `physicians.full_name` values exact-match a row in the current
+month's roster?) rather than discovering it after launch.
 
 ---
 
@@ -1023,9 +1082,17 @@ point is the rich menu, which lives inside the 1:1 chat with the OA, so the
 context should be `utou` and the call should work — but "should" is exactly the
 word that preceded the `openid`-scope failure, the double-reload beacon
 incident, and the fragment-stripping redirect loop in this project's history.
-`/preflight` exists for this: add a `liff.getContext()` dump and a
-`sendMessages` probe to it and confirm on a real phone, launched from the rich
-menu, before any of this is load-bearing.
+**And the obvious place to run that probe does not currently exist.**
+`/preflight` lives in `web/app/preflight/` — the Next.js app C1 says is
+written but *not deployed*. `main.js` has no such route and `vercel.json`
+does not ship one, so "add a probe to `/preflight`" is, today, an
+instruction to add it to a page no phone can reach. Whoever does this work
+needs to either stand up a minimal `preflight/` page in the Express app
+(cheapest: one static page behind the same `gatedPages` treatment, deleted
+once the answer is known) or fold the `liff.getContext()` dump and
+`sendMessages` probe into `/upload/` itself behind a `?probe=1` query — less
+tidy, but it is the page whose LIFF context we actually care about, launched
+the way we actually launch it.
 
 ### 7.6 What the admin gets — the Telegram message
 
@@ -1275,10 +1342,23 @@ browser talks to is either Supabase directly (Storage, the RPCs) or existing
 Express routes. Every earlier section that says "the page calls
 `/upload/score`" means exactly this.
 
-**Auth.** Sits behind the same gate as every physician page (§5.1): session
-cookie → refreshed access token → `is_current_user_allowlisted()`. Not a
-separate check — reuse `resolveAccessToken`/the allowlist call `servePage()`
-already makes, applied to this route too.
+**Auth.** Same *gate* as every physician page (§5.1) — session cookie →
+refreshed access token → `is_current_user_allowlisted()` — but **not**
+`servePage()` itself. That helper answers a failed check with
+`res.redirect(302, "/verify/…")`, which is right for a navigation and wrong
+for a `fetch()`: the browser follows the redirect transparently, the page
+gets `/verify/`'s HTML back with a 200, and `await res.json()` throws a
+parse error that looks nothing like "your session expired." This route
+reuses the two underlying helpers (`resolveAccessToken`, then
+`isCurrentUserAllowlisted`) and answers a failure with `401` + a JSON body
+the page can branch on — bouncing the physician to `/verify/` is then the
+page's decision, not a redirect it never asked to follow.
+
+**Body parsing.** `main.js` attaches `express.json()` per route, not
+globally (`/auth/session` and the two `/admin/api` writers each mount their
+own). This route needs its own — `express.json({ limit: "8kb" })`, matching
+`/auth/session`'s cap, since the body is one UUID — or `req.body` is
+`undefined` and `queue_id` reads as a `TypeError` rather than a 400.
 
 **Request**
 
@@ -1309,17 +1389,34 @@ else — the id is the only thing the browser gets to name.
 4. Everything from here down runs inside the guard from §11 and the
    `Promise.race` timeout from §7.7 rec 3 — a hostile or pathological file
    never reaches step 5 with the request still open.
-5. `resolveScore()` → the confidence gate (§7.7 rec 1) branches:
-   - **High-confidence tier:** cross-check the file's own inferred month
-     against `month_key` (§7.1's `month_mismatch` check) →
-     `saveScore()` + `logSubmission()` (service role) →
+5. `resolveScore()` → the confidence gate (§7.7 rec 1) branches. **Two
+   conditions, not one** — a confident score is necessary but not sufficient:
+   - **High-confidence tier AND `roster_index is not null`:** cross-check the
+     file's own inferred month against `month_key` (§7.1's `month_mismatch`
+     check) → `saveScore()` + `logSubmission()` (service role) →
      `UPDATE … SET status='done', score=…, score_method=…,
      archive_status='archive_pending', finished_at=now()` → respond with the
      score.
-   - **Low-confidence tier, or the parse timeout fired:** touch nothing —
-     leave `status='pending'` exactly as `enqueue_p4p_upload()` left it, so
-     `claim_p4p_score_fallback()` (§6.5) picks the row up on the worker's next
-     pass → respond `{ pending: true }`.
+   - **Low-confidence tier, the parse timeout fired, or `roster_index is
+     null`:** stamp `score_method` with whatever tier `resolveScore()` did
+     land on (which is also what makes the row immediately claimable rather
+     than waiting out the race guard, §6.5) and otherwise leave
+     `status='pending'` as `enqueue_p4p_upload()` left it, so
+     `claim_p4p_score_fallback()` picks it up on the worker's next pass →
+     respond `{ pending: true }`.
+
+   **Why `roster_index` gates this too.** `saveScore(date, index, score,
+   submittedAt)` throws outright on a null index — it is the roster row's
+   primary key, and there is no writing a score without one. `roster_index`
+   is null exactly when §6.3's *exact* name match missed, which is precisely
+   the case `matchName()`'s fuzzy matching exists to rescue — and that lives
+   in JS, in the worker, by deliberate design (§6.3's "one fuzzy matcher"
+   box). So a physician whose `physicians.full_name` is spelled even slightly
+   differently from their roster row gets the deferred path every month, no
+   matter how confidently their file states its total. That is the single
+   biggest lever on how often the fast path actually fires, which makes
+   `physicians.roster_name` (§6.6) less of an optional nicety than its
+   "Phase 5, optional" label suggests — see the note there.
    - **A rejection** (`month_mismatch`, or the same corruption checks
      `processBuffer` already runs — no rows, < 3 non-null cells): `UPDATE …
      SET status='rejected', error_type=…, error_detail=…, finished_at=now()`
@@ -1547,8 +1644,9 @@ synchronous call, or doesn't ship at all.
    same channel (`2008561527`). This is the same console access
    `web/README.md` has been blocked on — worth resolving once, for both.
    While in there: confirm `chat_message.write` is grantable for §7.5's
-   `liff.sendMessages()` path, and add a `liff.getContext()` +
-   `sendMessages` probe to `/preflight` per §7.5's closing note.
+   `liff.sendMessages()` path. The `liff.getContext()` + `sendMessages` probe
+   §7.5 calls for needs somewhere to live first — `/preflight` is in the
+   undeployed `web/` app, so see §7.5's closing note for the two options.
 2. Create the bucket and run the SQL in §6 (SQL Editor, per
    `SUPABASE_MIGRATIONS.md`) — including the `archive_pending` lifecycle
    from §7.7's recommendation on drawback 2, not just the original four
@@ -1703,8 +1801,9 @@ repo-scoped token in the browser. Never.
 | `assets/shared.js` | month window / deadline / file-validation helpers (shared with the eventual `web/` port) |
 | `package.json` (root) | **new dependency** — `exceljs`, lazy-`require`d only inside the upload handler (§7.7 rec 4) |
 | `lib/p4p-score.js` (root, **new**) | vendored copy of `resolveScore`/`extractScoreFromRows` + the zip-guard/parse-timeout wrapper — kept honest by the parity test below (§7.7 rec 5) |
-| `main.js` | `gatedPages` += `"upload"`; static mount; **new** `POST /upload/score` route per the §7.8 contract; `/line` handler gains the deferred-tier trigger-text / postback branch (§7.5) |
-| `vercel.json` | `includeFiles` += `"upload/**"` |
+| `main.js` | `gatedPages` += `"upload"`; static mounts for **both** `/upload` and `/lib` (§5.1 — nothing serves `/lib/` today); **new** `POST /upload/score` route per the §7.8 contract, with its own `express.json()` since body parsing here is per-route; `/line` handler gains the deferred-tier trigger-text / postback branch (§7.5) |
+| `vercel.json` | `includeFiles` += `"upload/**"`, `"lib/**"` |
+| `preflight/` (root, **new** — or a `?probe=1` mode on `/upload/`) | Somewhere to actually run §7.5's `liff.getContext()` + `sendMessages` probe. The existing `/preflight` is in the undeployed `web/` app (C1), so the Phase 0 verification step has no reachable home until this exists. Throwaway — delete once the answer is known. |
 | `scripts/line-upload-2026-09.sql` | **written and execution-tested against a real (stubbed) Postgres 16** — bucket, policies, `p4p_upload_queue` (both `status` and `archive_status` lifecycles, §6.2), `enqueue_p4p_upload`, `my_p4p_identity`, `my_p4p_uploads`, `claim_p4p_score_fallback`, `claim_p4p_archive` (§6.3–6.5). Not yet run against a real Supabase project — see the file's own header. |
 | `automation/index.js` | `processBuffer()` gains `source` / `identity` / `monthKey` / `notify`; email path passes `null` and is unchanged |
 | `automation/upload-queue.js` | **new** — thin wrapper over `claim_p4p_archive()` and `claim_p4p_score_fallback()` (§6.5); the archive claim retries indefinitely on backoff, the fallback claim terminates at 3 attempts (§7.7 rec 2) |

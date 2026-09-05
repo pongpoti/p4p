@@ -480,6 +480,19 @@ grant execute on function public.my_p4p_uploads(integer) to authenticated;
 --  zero rows, not one row of nulls — which is what every caller in this
 --  design already assumes.
 
+--  The `score_method is not null OR received_at < ...` clause below is not a
+--  refinement, it closes a real race. enqueue_p4p_upload() inserts the row as
+--  'pending', and the browser calls POST /upload/score a second or two later.
+--  Without a guard, a drain tick landing in that window claims the row first —
+--  so a file the synchronous path would have scored in ~1s instead goes down
+--  the slow Claude path, and /upload/score returns a 409 the page has no good
+--  way to explain. The guard gives the browser a window; but a plain age check
+--  alone would ALSO delay every genuinely-deferred row by that same window,
+--  pushing the deferred tier past the "under a minute" §7.3 promises. So
+--  /upload/score stamps `score_method` on its deferral branch (the losing
+--  tier's own method string — useful data in its own right, and doubling as
+--  "the synchronous path has already looked at this row"), which makes such
+--  rows claimable immediately. Only rows nobody has looked at yet wait.
 create or replace function public.claim_p4p_score_fallback()
 returns setof public.p4p_upload_queue
 language sql
@@ -489,6 +502,8 @@ as $$
    where q.id = (
      select id from public.p4p_upload_queue
       where status = 'pending' and attempts < 3
+        and (score_method is not null
+             or received_at < now() - interval '30 seconds')
       order by received_at
       limit 1
       for update skip locked)
