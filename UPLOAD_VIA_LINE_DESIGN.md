@@ -544,22 +544,58 @@ text from the error taxonomy (§10), and a button chosen by `error_type`:
 physician cannot fix alone (`not_in_roster`, repeated `other`). A retry button
 on an unretryable error is worse than no button.
 
-**Push quota is an operational constraint worth checking before rollout.**
-Push messages are metered against the LINE Official Account's plan; reply
-messages (sent in response to a user's own message) are not. At full adoption
-this is roughly one push per physician per month — order of 200, plus retries
-and failure notices. Confirm the OA's plan covers that, because the failure
-mode is silent: the API rejects the push and the physician simply never hears
-back. The queue row and the page's history list are the fallback either way,
-and `notified_at` stays null so the gap is visible rather than invisible.
+**Quota: replies are free, pushes are not — and this result can only be a
+push.** LINE counts push / multicast / narrowcast / broadcast against the
+Official Account's monthly quota and does **not** count reply messages (the
+ones sent with a `replyToken` in answer to a user's own message) at all.
+Two rules follow from how the counting works:
+
+- **A message is one delivery to one person, not one message object.** A push
+  carrying a Flex bubble *and* a text note to one physician costs **1**, the
+  same as either alone. So the receipt can be as rich as it needs to be —
+  there is no reason to compress two ideas into one bubble to save quota.
+- **A reply is not available here.** A `replyToken` only exists in answer to a
+  webhook event and expires within about a minute; this result is produced
+  ~10 minutes later by a GitHub runner that never saw an event. There is no
+  way to make the async receipt free by turning it into a reply.
+
+Budget: at full adoption, one push per physician per month — order of 200 —
+plus retries and failure notices. That shares a quota with
+`scripts/broadcast-flex.mjs`, where **one** carousel broadcast costs one
+message *per follower* (another ~200). Two broadcasts plus a month of upload
+receipts is already ~600. Check the plan in LINE Official Account Manager
+before rollout; Thailand's free tier has historically been 500 messages/month,
+with paid plans well above that, but the number moves and is not worth
+designing against from memory.
+
+If the quota turns out to be tight, the lever is to **push only when it
+matters** rather than to drop the receipt:
+
+- always push on **failure** — the physician has to act, and failures are rare;
+- on success, push only if the physician is no longer watching. The page
+  already polls `my_p4p_uploads()`; have it record a "seen" timestamp on the
+  row, and let the worker skip the push when the result was already read on
+  screen. Steady-state cost falls to roughly the number of people who closed
+  LINE while waiting.
+
+That is a real complexity cost for a saving that may not be needed, so it is
+deliberately **not** in the first cut — it is the thing to reach for if the
+plan check comes back tight.
+
+The failure mode either way is silent: the API rejects the push and the
+physician simply never hears back. The queue row and the page's history list
+are the fallback, and `notified_at` stays null so the gap is visible rather
+than invisible.
 
 **When there is no `line_user_id`** — the physician logged in by OTP but never
 had a LINE ID token captured (the `openid`-scope problem in
 `SUPABASE_TABLES.md`) — fall back to the **email** reply the pipeline can
 already send. We know their address; it is the PK of `physicians`.
 
-One new GitHub Actions secret: `LINE_ACCESS_TOKEN` (the value Vercel already
-holds).
+**No new secret.** `.github/workflows/send-carousel.yml` already resolves
+`secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN` for exactly this API, and
+`LINE_TOKEN` is what the rich-menu workflows use. `automation/line-push.js`
+reads the same pair.
 
 ### 7.5 What the admin gets — the Telegram message
 
@@ -784,7 +820,9 @@ triggers use.
    `web/README.md` has been blocked on — worth resolving once, for both.
 2. Create the bucket and run the SQL in §6 (SQL Editor, per
    `SUPABASE_MIGRATIONS.md`).
-3. Add `LINE_ACCESS_TOKEN` to GitHub Actions secrets.
+3. Check the LINE Official Account's message-quota plan against the push
+   budget in §7.4. No new secret is needed — `LINE_ACCESS_TOKEN` /
+   `LINE_TOKEN` are already GitHub Actions secrets.
 
 **Phase 1 — backend, testable with no UI.** Queue table, RPCs, worker,
 workflow. Verify by inserting a queue row by hand against a file uploaded with
