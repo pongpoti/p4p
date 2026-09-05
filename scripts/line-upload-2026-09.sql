@@ -395,7 +395,19 @@ begin
     from public.physicians p
    where p.email = v_email and p.active;
 
-  if v_full_name is not null and to_regclass('public.' || p_month) is not null then
+  -- Same format gate as enqueue_p4p_upload(), and for the same two reasons:
+  -- to_regclass() alone would happily match ANY existing public-schema
+  -- table, not just a roster table, and this function then queries whatever
+  -- it finds for firstname/lastname/submitted_at columns via dynamic SQL —
+  -- a caller passing e.g. p_month='physicians' would get a real Postgres
+  -- "column does not exist" error back through PostgREST, a small but real
+  -- schema-fingerprinting leak. %I already makes the dynamic query itself
+  -- injection-safe regardless; this gate is about not touching a
+  -- non-roster table at all, and about the two functions agreeing on what
+  -- "a valid month key" even means.
+  if v_full_name is not null
+     and p_month ~ '^(24|25|26)[0-9]{2}_(0[1-9]|1[0-2])$'
+     and to_regclass('public.' || p_month) is not null then
     v_norm_name := lower(regexp_replace(trim(v_full_name), '\s+', ' ', 'g'));
     execute format(
       'select submitted_at from public.%I
@@ -454,14 +466,24 @@ grant execute on function public.my_p4p_uploads(integer) to authenticated;
 --  bypasses RLS on its own. Restricting EXECUTE to service_role below is
 --  belt-and-suspenders, matching this repo's existing style of being
 --  explicit about grants (see security-rls-auth.sql).
+--
+--  Both `returns setof`, not a bare composite. This was caught by running
+--  it, not by reading it: a function declared to return a single
+--  `public.p4p_upload_queue` value ALWAYS produces exactly one row of
+--  output, even when nothing matched — a row with every field null. The
+--  design's own prose everywhere else says "claim_p4p_archive() returns
+--  nothing" when the queue is empty; a caller trusting that (checking
+--  `if (!data)`, or `if (data.length === 0)`) would instead get one
+--  falsy-looking-but-truthy object and try to process a queue row that
+--  does not exist. `setof` + a bare `UPDATE ... RETURNING` (no PL/pgSQL
+--  variable needed) makes "nothing matched" a genuine empty result set —
+--  zero rows, not one row of nulls — which is what every caller in this
+--  design already assumes.
 
 create or replace function public.claim_p4p_score_fallback()
-returns public.p4p_upload_queue
-language plpgsql
+returns setof public.p4p_upload_queue
+language sql
 as $$
-declare
-  v_row public.p4p_upload_queue;
-begin
   update public.p4p_upload_queue q
      set status = 'processing', attempts = attempts + 1, claimed_at = now()
    where q.id = (
@@ -470,9 +492,7 @@ begin
       order by received_at
       limit 1
       for update skip locked)
-  returning q.* into v_row;
-  return v_row;
-end;
+  returning q.*;
 $$;
 
 revoke all on function public.claim_p4p_score_fallback() from public;
@@ -480,12 +500,9 @@ grant execute on function public.claim_p4p_score_fallback() to service_role;
 
 
 create or replace function public.claim_p4p_archive()
-returns public.p4p_upload_queue
-language plpgsql
+returns setof public.p4p_upload_queue
+language sql
 as $$
-declare
-  v_row public.p4p_upload_queue;
-begin
   update public.p4p_upload_queue q
      set archive_attempts = archive_attempts + 1,
          archive_last_attempt_at = now()
@@ -498,9 +515,7 @@ begin
       order by received_at
       limit 1
       for update skip locked)
-  returning q.* into v_row;
-  return v_row;
-end;
+  returning q.*;
 $$;
 
 revoke all on function public.claim_p4p_archive() from public;
