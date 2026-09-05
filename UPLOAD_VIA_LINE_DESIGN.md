@@ -273,7 +273,7 @@ everything else Supabase.
 
 | State | Content |
 |---|---|
-| **Identity** | `นพ. สมชาย ใจดี — อายุรกรรม`, from `my_p4p_identity()`. Not editable. If the physician is not in the selected month's roster: a blocking notice with "ติดต่อผู้ดูแล" — *before* they pick a file, not after they wait. |
+| **Identity** | `นพ. สมชาย ใจดี — อายุรกรรม`, from `my_p4p_identity()`. Not editable. When `in_roster` comes back false: an **advisory** notice, never a block — "ไม่พบชื่อท่านในรายชื่อเดือนนี้ — ส่งได้ตามปกติ ระบบจะจับคู่ให้ภายหลัง", plus a "ติดต่อผู้ดูแล" link for the case where it really is wrong. See §5.5 for why this must not be the gate it looks like it should be. |
 | **Month** | Six chips from `MONTH_ITERATOR` (`src/constants.cjs`), same accent colours as every other page, **defaulting to the previous month** — the month people are actually submitting for. Each chip shows this physician's own `submitted_at` if any ("ส่งแล้ว 12 มิ.ย. 14:32", readable under the existing 4-column grant) and the month's deadline. |
 | **Deadline** | `กำหนดส่ง 10 ก.ค. 23:59`. Past it, an amber banner: the upload will still be recorded and scored, but ranking counts it as late. Say this **before** the upload, never after. |
 | **File** | `<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">` — LINE's own picker, which reaches Files / Drive / iCloud. Client-side checks in §5.3. |
@@ -312,6 +312,69 @@ To keep the eventual port cheap, month-window / deadline / file-validation
 helpers go in `assets/shared.js` (the existing shared browser lib, already
 watched by `web/lib/__tests__/parity.test.ts`) rather than inline in
 `upload/app.js`.
+
+### 5.5 Who actually reaches this page — and three cases the gate alone does not serve
+
+The gate (§5.1) settles *whether* someone gets in. It does not settle whether
+the page then works for them. Walking the real user types found three cases
+where it doesn't, all invisible if you only test as a fully-bound physician
+whose name matches their roster row.
+
+| Who | Reaches `/upload/`? | What they get |
+|---|---|---|
+| Active physician, LINE-bound, live session | yes, directly | the full flow |
+| Active physician, LINE-bound, stale session | yes, after `/verify/`'s silent reauth bounces them back | the full flow, one extra redirect |
+| **Active physician, never LINE-bound** | yes, after email OTP | uploads and scores fine — **but the deferred tier's chat notification cannot reach them.** Gap 1. |
+| **Physician whose name is spelled differently in `physicians` vs the roster** | yes | `in_roster: false`, though they *are* in the roster. Gap 2. |
+| Deactivated physician (`active = false`) | **no** | bounced at `servePage()` with `reason=blocked`; `enqueue_p4p_upload()` refuses independently. Correctly double-gated. |
+| Not on the allow-list | **no** | never gets a session; lands on `/verify/`'s access-request form. |
+| **Desktop / non-LINE browser** | yes — nothing stops them | Gap 3. |
+| Admin | only if also an allow-listed physician | the `/admin/` panels (§7.7 rec 2) are their surface, not this page. |
+| Department head | n/a | email recipient only; never touches this page. |
+
+**Gap 1 — an unbound physician has no chat identity to notify.** §7.5's pull
+mechanism resolves the queue row `source.userId` → `physicians.line_user_id`
+→ latest row. With `line_user_id` null there is nothing to resolve, so the
+ACK reply and the postback both fail. The *instant* tier is unaffected —
+`liff.sendMessages()` posts as the user and needs no stored binding — so this
+only bites the deferred tier, which is also the tier that most needs a
+notification.
+
+**Fix, and it is nearly free: bind opportunistically on first upload.**
+`/upload/` is a LIFF app holding a live access token in its `<meta>` (§5.1),
+and the machinery already exists — `supabase/functions/line-verify`'s
+`mode: "bind"` takes exactly `{ access_token, id_token }`, validates the
+session against GoTrue for the email and the ID token against LINE for the
+`line_user_id`, and writes both onto the `physicians` row. So on page boot,
+best-effort and non-blocking: `liff.getIDToken()` → if present, POST that
+pair to the Edge Function. A physician who has only ever logged in by OTP
+becomes bound the first time they open the upload page, and every later
+notification works. Two preconditions, both already in Phase 0: the new LIFF
+app needs the `openid` scope (else `getIDToken()` returns null and this
+silently no-ops, which is the correct degradation), and it must sit under the
+**same LINE Login channel** as `/verify/`'s app — `LINE_LOGIN_CHANNEL_ID` is
+what the function checks the token's audience against, so an app registered
+under a different Login channel fails that check.
+
+**Gap 2 — `in_roster: false` is not "not in the roster".** It is "the *exact*
+name match missed", which is the same condition that leaves `roster_index`
+null (§6.3, §7.8) — and exactly the condition `matchName()`'s fuzzy matching
+exists to rescue. Treating it as a blocking gate, which an earlier draft of
+§5.2 did, locks a legitimate physician out of submitting entirely because two
+records spell their name slightly differently. That is strictly worse than
+the thing it was trying to prevent: a wrong-month upload is recoverable, a
+physician who cannot submit at all is not. So it is advisory copy, and the
+file goes through the deferred path where the fuzzy matcher gets its turn.
+(`physicians.roster_name`, §6.6, is what actually shrinks this population.)
+
+**Gap 3 — the desktop guard matters more here than on the read-only pages.**
+`/status/`, `/list/` and `/ranking/` each check `/Line\//` in the UA and show
+an "open via LINE" block. `/upload/` needs the same, and for a sharper
+reason: outside the LIFF browser `liff.sendMessages()` is unavailable, so a
+desktop upload would score correctly and then silently produce no chat
+receipt at all — the physician sees the number on screen, closes the tab, and
+has nothing to show for it. Reuse the same block the other three pages use.
+Uploading from a desktop is not a use case worth supporting halfway.
 
 ---
 
@@ -1680,9 +1743,12 @@ real receipt directly, once, as soon as Phase 1's `/upload/score` returns)
 needs no chain at all and ships with Phase 1, not here.
 
 **Phase 3 — the page.** `upload/index.html`, `upload/app.js`, the `gatedPages`
-entry, the static mount, `vercel.json`. Reachable by URL, not linked from
-anywhere. Test with two or three volunteers — this is the first point real
-physicians touch any of it.
+entry, the static mounts, `vercel.json`. Reachable by URL, not linked from
+anywhere. Includes §5.5's three: the desktop guard, the advisory (never
+blocking) `in_roster` copy, and the boot-time opportunistic bind. Test with
+two or three volunteers — and make sure at least one of them is a physician
+who has only ever logged in by email OTP, since that is the case §5.5's
+Gap 1 is about and it is invisible when testing as a bound account.
 
 **Phase 4 — the rich menu.** Edit the SVG and `setup-richmenu.mjs`, run it
 once. This is the moment the feature exists for everyone; everything behind it
@@ -1797,7 +1863,7 @@ repo-scoped token in the browser. Never.
 |---|---|
 | `src/richmenu.svg` | `2500×1686`, fourth full-width block, fourth gradient |
 | `scripts/setup-richmenu.mjs` | menu size + fourth area → the upload LIFF URI; a `ดูผลล่าสุด` postback area if §7.5's fallback submenu is needed |
-| `upload/index.html`, `upload/app.js` | **new** — the page; calls `POST /upload/score` and `liff.sendMessages()` |
+| `upload/index.html`, `upload/app.js` | **new** — the page; calls `POST /upload/score` and `liff.sendMessages()`. Also carries the same `/Line\//` desktop guard the other three pages use, and a best-effort `line-verify` `mode:"bind"` call on boot so OTP-only physicians get a `line_user_id` (both §5.5) |
 | `assets/shared.js` | month window / deadline / file-validation helpers (shared with the eventual `web/` port) |
 | `package.json` (root) | **new dependency** — `exceljs`, lazy-`require`d only inside the upload handler (§7.7 rec 4) |
 | `lib/p4p-score.js` (root, **new**) | vendored copy of `resolveScore`/`extractScoreFromRows` + the zip-guard/parse-timeout wrapper — kept honest by the parity test below (§7.7 rec 5) |
@@ -1810,6 +1876,7 @@ repo-scoped token in the browser. Never.
 | `automation/line-push.js` | **new** — LINE push transport for the failure case only; success is a free reply (§7.5), not a push |
 | `lib/line-receipt-flex.js` (root, **new**) | The success-receipt builder (§7.4's visual spec), written with no `window`/`document` reference so it loads two ways from one file: `require()`d by `main.js` (same root tree, no isolation boundary — needed for the deferred tier's postback-triggered reply, §7.5 step ④) and `<script src="/lib/line-receipt-flex.js">`'d by `upload/index.html` (needed for the common tier's own `liff.sendMessages()` call, §7.5). Root and browser can share this way because nothing isolates them from each other (unlike `automation/`, C8) — one file, one visual spec, two runtimes. |
 | `automation/templates/line-receipt.js` | **new**, and **not** the same file as the row above — `automation/`'s C8 isolation means it cannot `require()` anything under root `lib/` regardless of module format. Builds the one thing this runtime ever sends: the failure bubble pushed for a terminal fallback-tier failure (§7.2/§12). A small, presentation-only duplication of the success bubble's *shape*, accepted rather than solved — lower-stakes than `resolveScore()`'s duplication (§7.7 rec 5), which is why it doesn't get the same parity-test treatment. |
+| `supabase/functions/line-verify` | **unchanged** — `/upload/` reuses its existing `mode:"bind"` for the §5.5 opportunistic binding. Listed only so nobody re-implements binding; the precondition is that the new LIFF app sits under the same LINE Login channel, per §13 Phase 0 |
 | `automation/telegram.js` | optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.6); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **new** — long-polling archive drain (§7.3), plus the `archive_pending` age alert (§7.7 rec 2) |
 | `.github/workflows/upload-drain.yml` | **new** — hourly relay + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
