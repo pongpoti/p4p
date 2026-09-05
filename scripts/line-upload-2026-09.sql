@@ -18,7 +18,11 @@
 --      exact 1h/4h boundaries (59 vs 61 minutes, 3h59m vs 4h1m) — which is
 --      how an off-by-one between this file's original formula and its own
 --      "1h, 2h, 4h…" doc comment was actually caught and fixed, not just
---      asserted correct. None of that reaches "verified" for a satisfied
+--      asserted correct. The same discipline caught the worst bug in this
+--      file: two roster rows sharing a name made the exact-match step return
+--      the WRONG physician's index labelled 'exact' (see part 3, step 7) —
+--      found only by seeding two same-named physicians and looking at which
+--      index came back. None of that reaches "verified" for a satisfied
 --      Supabase project, though — it was never run against real RLS-aware
 --      PostgREST request flow, real `auth.jwt()` claim shapes, or this
 --      project's actual `physicians`/roster-table data. Test on staging
@@ -106,8 +110,14 @@ create policy "p4p_uploads_own_folder_insert"
   );
 
 -- Object path convention (enforced by the policy above, not by a constraint —
--- Storage has no column-level checks on `name` beyond what a policy can see):
---   p4p-uploads/<auth.uid()>/<month_key>/<uuid>.xlsx
+-- Storage has no column-level checks on `name` beyond what a policy can see).
+-- The bucket is NOT part of it: storage.objects keeps the key in `name` and
+-- the bucket in `bucket_id`, so `name` — and `object_path` as passed to
+-- enqueue_p4p_upload() — is:
+--   <auth.uid()>/<month_key>/<uuid>.xlsx
+-- A browser that helpfully prefixes "p4p-uploads/" fails the ownership check
+-- in Part 3 on every upload, with an error about permissions rather than
+-- about the extra path segment actually causing it.
 
 
 -- ============================================================================
@@ -243,6 +253,7 @@ declare
   v_department   text;
   v_line_user_id text;
   v_roster_index bigint;
+  v_match_ids    bigint[];
   v_queue_id     uuid;
   v_roster_match text := 'none';
   v_deadline     timestamptz;
@@ -312,18 +323,36 @@ begin
   -- this file's own header comment on why the normalisation here doesn't
   -- need to be byte-identical to automation/'s normalise(): a mismatch
   -- only ever causes an unnecessary defer, never a wrong match.
+  --
+  -- AMBIGUITY MUST DEFER, NEVER GUESS. Collecting the ids and requiring
+  -- exactly one is the entire point of this shape. An earlier draft selected
+  -- INTO a scalar with `limit 2`, which silently takes the FIRST row when two
+  -- physicians share a name — and Thai full names repeat often enough across
+  -- ~200 physicians that this is a real case, not a theoretical one. Tested
+  -- against two same-named roster rows: it returned the WRONG physician's
+  -- index, labelled 'exact', which /upload/score would hand straight to
+  -- saveScore() — writing one physician's pay-affecting score onto another's
+  -- roster row, while the receipt told the uploader it saved fine.
+  -- matchName() in automation/ already refuses exactly this ("2+ rows match
+  -- → ambiguous, return null — safer than a wrong match"); so does this now.
+  -- Two same-named physicians therefore defer here, matchName() declines for
+  -- the same reason, and the file surfaces as an unmatched submission for a
+  -- human to attribute — the only correct outcome when the data genuinely
+  -- cannot tell them apart.
   v_norm_name := lower(regexp_replace(trim(v_full_name), '\s+', ' ', 'g'));
   execute format(
-    'select index from public.%I
-       where lower(regexp_replace(trim(coalesce(firstname,'''') || '' '' || coalesce(lastname,'''')), ''\s+'', '' '', ''g'')) = $1
-       limit 2',
+    'select array_agg(index) from (
+       select index from public.%I
+        where lower(regexp_replace(trim(coalesce(firstname,'''') || '' '' || coalesce(lastname,'''')), ''\s+'', '' '', ''g'')) = $1
+        limit 2) t',
     p_month_key
-  ) into v_roster_index using v_norm_name;
-  -- (limit 2 + relying on "into" taking the first row is intentional here:
-  -- if this ever needs to distinguish "0 matches" from "2+ matches" the
-  -- way the JS fast-path does for single-token names, switch this to a
-  -- FOR loop with an explicit count — not needed for the common case of a
-  -- full "first last" name, which is what `full_name` already is.)
+  ) into v_match_ids using v_norm_name;
+
+  if v_match_ids is not null and array_length(v_match_ids, 1) = 1 then
+    v_roster_index := v_match_ids[1];
+  else
+    v_roster_index := null;   -- 0 matches, or 2+ (ambiguous) — both defer
+  end if;
 
   if v_roster_index is not null then
     v_roster_match := 'exact';
