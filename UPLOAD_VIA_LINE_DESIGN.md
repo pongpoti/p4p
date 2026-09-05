@@ -103,6 +103,10 @@ Properties worth naming, because each one is a decision:
   forked. `automation/excel-parse.js`'s own header documents what happened last
   time this logic was copy-pasted — a fix in one copy had no way to reach the
   other. That mistake is not worth repeating at a larger scale.
+- **The score is computed synchronously; only the Drive archive is queued.**
+  See §7.7 — that variant is the chosen one, and it changes what the queue
+  carries. The rest of this document describes the pipeline the queue feeds,
+  which is unchanged either way.
 - **The queue is the durability boundary.** Once the row exists the submission
   is safe: the workflow can fail, the runner can die, Drive can be down, and
   the file is still there with `received_at` recorded.
@@ -863,6 +867,98 @@ Shape notes:
   one path or the other, and both paths notify. The new traffic is retries and
   the two new warning classes.
 
+### 7.7 Instant scoring — the chosen variant, and what it costs
+
+**Decided:** the score is computed **synchronously**, during the upload
+request, and the receipt goes out immediately. The background worker keeps only
+the part that genuinely needs a credential the web tier does not have — the
+Google Drive archive.
+
+```
+physician taps ส่งไฟล์
+   │
+   ├─ browser → Storage (bytes)                        as before
+   ├─ browser → POST /upload/score  (main.js)          NEW
+   │     parse → resolveScore() → month cross-check
+   │     → saveScore() + logSubmission() via service role
+   │     ← { score, month, late }                      ~1–2 s
+   ├─ page shows the score
+   ├─ page → liff.sendMessages(Flex receipt)           free AND instant
+   └─ queue row enqueued with status 'archive_pending'
+         │
+         └─ long-poll worker → extractFirstSheetBuffer → drive.uploadFile
+```
+
+Why this is even possible: `resolveScore()` already computes the number in pure
+JS before Claude is called — `analyseJson`'s prompt then says "USE THIS VALUE".
+Claude's real job is deciding **who** and **which month**, and on this path both
+are already known (§8). So the fast leg needs no Anthropic key, no Google
+credential, and no network call at all beyond Supabase.
+
+#### The drawbacks, ranked
+
+**1. A receipt cannot be un-sent — and the score is no longer Claude-checked.**
+Today `analysis.score` is *Claude's* answer, steered hard toward the JS value
+but free to differ. Dropping Claude from the fast path silently changes the
+score in whatever edge cases it currently corrects, and these scores decide
+ranking. Worse, if the background worker still runs `analyseJson` as a checker
+and disagrees, there are only two options: change a number the physician has
+already screenshotted, or leave it wrong.
+
+*This is the decision, not a detail.* Resolve it with evidence before building:
+every run log already prints both numbers —
+
+```
+🔢  JS score pre-scan: 1842.50 (sum of sub-total rows)
+✅  Score     : 1842.50            ← Claude's answer
+```
+
+— so a pass over a few months of Actions logs answers "does Claude ever
+disagree?" definitively. If it never does, drop it from the fast path with
+confidence. If it does, the fast path is not safe as designed and the honest
+options are to keep Claude in the synchronous call (adds ~2–10 s, still far
+better than a queue) or to show the instant number as provisional, which gives
+up most of what this variant is for.
+
+**2. A score can now exist with no archived file.** Today Drive-before-score is
+an invariant; this breaks it. `drive-client.js` deliberately does not
+auto-create folders — a missing month folder throws. Today that failure is
+loud: nothing saves. Afterwards it is quiet: every score saves and every
+archive fails, while `process/`'s SK03/merge step silently builds a month
+missing those files. **Add a "scored but not archived" panel to `/admin/`,
+and alert on any `archive_pending` row older than an hour.** The queue
+guarantees retries; it does not guarantee anyone looks.
+
+**3. Untrusted xlsx parsing moves into the web server.** Today a hostile
+workbook is parsed on a disposable GitHub runner. Afterwards it is parsed
+inside the Vercel function that holds `SUPABASE_SERVICE_ROLE_KEY`. The
+zip-entry / uncompressed-size guard in §11 stops being a nice-to-have and
+becomes a precondition — enforced **before** `ExcelJS.load()`, alongside the
+5 MB cap.
+
+**4. `exceljs` enters the production build.** This is C8, conceded knowingly:
+it is pure JS with no native build, unlike `googleapis`. But `vercel.json`
+routes *every* path to the single `main.js` function, so a top-level
+`require("exceljs")` would put its import cost on `/status/`, `/list/` and
+`/verify/` too. **Require it lazily, inside the upload handler only.**
+
+**5. Two places now parse workbooks, and more code, not less.** The scoring
+functions must move to one shared module that both Vercel and `automation/`
+import — the mistake `automation/excel-parse.js`'s header already documents,
+now with a second runtime to drift against. Extend the parity guard to cover
+it. And the async path does not go away: a slow phone, a big file or a cold
+function still needs the "still working, we will notify you" fallback, so both
+paths are maintained rather than one replaced.
+
+#### One consequence worth a policy decision
+
+An instant score plus `logSubmission`'s ignore-duplicates rule (first timestamp
+wins, §9) means a physician can upload, dislike the number, adjust the
+workbook, and re-upload with no cost to their punctuality — as many times as
+they like. That is either "good, they can fix their own mistakes quickly" or
+"score-shopping", and it is a policy call rather than a technical one. If it
+matters, the cheap control is to count uploads per `(email, month_key)` on the
+queue and surface the count in `/admin/` — visibility rather than a limit.
 ---
 
 ## 8. What this path deletes
