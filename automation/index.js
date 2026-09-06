@@ -130,7 +130,11 @@ async function firstSheetToRows(buffer, { targetMonth = null, targetYear = null 
   // writes the month in a title row, so candidate sheets get read too. The
   // year counts as much as the month — a physician who keeps every month of
   // every year in one file has more than one "July". See sheetMatchScore.
-  if (targetMonth !== null && workbook.worksheets.length > 1) {
+  // Single-sheet workbooks are scored too, so `matched` means "this file
+  // identified itself as the month asked for" rather than "there were
+  // several sheets and one of them did".
+  let matched = false;
+  if (targetMonth !== null) {
     const defaultIndex = wsIndex;
     let bestScore = 0;
     workbook.worksheets.forEach((ws, i) => {
@@ -141,13 +145,14 @@ async function firstSheetToRows(buffer, { targetMonth = null, targetYear = null 
         wsIndex = i;
       }
     });
+    matched = bestScore > 0;
     if (bestScore > 0 && wsIndex !== defaultIndex) {
       console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet "${workbook.worksheets[wsIndex].name}" (index ${wsIndex}, match ${bestScore}) over default "${allSheets[defaultIndex]}"`);
     }
   }
 
   const worksheet = workbook.worksheets[wsIndex];
-  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex] };
+  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex], matched };
 }
 
 /** One worksheet -> the col_N row objects the extractor and Claude expect. */
@@ -616,9 +621,9 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
       ?? resolveBeYear("", "", "", emailDate);
 
   // Parse workbook
-  let rows, allSheets, chosenSheet;
+  let rows, allSheets, chosenSheet, matchedSheet;
   try {
-    ({ rows, allSheets, chosenSheet } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
+    ({ rows, allSheets, chosenSheet, matched: matchedSheet } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
   } catch (err) {
     console.error(`│        ❌  Failed to parse workbook: ${err.message}`);
     await sendTelegram(formatErrorMessage(`Workbook parse failed: ${err.message}`, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
@@ -737,6 +742,21 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
       });
       return "rejected";
     }
+  }
+
+  // ── The workbook must identify itself as the month picked (upload only) ──
+  // The chip says what the physician MEANT to send; a tab named for that
+  // month, or a title row naming it, is the file saying what they actually
+  // sent. Without one there is nothing to check the chip against. The email
+  // path is deliberately exempt: there the sender's own words already carry
+  // that statement, and its own rules cover the rest.
+  if (monthKey && !matchedSheet) {
+    const detail = `ไม่พบเดือน ${displayMonthKey(monthKey)} ในไฟล์นี้`;
+    console.error(`│        ❌  month_not_found: no sheet identifies ${monthKey} (sheets: ${allSheets.join(", ")})`);
+    await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" })))
+      .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    await notifyFailure("month_not_found", { detail });
+    return "rejected";
   }
 
   // The month everything downstream writes to. On the upload path the

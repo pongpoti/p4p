@@ -889,8 +889,9 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // left holding the request open against Vercel's execution limit.
   const score = require("./lib/p4p-score")
   let rows
+  let matched
   try {
-    ({ rows } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, targetYear: beYear, timeoutMs: 7000 }))
+    ({ rows, matched } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, targetYear: beYear, timeoutMs: 7000 }))
   } catch (e) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
@@ -906,6 +907,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
     return reject("other", "ไฟล์มีข้อมูลไม่ครบ (" + nonNullCount + " ช่อง)")
   }
 
+
   // Month cross-check — the one mistake this path can still make is a file
   // whose contents say July uploaded under June. Only a month or year that
   // actually resolved counts: an unstated month is not a mismatch.
@@ -914,6 +916,16 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")
     return reject("month_mismatch", "ไฟล์ระบุเดือน " + inferredKey + " แต่เลือกส่งเดือน " + monthKey)
+  }
+
+  // Ordering matters: the check above fires when the file names a DIFFERENT
+  // month, which is the more precise complaint. Reaching here means it named
+  // no month this route could match at all — a tab named for the picked month
+  // or a title row naming it. Without one there is nothing to check the chip
+  // against: the file would be scored on the physician's word alone, and a
+  // wrong attachment would look exactly like a right one.
+  if (!matched) {
+    return reject("month_not_found", "ไม่พบเดือน " + receipt.displayMonth(monthKey) + " ในไฟล์นี้")
   }
 
   const { score: value, method } = score.resolveScore(rows)

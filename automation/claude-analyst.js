@@ -10,7 +10,6 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { MAX_ROW_JSON_CHARS, CLAUDE_MAX_TOKENS } from "./config.js";
-import { MONTH_TOKENS_BY_NUM } from "./months.js";
 
 // ── Singleton client ───────────────────────────────────────────────────────
 let _client = null;
@@ -129,21 +128,21 @@ export function resolveBeYearFromRows(rows) {
 // match both "ก.ค" and "ก.ค." — that is the form Thai documents actually
 // use, and the form this app's own THAI_MONTHS_SHORT prints.
 const MONTH_TOKEN_MAP = [
-  ["มกราคม",1],["January",1],["ม.ค",1],["มกรา",1],["มกร",1],["มค",1],
-  ["กุมภาพันธ์",2],["February",2],["ก.พ",2],["กุมภา",2],["กุมภ",2],["กพ",2],
-  ["มีนาคม",3],["March",3],["มี.ค",3],["มีนา",3],["มีน",3],["มีค",3],
-  ["เมษายน",4],["April",4],["เม.ย",4],["เมษา",4],["เมษ",4],["เมย",4],
+  ["มกราคม",1],["January",1],["Jan",1],["ม.ค",1],["มกรา",1],["มกร",1],["มค",1],
+  ["กุมภาพันธ์",2],["February",2],["Feb",2],["ก.พ",2],["กุมภา",2],["กุมภ",2],["กพ",2],
+  ["มีนาคม",3],["March",3],["Mar",3],["มี.ค",3],["มีนา",3],["มีน",3],["มีค",3],
+  ["เมษายน",4],["April",4],["Apr",4],["เม.ย",4],["เมษา",4],["เมษ",4],["เมย",4],
   ["เมศายน",4],["เมศา",4],["เมศ",4],                          // ษ→ศ typo variants
   ["พฤษภาคม",5],["May",5],["พ.ค",5],["พฤษภ",5],["พฤษ",5],["พค",5],
   ["พฤศภาคม",5],["พฤศภ",5],                                    // ษ→ศ typo variants
-  ["มิถุนายน",6],["June",6],["มิ.ย",6],["มิถุน",6],["มิถุ",6],["มิย",6],
-  ["กรกฎาคม",7],["July",7],["ก.ค",7],["กรกฎ",7],["กรก",7],["กค",7],
-  ["สิงหาคม",8],["August",8],["ส.ค",8],["สิงหา",8],["สิงห",8],["สค",8],
-  ["กันยายน",9],["September",9],["ก.ย",9],["กันยา",9],["กันย",9],["กย",9],
-  ["ตุลาคม",10],["October",10],["ต.ค",10],["ตุลา",10],["ตุล",10],["ตค",10],
-  ["พฤศจิกายน",11],["November",11],["พ.ย",11],["พฤศจิ",11],["พฤศ",11],["พย",11],
+  ["มิถุนายน",6],["June",6],["Jun",6],["มิ.ย",6],["มิถุน",6],["มิถุ",6],["มิย",6],
+  ["กรกฎาคม",7],["July",7],["Jul",7],["ก.ค",7],["กรกฎ",7],["กรก",7],["กค",7],
+  ["สิงหาคม",8],["August",8],["Aug",8],["ส.ค",8],["สิงหา",8],["สิงห",8],["สค",8],
+  ["กันยายน",9],["September",9],["Sep",9],["ก.ย",9],["กันยา",9],["กันย",9],["กย",9],
+  ["ตุลาคม",10],["October",10],["Oct",10],["ต.ค",10],["ตุลา",10],["ตุล",10],["ตค",10],
+  ["พฤศจิกายน",11],["November",11],["Nov",11],["พ.ย",11],["พฤศจิ",11],["พฤศ",11],["พย",11],
   ["พฤษจิกายน",11],["พฤษจิ",11],                               // ศ→ษ typo variants
-  ["ธันวาคม",12],["December",12],["ธ.ค",12],["ธันวา",12],["ธันว",12],["ธค",12],
+  ["ธันวาคม",12],["December",12],["Dec",12],["ธ.ค",12],["ธันวา",12],["ธันว",12],["ธค",12],
 ];
 
 /**
@@ -364,14 +363,12 @@ export function resolveBeMonthFromRows(rows) {
  * leftover from the month the file was copied from.
  */
 export function sheetMatchScore(ws, rows, targetMonth, targetYear) {
-  const toks = MONTH_TOKENS_BY_NUM[targetMonth] ?? [];
-  const name = String(ws.name ?? "").toLowerCase();
-  if (toks.some((t) => name.includes(t))) {
-    const y = resolveBeYear("", "", ws.name);
-    if (y && targetYear && y !== targetYear) return 0;
-    return y && targetYear ? 4 : 3;
+  const fromName = monthYearFromText(ws.name);
+  if (fromName.month) {
+    if (fromName.month !== targetMonth) return 0;
+    if (fromName.beYear && targetYear && fromName.beYear !== targetYear) return 0;
+    return fromName.beYear && targetYear ? 4 : 3;
   }
-  if (resolveBeMonth("", "", ws.name)) return 0;
   const hit = monthYearFromRows(rows);
   if (hit.month !== targetMonth) return 0;
   if (hit.beYear && targetYear && hit.beYear !== targetYear) return 0;

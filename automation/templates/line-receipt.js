@@ -43,6 +43,7 @@ const ERROR_TEXT = {
   zero_score: "ไม่พบคะแนนรวมในไฟล์ (คะแนนเป็นศูนย์) กรุณาตรวจสอบไฟล์แล้วส่งใหม่",
   wrong_date: "เดือน/ปีในไฟล์ไม่ถูกต้อง กรุณาตรวจสอบแล้วส่งใหม่",
   month_mismatch: "เดือนในไฟล์ไม่ตรงกับเดือนที่เลือกส่ง กรุณาตรวจสอบแล้วส่งใหม่",
+  month_not_found: "ไม่พบเดือนที่ท่านเลือกในไฟล์นี้ กรุณาตรวจสอบว่าแนบไฟล์ถูกเดือน และระบุเดือนไว้ในชื่อชีตหรือหัวตารางของไฟล์",
   not_in_roster: "ไม่พบรายชื่อของท่านในทะเบียนแพทย์ของเดือนนี้ กรุณาติดต่อผู้ดูแลระบบ",
   physician_not_found: "ไม่พบชื่อแพทย์ในระบบ กรุณาติดต่อผู้ดูแลระบบ",
   oversize: "ไฟล์มีขนาดใหญ่เกิน 5 MB กรุณาลดขนาดไฟล์แล้วส่งใหม่",
@@ -51,7 +52,7 @@ const ERROR_TEXT = {
 
 // A retry button on an unretryable error is worse than no button (§7.4).
 const RETRYABLE = new Set([
-  "wrong_extension", "temp_file", "month_mismatch", "zero_score",
+  "wrong_extension", "temp_file", "month_mismatch", "month_not_found", "zero_score",
   "wrong_date", "oversize", "file_link",
 ]);
 
