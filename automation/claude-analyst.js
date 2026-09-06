@@ -123,28 +123,28 @@ export function resolveBeYearFromRows(rows) {
 // Returns 1–12 from any text source (filename / subject / body).
 // Used to select the correct sheet in multi-sheet workbooks.
 
-const MONTH_TOKEN_MAP = (() => {
-  // Pairs of [token, monthNumber]. Longer tokens listed first so that
-  // e.g. "มกราคม" is matched before the shorter "มกรา" / "มกร".
-  const entries = [
-    ["มกราคม",1],["January",1],["มกรา",1],["มกร",1],["มค",1],
-    ["กุมภาพันธ์",2],["February",2],["กุมภา",2],["กุมภ",2],["กพ",2],
-    ["มีนาคม",3],["March",3],["มีนา",3],["มีน",3],["มีค",3],
-    ["เมษายน",4],["April",4],["เมษา",4],["เมษ",4],["เมย",4],
-    ["เมศายน",4],["เมศา",4],["เมศ",4],                          // ษ→ศ typo variants
-    ["พฤษภาคม",5],["May",5],["พฤษภ",5],["พฤษ",5],["พค",5],
-    ["พฤศภาคม",5],["พฤศภ",5],                                    // ษ→ศ typo variants
-    ["มิถุนายน",6],["June",6],["มิถุน",6],["มิถุ",6],["มิย",6],
-    ["กรกฎาคม",7],["July",7],["กรกฎ",7],["กรก",7],["กค",7],
-    ["สิงหาคม",8],["August",8],["สิงหา",8],["สิงห",8],["สค",8],
-    ["กันยายน",9],["September",9],["กันยา",9],["กันย",9],["กย",9],
-    ["ตุลาคม",10],["October",10],["ตุลา",10],["ตุล",10],["ตค",10],
-    ["พฤศจิกายน",11],["November",11],["พฤศจิ",11],["พฤศ",11],["พย",11],
-    ["พฤษจิกายน",11],["พฤษจิ",11],                               // ศ→ษ typo variants
-    ["ธันวาคม",12],["December",12],["ธันวา",12],["ธันว",12],["ธค",12],
-  ];
-  return entries; // order matters — scan longest-first within each month
-})();
+// Pairs of [token, monthNumber]. Order matters: longer tokens are listed
+// first so that e.g. "มกราคม" is matched before the shorter "มกรา" / "มกร".
+// The dotted forms ("ก.ค") carry no trailing period on purpose, so they
+// match both "ก.ค" and "ก.ค." — that is the form Thai documents actually
+// use, and the form this app's own THAI_MONTHS_SHORT prints.
+const MONTH_TOKEN_MAP = [
+  ["มกราคม",1],["January",1],["ม.ค",1],["มกรา",1],["มกร",1],["มค",1],
+  ["กุมภาพันธ์",2],["February",2],["ก.พ",2],["กุมภา",2],["กุมภ",2],["กพ",2],
+  ["มีนาคม",3],["March",3],["มี.ค",3],["มีนา",3],["มีน",3],["มีค",3],
+  ["เมษายน",4],["April",4],["เม.ย",4],["เมษา",4],["เมษ",4],["เมย",4],
+  ["เมศายน",4],["เมศา",4],["เมศ",4],                          // ษ→ศ typo variants
+  ["พฤษภาคม",5],["May",5],["พ.ค",5],["พฤษภ",5],["พฤษ",5],["พค",5],
+  ["พฤศภาคม",5],["พฤศภ",5],                                    // ษ→ศ typo variants
+  ["มิถุนายน",6],["June",6],["มิ.ย",6],["มิถุน",6],["มิถุ",6],["มิย",6],
+  ["กรกฎาคม",7],["July",7],["ก.ค",7],["กรกฎ",7],["กรก",7],["กค",7],
+  ["สิงหาคม",8],["August",8],["ส.ค",8],["สิงหา",8],["สิงห",8],["สค",8],
+  ["กันยายน",9],["September",9],["ก.ย",9],["กันยา",9],["กันย",9],["กย",9],
+  ["ตุลาคม",10],["October",10],["ต.ค",10],["ตุลา",10],["ตุล",10],["ตค",10],
+  ["พฤศจิกายน",11],["November",11],["พ.ย",11],["พฤศจิ",11],["พฤศ",11],["พย",11],
+  ["พฤษจิกายน",11],["พฤษจิ",11],                               // ศ→ษ typo variants
+  ["ธันวาคม",12],["December",12],["ธ.ค",12],["ธันวา",12],["ธันว",12],["ธค",12],
+];
 
 /**
  * Extract the month number (1–12) from filename / subject / body.
@@ -173,9 +173,38 @@ export function resolveBeMonth(filename, subject, body) {
  * the text as `body` also skips resolveBeYear's tier-4 (00-42), which would
  * otherwise read every small number in a sheet as a year.
  */
+/**
+ * The month a spreadsheet CELL states, if any. Stricter than resolveBeMonth
+ * because a cell holds running Thai, which has no spaces between words:
+ * "รวมคะแนน" and "แต้มคะแนน" — labels these very scorecards use, and which
+ * sit in SUBTOTAL_LABELS below — both contain "มค" and would otherwise read
+ * as January, rejecting a July upload that was perfectly correct.
+ *
+ * So a token counts anywhere only when it cannot collide: a dotted form
+ * (the period is its own delimiter) or three-plus Thai consonants. The
+ * two-consonant abbreviations need a non-Thai character beside them, which
+ * "กค69", "กค." and a cell that is just "กค" all have, and "รวมคะแนน" does
+ * not. Consonants are counted rather than characters because vowel marks
+ * inflate length: "มีค" is three characters but only two consonants, and is
+ * every bit as collision-prone as "มค".
+ */
+export function monthFromCellText(text) {
+  const s = String(text ?? "");
+  for (const [token, mo] of MONTH_TOKEN_MAP) {
+    if (/^[A-Za-z]+$/.test(token)) {
+      if (new RegExp(`\\b${token}\\b`, "i").test(s)) return mo;
+    } else if (token.includes(".") || (token.match(/[ก-ฮ]/g) ?? []).length >= 3) {
+      if (s.includes(token)) return mo;
+    } else if (new RegExp(`(?:^|[^฀-๿])${token}(?![฀-๿])`).test(s)) {
+      return mo;
+    }
+  }
+  return null;
+}
+
 export function monthYearFromText(text) {
   const s = String(text ?? "");
-  const month = resolveBeMonth("", "", s);
+  const month = monthFromCellText(s);
   if (!month) return { month: null, beYear: null };
   return { month, beYear: resolveBeYear("", "", s) };
 }
