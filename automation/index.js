@@ -11,7 +11,7 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriod } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, periodsInText, sheetMatchScore, statedPeriods } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
@@ -422,6 +422,8 @@ const ALERT_SUBJECTS = {
   zero_score          : "[แจ้งข้อผิดพลาด] คะแนนรวมเป็นศูนย์",
   wrong_date          : "[แจ้งข้อผิดพลาด] วันที่/เดือน/ปีในไฟล์ไม่ถูกต้อง",
   physician_not_found : "[แจ้งข้อผิดพลาด] ไม่พบชื่อแพทย์ในระบบ",
+  no_period           : "[แจ้งข้อผิดพลาด] ไม่ได้ระบุเดือนที่ส่ง",
+  ambiguous_period    : "[แจ้งข้อผิดพลาด] ระบุหลายเดือนในอีเมลเดียว",
   other           : "[แจ้งข้อผิดพลาด] ไม่สามารถประมวลผลไฟล์ P4P ได้",
 };
 
@@ -491,7 +493,7 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
  * @param {null|{ok,fail}} [context.notify]  Replaces the inline Gmail replies
  *   when identity is set. The pipeline stops knowing which channel it is.
  */
-export async function processBuffer(buffer, { subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null }) {
+export async function processBuffer(buffer, { subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1 }) {
   const isUpload = identity !== null;
 
   // Telegram context for the upload path — the admin's question changes from
@@ -546,9 +548,52 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   // would route a year wrong. It stays a last resort for sheet selection
   // below, where guessing wrong only costs a fallback rather than a score in
   // the wrong table.
-  const stated = monthKey ? { month: null, beYear: null } : statedPeriod(filename ?? "", subject, body);
-  const routingMonth = stated.month;
-  const routingYear = stated.beYear;
+  // A submission has to SAY which month it is for. The workbook's own contents
+  // are never enough on their own: a physician who keeps every month in one
+  // file has no way of telling us which of them this send is about, and
+  // guessing on their behalf is how one month's work ends up filed as
+  // another's. Three rules, all email-path only — the LIFF page asks for the
+  // month up front, so monthKey is already an explicit answer.
+  let routingMonth = null;
+  let routingYear = null;
+  if (!monthKey) {
+    const { periods } = statedPeriods(filename ?? "", subject, body);
+
+    if (periods.length === 0) {
+      const detail = "ไม่พบเดือนที่ระบุในอีเมลหรือชื่อไฟล์ กรุณาระบุเดือนที่ต้องการส่ง เช่น \"ส่ง P4P เดือน ก.ค. 2569\"";
+      console.error(`│        ❌  no_period: nothing in subject, body or filename names a month`);
+      await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "no_period" })))
+        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+      await notifyFailure("no_period", { detail });
+      return "rejected";
+    }
+
+    if (periods.length > 1) {
+      const named = periods.map((p) => `${p.beYear ?? "?"}_${String(p.month).padStart(2, "0")}`).join(", ");
+      // More than one period named, and one workbook: nothing says which of
+      // them this file is. With several workbooks the send can still be
+      // honoured, but only if each file names its own period — its filename is
+      // the only per-file signal there is, since matching by contents is the
+      // very guess these rules exist to avoid.
+      const ownPeriods = workbookCount > 1 ? periodsInText(filename ?? "") : [];
+      if (ownPeriods.length !== 1) {
+        const detail = workbookCount > 1
+          ? `อีเมลระบุหลายเดือน (${named}) กรุณาตั้งชื่อไฟล์ให้ระบุเดือนของแต่ละไฟล์ เช่น "P4P ก.ค. 2569.xlsx"`
+          : `อีเมลระบุหลายเดือน (${named}) แต่แนบไฟล์มาไฟล์เดียว กรุณาส่งแยกอีเมลละหนึ่งเดือน`;
+        console.error(`│        ❌  ambiguous_period: ${named} across ${workbookCount} workbook(s)`);
+        await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "ambiguous_period" })))
+          .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+        await notifyFailure("ambiguous_period", { detail });
+        return "rejected";
+      }
+      console.log(`│        📅  Multi-month mail (${named}) — this file names ${ownPeriods[0].beYear}_${String(ownPeriods[0].month).padStart(2, "0")}`);
+      routingMonth = ownPeriods[0].month;
+      routingYear = ownPeriods[0].beYear;
+    } else {
+      routingMonth = periods[0].month;
+      routingYear = periods[0].beYear;
+    }
+  }
 
   // Sheet selection still needs a month number even when routing does not:
   // a physician who accumulates every month in one workbook uploads the same
@@ -989,7 +1034,7 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
  * Download and process a single Excel attachment through the full pipeline.
  * Extracted so multiple attachments can be processed in parallel via Promise.allSettled.
  */
-async function processAttachment(att, messageId, context, gmail) {
+async function processAttachment(att, messageId, context, gmail, workbookCount = 1) {
   const excel = isExcelFile(att.mimeType, att.filename);
 
   console.log(`│`);
@@ -1039,7 +1084,7 @@ async function processAttachment(att, messageId, context, gmail) {
     return "replied";
   }
 
-  return processBuffer(buffer, { ...context, filename: att.filename, gmail });
+  return processBuffer(buffer, { ...context, filename: att.filename, gmail, workbookCount });
 }
 
 async function main() {
@@ -1174,7 +1219,7 @@ async function main() {
                 threadId : msg.threadId,
               };
               const results = await Promise.allSettled(
-                xlsxInMsg.map((att) => processAttachment(att, tm.msg.id, relayContext, gmail))
+                xlsxInMsg.map((att) => processAttachment(att, tm.msg.id, relayContext, gmail, xlsxInMsg.length))
               );
               relayProcessed = results.some((r) => r.status === "fulfilled" && r.value === true);
               results.forEach((r, idx) => {
@@ -1250,7 +1295,7 @@ async function main() {
           threadId : msg.threadId,
         };
         const results = await Promise.allSettled(
-          threadXlsx.atts.map((att) => processAttachment(att, threadXlsx.messageId, context, gmail))
+          threadXlsx.atts.map((att) => processAttachment(att, threadXlsx.messageId, context, gmail, threadXlsx.atts.length))
         );
         processedAnyAttachment = results.some(
           (r) => r.status === "fulfilled" && r.value === true
@@ -1318,8 +1363,9 @@ async function main() {
       emailDate: msg.date,
       threadId : msg.threadId,
     };
+    const workbookCount = attachments.filter((a) => isExcelFile(a.mimeType, a.filename)).length;
     const results = await Promise.allSettled(
-      attachments.map((att) => processAttachment(att, id, context, gmail))
+      attachments.map((att) => processAttachment(att, id, context, gmail, workbookCount))
     );
     processedAnyAttachment = results.some(
       (r) => r.status === "fulfilled" && r.value === true

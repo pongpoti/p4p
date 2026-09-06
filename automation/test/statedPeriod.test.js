@@ -1,52 +1,58 @@
 import { test } from "node:test";
 import assert   from "node:assert/strict";
-import { statedPeriod } from "../claude-analyst.js";
+import { periodsInText, statedPeriods } from "../claude-analyst.js";
 
-// statedPeriod is what an emailed submission is ROUTED on and rejected
-// against, so these cases are mostly about what it must NOT claim to know.
+// What a submission SAYS it is for. The email path refuses to route on
+// anything else, so these cases are mostly about what must NOT be claimed.
 
-test("subject outranks body, body outranks filename", () => {
-  assert.deepEqual(
-    statedPeriod("P4P_2569_01.xlsx", "ส่งงาน ก.ค. 2569", "ผลงาน มิ.ย. 2569"),
-    { month: 7, beYear: 2569 },
-  );
-  assert.deepEqual(
-    statedPeriod("P4P_2569_01.xlsx", "", "ผลงานเดือน มิ.ย. 2569"),
+test("every period in a line is found, each with the year written beside it", () => {
+  assert.deepEqual(periodsInText("ส่ง ก.ค. 2569"), [{ month: 7, beYear: 2569 }]);
+  assert.deepEqual(periodsInText("ส่งงานเดือน มิ.ย. และ ก.ค. 2569"), [
     { month: 6, beYear: 2569 },
-  );
-  assert.deepEqual(
-    statedPeriod("P4P_กค_2569.xlsx", "ส่งไฟล์ครับ", ""),
     { month: 7, beYear: 2569 },
-  );
+  ]);
 });
 
-test("a body that merely says 'รวมคะแนน' does not state January", () => {
-  // "รวมคะแนน" contains "มค". Reading it as January here would reject a
-  // correct July file, so the strict cell-text matcher is used instead of
-  // resolveBeMonth's plain substring search.
+test("a month and a year are never spliced out of two different dates", () => {
+  // Read flatly this is "first month, first year" = January 2568, a period
+  // the sender never wrote. Each month must keep its own year.
+  assert.deepEqual(periodsInText("แนบไฟล์ ธ.ค. 2568 และ ม.ค. 2569"), [
+    { month: 12, beYear: 2568 },
+    { month: 1, beYear: 2569 },
+  ]);
+});
+
+test("the same period written twice counts once", () => {
+  assert.deepEqual(periodsInText("ก.ค. 2569 (กรกฎาคม 2569)"), [{ month: 7, beYear: 2569 }]);
+});
+
+test("text that names no month states no period", () => {
+  assert.deepEqual(periodsInText("ส่งไฟล์ครับ"), []);
+  assert.deepEqual(periodsInText("รวมคะแนน 850 คะแนน"), [], "'มค' inside 'รวมคะแนน' is not January");
+  assert.deepEqual(periodsInText("ส่งคะแนน 85 แต้ม"), [], "a stray 85 is a score, not a year");
+  assert.deepEqual(periodsInText(""), []);
+});
+
+test("the mail decides; the filename is consulted only when the mail is silent", () => {
   assert.deepEqual(
-    statedPeriod("P4P.xlsx", "ส่ง P4P ครับ", "รวมคะแนน 850 คะแนน"),
-    { month: null, beYear: null },
+    statedPeriods("P4P_ม.ค._2569.xlsx", "ส่ง P4P ก.ค. 2569", ""),
+    { periods: [{ month: 7, beYear: 2569 }], source: "email" },
   );
-  assert.equal(statedPeriod("P4P.xlsx", "", "แต้มคะแนนเดือนนี้ 850").month, null);
-});
-
-test("a stray two-digit number is not a year", () => {
-  // resolveBeYear's tier 3 would read "85" as 2585 and collide with
-  // everything; only 4-digit years are firm enough to reject on.
   assert.deepEqual(
-    statedPeriod("P4P_2569.xlsx", "ส่งคะแนน 85 แต้ม", ""),
-    { month: null, beYear: 2569 },
+    statedPeriods("P4P ก.ค. 2569.xlsx", "ส่งไฟล์ครับ", ""),
+    { periods: [{ month: 7, beYear: 2569 }], source: "filename" },
   );
-  assert.equal(statedPeriod("P4P.xlsx", "ส่งคะแนน 85 แต้ม", "").beYear, null);
 });
 
-test("a CE year is converted, and a month with no year stays year-less", () => {
-  assert.deepEqual(statedPeriod("", "P4P July 2026", ""), { month: 7, beYear: 2569 });
-  assert.deepEqual(statedPeriod("", "ส่ง ก.ค. ครับ", ""), { month: 7, beYear: null });
+test("subject and body are pooled, so a mail naming two months shows both", () => {
+  const { periods, source } = statedPeriods("P4P.xlsx", "ส่ง P4P ก.ค. 2569", "แนบ มิ.ย. 2569 มาด้วยครับ");
+  assert.equal(source, "email");
+  assert.deepEqual(periods, [{ month: 7, beYear: 2569 }, { month: 6, beYear: 2569 }]);
 });
 
-test("an email that states nothing states nothing", () => {
-  assert.deepEqual(statedPeriod("P4P.xlsx", "ส่งไฟล์ครับ", ""), { month: null, beYear: null });
-  assert.deepEqual(statedPeriod("", "", ""), { month: null, beYear: null });
+test("a submission that states nothing anywhere is reported as such", () => {
+  assert.deepEqual(
+    statedPeriods("P4P.xlsx", "ส่งไฟล์ครับ", ""),
+    { periods: [], source: "none" },
+  );
 });

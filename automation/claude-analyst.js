@@ -221,21 +221,89 @@ export function resolveBeYearByPriority(filename, subject, body) {
  *     becomes 2585 and collides with everything. Two-digit years still work
  *     for sheet selection, where a wrong guess only costs a fallback.
  */
-export function statedPeriod(filename, subject, body) {
-  const sources = [subject ?? "", body ?? "", filename ?? ""];
-  let month = null;
-  for (const s of sources) {
-    month = monthFromCellText(s);
-    if (month) break;
+/** A 4-digit year only. Two-digit years are too loose to route or reject on. */
+function fourDigitBeYear(text) {
+  const be = String(text ?? "").match(/(?<!\d)(25\d{2})(?!\d)/);
+  if (be) return parseInt(be[1], 10);
+  const ce = String(text ?? "").match(/(?<!\d)(20\d{2})(?!\d)/);
+  if (ce) return parseInt(ce[1], 10) + 543;
+  return null;
+}
+
+/** Where a month is first stated in `s`, or -1 — same strict rules as monthFromCellText. */
+function monthTokenIndex(s, token) {
+  if (/^[A-Za-z]+$/.test(token)) {
+    const m = new RegExp(`\\b${token}\\b`, "i").exec(s);
+    return m ? m.index : -1;
   }
-  let beYear = null;
-  for (const s of sources) {
-    const be = s.match(/(?<!\d)(25\d{2})(?!\d)/);
-    if (be) { beYear = parseInt(be[1], 10); break; }
-    const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/);
-    if (ce) { beYear = parseInt(ce[1], 10) + 543; break; }
+  if (token.includes(".") || (token.match(/[ก-ฮ]/g) ?? []).length >= 3) {
+    return s.indexOf(token);
   }
-  return { month, beYear };
+  const m = new RegExp(`(?:^|[^฀-๿])(${token})(?![฀-๿])`).exec(s);
+  return m ? m.index + m[0].length - m[1].length : -1;
+}
+
+/**
+ * EVERY period a piece of text states, in the order they appear —
+ * "ส่ง ธ.ค. 2568 และ ม.ค. 2569" is two periods, not one.
+ *
+ * Each month takes the year written beside it (the slice running up to the
+ * next month mentioned), falling back to the text's single year when a month
+ * is written without one, as in "มิ.ย. และ ก.ค. 2569". Pairing them this way
+ * is what stops a month and a year being spliced out of two different dates:
+ * reading that December/January example as a flat "first month, first year"
+ * produced January 2568, a period the sender never wrote.
+ */
+export function periodsInText(text) {
+  const s = String(text ?? "");
+  const hits = [];
+  for (let mo = 1; mo <= 12; mo++) {
+    let at = -1;
+    for (const [token, m] of MONTH_TOKEN_MAP) {
+      if (m !== mo) continue;
+      const i = monthTokenIndex(s, token);
+      if (i >= 0 && (at === -1 || i < at)) at = i;
+    }
+    if (at >= 0) hits.push({ month: mo, at });
+  }
+  hits.sort((a, b) => a.at - b.at);
+
+  const docYear = fourDigitBeYear(s);
+  const seen = new Set();
+  const periods = [];
+  hits.forEach((h, k) => {
+    const end = k + 1 < hits.length ? hits[k + 1].at : s.length;
+    const beYear = fourDigitBeYear(s.slice(h.at, end)) ?? docYear;
+    const key = `${h.month}_${beYear}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    periods.push({ month: h.month, beYear });
+  });
+  return periods;
+}
+
+/**
+ * The periods a submission states, in the order of authority already
+ * established: what the sender wrote (subject and body together) decides, and
+ * the filename is consulted only when the mail itself says nothing.
+ *
+ * Subject and body are pooled rather than ranked against each other because
+ * the question this answers is "how many periods did the sender name?" — a
+ * mail whose subject says July and whose body lists June and July is naming
+ * two, and the caller needs to see both to refuse it.
+ */
+export function statedPeriods(filename, subject, body) {
+  const fromMail = [...periodsInText(subject), ...periodsInText(body)];
+  const seen = new Set();
+  const mail = fromMail.filter((p) => {
+    const key = `${p.month}_${p.beYear}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (mail.length > 0) return { periods: mail, source: "email" };
+  const name = periodsInText(filename);
+  return { periods: name, source: name.length > 0 ? "filename" : "none" };
 }
 
 export function monthFromCellText(text) {
