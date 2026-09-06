@@ -11,14 +11,13 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { checkEnv }                     from "./env-check.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
-import { MONTH_TOKENS_BY_NUM }          from "./months.js";
 import log                              from "./logger.js";
 import * as path                        from "path";
 import { pathToFileURL }                from "url";
@@ -92,7 +91,7 @@ function formatSize(bytes) {
  * @param {{ targetMonth?: number|null }} [opts]  targetMonth 1–12 hints which sheet to use
  *   in multi-sheet workbooks (e.g. physician accumulated all months in one file).
  */
-async function firstSheetToRows(buffer, { targetMonth = null } = {}) {
+async function firstSheetToRows(buffer, { targetMonth = null, targetYear = null } = {}) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
 
@@ -119,24 +118,33 @@ async function firstSheetToRows(buffer, { targetMonth = null } = {}) {
     wsIndex = 1;
   }
 
+  // Scored rather than first-name-wins: tab names answer when they say
+  // anything, but a workbook whose tabs are "Sheet1"/"Sheet2" still usually
+  // writes the month in a title row, so candidate sheets get read too. The
+  // year counts as much as the month — a physician who keeps every month of
+  // every year in one file has more than one "July". See sheetMatchScore.
   if (targetMonth !== null && workbook.worksheets.length > 1) {
-    // Month-number → Thai/English token map lives in months.js (shared)
-    const targetTokens = MONTH_TOKENS_BY_NUM[targetMonth] ?? [];
-
-    const matched = workbook.worksheets.findIndex((ws) => {
-      const name = ws.name.toLowerCase();
-      return targetTokens.some((tok) => name.includes(tok));
-    });
-
-    if (matched !== -1 && nonNullCount(workbook.worksheets[matched]) >= 3) {
-      if (matched !== wsIndex) {
-        console.log(`│        📋  Multi-sheet workbook: target month ${targetMonth} → sheet "${workbook.worksheets[matched].name}" (index ${matched}) over default "${allSheets[wsIndex]}"`);
+    const defaultIndex = wsIndex;
+    let bestScore = 0;
+    workbook.worksheets.forEach((ws, i) => {
+      if (nonNullCount(ws) < 3) return;
+      const s = sheetMatchScore(ws, rowsOfSheet(ws), targetMonth, targetYear);
+      if (s > bestScore) {
+        bestScore = s;
+        wsIndex = i;
       }
-      wsIndex = matched;
+    });
+    if (bestScore > 0 && wsIndex !== defaultIndex) {
+      console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet "${workbook.worksheets[wsIndex].name}" (index ${wsIndex}, match ${bestScore}) over default "${allSheets[defaultIndex]}"`);
     }
   }
 
   const worksheet = workbook.worksheets[wsIndex];
+  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex] };
+}
+
+/** One worksheet -> the col_N row objects the extractor and Claude expect. */
+function rowsOfSheet(worksheet) {
   const rows = [];
 
   worksheet.eachRow((row) => {
@@ -192,7 +200,7 @@ async function firstSheetToRows(buffer, { targetMonth = null } = {}) {
     if (Object.keys(obj).length > 0) rows.push(obj);
   });
 
-  return { rows, allSheets, chosenSheet: allSheets[wsIndex] };
+  return rows;
 }
 
 /**
@@ -533,11 +541,14 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   const targetMonth = monthKey
     ? parseInt(String(monthKey).slice(5), 10)
     : resolveBeMonth(filename ?? "", subject, body);
+  const targetYear = monthKey
+    ? parseInt(String(monthKey).slice(0, 4), 10)
+    : resolveBeYear(filename ?? "", subject, body, emailDate);
 
   // Parse workbook
   let rows, allSheets, chosenSheet;
   try {
-    ({ rows, allSheets, chosenSheet } = await firstSheetToRows(buffer, { targetMonth }));
+    ({ rows, allSheets, chosenSheet } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
   } catch (err) {
     console.error(`│        ❌  Failed to parse workbook: ${err.message}`);
     await sendTelegram(formatErrorMessage(`Workbook parse failed: ${err.message}`, filename, tgError({ errorType: "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));

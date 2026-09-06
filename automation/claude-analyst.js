@@ -10,6 +10,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { MAX_ROW_JSON_CHARS, CLAUDE_MAX_TOKENS } from "./config.js";
+import { MONTH_TOKENS_BY_NUM } from "./months.js";
 
 // ── Singleton client ───────────────────────────────────────────────────────
 let _client = null;
@@ -166,20 +167,68 @@ export function resolveBeMonth(filename, subject, body) {
 }
 
 /**
- * Same idea as resolveBeYearFromRows: a workbook with generic sheet names
- * (no month token to pick the right one by) can still state its own month
- * somewhere in its first few rows, e.g. a title/header cell. Reuses
- * resolveBeMonth per cell rather than re-matching MONTH_TOKEN_MAP directly.
+ * "กค69" -> { month: 7, beYear: 2569 }. Reads a year ONLY out of a string
+ * that already states a month, which is what makes the two-digit form safe
+ * to trust here: a bare 69 in a data cell is a score, not a year. Passing
+ * the text as `body` also skips resolveBeYear's tier-4 (00-42), which would
+ * otherwise read every small number in a sheet as a year.
  */
-export function resolveBeMonthFromRows(rows) {
+export function monthYearFromText(text) {
+  const s = String(text ?? "");
+  const month = resolveBeMonth("", "", s);
+  if (!month) return { month: null, beYear: null };
+  return { month, beYear: resolveBeYear("", "", s) };
+}
+
+/**
+ * The first month/year a sheet states in its opening rows — the title row
+ * of a workbook whose tab is called "Sheet1" is usually the only place the
+ * month is written down.
+ */
+export function monthYearFromRows(rows) {
   for (const row of rows.slice(0, 15)) {
     for (const val of Object.values(row)) {
       if (val === null || val === undefined) continue;
-      const mo = resolveBeMonth("", "", String(val));
-      if (mo) return mo;
+      const hit = monthYearFromText(val);
+      if (hit.month) return hit;
     }
   }
-  return null;
+  return { month: null, beYear: null };
+}
+
+export function resolveBeMonthFromRows(rows) {
+  return monthYearFromRows(rows).month;
+}
+
+/**
+ * How well one sheet answers "are you the sheet for this month and year?"
+ *
+ *   4  tab name states the month, and a year that matches
+ *   3  tab name states the month, with no year to check
+ *   2  content states the month, and a year that matches
+ *   1  content states the month, with no year to check
+ *   0  states nothing, or states a month/year that CONTRADICTS the target
+ *
+ * A contradicting sheet scores 0 rather than ranking last: a sheet that
+ * says it is some other month is not a weak match for this one, it is the
+ * wrong answer, and letting it lose to the positional default (and then to
+ * the month_mismatch check) is the honest outcome. Tab names outrank
+ * content because a name is a deliberate label, while a title row can be a
+ * leftover from the month the file was copied from.
+ */
+export function sheetMatchScore(ws, rows, targetMonth, targetYear) {
+  const toks = MONTH_TOKENS_BY_NUM[targetMonth] ?? [];
+  const name = String(ws.name ?? "").toLowerCase();
+  if (toks.some((t) => name.includes(t))) {
+    const y = resolveBeYear("", "", ws.name);
+    if (y && targetYear && y !== targetYear) return 0;
+    return y && targetYear ? 4 : 3;
+  }
+  if (resolveBeMonth("", "", ws.name)) return 0;
+  const hit = monthYearFromRows(rows);
+  if (hit.month !== targetMonth) return 0;
+  if (hit.beYear && targetYear && hit.beYear !== targetYear) return 0;
+  return hit.beYear && targetYear ? 2 : 1;
 }
 
 // ── JS-side physician name resolver ───────────────────────────────────────

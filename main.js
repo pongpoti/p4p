@@ -890,7 +890,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   const score = require("./lib/p4p-score")
   let rows
   try {
-    ({ rows } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, timeoutMs: 7000 }))
+    ({ rows } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, targetYear: beYear, timeoutMs: 7000 }))
   } catch (e) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
