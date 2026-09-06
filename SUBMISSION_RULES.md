@@ -110,33 +110,61 @@ Each sheet is scored against the target period, best match wins:
 A contradicting sheet scores 0 rather than ranking last: a sheet that says it
 is some other month is the wrong answer, not a weak match. When nothing scores
 above 0 the choice falls back to position (sheet 0, or sheet 1 if sheet 0 is
-near-empty) and the `month_mismatch` check is what catches it.
+near-empty).
+
+Tab names are read with the same strict reader as cell content
+(`monthYearFromText`), so `ก.ค. 2569`, `กรกฎาคม`, `กค69` and `Jul-25` all
+match. Reading them against a separate token list is what made a tab named
+`ก.ค. 2569` fail to match its own month — that list had no dotted forms, while
+the "names some other month" disqualifier used one that did.
 
 Only **one** sheet is ever read. A workbook holding several months contributes
 exactly one score per submission.
 
 ---
 
-## 4. LIFF path — current behaviour
+## 4. LIFF path — the file must identify itself
 
-The page asks for the month up front, so a submission always arrives with an
-explicit answer and sections 1–2 do not apply. One month per submission is
-structural: one chip, one `month_key`, and a unique index on
+The page asks for the month up front, so sections 1–2 do not apply: a
+submission always arrives with an explicit answer. One month per submission is
+structural — one chip, one `month_key`, and a unique index on
 `(email, month_key)` for anything still in flight.
+
+The chip is the **only** thing that defines the period. Tab names and cell
+content are read afterwards, solely to confirm or contradict it. The filename
+is not consulted at all: on this path it would be the same physician's
+assertion as the chip, made twice, so agreeing with it proves nothing.
+
+**The rule:** a submission is refused unless some sheet names the picked month,
+by tab name or by a title row. Single-sheet workbooks are held to the same bar
+— `matched` has to mean *this file identified itself as the month asked for*,
+not *there were several sheets and one of them did*. The chip says what the
+physician meant to send; this is the file saying what they actually sent.
+Without it a wrong attachment looks exactly like a right one.
 
 | Physician picks | Workbook | Outcome |
 |---|---|---|
-| July | single sheet, July | scored, Flex receipt |
-| July | multi-sheet, tabs named by month | July tab scored |
-| July | multi-sheet, generic tabs, title rows name months | July sheet scored |
-| July | multi-sheet, **nothing names any month** | sheet 1 scored as July — nothing can detect a mistake |
-| July | file is June, and says so | `month_mismatch`, nothing saved |
+| July | tab named `ก.ค. 2569` / `กรกฎาคม` / `Jul-25` | scored, Flex receipt |
+| July | generic tab, title row names July | scored |
+| July | multi-sheet, one tab is July | that sheet scored |
+| July | **names no month anywhere** (single or multi-sheet) | `month_not_found` |
+| July | names a different month | `month_mismatch` |
+| July | right month, contradicting year | `month_not_found` |
 | July | holds June + July | July scored; June needs its own submission |
 | July, again | any | refused — one in-flight submission per month |
 | July | score not confidently readable | deferred to the worker, result via chat |
 | July | name not exactly in roster | deferred to the fuzzy matcher, then scored |
 
-**Known gap:** row 4. When no tab name, no filename and no cell states a
-period, there is nothing to compare the physician's choice against, so a
-wrong-sheet pick is undetectable. This is the one shape none of the current
-rules improve.
+Order matters: the mismatch check runs first, so a file naming a *different*
+month gets the precise complaint, and `month_not_found` is reserved for a file
+naming no month at all. Both are retryable, so the receipt carries
+ส่งไฟล์อีกครั้ง.
+
+Enforced in `main.js`'s `/upload/score` and again in the worker
+(`automation/index.js`, gated on `monthKey`), so a deferred row behaves the
+same as an instant one.
+
+**Cost of this rule:** any workbook that does not label its month anywhere is
+now refused, which is likely a common shape. That is the intent — it is the
+only way to tell a right attachment from a wrong one — but expect a wave of
+`month_not_found` the first cycle.
