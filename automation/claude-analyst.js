@@ -206,6 +206,38 @@ export function resolveBeYearByPriority(filename, subject, body) {
   return resolveBeYear("", subject, body) ?? resolveBeYear(filename ?? "", "", "");
 }
 
+/**
+ * The period an email states, in the order that decides it: subject, then
+ * body, then filename. This is the value a submission is ROUTED on and
+ * rejected against, so it is read conservatively — a heuristic that is
+ * merely useful for picking a sheet is not good enough to refuse someone's
+ * work over:
+ *
+ *   • The month uses monthFromCellText, not resolveBeMonth. An email body is
+ *     running Thai exactly like a spreadsheet cell, and "รวมคะแนน" contains
+ *     "มค" — matching that as January would reject a correct July file.
+ *   • The year is 4-digit only. resolveBeYear's two-digit tier reads any
+ *     standalone 43-99 as a year, so a subject like "ส่งคะแนน 85 แต้ม"
+ *     becomes 2585 and collides with everything. Two-digit years still work
+ *     for sheet selection, where a wrong guess only costs a fallback.
+ */
+export function statedPeriod(filename, subject, body) {
+  const sources = [subject ?? "", body ?? "", filename ?? ""];
+  let month = null;
+  for (const s of sources) {
+    month = monthFromCellText(s);
+    if (month) break;
+  }
+  let beYear = null;
+  for (const s of sources) {
+    const be = s.match(/(?<!\d)(25\d{2})(?!\d)/);
+    if (be) { beYear = parseInt(be[1], 10); break; }
+    const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/);
+    if (ce) { beYear = parseInt(ce[1], 10) + 543; break; }
+  }
+  return { month, beYear };
+}
+
 export function monthFromCellText(text) {
   const s = String(text ?? "");
   for (const [token, mo] of MONTH_TOKEN_MAP) {

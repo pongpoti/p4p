@@ -11,7 +11,7 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriod } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
@@ -546,8 +546,9 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   // would route a year wrong. It stays a last resort for sheet selection
   // below, where guessing wrong only costs a fallback rather than a score in
   // the wrong table.
-  const routingMonth = monthKey ? null : resolveBeMonth(filename ?? "", subject, body);
-  const routingYear = monthKey ? null : resolveBeYearByPriority(filename ?? "", subject, body);
+  const stated = monthKey ? { month: null, beYear: null } : statedPeriod(filename ?? "", subject, body);
+  const routingMonth = stated.month;
+  const routingYear = stated.beYear;
 
   // Sheet selection still needs a month number even when routing does not:
   // a physician who accumulates every month in one workbook uploads the same
@@ -557,7 +558,9 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     : routingMonth;
   const targetYear = monthKey
     ? parseInt(String(monthKey).slice(0, 4), 10)
-    : routingYear ?? resolveBeYear("", "", "", emailDate);
+    : routingYear
+      ?? resolveBeYearByPriority(filename ?? "", subject, body)
+      ?? resolveBeYear("", "", "", emailDate);
 
   // Parse workbook
   let rows, allSheets, chosenSheet;
