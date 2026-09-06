@@ -530,9 +530,22 @@
       }
       probeEl.textContent = JSON.stringify(out, null, 2)
     })
+    // Calls liff.sendMessages() directly rather than through sendToChat(),
+    // which swallows its error by design (§ so a failed receipt never blocks
+    // a real upload) — this is the one place that error is worth surfacing,
+    // since "OK"/"FAILED" alone can't distinguish missing chat_message.write
+    // scope from isInClient()===false from a dead LIFF session.
     document.getElementById("probe-send").addEventListener("click", function () {
-      sendToChat([{ type: "text", text: "P4P probe " + new Date().toISOString() }]).then(function (sent) {
-        probeEl.textContent = "sendMessages: " + (sent ? "OK" : "FAILED") + "\n" + probeEl.textContent
+      liffReady.then(function (ok) {
+        if (!ok) return "sendMessages: SKIPPED (liff.init failed)"
+        if (!liff.isInClient()) return "sendMessages: SKIPPED (not isInClient — opened outside LINE's in-app browser)"
+        return liff.sendMessages([{ type: "text", text: "P4P probe " + new Date().toISOString() }])
+          .then(function () { return "sendMessages: OK" })
+          .catch(function (err) {
+            return "sendMessages: FAILED — " + (err && (err.message || JSON.stringify(err)))
+          })
+      }).then(function (line) {
+        probeEl.textContent = line + "\n" + probeEl.textContent
       })
     })
   }

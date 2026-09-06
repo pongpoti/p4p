@@ -9,22 +9,27 @@
     <title>ส่งไฟล์ P4P</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
         rel="stylesheet">
     <style>
         :root {
             --primary: #A68966;
+            --primary-dark: #8a6f52;
             --secondary: #4B3D33;
             --tertiary: #F5F5F0;
             --neutral: #FAF9F6;
             --text: #2d2d2d;
             --text-muted: #6b6b6b;
             --muted: #9A8A7A;
-            --border: #d9d2c8;
+            --border: #e3ddd2;
             --danger: #c0392b;
             --warn: #B8860B;
             --ok: #2E7D5B;
-            --radius: 6px;
+            --info: #35564B;
+            --radius: 16px;
+            --radius-sm: 11px;
+            --shadow-sm: 0 1px 2px rgba(75, 61, 51, .06), 0 1px 1px rgba(75, 61, 51, .04);
+            --shadow-md: 0 8px 24px -8px rgba(75, 61, 51, .22);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,7 +40,12 @@
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
-            padding-bottom: 40px;
+            padding-bottom: 48px;
+        }
+
+        .brand-bar {
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
         }
 
         /* ── Desktop block ───────────────────────────────────── */
@@ -53,17 +63,32 @@
         }
         #desktop-block p { color: var(--muted); font-size: .95rem; }
 
+        /* ── Header ──────────────────────────────────────────── */
         header {
-            background: var(--tertiary);
-            padding: 18px 20px 16px;
-            box-shadow: 0 2px 8px rgba(75, 61, 51, .08);
+            background: linear-gradient(155deg, var(--primary) 0%, var(--primary-dark) 100%);
+            padding: 24px 20px 26px;
+            border-radius: 0 0 22px 22px;
+            box-shadow: var(--shadow-md);
+            position: relative;
         }
         header h1 {
             font-family: 'Manrope', 'Noto Sans Thai Looped', sans-serif;
-            font-size: 1.2rem; font-weight: 700; color: var(--secondary);
+            font-size: 1.25rem; font-weight: 800; letter-spacing: .01em; color: #fff;
         }
-        #identity { margin-top: 6px; font-size: .95rem; color: var(--text-muted); }
-        #identity strong { color: var(--text); font-weight: 600; }
+        #identity {
+            margin-top: 8px; font-size: .95rem; color: rgba(255,255,255,.82);
+            min-height: 1.3em;
+        }
+        #identity strong { color: #fff; font-weight: 600; }
+        #identity.skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,.25) 25%, rgba(255,255,255,.45) 50%, rgba(255,255,255,.25) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            color: transparent !important;
+            border-radius: 6px;
+            display: inline-block;
+            min-width: 160px;
+        }
 
         main { padding: 16px; max-width: 640px; margin: 0 auto; }
 
@@ -71,104 +96,188 @@
             background: #fff;
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 16px;
+            box-shadow: var(--shadow-sm);
+            padding: 18px;
             margin-bottom: 14px;
         }
         section h2 {
-            font-size: .8rem; font-weight: 600; letter-spacing: .04em;
-            text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+            font-size: .74rem; font-weight: 700; letter-spacing: .06em;
+            text-transform: uppercase; color: var(--muted); margin-bottom: 14px;
+            display: flex; align-items: center; gap: 7px;
+        }
+        section h2::before {
+            content: "";
+            width: 4px; height: 14px; border-radius: 2px;
+            background: var(--primary); display: inline-block;
         }
 
         /* ── Month chips ─────────────────────────────────────── */
-        #months { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        #months { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
         .chip {
             border: 1.5px solid var(--border);
-            border-radius: var(--radius);
-            background: #fff;
-            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: var(--neutral);
+            padding: 12px 13px;
             text-align: left;
             font: inherit;
             cursor: pointer;
             display: block;
             width: 100%;
+            transition: border-color .15s ease, box-shadow .15s ease, background .15s ease, transform .1s ease;
         }
-        .chip[aria-pressed="true"] { border-color: var(--secondary); box-shadow: inset 0 0 0 1px var(--secondary); }
-        .chip .m-name { font-weight: 600; font-size: .95rem; display: flex; align-items: center; gap: 6px; }
-        .chip .m-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-        .chip .m-sub { font-size: .75rem; color: var(--text-muted); margin-top: 3px; }
+        .chip:active { transform: scale(.98); }
+        .chip[aria-pressed="true"] {
+            border-color: var(--primary);
+            background: #fff;
+            box-shadow: 0 0 0 1.5px var(--primary), var(--shadow-sm);
+        }
+        .chip .m-name { font-weight: 600; font-size: .95rem; display: flex; align-items: center; gap: 7px; color: var(--secondary); }
+        .chip .m-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px rgba(0,0,0,.04); }
+        .chip .m-sub { font-size: .76rem; color: var(--text-muted); margin-top: 4px; padding-left: 16px; }
 
+        /* ── Notices (icon via CSS mask, recolors with currentColor) ──── */
         .notice {
-            border-radius: var(--radius);
-            padding: 10px 12px;
+            position: relative;
+            border-radius: var(--radius-sm);
+            padding: 11px 14px 11px 40px;
             font-size: .85rem;
-            line-height: 1.45;
+            line-height: 1.5;
             margin-top: 12px;
         }
-        .notice.info { background: #F0F4F3; color: #35564B; }
+        .notice::before {
+            content: "";
+            position: absolute; left: 13px; top: 12px;
+            width: 18px; height: 18px;
+            background-color: currentColor;
+            -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+            -webkit-mask-size: contain; mask-size: contain;
+            -webkit-mask-position: center; mask-position: center;
+            opacity: .9;
+        }
+        .notice.info { background: #F0F4F3; color: var(--info); }
         .notice.warn { background: #FDF6E3; color: #7A5C11; }
         .notice.err  { background: #FBEDEC; color: #8C2F26; }
         .notice.ok   { background: #EEF6F1; color: #22604A; }
         .notice a { color: inherit; }
+        .notice.info::before, .notice.warn::before {
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cline x1='12' y1='11' x2='12' y2='16'/%3E%3Ccircle cx='12' cy='7.4' r='.6' fill='%23000' stroke='none'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cline x1='12' y1='11' x2='12' y2='16'/%3E%3Ccircle cx='12' cy='7.4' r='.6' fill='%23000' stroke='none'/%3E%3C/svg%3E");
+        }
+        .notice.warn::before {
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'/%3E%3Cline x1='12' y1='9' x2='12' y2='13'/%3E%3Ccircle cx='12' cy='17' r='.6' fill='%23000' stroke='none'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'/%3E%3Cline x1='12' y1='9' x2='12' y2='13'/%3E%3Ccircle cx='12' cy='17' r='.6' fill='%23000' stroke='none'/%3E%3C/svg%3E");
+        }
+        .notice.err::before {
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cline x1='9' y1='9' x2='15' y2='15'/%3E%3Cline x1='15' y1='9' x2='9' y2='15'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cline x1='9' y1='9' x2='15' y2='15'/%3E%3Cline x1='15' y1='9' x2='9' y2='15'/%3E%3C/svg%3E");
+        }
+        .notice.ok::before {
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+        }
 
         /* ── File picker ─────────────────────────────────────── */
         #file-input { display: none; }
         .filebtn {
-            display: block; width: 100%;
-            border: 1.5px dashed var(--border);
-            border-radius: var(--radius);
+            display: flex; align-items: center; justify-content: center; gap: 9px;
+            width: 100%;
+            border: 1.5px dashed var(--muted);
+            border-radius: var(--radius-sm);
             background: var(--tertiary);
-            padding: 18px 12px;
+            padding: 22px 12px;
             text-align: center;
-            font: inherit; color: var(--secondary); cursor: pointer;
+            font: inherit; font-weight: 500; color: var(--secondary); cursor: pointer;
+            transition: border-color .15s ease, background .15s ease;
         }
-        #file-name { margin-top: 10px; font-size: .9rem; word-break: break-all; }
-        #file-name .sz { color: var(--text-muted); font-size: .8rem; }
+        .filebtn:active { background: #efe9de; border-color: var(--primary); }
+        .filebtn svg { flex: none; color: var(--primary); }
+        #file-name {
+            margin-top: 10px; font-size: .88rem; word-break: break-all;
+            background: var(--tertiary); border-radius: var(--radius-sm);
+            padding: 10px 12px; display: flex; align-items: baseline; gap: 6px;
+        }
+        #file-name .sz { color: var(--text-muted); font-size: .78rem; white-space: nowrap; }
 
         .btn {
-            display: block; width: 100%;
-            border: none; border-radius: var(--radius);
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            width: 100%;
+            border: none; border-radius: var(--radius-sm);
             background: var(--secondary); color: #fff;
-            font: inherit; font-weight: 600;
+            font: inherit; font-weight: 600; font-size: .95rem;
             padding: 14px; cursor: pointer;
+            box-shadow: 0 6px 16px -6px rgba(75, 61, 51, .45);
+            transition: transform .1s ease, box-shadow .15s ease, opacity .15s ease;
         }
-        .btn[disabled] { background: var(--muted); cursor: default; }
-        .btn.secondary { background: #fff; color: var(--secondary); border: 1.5px solid var(--border); }
+        .btn:active { transform: translateY(1px) scale(.99); box-shadow: 0 3px 10px -6px rgba(75, 61, 51, .4); }
+        .btn[disabled] { background: var(--muted); cursor: default; box-shadow: none; }
+        .btn.secondary {
+            background: #fff; color: var(--secondary);
+            border: 1.5px solid var(--border); box-shadow: none;
+        }
 
-        #confirm-line { font-size: .9rem; line-height: 1.5; margin-bottom: 12px; }
+        #confirm-line { font-size: .92rem; line-height: 1.6; margin-bottom: 14px; }
         #confirm-line b { color: var(--secondary); }
 
         /* ── Progress ────────────────────────────────────────── */
-        #progress-wrap { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-        #progress-bar { height: 100%; width: 0; background: var(--primary); transition: width .15s linear; }
-        #progress-label { margin-top: 8px; font-size: .85rem; color: var(--text-muted); }
+        #progress-wrap { height: 8px; background: var(--tertiary); border-radius: 999px; overflow: hidden; }
+        #progress-bar {
+            height: 100%; width: 0; border-radius: 999px;
+            background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+            transition: width .15s linear;
+        }
+        #progress-label { margin-top: 10px; font-size: .85rem; color: var(--text-muted); text-align: center; }
 
         /* ── Result ──────────────────────────────────────────── */
-        #result-score { font-size: 2.1rem; font-weight: 700; color: var(--secondary); font-family: 'Manrope', sans-serif; }
-        #result-rows { margin-top: 10px; font-size: .9rem; }
-        #result-rows div { display: flex; justify-content: space-between; padding: 4px 0; }
+        #result-score {
+            font-size: 2.4rem; font-weight: 800; color: var(--secondary); font-family: 'Manrope', sans-serif;
+            text-align: center; padding: 18px 0 6px;
+        }
+        #result-rows { margin-top: 6px; font-size: .9rem; }
+        #result-rows div { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+        #result-rows div:last-child { border-bottom: none; }
         #result-rows span:first-child { color: var(--text-muted); }
+        #result-rows span:last-child { font-weight: 600; color: var(--secondary); }
+        #again-button { margin-top: 14px; }
 
         /* ── History ─────────────────────────────────────────── */
         #history-list { list-style: none; }
         #history-list li {
             display: flex; justify-content: space-between; align-items: center;
-            gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: .88rem;
+            gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: .88rem;
         }
         #history-list li:last-child { border-bottom: none; }
-        .status-chip { font-size: .75rem; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+        .status-chip {
+            font-size: .74rem; font-weight: 600; padding: 4px 10px 4px 20px; border-radius: 999px;
+            white-space: nowrap; position: relative;
+        }
+        .status-chip::before {
+            content: ""; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+            width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+        }
         .status-chip.done { background: #EEF6F1; color: var(--ok); }
         .status-chip.pending { background: #FDF6E3; color: var(--warn); }
         .status-chip.failed { background: #FBEDEC; color: var(--danger); }
         .h-when { color: var(--text-muted); font-size: .78rem; }
 
         .hidden { display: none !important; }
-        .skeleton { color: transparent; background: var(--border); border-radius: 4px; animation: pulse 1.4s ease-in-out infinite; }
-        @keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: .9 } }
-        #probe { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .72rem; }
+        .skeleton {
+            color: transparent !important;
+            background: linear-gradient(90deg, var(--border) 25%, var(--tertiary) 50%, var(--border) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: 6px;
+        }
+        @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        #probe {
+            white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .72rem;
+            background: var(--tertiary); border-radius: var(--radius-sm); padding: 10px; line-height: 1.5;
+        }
+        #probe-send { margin-top: 10px; }
     </style>
 </head>
 
 <body>
+    <div class="brand-bar"></div>
     <div id="desktop-block">
         <h2>ไม่รองรับการใช้งานบนคอมพิวเตอร์</h2>
         <p>กรุณาเปิดลิงก์นี้ผ่านแอปพลิเคชัน LINE บนโทรศัพท์มือถือ</p>
@@ -194,7 +303,10 @@
             <h2>เลือกไฟล์ Excel</h2>
             <input type="file" id="file-input"
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
-            <button type="button" class="filebtn" id="file-button">แตะเพื่อเลือกไฟล์ (.xlsx)</button>
+            <button type="button" class="filebtn" id="file-button">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                <span>แตะเพื่อเลือกไฟล์ (.xlsx)</span>
+            </button>
             <div id="file-name" class="hidden"></div>
             <div id="file-error" class="notice err hidden"></div>
         </section>
@@ -203,7 +315,10 @@
         <section id="step-confirm" class="hidden">
             <h2>ยืนยันการส่ง</h2>
             <div id="confirm-line"></div>
-            <button type="button" class="btn" id="submit-button">ส่งไฟล์</button>
+            <button type="button" class="btn" id="submit-button">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                <span>ส่งไฟล์</span>
+            </button>
             <div class="notice info">ส่งซ้ำได้ — ระบบจะใช้ไฟล์ล่าสุด แต่เวลาส่งจะนับจากครั้งแรก</div>
         </section>
 
@@ -218,7 +333,10 @@
         <section id="step-result" class="hidden">
             <h2 id="result-title">ผลการส่ง</h2>
             <div id="result-body"></div>
-            <button type="button" class="btn secondary hidden" id="again-button">ส่งไฟล์อีกครั้ง</button>
+            <button type="button" class="btn secondary hidden" id="again-button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.85-4.36L23 10M1 14l4.65 5.36A9 9 0 0 0 20.5 15"/></svg>
+                <span>ส่งไฟล์อีกครั้ง</span>
+            </button>
         </section>
 
         <!-- ── History ───────────────────────────────────────── -->
