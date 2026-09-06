@@ -488,7 +488,9 @@ create table public.p4p_upload_queue (
   line_user_id  text,
   -- what is being submitted
   month_key     text        not null,          -- 'YYYY_MM', BE year
-  roster_index  bigint,                        -- set when the exact match hits (§6.3)
+  roster_index  uuid,                           -- set when the exact match hits (§6.3) —
+                                                 -- uuid, matching the roster tables' own
+                                                 -- "index" column, not bigint
   object_path   text        not null unique,
   filename      text        not null,          -- original name, display only
   size_bytes    integer     not null,

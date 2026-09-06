@@ -27,6 +27,22 @@
 --      PostgREST request flow, real `auth.jwt()` claim shapes, or this
 --      project's actual `physicians`/roster-table data. Test on staging
 --      first, the same way every other file in this directory says to.
+--
+--      UPDATE 2026-09-06, found for real in production: roster_index (here
+--      and on p4p_upload_queue) was declared bigint. Every month table's own
+--      "index" column is uuid (provision-month-function.sql copies it
+--      structurally, `like ... including all`) -- the stubbed test schema
+--      above used bigint and never caught the mismatch. Result: the ONE case
+--      this whole design optimizes for -- a physician whose name exactly
+--      matches their roster row -- crashed enqueue_p4p_upload() with
+--      "invalid input syntax for type bigint: <uuid>" while casting the
+--      matched uuid[] into a bigint[] variable. A name that did NOT match
+--      exactly was unaffected (v_match_ids stayed null, no cast attempted),
+--      which is why this shipped before it was noticed. Fixed both
+--      declarations below to uuid/uuid[]; verified against the live project
+--      with the real failing (email, object_path, month_key) inside a
+--      rolled-back transaction -- roster_match came back 'exact' instead of
+--      raising.
 --      Two things are still open, not closed by any of the above:
 --        1. The BE-year → deadline arithmetic (part 3, enqueue_p4p_upload)
 --           duplicates the logic in web/lib/months.ts's deadlineISO() by
@@ -142,7 +158,10 @@ create table if not exists public.p4p_upload_queue (
 
   -- what is being submitted
   month_key     text        not null,          -- 'YYYY_MM', BE year
-  roster_index  bigint,                        -- set when the exact match hits (part 3)
+  roster_index  uuid,                           -- set when the exact match hits (part 3) —
+                                                 -- uuid, matching the roster tables' own
+                                                 -- "index" column, NOT bigint (see the
+                                                 -- 2026-09-06 update in this file's header)
   object_path   text        not null unique,
   filename      text        not null,          -- original name, display only
   size_bytes    integer     not null,
@@ -252,8 +271,8 @@ declare
   v_full_name    text;
   v_department   text;
   v_line_user_id text;
-  v_roster_index bigint;
-  v_match_ids    bigint[];
+  v_roster_index uuid;
+  v_match_ids    uuid[];
   v_queue_id     uuid;
   v_roster_match text := 'none';
   v_deadline     timestamptz;

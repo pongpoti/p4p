@@ -110,7 +110,9 @@ already-applied file is safe.
     Depends on step 6's `is_current_user_allowlisted()` and step 14's
     `physicians` table. Idempotent like the rest; safe to re-run after a fix.
     Read the file's own header before running it — it records exactly what
-    was and was not verified.
+    was and was not verified, including a 2026-09-06 production fix
+    (`roster_index` was bigint, should always have been uuid — see the
+    file's header for how this was found and confirmed fixed live).
 
 ## Superseded — do NOT run
 
