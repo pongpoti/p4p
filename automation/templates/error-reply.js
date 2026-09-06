@@ -9,6 +9,9 @@
  * @param {"wrong_extension"|"file_link"|"temp_file"|"wrong_date"|"physician_not_found"|"other"} data.errorType
  * @param {string} [data.detectedDate]  Date string extracted from file, shown when errorType="wrong_date"
  * @param {string} [data.detectedName]  Name extracted from file, shown when errorType="physician_not_found"
+ * @param {string} [data.statedDate]    Period the email/filename asked for, shown when
+ *   errorType="month_mismatch" — paired with detectedDate, the two together are what
+ *   make that rejection self-explanatory instead of "something went wrong".
  */
 // Escape here (the single place these values reach HTML) rather than relying
 // on every caller to pre-escape — filename/detectedName/detectedDate all
@@ -23,10 +26,11 @@ function escHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", detectedDate = "", detectedName = "" }) {
+export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", detectedDate = "", detectedName = "", statedDate = "" }) {
   safeFilename = escHtml(safeFilename);
   detectedDate = escHtml(detectedDate);
   detectedName = escHtml(detectedName);
+  statedDate   = escHtml(statedDate);
   const CONTENT = {
     wrong_extension: {
       bannerTitle  : "ประเภทไฟล์ไม่ถูกต้อง",
@@ -52,6 +56,11 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
       bannerTitle  : "วันที่/เดือน/ปี ในไฟล์ไม่ถูกต้อง",
       bannerBody   : "ระบบไม่พบข้อมูลสำหรับช่วงเวลาที่ระบุในไฟล์<br>กรุณาตรวจสอบว่าไฟล์ P4P ตรงกับเดือนและปีที่ถูกต้อง",
       instruction  : "กรุณาตรวจสอบชื่อไฟล์และข้อมูลภายในว่าระบุเดือน/ปีถูกต้อง แล้วส่งไฟล์ใหม่อีกครั้ง",
+    },
+    month_mismatch: {
+      bannerTitle  : "เดือนที่ระบุไม่ตรงกับไฟล์",
+      bannerBody   : "เดือนที่ท่านระบุในอีเมล/ชื่อไฟล์ ไม่ตรงกับเดือนของข้อมูลในไฟล์ที่แนบมา<br>ระบบจะไม่บันทึกคะแนน เพื่อป้องกันการบันทึกผิดเดือน",
+      instruction  : "กรุณาตรวจสอบตามรายละเอียดด้านล่างว่าท่านแนบไฟล์ถูกเดือนหรือไม่ หากไฟล์ถูกต้องแล้ว กรุณาแก้เดือนที่ระบุในอีเมลให้ตรงกับไฟล์ แล้วส่งใหม่อีกครั้ง",
     },
     no_period: {
       bannerTitle  : "ไม่ได้ระบุเดือนที่ส่ง",
@@ -84,9 +93,18 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
         </tr>`
     : "";
 
+  const statedRow = statedDate
+    ? `<tr>
+          <td>เดือนที่ท่านระบุ</td>
+          <td>${statedDate}</td>
+        </tr>`
+    : "";
+
+  // For month_mismatch this is "the month the FILE turned out to be", which is
+  // only meaningful next to statedRow above — hence the label changing.
   const dateRow = detectedDate
     ? `<tr>
-          <td>วันที่ที่ตรวจพบ</td>
+          <td>${statedDate ? "เดือนที่พบในไฟล์" : "วันที่ที่ตรวจพบ"}</td>
           <td>${detectedDate}</td>
         </tr>`
     : "";
@@ -98,7 +116,7 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
         </tr>`
     : "";
 
-  const detailRows = filenameRow + dateRow + nameRow;
+  const detailRows = filenameRow + statedRow + dateRow + nameRow;
 
   return `<!DOCTYPE html>
 <html lang="th">

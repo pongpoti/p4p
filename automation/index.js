@@ -34,6 +34,13 @@ const THAI_MONTHS = [
   "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
 ];
 
+/** "2569_07" -> "กรกฎาคม 2569". Falls back to the raw key if it is not one. */
+function displayMonthKey(key) {
+  const [beYear, monthNum] = String(key ?? "").split("_");
+  const thaiMonth = THAI_MONTHS[parseInt(monthNum, 10)];
+  return thaiMonth ? `${thaiMonth} ${beYear}` : String(key ?? "");
+}
+
 // Lazy Drive client — only initialised if P4P_FOLDER_ID is set
 let _drive = null;
 function getDrive() {
@@ -422,6 +429,7 @@ const ALERT_SUBJECTS = {
   zero_score          : "[แจ้งข้อผิดพลาด] คะแนนรวมเป็นศูนย์",
   wrong_date          : "[แจ้งข้อผิดพลาด] วันที่/เดือน/ปีในไฟล์ไม่ถูกต้อง",
   physician_not_found : "[แจ้งข้อผิดพลาด] ไม่พบชื่อแพทย์ในระบบ",
+  month_mismatch      : "[แจ้งข้อผิดพลาด] เดือนที่ระบุไม่ตรงกับไฟล์",
   no_period           : "[แจ้งข้อผิดพลาด] ไม่ได้ระบุเดือนที่ส่ง",
   ambiguous_period    : "[แจ้งข้อผิดพลาด] ระบุหลายเดือนในอีเมลเดียว",
   other           : "[แจ้งข้อผิดพลาด] ไม่สามารถประมวลผลไฟล์ P4P ได้",
@@ -439,14 +447,14 @@ const ALERT_SUBJECTS = {
  * @param {string} messageId      Gmail message ID for thread reply
  * @param {object} gmail          Shared Gmail client
  */
-async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", replyTo, messageId, gmail }) {
+async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", statedDate = "", replyTo, messageId, gmail }) {
   if (!SEND_ERROR_REPLIES) {
     console.log(`│        ⏸️   Alert reply [${errorType}] suppressed (SEND_ERROR_REPLIES=false)`);
     return;
   }
   if (!replyTo || !messageId) return;
   const subject  = ALERT_SUBJECTS[errorType] ?? ALERT_SUBJECTS.other;
-  const htmlReply = buildHtmlErrorReply({ safeFilename, errorType, detectedDate, detectedName });
+  const htmlReply = buildHtmlErrorReply({ safeFilename, errorType, detectedDate, detectedName, statedDate });
   try {
     await gmail.sendMessage({
       to              : replyTo,
@@ -523,7 +531,7 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   // sendAlertReply -> buildHtmlErrorReply now escapes safeFilename/detectedDate/
   // detectedName internally (single escaping point) — pass raw values below,
   // not pre-escaped ones, to avoid double-escaping ("&" -> "&amp;amp;").
-  const notifyFailure = async (errorType = "other", { detail = "", detectedDate = "", detectedName = "" } = {}) => {
+  const notifyFailure = async (errorType = "other", { detail = "", detectedDate = "", detectedName = "", statedDate = "" } = {}) => {
     if (isUpload) {
       if (notify?.fail) await notify.fail(errorType, detail || detectedDate || detectedName || "");
       return;
@@ -531,7 +539,7 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     await sendAlertReply({
       errorType,
       safeFilename: filename ?? "",
-      detectedDate, detectedName,
+      detectedDate, detectedName, statedDate,
       replyTo, messageId, gmail,
     });
   };
@@ -718,7 +726,15 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
       if (uploadCtx) uploadCtx.monthInFile = analysis.date;
       await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_mismatch" })))
         .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-      await notifyFailure("month_mismatch", { detail });
+      // Both months by name, not just "an error occurred": this is the one
+      // rejection the physician can resolve unaided, but only if the reply
+      // says which month they asked for and which one the file turned out
+      // to hold.
+      await notifyFailure("month_mismatch", {
+        detail,
+        statedDate  : displayMonthKey(statedKey),
+        detectedDate: displayMonthKey(analysis.date),
+      });
       return "rejected";
     }
   }
