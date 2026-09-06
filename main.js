@@ -909,7 +909,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // Month cross-check — the one mistake this path can still make is a file
   // whose contents say July uploaded under June. Only a month or year that
   // actually resolved counts: an unstated month is not a mismatch.
-  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "")
+  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "") || score.resolveBeMonthFromRows(rows)
   const inferredYear = score.resolveBeYear(row.filename || "", "", "") || score.resolveBeYearFromRows(rows)
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")

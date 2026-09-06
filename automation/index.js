@@ -11,7 +11,7 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
@@ -580,7 +580,7 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   // Only a month or year that actually resolved counts; an unstated month is
   // not a disagreement. Runs before Claude so a mismatch costs no API call.
   if (monthKey) {
-    const fileMonth = resolveBeMonth(filename ?? "", "", "");
+    const fileMonth = resolveBeMonth(filename ?? "", "", "") ?? resolveBeMonthFromRows(rows);
     const fileYear  = resolveBeYear(filename ?? "", "", "") ?? resolveBeYearFromRows(rows);
     const selMonth  = parseInt(String(monthKey).slice(5), 10);
     const selYear   = parseInt(String(monthKey).slice(0, 4), 10);

@@ -165,6 +165,23 @@ export function resolveBeMonth(filename, subject, body) {
   return null;
 }
 
+/**
+ * Same idea as resolveBeYearFromRows: a workbook with generic sheet names
+ * (no month token to pick the right one by) can still state its own month
+ * somewhere in its first few rows, e.g. a title/header cell. Reuses
+ * resolveBeMonth per cell rather than re-matching MONTH_TOKEN_MAP directly.
+ */
+export function resolveBeMonthFromRows(rows) {
+  for (const row of rows.slice(0, 15)) {
+    for (const val of Object.values(row)) {
+      if (val === null || val === undefined) continue;
+      const mo = resolveBeMonth("", "", String(val));
+      if (mo) return mo;
+    }
+  }
+  return null;
+}
+
 // ── JS-side physician name resolver ───────────────────────────────────────
 // Thai title prefixes to strip before returning a name
 const TITLE_PREFIX_RE = /^(?:นพ\.|พญ\.|นายแพทย์\s*|แพทย์หญิง\s*|ทพ\.|ทพญ\.|ดร\.|Dr\.\s*|Prof\.\s*|Mr\.\s*|Mrs\.\s*)/;
