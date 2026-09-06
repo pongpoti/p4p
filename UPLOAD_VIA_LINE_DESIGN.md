@@ -303,7 +303,7 @@ everything else Supabase.
 |---|---|
 | **Identity** | `นพ. สมชาย ใจดี — อายุรกรรม`, from `my_p4p_identity()`. Not editable. When `in_roster` comes back false: an **advisory** notice, never a block — "ไม่พบชื่อท่านในรายชื่อเดือนนี้ — ส่งได้ตามปกติ ระบบจะจับคู่ให้ภายหลัง", plus a "ติดต่อผู้ดูแล" link for the case where it really is wrong. See §5.5 for why this must not be the gate it looks like it should be. |
 | **Month** | Six chips from `MONTH_ITERATOR` (`src/constants.cjs`), same accent colours as every other page, **defaulting to the previous month** — the month people are actually submitting for. Each chip shows this physician's own `submitted_at` if any ("ส่งแล้ว 12 มิ.ย. 14:32", readable under the existing 4-column grant) and the month's deadline. |
-| **Deadline** | `กำหนดส่ง 10 ก.ค. 23:59`. Past it, an amber banner: the upload will still be recorded and scored, but ranking counts it as late. Say this **before** the upload, never after. |
+| **Deadline** | `กำหนดส่ง ภายใน 10 ก.ค.`. Past it, an amber banner: the upload will still be recorded and scored, but ranking counts it as late. Say this **before** the upload, never after. |
 | **File** | `<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">` — LINE's own picker, which reaches Files / Drive / iCloud. Client-side checks in §5.3. |
 | **Confirm** | One sentence naming all three facts: *"ส่งไฟล์ `<name>` เป็นผลงานเดือน `<month>` ในชื่อ นพ. สมชาย ใจดี"* — the point where a wrong month or a wrong account is caught by the one person who can tell. |
 | **Uploading** | XHR progress. These files are tens of KB; the bar exists for a bad connection, not a big file. |

@@ -104,6 +104,19 @@
       " " + parts.hour + ":" + parts.minute
   }
 
+  // "ภายใน 10 ก.ค." — same cutoff as deadlineDisplay but without the time,
+  // for the "กำหนดส่ง" label: the exact hour doesn't need surfacing there,
+  // just the day to submit by. deadlineDisplay itself stays untouched since
+  // the late-notice banner still wants the precise time you missed.
+  function deadlineDueDisplay(key) {
+    var d = deadlineDate(key)
+    if (!d) return ""
+    var parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok", day: "numeric", month: "numeric",
+    }).formatToParts(d).reduce(function (acc, p) { acc[p.type] = p.value; return acc }, {})
+    return "ภายใน " + parseInt(parts.day, 10) + " " + THAI_MONTHS_SHORT[parseInt(parts.month, 10) - 1]
+  }
+
   function isLateFor(key, when) {
     var d = deadlineDate(key)
     if (!d) return false
@@ -199,6 +212,7 @@
     monthKeyDisplay: monthKeyDisplay,
     deadlineDate: deadlineDate,
     deadlineDisplay: deadlineDisplay,
+    deadlineDueDisplay: deadlineDueDisplay,
     isLateFor: isLateFor,
     shortDateTime: shortDateTime,
     validateUploadFile: validateUploadFile,

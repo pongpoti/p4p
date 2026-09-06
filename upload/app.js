@@ -170,7 +170,7 @@
     deadlineNotice.className = "notice " + (late ? "warn" : "info")
     deadlineNotice.textContent = late
       ? "เลยกำหนดส่งของเดือนนี้แล้ว (" + P4P.deadlineDisplay(selectedMonth) + ") — ระบบยังบันทึกคะแนนให้ตามปกติ แต่การจัดอันดับจะนับว่าส่งช้า"
-      : "กำหนดส่ง " + P4P.deadlineDisplay(selectedMonth)
+      : "กำหนดส่ง " + P4P.deadlineDueDisplay(selectedMonth)
   }
 
   function renderMonths(submittedByMonth) {
@@ -189,7 +189,7 @@
         '<span class="m-name"><span class="m-dot" style="background:' + esc(accent) + '"></span>' +
         esc(P4P.monthKeyDisplay(key)) + "</span>" +
         '<span class="m-sub">' +
-        (submitted ? "ส่งแล้ว " + esc(P4P.shortDateTime(submitted)) : "กำหนดส่ง " + esc(P4P.deadlineDisplay(key))) +
+        (submitted ? "ส่งแล้ว " + esc(P4P.shortDateTime(submitted)) : "กำหนดส่ง " + esc(P4P.deadlineDueDisplay(key))) +
         "</span>"
 
       btn.addEventListener("click", function () {
