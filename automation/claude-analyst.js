@@ -188,6 +188,24 @@ export function resolveBeMonth(filename, subject, body) {
  * inflate length: "มีค" is three characters but only two consonants, and is
  * every bit as collision-prone as "มค".
  */
+/**
+ * The year, asked source by source in the order that decides a submission's
+ * period: what the sender wrote (subject, then body) first, the filename
+ * only after that.
+ *
+ * resolveBeYear on its own cannot express this — it tiers by year FORMAT and
+ * takes the best match across all three sources at once, so a "2569" in a
+ * filename outranks a "2568" in the subject line. Calling it once per source
+ * keeps each source's own tier logic (4-digit BE, 4-digit CE, 2-digit) while
+ * letting the earlier source win outright.
+ *
+ * emailDate is not consulted: it says when the mail was sent, not which
+ * month it covers.
+ */
+export function resolveBeYearByPriority(filename, subject, body) {
+  return resolveBeYear("", subject, body) ?? resolveBeYear(filename ?? "", "", "");
+}
+
 export function monthFromCellText(text) {
   const s = String(text ?? "");
   for (const [token, mo] of MONTH_TOKEN_MAP) {

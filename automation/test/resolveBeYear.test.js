@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert   from "node:assert/strict";
-import { resolveBeYear } from "../claude-analyst.js";
+import { resolveBeYear, resolveBeYearByPriority } from "../claude-analyst.js";
 
 test("full BE year in filename", () => {
   assert.equal(resolveBeYear("P4P_2569_02.xlsx", "", ""), 2569);
@@ -90,4 +90,33 @@ test("boundary: 42 resolves as short CE (tier 4), not short BE", () => {
 
 test("boundary: 40 resolves as short CE (tier 4)", () => {
   assert.equal(resolveBeYear("report.xlsx", "40", ""), 2583);
+});
+
+// ── Source priority ───────────────────────────────────────────────────────
+// What the sender wrote outranks the filename. resolveBeYear alone cannot
+// express this: it tiers by year FORMAT and takes the best match across all
+// three sources at once, so the filename's 2569 beats the subject's 2568.
+
+test("resolveBeYear alone takes the max across sources, not the first source", () => {
+  assert.equal(resolveBeYear("P4P_2569.xlsx", "ส่งงานเดือน ก.ค. 2568", ""), 2569);
+});
+
+test("by priority, the subject wins over the filename", () => {
+  assert.equal(resolveBeYearByPriority("P4P_2569.xlsx", "ส่งงานเดือน ก.ค. 2568", ""), 2568);
+});
+
+test("by priority, the body wins over the filename", () => {
+  assert.equal(resolveBeYearByPriority("P4P_2569.xlsx", "", "ผลงานประจำเดือน ก.ค. 2568"), 2568);
+});
+
+test("by priority, the filename is used when the mail says nothing", () => {
+  assert.equal(resolveBeYearByPriority("P4P_2569.xlsx", "ส่งไฟล์ครับ", ""), 2569);
+});
+
+test("by priority, a two-digit year in the subject still outranks the filename", () => {
+  assert.equal(resolveBeYearByPriority("P4P_2568.xlsx", "P4P ก.ค. 69", ""), 2569);
+});
+
+test("by priority, nothing anywhere is null — never the email's own send date", () => {
+  assert.equal(resolveBeYearByPriority("report.xlsx", "ส่งไฟล์ครับ", ""), null);
 });

@@ -11,7 +11,7 @@
 
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
@@ -535,15 +535,29 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
   };
   const otherReply = (detail = "") => notifyFailure("other", { detail });
 
+  // The period this submission is FOR, on the email path, in the stated
+  // order of authority: what the sender wrote (subject, then body), and only
+  // then the filename. resolveBeMonth already reads its sources in that
+  // order; resolveBeYear does not — it takes the best match across all three
+  // per year-format tier — so the year is asked source by source instead.
+  //
+  // emailDate is deliberately NOT part of this: it says when the mail was
+  // sent, not which month it covers, and a December report sent in January
+  // would route a year wrong. It stays a last resort for sheet selection
+  // below, where guessing wrong only costs a fallback rather than a score in
+  // the wrong table.
+  const routingMonth = monthKey ? null : resolveBeMonth(filename ?? "", subject, body);
+  const routingYear = monthKey ? null : resolveBeYearByPriority(filename ?? "", subject, body);
+
   // Sheet selection still needs a month number even when routing does not:
   // a physician who accumulates every month in one workbook uploads the same
   // file each time, and the right sheet is the one for the month they chose.
   const targetMonth = monthKey
     ? parseInt(String(monthKey).slice(5), 10)
-    : resolveBeMonth(filename ?? "", subject, body);
+    : routingMonth;
   const targetYear = monthKey
     ? parseInt(String(monthKey).slice(0, 4), 10)
-    : resolveBeYear(filename ?? "", subject, body, emailDate);
+    : routingYear ?? resolveBeYear("", "", "", emailDate);
 
   // Parse workbook
   let rows, allSheets, chosenSheet;
@@ -639,10 +653,36 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     return "replied";
   }
 
+  // What the sender said this file is for outranks what Claude read out of
+  // the sheet — and where they disagree, neither is written. The sheet was
+  // already selected to match the stated period, so a disagreement here means
+  // no sheet in the workbook matched and the fallback holds some other month:
+  // exactly the case that would otherwise file one month's work under
+  // another. Only a component that actually resolved is compared; an unstated
+  // month or year is not a disagreement, same rule as the upload path's check.
+  if (!monthKey && analysis.date) {
+    const [claudeYear, claudeMonth] = String(analysis.date).split("_").map((n) => parseInt(n, 10));
+    if ((routingMonth && claudeMonth && routingMonth !== claudeMonth) ||
+        (routingYear && claudeYear && routingYear !== claudeYear)) {
+      const statedKey = `${routingYear ?? claudeYear}_${String(routingMonth ?? claudeMonth).padStart(2, "0")}`;
+      const detail = `อีเมล/ชื่อไฟล์ระบุเดือน ${statedKey} แต่ไฟล์ที่อ่านได้เป็นเดือน ${analysis.date}`;
+      console.error(`│        ❌  month_mismatch: ${detail}`);
+      if (uploadCtx) uploadCtx.monthInFile = analysis.date;
+      await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_mismatch" })))
+        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+      await notifyFailure("month_mismatch", { detail });
+      return "rejected";
+    }
+  }
+
   // The month everything downstream writes to. On the upload path the
-  // physician picked it and the cross-check above already confirmed the file
-  // does not contradict it, so Claude's own date is never the routing answer.
-  const workMonth = monthKey ?? analysis.date;
+  // physician picked it; on the email path the sender's own statement wins,
+  // and Claude's reading is the fallback for a mail that states no period at
+  // all. Either way the two have been checked to agree by this point.
+  const statedMonth = routingMonth && routingYear
+    ? `${routingYear}_${String(routingMonth).padStart(2, "0")}`
+    : null;
+  const workMonth = monthKey ?? statedMonth ?? analysis.date;
 
   // ── Roster resolution ────────────────────────────────────────────────────
   // Upload path: identity is already verified, so there is nothing to fuzzy-
