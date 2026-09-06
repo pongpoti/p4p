@@ -168,3 +168,38 @@ same as an instant one.
 now refused, which is likely a common shape. That is the intent — it is the
 only way to tell a right attachment from a wrong one — but expect a wave of
 `month_not_found` the first cycle.
+
+### What the physician is told
+
+**Before upload** — inline under the file picker, nothing leaves the phone:
+
+| Trigger | Message |
+|---|---|
+| not `.xlsx` | รองรับเฉพาะไฟล์ Excel (.xlsx) เท่านั้น |
+| `~$…` lock file | ไฟล์นี้เป็นไฟล์ชั่วคราวของ Excel (~$) กรุณาปิดไฟล์แล้วเลือกไฟล์จริง |
+| over 5 MB | ไฟล์ใหญ่เกิน 5 MB กรุณาลดขนาดไฟล์ |
+| 0 bytes | ไฟล์ว่าง กรุณาเลือกไฟล์ใหม่ |
+| renamed non-xlsx | ไฟล์นี้ไม่ใช่ไฟล์ Excel (.xlsx) จริง — อาจถูกเปลี่ยนนามสกุลไฟล์ กรุณาบันทึกใหม่เป็น .xlsx |
+
+**After submit** — result card ส่งไฟล์ไม่สำเร็จ. The banner is the error
+type's text; the amber line beneath is the detail, where there is one:
+
+| Error | Banner | Detail |
+|---|---|---|
+| `month_not_found` | ไม่พบเดือนที่ท่านเลือกในไฟล์นี้ … ระบุเดือนไว้ในชื่อชีตหรือหัวตารางของไฟล์ | ไม่พบเดือน `กรกฎาคม 2569` ในไฟล์นี้ |
+| `month_mismatch` | เดือนในไฟล์ไม่ตรงกับเดือนที่เลือกส่ง | ไฟล์ระบุเดือน `2569_06` แต่เลือกส่งเดือน `2569_07` |
+| `zero_score` | ไม่พบคะแนนรวมในไฟล์ (คะแนนเป็นศูนย์) | ไม่พบคะแนนรวมในไฟล์ |
+| `other` | ระบบไม่สามารถอ่านไฟล์ของท่านได้ | ไฟล์ไม่มีข้อมูล (0 แถว) / ไฟล์มีข้อมูลไม่ครบ (N ช่อง) |
+| duplicate | ส่งไฟล์เดือนนี้ไปแล้ว กำลังตรวจสอบ | — |
+
+**From the worker**, for deferred submissions: the same text in a red Flex
+bubble, plus `not_in_roster`, `physician_not_found` and `wrong_date`.
+
+Retryable errors carry a ส่งไฟล์อีกครั้ง button back to the page; the rest
+(`not_in_roster`, `physician_not_found`, `other`) carry ติดต่อผู้ดูแล instead,
+because a retry button on something a retry cannot fix is worse than none.
+
+Two rough edges, both known: `file_link` and `oversize` sit in the shared text
+map but are unreachable from LIFF (the picker catches oversize first), and the
+duplicate-month message arrives as a raw Postgres string through the page's
+generic catch, so it gets no icon, detail line or button.
