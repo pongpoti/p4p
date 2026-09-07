@@ -135,6 +135,18 @@
       " " + parts.hour + ":" + parts.minute
   }
 
+  // "2026-06-12T07:32:00Z" -> "12 มิ.ย." (Bangkok). The month chips are two
+  // to a row, so their subtitle has roughly half a phone's width to live in —
+  // the time is dropped there and stays available in ประวัติการส่ง below.
+  function shortDate(iso) {
+    var d = new Date(iso)
+    if (isNaN(d.getTime())) return ""
+    var parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok", day: "numeric", month: "numeric",
+    }).formatToParts(d).reduce(function (acc, p) { acc[p.type] = p.value; return acc }, {})
+    return parseInt(parts.day, 10) + " " + THAI_MONTHS_SHORT[parseInt(parts.month, 10) - 1]
+  }
+
   var MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
   // Synchronous picker checks (§5.3). UX only — enqueue_p4p_upload() and the
@@ -215,6 +227,7 @@
     deadlineDueDisplay: deadlineDueDisplay,
     isLateFor: isLateFor,
     shortDateTime: shortDateTime,
+    shortDate: shortDate,
     validateUploadFile: validateUploadFile,
     checkMagicBytes: checkMagicBytes,
   }

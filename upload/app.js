@@ -189,7 +189,7 @@
         '<span class="m-name"><span class="m-dot" style="background:' + esc(accent) + '"></span>' +
         esc(P4P.monthKeyDisplay(key)) + "</span>" +
         '<span class="m-sub">' +
-        (submitted ? "ส่งแล้ว " + esc(P4P.shortDateTime(submitted)) : "กำหนดส่ง " + esc(P4P.deadlineDueDisplay(key))) +
+        (submitted ? "ส่งแล้ว " + esc(P4P.shortDate(submitted)) : esc(P4P.deadlineDueDisplay(key))) +
         "</span>"
 
       btn.addEventListener("click", function () {

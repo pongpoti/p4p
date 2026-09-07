@@ -133,7 +133,30 @@
         }
         .chip .m-name { font-weight: 600; font-size: .95rem; display: flex; align-items: center; gap: 7px; color: var(--secondary); }
         .chip .m-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px rgba(0,0,0,.04); }
-        .chip .m-sub { font-size: .76rem; color: var(--text-muted); margin-top: 4px; padding-left: 16px; }
+        .chip .m-sub {
+            /* block, not the inline span it looks like: overflow, text-overflow
+               and margin-top all no-op on an inline box, so the ellipsis below
+               would never fire and nowrap alone would let the text spill out
+               past the card's edge instead of being clipped. */
+            display: block;
+            font-size: .76rem; color: var(--text-muted); margin-top: 4px;
+            /* Two chips to a row leaves ~100-150px for this line depending on
+               the phone. It must never wrap: a two-line subtitle makes that
+               one card taller than its neighbours and the grid look broken.
+               The ellipsis is a backstop that the shortened copy should keep
+               it from ever reaching. */
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* Small phones (iPhone SE and friends) leave the subtitle under 100px
+           to work with, which the Thai abbreviations only just fit into. Buy
+           the margin back from padding and the gap rather than letting the
+           line reach the ellipsis. */
+        @media (max-width: 360px) {
+            #months { gap: 8px; }
+            .chip { padding: 11px 10px; }
+            .chip .m-sub { font-size: .72rem; }
+        }
 
         /* ── Notices (icon via CSS mask, recolors with currentColor) ──── */
         .notice {
