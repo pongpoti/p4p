@@ -137,6 +137,7 @@ const MONTH_TOKEN_MAP = [
   ["พฤศภาคม",5],["พฤศภ",5],                                    // ษ→ศ typo variants
   ["มิถุนายน",6],["June",6],["Jun",6],["มิ.ย",6],["มิถุน",6],["มิถุ",6],["มิย",6],
   ["กรกฎาคม",7],["July",7],["Jul",7],["ก.ค",7],["กรกฎ",7],["กรก",7],["กค",7],
+  ["กรกฏาคม",7],["กรกฏา",7],["กรกฏ",7],                        // ฎ→ฏ typo variants
   ["สิงหาคม",8],["August",8],["Aug",8],["ส.ค",8],["สิงหา",8],["สิงห",8],["สค",8],
   ["กันยายน",9],["September",9],["Sep",9],["ก.ย",9],["กันยา",9],["กันย",9],["กย",9],
   ["ตุลาคม",10],["October",10],["Oct",10],["ต.ค",10],["ตุลา",10],["ตุล",10],["ตค",10],
@@ -161,9 +162,11 @@ export function resolveBeMonth(filename, subject, body) {
         // Thai tokens: require a non-Thai boundary on both sides so a token
         // cannot match as a substring of a longer Thai word — a physician's
         // name is exactly as likely to contain "กันย" (September) as any
-        // ordinary word is.
+        // ordinary word is. The one deliberate exception is "เดือน" ("month")
+        // directly before the token — the no-space compound "เดือนมกราคม"
+        // that subjects and filenames actually use.
         const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (new RegExp(`(?:^|[^฀-๿])${escaped}(?![฀-๿])`).test(t)) return mo;
+        if (new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${escaped}(?![฀-๿])`).test(t)) return mo;
       }
     }
   }
@@ -246,6 +249,12 @@ function fourDigitBeYear(text) {
  * abbreviation as a substring: "ณัฐกันย์" contains "กันย" (กันยายน, September)
  * with no boundary at all. Since this reader decides what a submission is
  * routed on and rejected against, it cannot afford that false positive.
+ *
+ * The one deliberate exception mirrors monthFromCellText's own compound word:
+ * "เดือน" ("month") directly before the token, as in "เดือนมกราคม" — subjects
+ * and filenames use that same no-space compound, and it is a fixed, known
+ * word rather than an open-ended category, so it cannot reopen the name
+ * collision this boundary check exists to close.
  */
 function monthTokenIndex(s, token) {
   if (/^[A-Za-z]+$/.test(token)) {
@@ -253,7 +262,7 @@ function monthTokenIndex(s, token) {
     return m ? m.index : -1;
   }
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = new RegExp(`(?:^|[^฀-๿])(${escaped})(?![฀-๿])`).exec(s);
+  const m = new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))(${escaped})(?![฀-๿])`).exec(s);
   return m ? m.index + m[0].length - m[1].length : -1;
 }
 
@@ -325,10 +334,16 @@ export function monthFromCellText(text) {
   for (const [token, mo] of MONTH_TOKEN_MAP) {
     if (/^[A-Za-z]+$/.test(token)) {
       if (new RegExp(`\\b${token}\\b`, "i").test(s)) return mo;
-    } else if (token.includes(".") || (token.match(/[ก-ฮ]/g) ?? []).length >= 3) {
-      if (s.includes(token)) return mo;
-    } else if (new RegExp(`(?:^|[^฀-๿])${token}(?![฀-๿])`).test(s)) {
-      return mo;
+    } else {
+      // Every Thai token needs a non-Thai boundary on both sides — the same
+      // rule monthTokenIndex applies to subject/body/filename, and for the
+      // same reason: a tab name or title-row cell can hold a physician's own
+      // name just as easily as it holds a total-column label, and "ณัฐกันย์"
+      // contains "กันย" (กันยายน, September) with no boundary at all. The one
+      // exception is "เดือน" ("month") directly before the token — the
+      // no-space compound "เดือนสิงหาคม" this repo's own title rows use.
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${escaped}(?![฀-๿])`).test(s)) return mo;
     }
   }
   return null;

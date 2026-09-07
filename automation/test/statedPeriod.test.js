@@ -75,3 +75,13 @@ test("a month abbreviation embedded in a person's name is not a stated month", (
   // August upload as a month_mismatch.
   assert.equal(resolveBeMonth("ณัฐกันย์ ลิมปวิทยากุล p4p 69 (1).xlsx", "", ""), null);
 });
+
+test("the เดือน<month> compound (no space) still resolves, despite the boundary check above", () => {
+  // The fix for the name collision above must not re-break this: "เดือน"
+  // ("month") directly against a month name, with no space, is how subjects
+  // and filenames actually write it — e.g. "P4P ศุภศรัณย์ เดือนมกราคม 2569.xlsx".
+  assert.deepEqual(periodsInText("P4P ศุภศรัณย์ เดือนมกราคม 2569.xlsx"), [
+    { month: 1, beYear: 2569 },
+  ]);
+  assert.equal(resolveBeMonth("P4P ศุภศรัณย์ เดือนมกราคม 2569.xlsx", "", ""), 1);
+});
