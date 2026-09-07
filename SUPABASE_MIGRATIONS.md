@@ -125,6 +125,17 @@ already-applied file is safe.
     LINE's client or a flaky connection retrying the extra LIFF hop
     `status` takes via the month-picker), not a bug in this codebase; the
     throttle removal makes it moot rather than fixing it.
+20. `scripts/liff-access-add-upload-2026-09.sql` — **applied live
+    2026-09-08**: folds `/upload/`'s page-open Telegram notification into
+    this same mechanism, replacing the separate, plainer one main.js sent
+    directly (`lib/telegram-notify.js`'s now-deleted `formatPageOpenMessage`)
+    — one alert system for all four pages instead of two. Widens the `page`
+    check constraint and `log_liff_access()`'s validation to include
+    `'upload'`, and gives `notify_liff_access()` a Thai label for it
+    (`ส่งไฟล์ P4P`). Falls under step 19's "no throttle" decision
+    automatically — that gate is `if p_page = 'verify'`, so every other page
+    including this new one was already unthrottled. Confirmed live the same
+    way as steps 17/19.
 
 ## Superseded — do NOT run
 
