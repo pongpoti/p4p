@@ -39,14 +39,17 @@ test("the email path's success message names its source", () => {
 });
 
 test("the email path's error message names its source", () => {
+  // File sits in the trailing footer, not the padded label block — the same
+  // shape every other message here uses (title / fields / blank / File).
   assert.equal(
     formatErrorMessage("Workbook parse failed: boom", "P4P_มิย69.xlsx"),
     [
       "❌ P4P Processing Error",
       "",
       "📥 Source: Email",
-      "📎 File  : P4P_มิย69.xlsx",
       "💬 Error : Workbook parse failed: boom",
+      "",
+      "📎 File: P4P_มิย69.xlsx",
     ].join("\n")
   );
 });

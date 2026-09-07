@@ -158,8 +158,9 @@ export function formatErrorMessage(error, filename, upload = null) {
       `❌ P4P Processing Error`,
       ``,
       `📥 Source: Email`,
-      `📎 File  : ${filename ?? "(unknown)"}`,
       `💬 Error : ${error ?? "unknown error"}`,
+      ``,
+      `📎 File: ${filename ?? "(unknown)"}`,
     ].join("\n");
   }
 
