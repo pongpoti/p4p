@@ -113,6 +113,18 @@ already-applied file is safe.
     was and was not verified, including a 2026-09-06 production fix
     (`roster_index` was bigint, should always have been uuid — see the
     file's header for how this was found and confirmed fixed live).
+19. `scripts/liff-access-no-throttle-2026-09.sql` — **applied live
+    2026-09-08**: removes step 17's 10-minute dedup window for
+    status/list/ranking's access alert (explicit product decision — every
+    open should alert, matching `/upload/`'s own unthrottled page-open
+    notification). `verify/`'s throttle is untouched. Confirmed live via the
+    same `pg_get_functiondef` query step 17 used. The file's own header also
+    records what querying `liff_access_log` turned up while investigating a
+    "duplicate alert" report: five sub-100ms-apart same-throttle_key pairs,
+    concentrated on `status` — a genuine double page load (most likely
+    LINE's client or a flaky connection retrying the extra LIFF hop
+    `status` takes via the month-picker), not a bug in this codebase; the
+    throttle removal makes it moot rather than fixing it.
 
 ## Superseded — do NOT run
 
