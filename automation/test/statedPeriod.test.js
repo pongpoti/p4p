@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert   from "node:assert/strict";
-import { periodsInText, statedPeriods } from "../claude-analyst.js";
+import { periodsInText, statedPeriods, resolveBeMonth } from "../claude-analyst.js";
 
 // What a submission SAYS it is for. The email path refuses to route on
 // anything else, so these cases are mostly about what must NOT be claimed.
@@ -55,4 +55,23 @@ test("a submission that states nothing anywhere is reported as such", () => {
     statedPeriods("P4P.xlsx", "ส่งไฟล์ครับ", ""),
     { periods: [], source: "none" },
   );
+});
+
+test("a month abbreviation embedded in a person's name is not a stated month", () => {
+  // "ณัฐกันย์" (a real given name) contains "กันย" — the abbreviation for
+  // กันยายน (September) — as a plain substring, with no space around it.
+  // Reading that as a stated September turned a real, unambiguous August
+  // submission into an "ambiguous_period" rejection.
+  assert.deepEqual(periodsInText("p4p ณัฐกันย์ ลิมปวิทยากุล ส.ค. 69"), [
+    { month: 8, beYear: null },
+  ]);
+  assert.deepEqual(
+    statedPeriods("ณัฐกันย์ ลิมปวิทยากุล p4p 69 (1).xlsx", "p4p ณัฐกันย์ ลิมปวิทยากุล ส.ค. 69", ""),
+    { periods: [{ month: 8, beYear: null }], source: "email" },
+  );
+  // Same collision, different reader: the upload path's month cross-check
+  // (index.js) reads the filename alone through resolveBeMonth, and this
+  // exact filename would otherwise read as September and reject a correct
+  // August upload as a month_mismatch.
+  assert.equal(resolveBeMonth("ณัฐกันย์ ลิมปวิทยากุล p4p 69 (1).xlsx", "", ""), null);
 });

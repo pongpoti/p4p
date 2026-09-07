@@ -157,8 +157,13 @@ export function resolveBeMonth(filename, subject, body) {
       // Latin tokens: require word boundary to avoid "May" inside "Maybe"
       if (/^[A-Za-z]+$/.test(token)) {
         if (new RegExp(`\\b${token}\\b`, "i").test(t)) return mo;
-      } else if (t.includes(token)) {
-        return mo;
+      } else {
+        // Thai tokens: require a non-Thai boundary on both sides so a token
+        // cannot match as a substring of a longer Thai word — a physician's
+        // name is exactly as likely to contain "กันย" (September) as any
+        // ordinary word is.
+        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (new RegExp(`(?:^|[^฀-๿])${escaped}(?![฀-๿])`).test(t)) return mo;
       }
     }
   }
@@ -229,16 +234,26 @@ function fourDigitBeYear(text) {
   return null;
 }
 
-/** Where a month is first stated in `s`, or -1 — same strict rules as monthFromCellText. */
+/**
+ * Where a month is first stated in `s`, or -1.
+ *
+ * Every Thai token — abbreviation, dotted form, or full name — requires a
+ * non-Thai boundary on both sides, with no exception for length. monthFromCellText
+ * skips that check for dotted/3+-consonant tokens because cell text is running
+ * Thai prose that legitimately butts a month word against another Thai word
+ * ("เดือนสิงหาคม"). Free text — a subject line or filename — routinely carries a
+ * person's name instead, and a name is exactly as likely to contain a month
+ * abbreviation as a substring: "ณัฐกันย์" contains "กันย" (กันยายน, September)
+ * with no boundary at all. Since this reader decides what a submission is
+ * routed on and rejected against, it cannot afford that false positive.
+ */
 function monthTokenIndex(s, token) {
   if (/^[A-Za-z]+$/.test(token)) {
     const m = new RegExp(`\\b${token}\\b`, "i").exec(s);
     return m ? m.index : -1;
   }
-  if (token.includes(".") || (token.match(/[ก-ฮ]/g) ?? []).length >= 3) {
-    return s.indexOf(token);
-  }
-  const m = new RegExp(`(?:^|[^฀-๿])(${token})(?![฀-๿])`).exec(s);
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`(?:^|[^฀-๿])(${escaped})(?![฀-๿])`).exec(s);
   return m ? m.index + m[0].length - m[1].length : -1;
 }
 
