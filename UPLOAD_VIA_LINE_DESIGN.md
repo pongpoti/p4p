@@ -1194,6 +1194,26 @@ the way we actually launch it.
 path keeps that, with the fields changed to match what is actually worth
 checking on this path.
 
+**Which runtime sends it.** After §7.7 that is no longer one answer. A LIFF
+submission is normally decided inside the Vercel request — `/upload/score`
+scores it, saves it, closes the queue row and returns — and drain-uploads'
+archive branch is deliberately silent afterwards, having nothing new to
+report. So the worker only ever alerts on the deferred tier, and the common
+case would go out with no Telegram at all. `/upload/score` therefore sends its
+own, through `lib/telegram-notify.js`: a vendored copy of the four formatting
+functions (byte-identical, guarded by `lib/__tests__/parity.test.mjs`) over an
+axios transport, because `automation/` is C8's isolation boundary, is ESM, and
+is not in `vercel.json`'s `includeFiles`.
+
+Two consequences worth stating. **Vercel needs its own `TELEGRAM_BOT_TOKEN`
+and `TELEGRAM_CHAT_ID`** — the same bot and chat the worker uses, but a second
+deployment holding the credential; without them the send is skipped with a
+console warning and nothing else changes. And the send is **awaited before the
+response**, not fired and forgotten: the function can be frozen the moment the
+response is written. It caps itself at 5 s and swallows every failure, so the
+worst case is a slightly slower receipt, never a saved score reported as an
+error.
+
 On the email path the admin's question is *"did the fuzzy match pick the right
 person?"* — hence `👤 Name` (what Claude read) versus `🔗 Matched` (who it was
 matched to) and a similarity percentage. On the upload path there is no fuzzy
@@ -1251,9 +1271,10 @@ Shape notes:
   `source`/`account` block** rather than being replaced. The email path passes
   nothing new and its messages stay byte-identical — the admin's eye is trained
   on that layout.
-- **`🔁 Attempt: n/3`** appears only on the upload path, because only it
-  retries (§12). It is the difference between "this will come back" and "this
-  is over, someone has to look".
+- **`🔁 Attempt: n/3`** appears only on the upload path's *deferred* tier,
+  because only that retries (§12). It is the difference between "this will
+  come back" and "this is over, someone has to look". A rejection from
+  `/upload/score` is terminal on the first try and prints no counter.
 - **The account email is included** — consistent with
   `notify_access_request()`, which already sends addresses to the same private
   chat. If that chat's membership ever widens, this is one of the lines to cut

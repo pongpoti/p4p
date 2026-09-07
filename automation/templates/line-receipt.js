@@ -31,7 +31,6 @@ const MONTH_ACCENTS = [
 ];
 
 const HEADER_BG_FAIL = "#B03A2E";
-const SUBTITLE = "#ffffa0";
 const BODY_BG = "#F5F5F0";
 const MUTED = "#6E5C49";
 
@@ -65,6 +64,34 @@ export function displayMonth(monthKey) {
   const [year, month] = String(monthKey ?? "").split("_");
   const name = THAI_MONTHS[parseInt(month, 10) - 1];
   return name ? `${name} ${year}` : String(monthKey ?? "");
+}
+
+/**
+ * The month name on a pill of its own accent colour, centred under the title —
+ * the same badge lib/line-receipt-flex.js builds, so a failure bubble and a
+ * receipt name the month the same way. `flex: 0` keeps the pill the width of
+ * its text; the fillers either side are what centre it. Dark text because
+ * every accent above is a 300-level pastel.
+ */
+function monthBadge(monthKey, accent) {
+  const pill = {
+    type: "box",
+    layout: "vertical",
+    contents: [
+      { type: "text", text: displayMonth(monthKey), size: "sm", weight: "bold", color: "#2D2218", align: "center" },
+    ],
+    backgroundColor: accent,
+    cornerRadius: "xl",
+    paddingAll: "xs",
+    paddingStart: "md",
+    paddingEnd: "md",
+    flex: 0,
+  };
+  return {
+    type: "box",
+    layout: "horizontal",
+    contents: [{ type: "filler" }, pill, { type: "filler" }],
+  };
 }
 
 /**
@@ -103,7 +130,7 @@ export function buildFailureBubble({ monthKey, errorType, detail, uploadLiffUrl 
         paddingAll: "xl",
         contents: [
           { type: "text", text: "⚠️ ส่งไฟล์ P4P ไม่สำเร็จ", align: "center", color: "#FFFFFF", size: "xl", weight: "bold", wrap: true, margin: "md", offsetBottom: "sm" },
-          { type: "text", text: displayMonth(monthKey), align: "center", color: SUBTITLE, size: "sm", wrap: true },
+          monthBadge(monthKey, accent),
         ],
       },
       hero: { type: "box", layout: "vertical", contents: [], height: "5px", backgroundColor: accent },

@@ -746,6 +746,10 @@ const UPLOAD_BUCKET = "p4p-uploads"
 const UPLOAD_LIFF_URL = UPLOAD_LIFF_ID ? "https://liff.line.me/" + UPLOAD_LIFF_ID : ""
 
 const receipt = require("./lib/line-receipt-flex")
+// The admin's Telegram alert (§7.6). Vendored for the same reason the scorer
+// is — see the file's own header — and a no-op when this deployment has no
+// TELEGRAM_* variables, never a failed submission.
+const tg = require("./lib/telegram-notify")
 
 function serviceHeaders(extra) {
   return Object.assign({
@@ -841,9 +845,31 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   const monthNum = parseInt(String(monthKey).slice(5), 10)
   const beYear = parseInt(String(monthKey).slice(0, 4), 10)
 
+  // The §7.6 context block. `rosterMatch` is always "exact" on this path:
+  // reaching a Telegram from here means row.roster_index was non-null, which
+  // enqueue_p4p_upload() only sets on an exact roster hit — anything fuzzy
+  // was deferred to the worker, which sends its own.
+  function tgContext(extra) {
+    return Object.assign({
+      source: "LINE upload",
+      accountName: row.full_name,
+      email: row.email,
+      monthKey,
+      rosterMatch: "exact",
+    }, extra || {})
+  }
+
+  // Awaited, not fired and forgotten: the Vercel function can be frozen the
+  // moment the response is written, and a promise still in flight then simply
+  // never resolves. sendTelegram() swallows its own failures and caps itself
+  // at 5 s, so the worst case is a slightly slower receipt.
+  async function notifyAdmin(text) {
+    await tg.sendTelegram(text)
+  }
+
   // Reject (terminal, no retry on either claim function) — same shape as an
   // enqueue-time refusal: nothing here was ever eligible.
-  async function reject(errorType, detail, status) {
+  async function reject(errorType, detail, status, tgExtra) {
     try {
       await patchQueueRow(row.id, {
         status: "rejected",
@@ -854,6 +880,13 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
     } catch (e) {
       console.error("[upload] reject patch failed:", e.message)
     }
+    // No attempt counter: unlike the worker's failures, a rejection here is
+    // terminal on the first try — there is nothing coming back.
+    await notifyAdmin(tg.formatErrorMessage(
+      detail || errorType,
+      row.filename,
+      tgContext(Object.assign({ errorType }, tgExtra || {}))
+    ))
     return res.status(status || 422).json({ error: errorType, detail: detail || "" })
   }
 
@@ -915,7 +948,10 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   const inferredYear = score.resolveBeYear(row.filename || "", "", "") || score.resolveBeYearFromRows(rows)
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")
-    return reject("month_mismatch", "ไฟล์ระบุเดือน " + inferredKey + " แต่เลือกส่งเดือน " + monthKey)
+    // monthInFile is what turns the alert's "⚠️ Month in file" line on — the
+    // one disagreement this path can actually detect (§7.6).
+    return reject("month_mismatch", "ไฟล์ระบุเดือน " + inferredKey + " แต่เลือกส่งเดือน " + monthKey,
+      422, { monthInFile: inferredKey })
   }
 
   // Ordering matters: the check above fires when the file names a DIFFERENT
@@ -1019,6 +1055,19 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   }
 
   const displayName = [rosterRow.prefix, matchedName].filter(Boolean).join(" ").trim()
+
+  // The success half of §7.6. The worker sends nothing for a row that got
+  // this far — drain-uploads' archive branch is silent by design — so if this
+  // send is skipped the admin never hears about the common case at all.
+  await notifyAdmin(tg.formatResultMessage(
+    // `value.toFixed(2)`, not receipt.formatScore's grouped "1,842.50": the
+    // worker's own success alert prints the ungrouped form, and the admin
+    // reads both messages side by side.
+    { matchedName, score: value.toFixed(2), saved: true },
+    row.filename,
+    tgContext()
+  ))
+
   res.json({
     score: Number(value.toFixed(2)),
     month_key: monthKey,
