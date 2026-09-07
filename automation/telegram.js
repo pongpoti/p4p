@@ -100,7 +100,7 @@ function accountLine(upload) {
  * @param {object} result  { name, date, score, matchedName, similarity, saved }
  * @param {string} filename  Source xlsx filename
  * @param {object} [upload]  LINE-upload context — omit entirely on the email
- *   path, whose message stays byte-identical:
+ *   path, which prints its own fixed "Email" source instead:
  *   { source, accountName, email, monthKey, rosterMatch, nameInFile, monthInFile }
  * @returns {string}
  */
@@ -115,6 +115,7 @@ export function formatResultMessage(result, filename, upload = null) {
     return [
       `📋 P4P Workload Report`,
       ``,
+      `📥 Source   : Email`,
       `👤 Name     : ${result.name ?? "—"}`,
       `🔗 Matched  : ${result.matchedName ?? "—"}${sim}`,
       `📅 Date     : ${result.date ?? "—"}`,
@@ -149,15 +150,16 @@ export function formatResultMessage(result, filename, upload = null) {
  * @param {string} error     Human-readable failure description
  * @param {string} filename  Source xlsx filename
  * @param {object} [upload]  As above, plus { errorType, attempt, maxAttempts }.
- *   Omitted on the email path, which keeps its exact existing four lines.
+ *   Omitted on the email path, which prints its own fixed "Email" source.
  */
 export function formatErrorMessage(error, filename, upload = null) {
   if (!upload) {
     return [
       `❌ P4P Processing Error`,
       ``,
-      `📎 File : ${filename ?? "(unknown)"}`,
-      `💬 Error: ${error ?? "unknown error"}`,
+      `📥 Source: Email`,
+      `📎 File  : ${filename ?? "(unknown)"}`,
+      `💬 Error : ${error ?? "unknown error"}`,
     ].join("\n");
   }
 

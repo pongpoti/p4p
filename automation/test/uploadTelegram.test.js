@@ -2,10 +2,10 @@
  * The admin's Telegram message, on both paths.
  *
  * The email path's layout is load-bearing in a way tests usually aren't: the
- * admin has been reading the same eight lines for months and scans them by
- * shape. So the first assertion here is that passing no upload context leaves
- * those messages BYTE-identical — the upload block is an addition, never a
- * rewrite (design §7.6).
+ * admin has been reading the same shape for months and scans it, not reads
+ * it. It now leads with a Source line — matching the upload path's own first
+ * line — so the two are told apart by the same field instead of by the
+ * absence of one (design §7.6).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -20,12 +20,13 @@ const RESULT = {
   saved: true,
 };
 
-test("the email path's success message is unchanged", () => {
+test("the email path's success message names its source", () => {
   assert.equal(
     formatResultMessage(RESULT, "P4P_มิย69.xlsx"),
     [
       "📋 P4P Workload Report",
       "",
+      "📥 Source   : Email",
       "👤 Name     : สมชาย ใจดี",
       "🔗 Matched  : สมชาย ใจดี (87% match)",
       "📅 Date     : 2569_06",
@@ -37,14 +38,15 @@ test("the email path's success message is unchanged", () => {
   );
 });
 
-test("the email path's error message is unchanged", () => {
+test("the email path's error message names its source", () => {
   assert.equal(
     formatErrorMessage("Workbook parse failed: boom", "P4P_มิย69.xlsx"),
     [
       "❌ P4P Processing Error",
       "",
-      "📎 File : P4P_มิย69.xlsx",
-      "💬 Error: Workbook parse failed: boom",
+      "📥 Source: Email",
+      "📎 File  : P4P_มิย69.xlsx",
+      "💬 Error : Workbook parse failed: boom",
     ].join("\n")
   );
 });

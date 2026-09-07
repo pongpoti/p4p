@@ -511,8 +511,8 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
 
   // Telegram context for the upload path — the admin's question changes from
   // "did the fuzzy match pick the right person?" to "did the file agree with
-  // what the physician claimed?" (§7.6). Null on the email path, whose
-  // messages stay byte-identical.
+  // what the physician claimed?" (§7.6). Null on the email path, which prints
+  // its own fixed "Email" source instead of this block.
   const uploadCtx = isUpload
     ? {
         source      : source === "line-upload" ? "LINE upload" : source,

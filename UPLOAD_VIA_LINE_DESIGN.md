@@ -1269,8 +1269,9 @@ Shape notes:
   MarkdownV2 would require escaping anyway.
 - **`formatResultMessage` / `formatErrorMessage` gain an optional
   `source`/`account` block** rather than being replaced. The email path passes
-  nothing new and its messages stay byte-identical — the admin's eye is trained
-  on that layout.
+  nothing new and now prints a fixed `📥 Source   : Email` / `📥 Source: Email`
+  line of its own — the two paths are told apart by the same field rather than
+  by one path having it and the other not.
 - **`🔁 Attempt: n/3`** appears only on the upload path's *deferred* tier,
   because only that retries (§12). It is the difference between "this will
   come back" and "this is over, someone has to look". A rejection from
