@@ -374,6 +374,16 @@ function servePage(name) {
       return res.redirect(302, "/verify/?reason=blocked#")
     }
 
+    // Every load of /upload/ tells the admin — a lightweight "someone's
+    // here" signal now that the rich menu makes it reachable by everyone.
+    // Awaited for the same reason /upload/score's alert is: a Vercel
+    // function can be frozen the instant the response is written, so a
+    // fire-and-forget send might never actually leave. sendTelegram()
+    // swallows its own failures, so a Telegram outage never blocks the page.
+    if (name === "upload") {
+      await tg.sendTelegram(tg.formatPageOpenMessage(jwtPayload(at).email || ""))
+    }
+
     res.setHeader("Content-Type", "text/html; charset=utf-8")
     // This HTML carries a live access token in its <meta>, so it must never be
     // written to a cache — and a cached copy would also keep pointing at the
