@@ -1,0 +1,43 @@
+name: Setup Rich Menu (adds the upload block)
+
+# One-time, manual switch (UPLOAD_VIA_LINE_DESIGN.md §13 Phase 4): creates the
+# 4-block main rich menu — the existing status/ranking/person-list row plus a
+# new full-width "upload" row — and sets it as the default for every LINE OA
+# user immediately. Everything behind it (the /upload/ page, scoring, the
+# admin Telegram alert) has already shipped; this is the step that makes it
+# reachable. Deliberately workflow_dispatch only, never scheduled — the
+# script itself says "run it once".
+#
+# Uses the same LINE_TOKEN secret update-month-picker.yml already runs
+# monthly against this channel — nothing new to add. UPLOAD_LIFF_ID is not a
+# secret (it ships in the page's own HTML and in main.js's source as a
+# fallback), so it's a plain literal here rather than a secret lookup.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-richmenu:
+    name: Create + activate the 4-block rich menu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create and activate rich menu
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          UPLOAD_LIFF_ID: '2008561527-sj7tuMLL'
+        run: node scripts/setup-richmenu.mjs

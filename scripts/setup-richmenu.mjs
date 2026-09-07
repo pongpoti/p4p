@@ -40,10 +40,41 @@ const jsonHdr = { ...authHdr, 'Content-Type': 'application/json' }
 const log = (m) => process.stdout.write(`${m}\n`)
 const ok  = (m) => log(`✓ ${m}`)
 
+// Look up an alias's CURRENT richMenuId before touching it, purely so the
+// old object can be deleted once the alias points elsewhere — setAlias()
+// itself only swaps the pointer (delete-then-recreate the ALIAS), never the
+// menu object the alias used to point to. Left alone, every re-run of this
+// script would leak one orphaned rich menu per aliased block: harmless to a
+// user (nothing still points at it), but it still counts against the
+// account's rich-menu quota forever. update-month-picker.mjs's own standalone
+// CLI runner already does this same lookup-then-delete for exactly this
+// reason; this mirrors it for both aliases setup-richmenu.mjs manages.
+async function currentAliasTarget(aliasId) {
+  try {
+    const res = await axios.get(`${API}/v2/bot/richmenu/alias/${aliasId}`, { headers: authHdr })
+    return res.data.richMenuId
+  } catch {
+    return null
+  }
+}
+
+async function deleteOldMenu(oldId, newId, label) {
+  if (!oldId || oldId === newId) return
+  try {
+    await axios.delete(`${API}/v2/bot/richmenu/${oldId}`, { headers: authHdr })
+    ok(`Deleted old ${label} menu ${oldId}`)
+  } catch (e) {
+    log(`⚠  Could not delete old ${label} menu ${oldId}: ${e.response?.data?.message ?? e.message}`)
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 1 — Month-picker rich menu (must exist before main menu references it)
 // ═══════════════════════════════════════════════════════════════════════════════
 log('\n── Step 1: Month-picker (2500×1686) ──────────────────────────')
+
+const oldPickerId = await currentAliasTarget('month-picker')
+log(oldPickerId ? `Existing month-picker: ${oldPickerId}` : 'No existing month-picker alias — will create fresh')
 
 const months = getMonthData()
 log(`Month range: ${months.map(m => `${m.name} ${m.year}`).join(' → ')}`)
@@ -57,11 +88,15 @@ const pickerMenuId = await createAndUpload(buildMenuPayload(months), pickerPng)
 ok(`Month-picker created — ${pickerMenuId}`)
 
 await setAlias('month-picker', pickerMenuId)
+await deleteOldMenu(oldPickerId, pickerMenuId, 'month-picker')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STEP 2 — Main rich menu (references alias "month-picker" in block 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 log('\n── Step 2: Main rich menu (2500×1686) ────────────────────────')
+
+const oldMainId = await currentAliasTarget('status')
+log(oldMainId ? `Existing main menu: ${oldMainId}` : 'No existing "status" alias — will create fresh')
 
 log('Rendering main SVG → PNG...')
 const svgPath = join(__dirname, '../src/richmenu.svg')
@@ -105,6 +140,7 @@ const mainMenuId = await createAndUpload(mainPayload, mainPng)
 ok(`Main menu created — ${mainMenuId}`)
 
 await setAlias('status', mainMenuId)
+await deleteOldMenu(oldMainId, mainMenuId, 'main')
 
 log('Setting main menu as default...')
 const defRes = await axios.post(
