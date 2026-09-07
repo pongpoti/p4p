@@ -271,7 +271,7 @@
     if (!pickedFile) return
     var who = (identity && identity.full_name) || "ท่าน"
     confirmLine.innerHTML =
-      "ส่งไฟล์ <b>" + esc(pickedFile.name) + "</b> เป็นผลงานเดือน <b>" +
+      "ส่งไฟล์ <b>" + esc(pickedFile.name) + "</b> เป็น P4P ของเดือน <b>" +
       esc(P4P.monthKeyDisplay(selectedMonth)) + "</b> ในชื่อ <b>" + esc(who) + "</b>"
   }
 
@@ -492,8 +492,12 @@
       rows.forEach(function (row) {
         var pair = STATUS_LABEL[row.status] || ["pending", row.status]
         var chipText = pair[1]
+        // A scored row gets its own separate score pill rather than folding
+        // the number into the status text ("สำเร็จ 1,842.50" as one string) —
+        // two badges read at a glance, one long one does not.
+        var scoreChip = ""
         if (row.status === "done" && row.score !== null && row.score !== undefined) {
-          chipText += " " + receipt.formatScore(row.score)
+          scoreChip = '<span class="score-chip">' + esc(receipt.formatScore(row.score)) + "</span>"
         } else if (pair[0] === "failed" && row.error_type) {
           chipText += " · " + row.error_type
         }
@@ -501,7 +505,7 @@
         li.innerHTML =
           "<span>" + esc(P4P.monthKeyDisplay(row.month_key)) +
           '<br><span class="h-when">' + esc(P4P.shortDateTime(row.received_at)) + "</span></span>" +
-          '<span class="status-chip ' + pair[0] + '">' + esc(chipText) + "</span>"
+          '<span class="chip-group"><span class="status-chip ' + pair[0] + '">' + esc(chipText) + "</span>" + scoreChip + "</span>"
         historyList.appendChild(li)
       })
     }).catch(function (err) {

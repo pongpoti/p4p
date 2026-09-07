@@ -66,17 +66,41 @@
         /* ── Header ──────────────────────────────────────────── */
         header {
             background: linear-gradient(155deg, var(--primary) 0%, var(--primary-dark) 100%);
-            padding: 24px 20px 26px;
+            padding: 26px 20px 28px;
             border-radius: 0 0 22px 22px;
             box-shadow: var(--shadow-md);
             position: relative;
+            overflow: hidden;
+        }
+        /* Two soft, oversized radial glows rather than a blur filter — cheap
+           on the LINE in-app webview and gives the flat gradient some depth
+           without a new asset. Purely decorative, so it's aria-hidden and
+           sits behind the content layer. */
+        .header-decor {
+            position: absolute; inset: 0; pointer-events: none;
+            background:
+                radial-gradient(140px 140px at 90% -15%, rgba(255,255,255,.18), transparent 70%),
+                radial-gradient(180px 180px at -15% 115%, rgba(255,255,255,.10), transparent 70%);
+        }
+        .header-top { display: flex; align-items: center; gap: 11px; position: relative; z-index: 1; }
+        .header-icon {
+            flex: none; width: 38px; height: 38px; border-radius: 12px;
+            background: rgba(255,255,255,.16);
+            display: flex; align-items: center; justify-content: center;
+            color: #fff;
         }
         header h1 {
             font-family: 'Manrope', 'Noto Sans Thai Looped', sans-serif;
-            font-size: 1.25rem; font-weight: 800; letter-spacing: .01em; color: #fff;
+            font-size: 1.32rem; font-weight: 800; letter-spacing: .01em; color: #fff;
+            text-shadow: 0 1px 3px rgba(0,0,0,.1);
         }
+        .identity-row {
+            margin-top: 13px; display: flex; align-items: center; gap: 8px;
+            position: relative; z-index: 1;
+        }
+        .identity-icon { flex: none; color: rgba(255,255,255,.65); }
         #identity {
-            margin-top: 8px; font-size: .95rem; color: rgba(255,255,255,.82);
+            font-size: .95rem; color: rgba(255,255,255,.85);
             min-height: 1.3em;
         }
         #identity strong { color: #fff; font-weight: 600; }
@@ -101,13 +125,13 @@
             margin-bottom: 14px;
         }
         section h2 {
-            font-size: .74rem; font-weight: 700; letter-spacing: .06em;
+            font-size: 1rem; font-weight: 700; letter-spacing: .03em;
             text-transform: uppercase; color: var(--muted); margin-bottom: 14px;
             display: flex; align-items: center; gap: 7px;
         }
         section h2::before {
             content: "";
-            width: 4px; height: 14px; border-radius: 2px;
+            width: 4px; height: 16px; border-radius: 2px;
             background: var(--primary); display: inline-block;
         }
 
@@ -269,10 +293,15 @@
             gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: .88rem;
         }
         #history-list li:last-child { border-bottom: none; }
-        .status-chip {
-            font-size: .74rem; font-weight: 600; padding: 4px 10px 4px 20px; border-radius: 999px;
-            white-space: nowrap; position: relative;
+        /* The trailing badges for one history row — status pill, and (only on
+           a scored row) a second, separate pill for the number. Two chips
+           read at a glance; one chip carrying "สำเร็จ 1,842.50" as a single
+           string does not. */
+        .chip-group { display: flex; align-items: center; gap: 6px; flex: none; }
+        .status-chip, .score-chip {
+            font-size: .74rem; font-weight: 600; border-radius: 999px; white-space: nowrap;
         }
+        .status-chip { padding: 4px 10px 4px 20px; position: relative; }
         .status-chip::before {
             content: ""; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
             width: 6px; height: 6px; border-radius: 50%; background: currentColor;
@@ -280,6 +309,8 @@
         .status-chip.done { background: #EEF6F1; color: var(--ok); }
         .status-chip.pending { background: #FDF6E3; color: var(--warn); }
         .status-chip.failed { background: #FBEDEC; color: var(--danger); }
+        /* No status dot — this pill states a value, not a state. */
+        .score-chip { padding: 4px 10px; background: var(--tertiary); color: var(--secondary); font-weight: 700; }
         .h-when { color: var(--text-muted); font-size: .78rem; }
 
         .hidden { display: none !important; }
@@ -307,8 +338,17 @@
     </div>
 
     <header>
-        <h1>ส่งไฟล์ P4P</h1>
-        <div id="identity" class="skeleton">กำลังโหลดข้อมูล…</div>
+        <div class="header-decor" aria-hidden="true"></div>
+        <div class="header-top">
+            <div class="header-icon">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </div>
+            <h1>ส่งไฟล์ P4P</h1>
+        </div>
+        <div class="identity-row">
+            <svg class="identity-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <div id="identity" class="skeleton">กำลังโหลดข้อมูล…</div>
+        </div>
     </header>
 
     <main>
@@ -316,7 +356,7 @@
 
         <!-- ── Month ─────────────────────────────────────────── -->
         <section id="step-month">
-            <h2>เลือกเดือนของผลงาน</h2>
+            <h2>เลือกเดือนที่จะส่ง</h2>
             <div id="months"></div>
             <div id="deadline-notice" class="notice info"></div>
         </section>
