@@ -67,30 +67,30 @@ export const svgs = [
   {
     file: 'upload.png',
     width: 1536,  // → 1536×967 (27:17)
-    // A sheet of data with the upload page's own arrow-out-of-a-tray glyph
-    // rising out of it, a progress bar mid-fill, and a completed check badge
-    // — the three moments of one submission (pick file, send it, done) in
-    // one still image.
+    // Centrepiece is a glimpse of the actual rich-menu row — same clay
+    // circle + upload-tray glyph as src/richmenu.svg's real "ส่งไฟล์ P4P"
+    // button, in its own true colour rather than the card's blue theme, so
+    // it reads as "here is that exact button" rather than as themed
+    // artwork. Month chip + a small "sent" check badge (overlapping the
+    // card's corner, not a separate element) supply the same "this is a
+    // submission" story the previous version told with a document icon.
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270 170">
   <rect width="270" height="170" fill="#E8F1FC"/>
-  <circle cx="38" cy="32" r="5" fill="#0B84FF" opacity=".2"/><circle cx="240" cy="136" r="6" fill="#0B84FF" opacity=".18"/><circle cx="226" cy="30" r="4" fill="#FFC400" opacity=".4"/>
-  <rect x="68" y="24" width="104" height="130" rx="14" fill="#fff" stroke="#CFE3FA" stroke-width="2"/>
-  <rect x="84" y="40" width="72" height="50" rx="6" fill="#EAF3FC"/>
-  <rect x="92" y="48" width="32" height="6" rx="3" fill="#0B84FF"/>
-  <rect x="92" y="60" width="56" height="5" rx="2.5" fill="#CFE3FA"/>
-  <rect x="92" y="70" width="56" height="5" rx="2.5" fill="#CFE3FA"/>
-  <rect x="92" y="80" width="36" height="5" rx="2.5" fill="#CFE3FA"/>
-  <g transform="translate(120,104)" fill="none" stroke="#0B84FF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="30" cy="140" r="5" fill="#0B84FF" opacity=".2"/><circle cx="248" cy="26" r="4" fill="#FFC400" opacity=".4"/>
+  <rect x="52" y="44" width="166" height="82" rx="16" fill="#fff" stroke="#CFE3FA" stroke-width="2"/>
+  <circle cx="94" cy="85" r="28" fill="#8A6F52"/>
+  <g transform="translate(94,84) scale(.78)" fill="none" stroke="#FFFFFF" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round">
     <path d="M-18,10 v7 q0,5 5,5 h26 q5,0 5,-5 v-7"/>
     <line x1="0" y1="12" x2="0" y2="-15"/>
     <polyline points="-10,-5 0,-17 10,-5"/>
   </g>
-  <rect x="84" y="130" width="72" height="8" rx="4" fill="#EAF3FC"/>
-  <rect x="84" y="130" width="48" height="8" rx="4" fill="#0B84FF"/>
-  <rect x="188" y="34" width="54" height="24" rx="12" fill="#0B84FF"/>
-  <text x="215" y="50" text-anchor="middle" font-family="'Noto Sans Thai',sans-serif" font-size="12" font-weight="700" fill="#fff">ก.ค. 69</text>
-  <circle cx="204" cy="118" r="26" fill="#fff" stroke="#0B84FF" stroke-width="5"/>
-  <path d="M193 118 l7.5 8 l14 -16" fill="none" stroke="#0B84FF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="134" y="80" font-family="'Noto Sans Thai',sans-serif" font-size="19" font-weight="700" fill="#2D2218">ส่งไฟล์ P4P</text>
+  <rect x="134" y="88" width="28" height="4" rx="2" fill="#A68966" opacity=".75"/>
+  <text x="134" y="106" font-family="'Noto Sans Thai',sans-serif" font-size="11" fill="#6E5C49">แตะเพื่อส่งไฟล์</text>
+  <rect x="200" y="22" width="54" height="24" rx="12" fill="#0B84FF"/>
+  <text x="227" y="38" text-anchor="middle" font-family="'Noto Sans Thai',sans-serif" font-size="12" font-weight="700" fill="#fff">ก.ค. 69</text>
+  <circle cx="212" cy="118" r="19" fill="#fff" stroke="#0B84FF" stroke-width="4.5"/>
+  <path d="M204 118 l5.5 6 l10.5 -12" fill="none" stroke="#0B84FF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`,
   },
   {
@@ -99,6 +99,13 @@ export const svgs = [
     // An ID card (name + department rows, like the identity block on
     // status/) with a check-shield for "identity confirmed" and an opened
     // envelope for "by email" — the two things verifying actually checks.
+    // A small LINE badge overlaps the card's bottom-right corner: this is
+    // verification happening THROUGH LINE, so the card alone (which reads
+    // as "any ID") needed that anchor. Simplified original speech-bubble
+    // glyph rather than a traced copy of LINE's own logo file — appropriate
+    // for this internal, non-commercial use. Positioned in the one gap that
+    // doesn't crowd anything else: right of the envelope, below the shield,
+    // above the checkmark badge (checked against all three's coordinates).
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270 170">
   <rect width="270" height="170" fill="#E8F1FC"/>
   <circle cx="234" cy="34" r="5" fill="#0B84FF" opacity=".2"/><circle cx="34" cy="132" r="6" fill="#0B84FF" opacity=".18"/>
@@ -115,6 +122,9 @@ export const svgs = [
   <polyline points="66,124 96,144 126,124" fill="none" stroke="#0B84FF" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="150" cy="146" r="15" fill="#0B84FF"/>
   <path d="M143.5 146 l4.5 4.5 l8.5 -9.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="140" y="90" width="36" height="36" rx="10" fill="#06C755" stroke="#fff" stroke-width="3"/>
+  <rect x="148" y="99" width="20" height="14" rx="5" fill="#fff"/>
+  <polygon points="152,113 152,119 158,113" fill="#fff"/>
 </svg>`,
   },
 ]
