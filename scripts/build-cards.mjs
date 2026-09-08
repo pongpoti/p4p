@@ -22,6 +22,12 @@ const LATEST  = 'v1'
 const version = process.argv[2] ?? LATEST
 const release = await import(`./releases/${version}.mjs`)
 const { RELEASE, BASE_URL, ALT_TEXT, svgs, features } = release
+// Optional per-release accent for the TEXT area (bullet dot, divider bar,
+// "ฟีเจอร์" eyebrow label) — separate from the hero PNGs' own colours, which
+// each release's svgs already control directly. Defaults to v1's green so
+// any release that doesn't set these (including a v1 rebuild) is unaffected.
+const THEME_COLOR       = release.THEME_COLOR ?? '#00C300'
+const THEME_LABEL_COLOR = release.THEME_LABEL_COLOR ?? '#00A300'
 
 const OUT = join(__dirname, `../assets/cards/${RELEASE}`)
 mkdirSync(OUT, { recursive: true })
@@ -37,7 +43,7 @@ for (const { file, svg, width } of svgs) {
 const bulletRow = (text) => ({
   type: 'box', layout: 'baseline', spacing: 'sm', margin: 'md',
   contents: [
-    { type: 'text', text: '•', size: 'sm', color: '#00C300', weight: 'bold', flex: 0 },
+    { type: 'text', text: '•', size: 'sm', color: THEME_COLOR, weight: 'bold', flex: 0 },
     { type: 'text', text, size: 'sm', color: '#555555', wrap: true, flex: 1 },
   ],
 })
@@ -52,9 +58,9 @@ const featureBubble = ({ img, title, bullets }) => ({
   body: {
     type: 'box', layout: 'vertical', paddingAll: '16px', backgroundColor: '#FFFFFF',
     contents: [
-      { type: 'text', text: 'ฟีเจอร์', size: 'xs', weight: 'bold', color: '#00A300' },
+      { type: 'text', text: 'ฟีเจอร์', size: 'xs', weight: 'bold', color: THEME_LABEL_COLOR },
       { type: 'text', text: title, size: 'lg', weight: 'bold', color: '#333333', margin: 'sm', wrap: true },
-      { type: 'box', layout: 'vertical', contents: [], width: '34px', height: '3px', backgroundColor: '#00C300', cornerRadius: '2px', margin: 'md' },
+      { type: 'box', layout: 'vertical', contents: [], width: '34px', height: '3px', backgroundColor: THEME_COLOR, cornerRadius: '2px', margin: 'md' },
       ...bullets.map(bulletRow),
     ],
   },

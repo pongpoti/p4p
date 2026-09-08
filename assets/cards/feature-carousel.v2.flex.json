@@ -36,7 +36,7 @@
               "text": "ฟีเจอร์",
               "size": "xs",
               "weight": "bold",
-              "color": "#00A300"
+              "color": "#0A6FD6"
             },
             {
               "type": "text",
@@ -53,7 +53,7 @@
               "contents": [],
               "width": "34px",
               "height": "3px",
-              "backgroundColor": "#00C300",
+              "backgroundColor": "#0B84FF",
               "cornerRadius": "2px",
               "margin": "md"
             },
@@ -67,7 +67,7 @@
                   "type": "text",
                   "text": "•",
                   "size": "sm",
-                  "color": "#00C300",
+                  "color": "#0B84FF",
                   "weight": "bold",
                   "flex": 0
                 },
@@ -91,7 +91,7 @@
                   "type": "text",
                   "text": "•",
                   "size": "sm",
-                  "color": "#00C300",
+                  "color": "#0B84FF",
                   "weight": "bold",
                   "flex": 0
                 },
@@ -115,7 +115,7 @@
                   "type": "text",
                   "text": "•",
                   "size": "sm",
-                  "color": "#00C300",
+                  "color": "#0B84FF",
                   "weight": "bold",
                   "flex": 0
                 },
@@ -153,7 +153,7 @@
               "text": "ฟีเจอร์",
               "size": "xs",
               "weight": "bold",
-              "color": "#00A300"
+              "color": "#0A6FD6"
             },
             {
               "type": "text",
@@ -170,7 +170,7 @@
               "contents": [],
               "width": "34px",
               "height": "3px",
-              "backgroundColor": "#00C300",
+              "backgroundColor": "#0B84FF",
               "cornerRadius": "2px",
               "margin": "md"
             },
@@ -184,7 +184,7 @@
                   "type": "text",
                   "text": "•",
                   "size": "sm",
-                  "color": "#00C300",
+                  "color": "#0B84FF",
                   "weight": "bold",
                   "flex": 0
                 },
@@ -208,7 +208,7 @@
                   "type": "text",
                   "text": "•",
                   "size": "sm",
-                  "color": "#00C300",
+                  "color": "#0B84FF",
                   "weight": "bold",
                   "flex": 0
                 },
