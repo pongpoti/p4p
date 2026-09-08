@@ -2,11 +2,13 @@ name: "! create SK03/merge files and notify dept heads"
 
 on:
   schedule:
-    # Runs every day at ~00:17 UTC (~07:17 Bangkok time, UTC+7). Offset 17
-    # minutes past the hour, not on the hour — GitHub Actions scheduled runs
-    # queue behind everyone else's top-of-hour crons and can be delayed by
-    # hours; an off-the-hour minute lands in a much less congested slot.
-    - cron: '17 0 * * *'
+    # Runs every day at ~17:37 UTC (~00:37 Bangkok time, UTC+7, next day) —
+    # just after local midnight, when no one is touching the shared Drive
+    # folders. Offset 37 minutes past the hour, not on a round number like
+    # :00/:15/:30/:45 — GitHub Actions scheduled runs queue behind everyone
+    # else's crons (especially top-of-hour and other round minutes) and can
+    # be delayed by hours; an uncommon minute lands in a less congested slot.
+    - cron: '37 17 * * *'
   workflow_dispatch: # allow manual trigger from GitHub UI
     inputs:
       test_dept:
