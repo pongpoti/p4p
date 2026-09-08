@@ -74,6 +74,11 @@ export const svgs = [
     // artwork. Month chip + a small "sent" check badge (overlapping the
     // card's corner, not a separate element) supply the same "this is a
     // submission" story the previous version told with a document icon.
+    // Title is 16px at x=130, not the original 19px at x=134: at 19px the
+    // text ran ~9px past the card's right edge (caught from a live LINE
+    // screenshot; resvg.innerBBox() on the string alone measured 93px
+    // wide, and 134+93=227 is past the card's edge at 218). 16px measures
+    // 78px, ending at 208 — 10px clear.
     svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270 170">
   <rect width="270" height="170" fill="#E8F1FC"/>
   <circle cx="30" cy="140" r="5" fill="#0B84FF" opacity=".2"/><circle cx="248" cy="26" r="4" fill="#FFC400" opacity=".4"/>
@@ -84,9 +89,9 @@ export const svgs = [
     <line x1="0" y1="12" x2="0" y2="-15"/>
     <polyline points="-10,-5 0,-17 10,-5"/>
   </g>
-  <text x="134" y="80" font-family="'Noto Sans Thai',sans-serif" font-size="19" font-weight="700" fill="#2D2218">ส่งไฟล์ P4P</text>
-  <rect x="134" y="88" width="28" height="4" rx="2" fill="#A68966" opacity=".75"/>
-  <text x="134" y="106" font-family="'Noto Sans Thai',sans-serif" font-size="11" fill="#6E5C49">แตะเพื่อส่งไฟล์</text>
+  <text x="130" y="80" font-family="'Noto Sans Thai',sans-serif" font-size="16" font-weight="700" fill="#2D2218">ส่งไฟล์ P4P</text>
+  <rect x="130" y="88" width="28" height="4" rx="2" fill="#A68966" opacity=".75"/>
+  <text x="130" y="106" font-family="'Noto Sans Thai',sans-serif" font-size="11" fill="#6E5C49">แตะเพื่อส่งไฟล์</text>
   <rect x="200" y="22" width="54" height="24" rx="12" fill="#0B84FF"/>
   <text x="227" y="38" text-anchor="middle" font-family="'Noto Sans Thai',sans-serif" font-size="12" font-weight="700" fill="#fff">ก.ค. 69</text>
   <circle cx="212" cy="118" r="19" fill="#fff" stroke="#0B84FF" stroke-width="4.5"/>
@@ -134,9 +139,15 @@ export const features = [
   {
     img: 'upload.png',
     title: 'ส่งไฟล์ P4P ผ่าน LINE',
+    // Each bullet trimmed to fit one line in the Flex bubble (size 'sm').
+    // The originals wrapped to 2 lines each — confirmed from a live LINE
+    // screenshot — so these were re-measured with the same resvg/Noto Sans
+    // Thai proxy used for the hero art: calibrated against that screenshot's
+    // own wrap points (a known-fitting line measured 200-221px there), every
+    // string below measures under 200px, well clear of that line.
     bullets: [
-      'แตะเมนู "ส่งไฟล์ P4P" เพื่อส่งไฟล์ Excel ได้ทันที',
-      'เลือกเดือนที่จะส่ง แนบไฟล์ ระบบตรวจให้อัตโนมัติ',
+      'แตะเมนู "ส่งไฟล์ P4P" ส่งไฟล์ได้ทันที',
+      'เลือกเดือน แนบไฟล์ ตรวจให้อัตโนมัติ',
       'ทราบผลคะแนนทันที ไม่ต้องรอทางอีเมล',
     ],
   },
@@ -144,8 +155,8 @@ export const features = [
     img: 'verify.png',
     title: 'ยืนยันตัวตนผ่าน LINE',
     bullets: [
-      'ยืนยันตัวตนด้วยอีเมลที่ลงทะเบียนไว้ ครั้งเดียวจบ',
-      'ผูกบัญชี LINE เพื่อรับการแจ้งเตือนและใช้เมนูอื่นได้ทันที',
+      'ยืนยันตัวตนด้วยอีเมลที่ลงทะเบียน',
+      'ผูก LINE รับแจ้งเตือน ใช้เมนูอื่นได้ทันที',
     ],
   },
 ]
