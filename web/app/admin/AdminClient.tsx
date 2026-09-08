@@ -332,30 +332,7 @@ export default function AdminClient() {
           <span className="text-xs text-[var(--color-ink-muted)]">
             {visible.length} จาก {rows.length} แถว
           </span>
-          <button
-            type="button"
-            onClick={() => setAdding((v) => !v)}
-            disabled={!columns.length}
-            className="rounded-[var(--radius-card)] bg-[var(--color-secondary)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-          >
-            {adding ? "ยกเลิก" : "+ เพิ่มแถว"}
-          </button>
         </div>
-
-        {adding ? (
-          <div className="mb-3">
-            <RowCard
-              columns={editable}
-              row={{}}
-              initialMode="edit"
-              alwaysOpen
-              saveLabel="เพิ่ม"
-              onSave={handleAdd}
-              onCancel={() => setAdding(false)}
-              onError={(m) => flash("error", `เพิ่มแถวไม่สำเร็จ: ${m}`)}
-            />
-          </div>
-        ) : null}
 
         {loading ? (
           <div className="py-10 text-center">
@@ -378,6 +355,41 @@ export default function AdminClient() {
           </div>
         )}
       </main>
+
+      {!adding ? (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          disabled={!columns.length}
+          aria-label="เพิ่มแถว"
+          className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--color-secondary)] text-2xl font-semibold leading-none text-white shadow-lg disabled:opacity-50"
+        >
+          +
+        </button>
+      ) : null}
+
+      {adding ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-4 pb-4 sm:items-center"
+          onClick={() => setAdding(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-[560px] overflow-y-auto rounded-[var(--radius-card)] shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RowCard
+              columns={editable}
+              row={{}}
+              initialMode="edit"
+              alwaysOpen
+              saveLabel="เพิ่ม"
+              onSave={handleAdd}
+              onCancel={() => setAdding(false)}
+              onError={(m) => flash("error", `เพิ่มแถวไม่สำเร็จ: ${m}`)}
+            />
+          </div>
+        </div>
+      ) : null}
     </>
   )
 }
