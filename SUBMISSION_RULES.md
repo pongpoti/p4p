@@ -130,27 +130,44 @@ submission always arrives with an explicit answer. One month per submission is
 structural — one chip, one `month_key`, and a unique index on
 `(email, month_key)` for anything still in flight.
 
-The chip is the **only** thing that defines the period. Tab names and cell
-content are read afterwards, solely to confirm or contradict it. The filename
-is not consulted at all: on this path it would be the same physician's
-assertion as the chip, made twice, so agreeing with it proves nothing.
+The chip is the **only** thing that defines the period. What confirms or
+contradicts it depends on the workbook's shape:
 
-**The rule:** a submission is refused unless some sheet names the picked month,
-by tab name or by a title row. Single-sheet workbooks are held to the same bar
-— `matched` has to mean *this file identified itself as the month asked for*,
-not *there were several sheets and one of them did*. The chip says what the
-physician meant to send; this is the file saying what they actually sent.
-Without it a wrong attachment looks exactly like a right one.
+- **Multiple sheets holding data** — tab names and cell content are read to
+  find the one sheet that names the picked month; the filename is not
+  consulted at all here, since it would just be the same physician's
+  assertion as the chip, made twice.
+- **Exactly one sheet holding data** — its tab name and content are *not*
+  consulted. A lone sheet's tab/title text is routinely stale: a physician
+  reuses last month's file and never renames the tab, so a contradicting or
+  silent tab is not evidence either way. The **filename** is the sole signal
+  instead — it is what the physician typed *this time* they saved the file,
+  which a leftover tab name is not. (Real incident this rule exists for: a
+  June submission whose only sheet was still tabbed "พ.ย. 68" from a reused
+  November file — the email path scored it fine via the subject line, the
+  LIFF path rejected it twice as `month_not_found` because the tab
+  contradicted, and renaming the *file* didn't help because the check read
+  the tab, not the filename, until this rule changed that for the
+  single-sheet case.)
+
+**The rule:** a submission is refused unless the file identifies the picked
+month — by tab name or title row for a multi-sheet workbook, by filename for
+a single-sheet one. The chip says what the physician meant to send; this is
+the file (or its name) saying what they actually sent. Without it a wrong
+attachment looks exactly like a right one — a gap now narrower for
+single-sheet workbooks than it used to be, since a mislabeled-but-wrong-content
+file that merely has the right filename now passes.
 
 | Physician picks | Workbook | Outcome |
 |---|---|---|
-| July | tab named `ก.ค. 2569` / `กรกฎาคม` / `Jul-25` | scored, Flex receipt |
-| July | generic tab, title row names July | scored |
-| July | multi-sheet, one tab is July | that sheet scored |
-| July | **names no month anywhere** (single or multi-sheet) | `month_not_found` |
-| July | names a different month | `month_mismatch` |
-| July | right month, contradicting year | `month_not_found` |
-| July | holds June + July | July scored; June needs its own submission |
+| July | single sheet, filename says July | scored (sheet content not checked) |
+| July | single sheet, filename says nothing about the month | `month_not_found` |
+| July | single sheet, filename says June | `month_mismatch` |
+| July | multi-sheet, tab named `ก.ค. 2569` / `กรกฎาคม` / `Jul-25` | scored, Flex receipt |
+| July | multi-sheet, generic tabs, one title row names July | scored |
+| July | multi-sheet, **no** tab/title names July anywhere | `month_not_found` |
+| July | multi-sheet, one tab names a different month | `month_mismatch` |
+| July | holds June + July sheets | July scored; June needs its own submission |
 | July, again | any | refused — one in-flight submission per month |
 | July | score not confidently readable | deferred to the worker, result via chat |
 | July | name not exactly in roster | deferred to the fuzzy matcher, then scored |
@@ -160,14 +177,18 @@ month gets the precise complaint, and `month_not_found` is reserved for a file
 naming no month at all. Both are retryable, so the receipt carries
 ส่งไฟล์อีกครั้ง.
 
-Enforced in `main.js`'s `/upload/score` and again in the worker
-(`automation/index.js`, gated on `monthKey`), so a deferred row behaves the
-same as an instant one.
+Enforced in `main.js`'s `/upload/score` only (`lib/p4p-score.js`'s
+`parseWorkbookRowsSafely`) — this single-sheet/filename carve-out is LIFF-only
+and does not apply to the email worker's own month check
+(`automation/index.js`, gated on `monthKey`), which still reads tab/row
+content regardless of sheet count.
 
-**Cost of this rule:** any workbook that does not label its month anywhere is
-now refused, which is likely a common shape. That is the intent — it is the
-only way to tell a right attachment from a wrong one — but expect a wave of
-`month_not_found` the first cycle.
+**Cost of this rule:** for a multi-sheet workbook, one that does not label its
+month anywhere is still refused. For a single-sheet workbook, the burden moved
+from "the sheet must say the month" to "the filename must" — a physician who
+uploads a correctly-named file no longer needs the tab renamed too, but a
+correctly-tabbed file with a generic filename (e.g. one shared to them without
+renaming) now needs the filename fixed instead.
 
 ### What the physician is told
 

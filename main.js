@@ -923,8 +923,11 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   const score = require("./lib/p4p-score")
   let rows
   let matched
+  let singleSheet
   try {
-    ({ rows, matched } = await score.parseWorkbookRowsSafely(buffer, { targetMonth: monthNum, targetYear: beYear, timeoutMs: 7000 }))
+    ({ rows, matched, singleSheet } = await score.parseWorkbookRowsSafely(buffer, {
+      targetMonth: monthNum, targetYear: beYear, filename: row.filename, timeoutMs: 7000,
+    }))
   } catch (e) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
@@ -944,8 +947,16 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // Month cross-check — the one mistake this path can still make is a file
   // whose contents say July uploaded under June. Only a month or year that
   // actually resolved counts: an unstated month is not a mismatch.
-  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "") || score.resolveBeMonthFromRows(rows)
-  const inferredYear = score.resolveBeYear(row.filename || "", "", "") || score.resolveBeYearFromRows(rows)
+  //
+  // A workbook with exactly one sheet holding data skips the rows fallback
+  // entirely (`singleSheet`): its sheet content isn't consulted for this
+  // check either, for the same reason parseWorkbookRowsSafely ignores it for
+  // `matched` — a lone sheet's tab/title text is routinely a leftover from
+  // whatever month the physician last reused this file for.
+  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "") ||
+    (singleSheet ? null : score.resolveBeMonthFromRows(rows))
+  const inferredYear = score.resolveBeYear(row.filename || "", "", "") ||
+    (singleSheet ? null : score.resolveBeYearFromRows(rows))
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")
     // monthInFile is what turns the alert's "⚠️ Month in file" line on — the
@@ -955,11 +966,13 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   }
 
   // Ordering matters: the check above fires when the file names a DIFFERENT
-  // month, which is the more precise complaint. Reaching here means it named
-  // no month this route could match at all — a tab named for the picked month
-  // or a title row naming it. Without one there is nothing to check the chip
-  // against: the file would be scored on the physician's word alone, and a
-  // wrong attachment would look exactly like a right one.
+  // month, which is the more precise complaint. Reaching here means nothing
+  // this route trusts named a month at all: for a multi-sheet workbook, no
+  // tab/title row named the picked month; for a single-sheet one, the
+  // filename itself didn't (its sheet content is never consulted — see
+  // above). Without one there is nothing to check the chip against: the
+  // file would be scored on the physician's word alone, and a wrong
+  // attachment would look exactly like a right one.
   if (!matched) {
     return reject("month_not_found", "ไม่พบเดือน " + receipt.displayMonth(monthKey) + " ในไฟล์นี้")
   }
