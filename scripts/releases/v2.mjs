@@ -94,8 +94,13 @@ export const svgs = [
   <text x="130" y="106" font-family="'Noto Sans Thai',sans-serif" font-size="11" fill="#6E5C49">แตะเพื่อส่งไฟล์</text>
   <rect x="200" y="22" width="54" height="24" rx="12" fill="#0B84FF"/>
   <text x="227" y="38" text-anchor="middle" font-family="'Noto Sans Thai',sans-serif" font-size="12" font-weight="700" fill="#fff">ก.ค. 69</text>
-  <circle cx="212" cy="118" r="19" fill="#fff" stroke="#0B84FF" stroke-width="4.5"/>
-  <path d="M204 118 l5.5 6 l10.5 -12" fill="none" stroke="#0B84FF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- cx=222, not 212: at 212 the ring's stroke (radius 19 + half of
+       stroke-width 4.5 = 21.25px visual reach) started at x≈190.75, which
+       overlapped the subtitle text ending at x≈192 — confirmed from a live
+       LINE screenshot showing the ring cutting into "แตะเพื่อส่งไฟล์". At
+       222 the ring starts at x≈200.75, a clear 8.75px past the subtitle. -->
+  <circle cx="222" cy="118" r="19" fill="#fff" stroke="#0B84FF" stroke-width="4.5"/>
+  <path d="M214 118 l5.5 6 l10.5 -12" fill="none" stroke="#0B84FF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`,
   },
   {
