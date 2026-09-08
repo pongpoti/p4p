@@ -9,7 +9,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/cover.png",
+          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/cover.png?v=be413705",
           "size": "full",
           "aspectRatio": "3:4",
           "aspectMode": "cover"
@@ -20,7 +20,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/status.png",
+          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/status.png?v=afe2d7f4",
           "size": "full",
           "aspectRatio": "20:13",
           "aspectMode": "cover"
@@ -137,7 +137,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/ranking.png",
+          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/ranking.png?v=2cd6e688",
           "size": "full",
           "aspectRatio": "20:13",
           "aspectMode": "cover"
@@ -254,7 +254,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/list.png",
+          "url": "https://skh-mso-p4p.vercel.app/assets/cards/v1/list.png?v=46eecda8",
           "size": "full",
           "aspectRatio": "20:13",
           "aspectMode": "cover"

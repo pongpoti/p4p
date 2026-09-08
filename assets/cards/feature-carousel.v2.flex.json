@@ -9,7 +9,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/cover.png",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/cover.png?v=23636f35",
           "size": "full",
           "aspectRatio": "3:4",
           "aspectMode": "cover"
@@ -20,7 +20,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/upload.png",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/upload.png?v=2f1a4b7c",
           "size": "full",
           "aspectRatio": "20:13",
           "aspectMode": "cover"
@@ -137,7 +137,7 @@
         "size": "mega",
         "hero": {
           "type": "image",
-          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/verify.png",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/verify.png?v=49943efb",
           "size": "full",
           "aspectRatio": "20:13",
           "aspectMode": "cover"

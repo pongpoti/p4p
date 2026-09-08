@@ -14,6 +14,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { svgToPng } from './render.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -33,11 +34,22 @@ const OUT = join(__dirname, `../assets/cards/${RELEASE}`)
 mkdirSync(OUT, { recursive: true })
 
 // ── Render PNGs ───────────────────────────────────────────────────────────────
+// Each URL below gets a content-hash query string (same trick main.js's
+// stampAssets() uses for <script src>, see its own comment for the incident
+// that motivated it): LINE fetches these images once per push and caches
+// them by URL indefinitely. Without a hash, re-running this script to fix a
+// card and re-sending the SAME test push shows the OLD image — confirmed
+// live (2026-09-08): a badge-position fix was pushed, deployed, and still
+// didn't appear on a fresh test send because the URL hadn't changed. A
+// bare filename is stable across edits; the hash isn't.
+const hashes = {}
 for (const { file, svg, width } of svgs) {
   const png = svgToPng(svg, width)
   writeFileSync(join(OUT, file), png)
+  hashes[file] = createHash('sha1').update(png).digest('hex').slice(0, 8)
   console.log(`✓ ${RELEASE}/${file} — ${(png.length / 1024).toFixed(1)} KB`)
 }
+const urlFor = (file) => `${BASE_URL}/${file}?v=${hashes[file]}`
 
 // ── Build Flex carousel JSON ──────────────────────────────────────────────────
 const bulletRow = (text) => ({
@@ -52,7 +64,7 @@ const featureBubble = ({ img, title, bullets }) => ({
   type: 'bubble',
   size: 'mega',
   hero: {
-    type: 'image', url: `${BASE_URL}/${img}`,
+    type: 'image', url: urlFor(img),
     size: 'full', aspectRatio: '20:13', aspectMode: 'cover',
   },
   body: {
@@ -74,7 +86,7 @@ const message = {
     contents: [
       {
         type: 'bubble', size: 'mega',
-        hero: { type: 'image', url: `${BASE_URL}/cover.png`, size: 'full', aspectRatio: '3:4', aspectMode: 'cover' },
+        hero: { type: 'image', url: urlFor('cover.png'), size: 'full', aspectRatio: '3:4', aspectMode: 'cover' },
       },
       ...features.map(featureBubble),
     ],
