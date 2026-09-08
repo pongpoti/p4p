@@ -1,0 +1,230 @@
+{
+  "type": "flex",
+  "altText": "อัปเดตใหม่ — ระบบ P4P มีฟีเจอร์ใหม่ 2 อย่าง",
+  "contents": {
+    "type": "carousel",
+    "contents": [
+      {
+        "type": "bubble",
+        "size": "mega",
+        "hero": {
+          "type": "image",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/cover.png",
+          "size": "full",
+          "aspectRatio": "3:4",
+          "aspectMode": "cover"
+        }
+      },
+      {
+        "type": "bubble",
+        "size": "mega",
+        "hero": {
+          "type": "image",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/upload.png",
+          "size": "full",
+          "aspectRatio": "20:13",
+          "aspectMode": "cover"
+        },
+        "body": {
+          "type": "box",
+          "layout": "vertical",
+          "paddingAll": "16px",
+          "backgroundColor": "#FFFFFF",
+          "contents": [
+            {
+              "type": "text",
+              "text": "ฟีเจอร์",
+              "size": "xs",
+              "weight": "bold",
+              "color": "#00A300"
+            },
+            {
+              "type": "text",
+              "text": "ส่งไฟล์ P4P ผ่าน LINE",
+              "size": "lg",
+              "weight": "bold",
+              "color": "#333333",
+              "margin": "sm",
+              "wrap": true
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [],
+              "width": "34px",
+              "height": "3px",
+              "backgroundColor": "#00C300",
+              "cornerRadius": "2px",
+              "margin": "md"
+            },
+            {
+              "type": "box",
+              "layout": "baseline",
+              "spacing": "sm",
+              "margin": "md",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "•",
+                  "size": "sm",
+                  "color": "#00C300",
+                  "weight": "bold",
+                  "flex": 0
+                },
+                {
+                  "type": "text",
+                  "text": "แตะเมนู \"ส่งไฟล์ P4P\" เพื่อส่งไฟล์ Excel ได้ทันที",
+                  "size": "sm",
+                  "color": "#555555",
+                  "wrap": true,
+                  "flex": 1
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "baseline",
+              "spacing": "sm",
+              "margin": "md",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "•",
+                  "size": "sm",
+                  "color": "#00C300",
+                  "weight": "bold",
+                  "flex": 0
+                },
+                {
+                  "type": "text",
+                  "text": "เลือกเดือนที่จะส่ง แนบไฟล์ ระบบตรวจให้อัตโนมัติ",
+                  "size": "sm",
+                  "color": "#555555",
+                  "wrap": true,
+                  "flex": 1
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "baseline",
+              "spacing": "sm",
+              "margin": "md",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "•",
+                  "size": "sm",
+                  "color": "#00C300",
+                  "weight": "bold",
+                  "flex": 0
+                },
+                {
+                  "type": "text",
+                  "text": "ทราบผลคะแนนทันที ไม่ต้องรอทางอีเมล",
+                  "size": "sm",
+                  "color": "#555555",
+                  "wrap": true,
+                  "flex": 1
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "bubble",
+        "size": "mega",
+        "hero": {
+          "type": "image",
+          "url": "https://p4p-sakhonmso.vercel.app/assets/cards/v2/verify.png",
+          "size": "full",
+          "aspectRatio": "20:13",
+          "aspectMode": "cover"
+        },
+        "body": {
+          "type": "box",
+          "layout": "vertical",
+          "paddingAll": "16px",
+          "backgroundColor": "#FFFFFF",
+          "contents": [
+            {
+              "type": "text",
+              "text": "ฟีเจอร์",
+              "size": "xs",
+              "weight": "bold",
+              "color": "#00A300"
+            },
+            {
+              "type": "text",
+              "text": "ยืนยันตัวตนผ่าน LINE",
+              "size": "lg",
+              "weight": "bold",
+              "color": "#333333",
+              "margin": "sm",
+              "wrap": true
+            },
+            {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [],
+              "width": "34px",
+              "height": "3px",
+              "backgroundColor": "#00C300",
+              "cornerRadius": "2px",
+              "margin": "md"
+            },
+            {
+              "type": "box",
+              "layout": "baseline",
+              "spacing": "sm",
+              "margin": "md",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "•",
+                  "size": "sm",
+                  "color": "#00C300",
+                  "weight": "bold",
+                  "flex": 0
+                },
+                {
+                  "type": "text",
+                  "text": "ยืนยันตัวตนด้วยอีเมลที่ลงทะเบียนไว้ ครั้งเดียวจบ",
+                  "size": "sm",
+                  "color": "#555555",
+                  "wrap": true,
+                  "flex": 1
+                }
+              ]
+            },
+            {
+              "type": "box",
+              "layout": "baseline",
+              "spacing": "sm",
+              "margin": "md",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "•",
+                  "size": "sm",
+                  "color": "#00C300",
+                  "weight": "bold",
+                  "flex": 0
+                },
+                {
+                  "type": "text",
+                  "text": "ผูกบัญชี LINE เพื่อรับการแจ้งเตือนและใช้เมนูอื่นได้ทันที",
+                  "size": "sm",
+                  "color": "#555555",
+                  "wrap": true,
+                  "flex": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
