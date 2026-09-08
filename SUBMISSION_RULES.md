@@ -168,7 +168,8 @@ file that merely has the right filename now passes.
 | July | multi-sheet, **no** tab/title names July anywhere | `month_not_found` |
 | July | multi-sheet, one tab names a different month | `month_mismatch` |
 | July | holds June + July sheets | July scored; June needs its own submission |
-| July, again | any | refused — one in-flight submission per month |
+| July, again, earlier attempt still `pending`/`processing` | any | refused as a duplicate — `ส่งไฟล์เดือนนี้ไปแล้ว กำลังตรวจสอบ` |
+| July, again, earlier attempt reached `done`/`failed`/`rejected` | corrected file | **accepted** — a terminal outcome frees the slot, scored fresh (overwrites any prior score; first submission's timestamp still wins for punctuality) |
 | July | score not confidently readable | deferred to the worker, result via chat |
 | July | name not exactly in roster | deferred to the fuzzy matcher, then scored |
 
