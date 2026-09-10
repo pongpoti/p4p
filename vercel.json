@@ -7,9 +7,25 @@
       "config": {
         "includeFiles": ["list/**", "status/**", "ranking/**", "verify/**", "admin/**", "assets/**", "upload/**", "lib/**"]
       }
+    },
+    {
+      "src": "web/package.json",
+      "use": "@vercel/next"
     }
   ],
   "routes": [
+    {
+      "src": "/admin$",
+      "dest": "/web/admin"
+    },
+    {
+      "src": "/admin/(.*)",
+      "dest": "/web/admin/$1"
+    },
+    {
+      "src": "/_next/(.*)",
+      "dest": "/web/_next/$1"
+    },
     {
       "src": "/(.*)",
       "dest": "main.js"
