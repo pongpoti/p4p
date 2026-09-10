@@ -22,6 +22,7 @@
     const searchInput   = document.getElementById("search_input")
     const deptFilter    = document.getElementById("dept_filter")
     const addBtn        = document.getElementById("add-btn")
+    const addOverlay    = document.getElementById("add-overlay")
     const rowCount      = document.getElementById("row-count")
     const rowsEl        = document.getElementById("rows")
     const newRowCard    = document.getElementById("new-row-card")
@@ -392,7 +393,7 @@
 
     async function loadRowsAndColumns(table) {
         rowsEl.innerHTML = ""
-        newRowCard.style.display = "none"
+        closeAddForm()
         load.style.display = "block"
         try {
             const [{ columns: cols }, { rows }] = await Promise.all([
@@ -412,17 +413,24 @@
     }
 
     // ── Add row ──────────────────────────────────────────────────────────
+    // The form floats over the list in a fixed overlay (FAB to open, tap the
+    // backdrop or ยกเลิก to close) instead of appearing inline, so opening it
+    // never shifts whatever row the admin was already looking at.
+    function closeAddForm() {
+        addOverlay.classList.add("hidden")
+        newRowCard.innerHTML = ""
+        addBtn.classList.remove("hidden")
+    }
+
     function openAddForm() {
-        newRowCard.style.display = "block"
+        addBtn.classList.add("hidden")
+        addOverlay.classList.remove("hidden")
         newRowCard.innerHTML = editableColumns().map((c) => fieldLineHtml(c, null, true)).join("") +
             '<div class="row-actions">' +
             '<button type="button" class="row-btn btn-cancel">ยกเลิก</button>' +
             '<button type="button" class="row-btn btn-save">เพิ่ม</button>' +
             "</div>"
-        newRowCard.querySelector(".btn-cancel").addEventListener("click", () => {
-            newRowCard.style.display = "none"
-            newRowCard.innerHTML = ""
-        })
+        newRowCard.querySelector(".btn-cancel").addEventListener("click", closeAddForm)
         newRowCard.querySelector(".btn-save").addEventListener("click", async () => {
             const body = collectInputValues(newRowCard)
             try {
@@ -435,8 +443,7 @@
                     populateDeptFilter()
                     renderList()
                 }
-                newRowCard.style.display = "none"
-                newRowCard.innerHTML = ""
+                closeAddForm()
                 showStatus("เพิ่มแถวแล้ว", false)
             } catch (e) {
                 showStatus("เพิ่มแถวไม่สำเร็จ: " + e.message, true)
@@ -444,6 +451,10 @@
         })
     }
     addBtn.addEventListener("click", openAddForm)
+    // Only a click on the backdrop itself (not a descendant) closes the form.
+    addOverlay.addEventListener("click", (e) => {
+        if (e.target === addOverlay) closeAddForm()
+    })
 
     tableSelect.addEventListener("change", () => {
         currentTable = tableSelect.value
