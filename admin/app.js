@@ -305,13 +305,14 @@
         body.className = "row-card-body"
 
         function renderView() {
-            card.classList.remove("editing")
             body.innerHTML = editableColumns().map((c) => fieldLineHtml(c, row[c.column_name], false)).join("") +
                 '<div class="row-actions">' +
                 '<button type="button" class="row-btn btn-delete">ลบ</button>' +
                 '<button type="button" class="row-btn btn-edit">แก้ไข</button>' +
                 "</div>"
-            body.querySelector(".btn-edit").addEventListener("click", renderEdit)
+            body.querySelector(".btn-edit").addEventListener("click", () => {
+                openEditForm(row, pkValue, head)
+            })
             body.querySelector(".btn-delete").addEventListener("click", async () => {
                 if (!confirm("ยืนยันการลบ " + fullName(row) + "?")) return
                 try {
@@ -321,39 +322,6 @@
                     showStatus("ลบแล้ว", false)
                 } catch (e) {
                     showStatus("ลบไม่สำเร็จ: " + e.message, true)
-                }
-            })
-        }
-
-        function renderEdit() {
-            card.classList.add("editing")
-            body.innerHTML = editableColumns().map((c) => fieldLineHtml(c, row[c.column_name], true)).join("") +
-                '<div class="row-actions">' +
-                '<button type="button" class="row-btn btn-cancel">ยกเลิก</button>' +
-                '<button type="button" class="row-btn btn-save">บันทึก</button>' +
-                "</div>"
-            body.querySelector(".btn-cancel").addEventListener("click", renderView)
-            body.querySelector(".btn-save").addEventListener("click", async () => {
-                const body_ = collectInputValues(body)
-                try {
-                    const { row: updated } = await api(
-                        "/admin/api/tables/" + encodeURIComponent(currentTable) + "/rows/" + encodeURIComponent(pkValue),
-                        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body_) }
-                    )
-                    Object.assign(row, updated || body_)
-                    head.querySelector(".row-card-name").textContent = fullName(row) || "(ไม่มีชื่อ)"
-                    const badge = head.querySelector(".dept-badge")
-                    if (row.department) {
-                        if (badge) badge.textContent = row.department
-                        else head.insertBefore(Object.assign(document.createElement("div"), { className: "dept-badge", textContent: row.department }), head.querySelector(".chevron"))
-                    } else if (badge) {
-                        badge.remove()
-                    }
-                    populateDeptFilter()
-                    renderView()
-                    showStatus("บันทึกแล้ว", false)
-                } catch (e) {
-                    showStatus("บันทึกไม่สำเร็จ: " + e.message, true)
                 }
             })
         }
@@ -412,44 +380,75 @@
         }
     }
 
-    // ── Add row ──────────────────────────────────────────────────────────
-    // The form floats over the list in a fixed overlay (FAB to open, tap the
-    // backdrop or ยกเลิก to close) instead of appearing inline, so opening it
-    // never shifts whatever row the admin was already looking at.
+    // ── Add / edit row ───────────────────────────────────────────────────
+    // Both add and edit share one fixed overlay (FAB to open the add form,
+    // "แก้ไข" on a row to open the edit form; tap the backdrop or ยกเลิก to
+    // close either) instead of appearing inline, so opening either one never
+    // shifts whatever row the admin was already looking at.
     function closeAddForm() {
         addOverlay.classList.add("hidden")
         newRowCard.innerHTML = ""
         addBtn.classList.remove("hidden")
     }
 
-    function openAddForm() {
+    // sourceRow: values to prefill from (null for a blank add form).
+    // onSave(values): performs the API call and applies the result to local
+    // state; throwing leaves the form open and shows the error.
+    function openFormOverlay(sourceRow, saveLabel, onSave) {
         addBtn.classList.add("hidden")
         addOverlay.classList.remove("hidden")
-        newRowCard.innerHTML = editableColumns().map((c) => fieldLineHtml(c, null, true)).join("") +
+        newRowCard.innerHTML = editableColumns().map((c) => fieldLineHtml(c, sourceRow ? sourceRow[c.column_name] : null, true)).join("") +
             '<div class="row-actions">' +
             '<button type="button" class="row-btn btn-cancel">ยกเลิก</button>' +
-            '<button type="button" class="row-btn btn-save">เพิ่ม</button>' +
+            '<button type="button" class="row-btn btn-save">' + escHtml(saveLabel) + '</button>' +
             "</div>"
         newRowCard.querySelector(".btn-cancel").addEventListener("click", closeAddForm)
         newRowCard.querySelector(".btn-save").addEventListener("click", async () => {
-            const body = collectInputValues(newRowCard)
+            const values = collectInputValues(newRowCard)
             try {
-                const { row } = await api(
-                    "/admin/api/tables/" + encodeURIComponent(currentTable) + "/rows",
-                    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-                )
-                if (row) {
-                    allRows.push(row)
-                    populateDeptFilter()
-                    renderList()
-                }
+                await onSave(values)
                 closeAddForm()
-                showStatus("เพิ่มแถวแล้ว", false)
             } catch (e) {
-                showStatus("เพิ่มแถวไม่สำเร็จ: " + e.message, true)
+                showStatus("บันทึกไม่สำเร็จ: " + e.message, true)
             }
         })
     }
+
+    function openAddForm() {
+        openFormOverlay(null, "เพิ่ม", async (values) => {
+            const { row } = await api(
+                "/admin/api/tables/" + encodeURIComponent(currentTable) + "/rows",
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) }
+            )
+            if (row) {
+                allRows.push(row)
+                populateDeptFilter()
+                renderList()
+            }
+            showStatus("เพิ่มแถวแล้ว", false)
+        })
+    }
+
+    function openEditForm(row, pkValue, head) {
+        openFormOverlay(row, "บันทึก", async (values) => {
+            const { row: updated } = await api(
+                "/admin/api/tables/" + encodeURIComponent(currentTable) + "/rows/" + encodeURIComponent(pkValue),
+                { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) }
+            )
+            Object.assign(row, updated || values)
+            head.querySelector(".row-card-name").textContent = fullName(row) || "(ไม่มีชื่อ)"
+            const badge = head.querySelector(".dept-badge")
+            if (row.department) {
+                if (badge) badge.textContent = row.department
+                else head.insertBefore(Object.assign(document.createElement("div"), { className: "dept-badge", textContent: row.department }), head.querySelector(".chevron"))
+            } else if (badge) {
+                badge.remove()
+            }
+            populateDeptFilter()
+            showStatus("บันทึกแล้ว", false)
+        })
+    }
+
     addBtn.addEventListener("click", openAddForm)
     // Only a click on the backdrop itself (not a descendant) closes the form.
     addOverlay.addEventListener("click", (e) => {
