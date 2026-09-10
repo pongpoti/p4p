@@ -311,7 +311,7 @@
                 '<button type="button" class="row-btn btn-edit">แก้ไข</button>' +
                 "</div>"
             body.querySelector(".btn-edit").addEventListener("click", () => {
-                openEditForm(row, pkValue, head)
+                openEditForm(row, pkValue, head, renderView)
             })
             body.querySelector(".btn-delete").addEventListener("click", async () => {
                 if (!confirm("ยืนยันการลบ " + fullName(row) + "?")) return
@@ -429,7 +429,11 @@
         })
     }
 
-    function openEditForm(row, pkValue, head) {
+    // onSaved: re-renders the row's expanded field list from the just-updated
+    // row object (renderView, passed in by the caller) — without this the
+    // card keeps showing pre-edit values until an unrelated action forces a
+    // full list rebuild.
+    function openEditForm(row, pkValue, head, onSaved) {
         openFormOverlay(row, "บันทึก", async (values) => {
             const { row: updated } = await api(
                 "/admin/api/tables/" + encodeURIComponent(currentTable) + "/rows/" + encodeURIComponent(pkValue),
@@ -445,6 +449,7 @@
                 badge.remove()
             }
             populateDeptFilter()
+            onSaved()
             showStatus("บันทึกแล้ว", false)
         })
     }
