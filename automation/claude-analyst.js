@@ -255,6 +255,13 @@ function fourDigitBeYear(text) {
  * and filenames use that same no-space compound, and it is a fixed, known
  * word rather than an open-ended category, so it cannot reopen the name
  * collision this boundary check exists to close.
+ *
+ * A second, narrower exception: a token with no boundary on either side but
+ * immediately followed by a bare two-digit number, as in "ประพันธ์สค69" — a
+ * name run straight into "month + BE year" with no space at all. No Thai
+ * name is ever followed by digits, so this can't be the name-collision false
+ * positive above (that collision, e.g. "ณัฐกันย์", has no digits after it
+ * either) — it is only reachable by an actual compact month+year.
  */
 function monthTokenIndex(s, token) {
   if (/^[A-Za-z]+$/.test(token)) {
@@ -262,8 +269,11 @@ function monthTokenIndex(s, token) {
     return m ? m.index : -1;
   }
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))(${escaped})(?![฀-๿])`).exec(s);
-  return m ? m.index + m[0].length - m[1].length : -1;
+  const boundary = new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))(${escaped})(?![฀-๿])`).exec(s);
+  if (boundary) return boundary.index + boundary[0].length - boundary[1].length;
+
+  const glued = new RegExp(`${escaped}(?=\\d{2}(?!\\d))`).exec(s);
+  return glued ? glued.index : -1;
 }
 
 /**
