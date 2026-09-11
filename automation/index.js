@@ -620,6 +620,13 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
       ?? resolveBeYearByPriority(filename ?? "", subject, body)
       ?? resolveBeYear("", "", "", emailDate);
 
+  // The period everything downstream — sheet selection, Claude's prompt, the
+  // Supabase table, the saved score — is keyed on. Resolved once, from the
+  // sender's own words (or their explicit LIFF selection), and never
+  // revisited: nothing past this point, including the AI analysis below, is
+  // allowed to propose a different month or year.
+  const dateKey = `${targetYear}_${String(targetMonth).padStart(2, "0")}`;
+
   // Parse workbook
   let rows, allSheets, chosenSheet, matchedSheet;
   try {
@@ -690,11 +697,21 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     _source_file    : filename,
     _selected_sheet : chosenSheet,
     _all_sheets     : allSheets,
+    _date_key       : dateKey,
     rows,
   };
 
-  // Claude analysis
-  console.log(`│        🤖  Sending to Claude for analysis…`);
+  // Claude analysis — physician name and score only. The period is never
+  // asked: it is a stated fact (dateKey), not a question, so there is
+  // nothing left for an AI reading to override. This used to also ask
+  // Claude to independently re-derive the month/year from the same subject
+  // text and reject on disagreement — meant to catch a workbook whose real
+  // content contradicts what the sender claimed, but it had no deterministic
+  // basis (Claude was reading the same ambiguous free text JS already read)
+  // and once rejected a plain, correct submission it misread a glued
+  // "name+month+year" subject and answered a different month than the one
+  // actually stated anywhere.
+  console.log(`│        🤖  Resolving physician + score…`);
   let analysis;
   try {
     analysis = await analyseJson(intermediate, filename);
@@ -704,7 +721,7 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     if (analysis.score <= 0) throw new Error("Score is 0 — cannot save a zero score.");
   } catch (err) {
     const isZero = /score is 0/i.test(err.message);
-    console.error(`│        ❌  Claude analysis failed: ${err.message}`);
+    console.error(`│        ❌  Analysis failed: ${err.message}`);
     await sendTelegram(formatErrorMessage(err.message, filename, tgError({ errorType: isZero ? "zero_score" : "other" }))).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     if (isZero) {
       await notifyFailure("zero_score", { detail: "ไม่พบคะแนนรวมในไฟล์" });
@@ -712,36 +729,6 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
       await otherReply(err.message);
     }
     return "replied";
-  }
-
-  // What the sender said this file is for outranks what Claude read out of
-  // the sheet — and where they disagree, neither is written. The sheet was
-  // already selected to match the stated period, so a disagreement here means
-  // no sheet in the workbook matched and the fallback holds some other month:
-  // exactly the case that would otherwise file one month's work under
-  // another. Only a component that actually resolved is compared; an unstated
-  // month or year is not a disagreement, same rule as the upload path's check.
-  if (!monthKey && analysis.date) {
-    const [claudeYear, claudeMonth] = String(analysis.date).split("_").map((n) => parseInt(n, 10));
-    if ((routingMonth && claudeMonth && routingMonth !== claudeMonth) ||
-        (routingYear && claudeYear && routingYear !== claudeYear)) {
-      const statedKey = `${routingYear ?? claudeYear}_${String(routingMonth ?? claudeMonth).padStart(2, "0")}`;
-      const detail = `อีเมล/ชื่อไฟล์ระบุเดือน ${statedKey} แต่ไฟล์ที่อ่านได้เป็นเดือน ${analysis.date}`;
-      console.error(`│        ❌  month_mismatch: ${detail}`);
-      if (uploadCtx) uploadCtx.monthInFile = analysis.date;
-      await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_mismatch" })))
-        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-      // Both months by name, not just "an error occurred": this is the one
-      // rejection the physician can resolve unaided, but only if the reply
-      // says which month they asked for and which one the file turned out
-      // to hold.
-      await notifyFailure("month_mismatch", {
-        detail,
-        statedDate  : displayMonthKey(statedKey),
-        detectedDate: displayMonthKey(analysis.date),
-      });
-      return "rejected";
-    }
   }
 
   // ── The workbook must identify itself as the month picked (upload only) ──
@@ -759,14 +746,10 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     return "rejected";
   }
 
-  // The month everything downstream writes to. On the upload path the
-  // physician picked it; on the email path the sender's own statement wins,
-  // and Claude's reading is the fallback for a mail that states no period at
-  // all. Either way the two have been checked to agree by this point.
-  const statedMonth = routingMonth && routingYear
-    ? `${routingYear}_${String(routingMonth).padStart(2, "0")}`
-    : null;
-  const workMonth = monthKey ?? statedMonth ?? analysis.date;
+  // The month everything downstream writes to — dateKey already, always
+  // (analysis.date is guaranteed equal to it; see the Claude analysis step
+  // above).
+  const workMonth = dateKey;
 
   // ── Roster resolution ────────────────────────────────────────────────────
   // Upload path: identity is already verified, so there is nothing to fuzzy-
