@@ -12,6 +12,8 @@
  * Output: eligible_<BEyear><MM>.pdf → uploaded to ELIGIBLE_FOLDER_ID.
  */
 
+require('./redact.js');   // MUST be first: patches console before anything logs (public job logs)
+
 const { createClient } = require('@supabase/supabase-js');
 const fs               = require('fs');
 const path             = require('path');

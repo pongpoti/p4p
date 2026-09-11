@@ -8,6 +8,8 @@
  *   ⚠️   Supabase rows with NO file in Drive (score=NULL = never submitted)
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { createDriveClient } from "../drive-client.js";
 import { createClient }      from "@supabase/supabase-js";
 

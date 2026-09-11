@@ -17,6 +17,8 @@
  *   DRY_RUN       "true" → skip saveScore (read-only preview)
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { google }   from "googleapis";
 import { createClient } from "@supabase/supabase-js";
 import { appendFileSync } from "fs";

@@ -16,6 +16,8 @@
  *   SUPABASE_URL, SUPABASE_KEY
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { google }        from "googleapis";
 import { createClient }  from "@supabase/supabase-js";
 import { config as dotenvConfig } from "dotenv";

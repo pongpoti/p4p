@@ -18,6 +18,8 @@
  * Usage: node preprocess-drive.js
  */
 
+require('./redact.js');   // MUST be first: patches console before anything logs (public job logs)
+
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');

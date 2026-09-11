@@ -25,6 +25,8 @@
  *   node scripts/drain-uploads.mjs
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { processBuffer, extractFirstSheetBuffer } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,

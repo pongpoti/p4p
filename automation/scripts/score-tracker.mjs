@@ -32,6 +32,8 @@
  * and edit a single row of beats re-pasting a whole JSON blob each time.
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { config as dotenvConfig } from "dotenv";
 import { appendFileSync }        from "fs";
 import { createGmailClient }     from "../gmail-client.js";

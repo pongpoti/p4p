@@ -18,6 +18,8 @@
  *   6. Upload / overwrite in Drive
  */
 
+require('./redact.js');   // MUST be first: patches console before anything logs (public job logs)
+
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS          = require('exceljs');
 const { Readable }     = require('stream');

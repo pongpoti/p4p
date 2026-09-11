@@ -25,6 +25,8 @@
  * sql/dept_heads.sql), same as score-tracker.mjs.
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { config as dotenvConfig } from "dotenv";
 import { appendFileSync }        from "fs";
 import { createGmailClient }     from "../gmail-client.js";

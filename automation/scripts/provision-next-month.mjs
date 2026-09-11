@@ -25,6 +25,8 @@
  *   NEW_KEY=2569_08 OLD_KEY=2569_07 node scripts/provision-next-month.mjs
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { createClient } from "@supabase/supabase-js";
 import { bangkokYearMonth, monthKey } from "../bangkok-date.js";
 

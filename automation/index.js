@@ -9,6 +9,8 @@
  *   npm start
  */
 
+import "./redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { createGmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, periodsInText, sheetMatchScore, statedPeriods } from "./claude-analyst.js";
@@ -1232,7 +1234,7 @@ async function main() {
     console.log(`│  Body:     ${msgBody.slice(0, 120).replace(/\n/g, " ")}${msgBody.length > 120 ? "…" : ""}`);
 
     if (SKIP_SENDERS.has(fromEmail)) {
-      // Relay senders (e.g. sakhonmso@gmail.com) forward/reply to physician emails.
+      // Relay senders (see THREAD_RELAY_SENDERS) forward/reply to physician emails.
       // Instead of skipping, search the thread for an xlsx from the original sender.
       if (THREAD_RELAY_SENDERS.has(fromEmail) && msg.threadId) {
         console.log(`│  🔄  Relay sender — searching thread for xlsx from original messages…`);

@@ -20,6 +20,8 @@
  * the output from the current Drive + Supabase data.
  */
 
+require('./redact.js');   // MUST be first: patches console before anything logs (public job logs)
+
 require('dotenv').config();
 
 const { google }        = require('googleapis');

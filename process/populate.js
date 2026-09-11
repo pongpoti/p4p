@@ -5,6 +5,8 @@
  * Run once on 1 January each year via GitHub Actions.
  */
 
+require('./redact.js');   // MUST be first: patches console before anything logs (public job logs)
+
 require('dotenv').config();
 
 const { google } = require('googleapis');
