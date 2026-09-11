@@ -27,6 +27,8 @@
  *   DRY_RUN         "true" to print without writing
  */
 
+import "../redact.js";   // MUST be first: patches console before anything logs (public job logs)
+
 import { google }              from "googleapis";
 import { config as dotenvConfig } from "dotenv";
 import { appendFileSync }       from "fs";
@@ -41,7 +43,14 @@ const THAI_MONTHS = [
 ];
 const THAI_MONTH_NUM = Object.fromEntries(THAI_MONTHS.map((m, i) => [m, i + 1]));
 
-const BOT_ADDRESSES  = new Set(["sakhonmso@gmail.com"]);
+const BOT_ADDRESSES  = new Set(
+  (process.env.BOT_ADDRESSES ?? "")            // env-only: real mailbox, public repo
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+);
+if (BOT_ADDRESSES.size === 0) {
+  console.error("Set BOT_ADDRESSES (comma-separated) — the bot's own reply addresses, used to find success replies.");
+  process.exit(1);
+}
 const SUCCESS_SUBJECT = "องค์กรแพทย์";        // bot success reply subject contains this
 const TARGET_MONTHS  = new Set(
   (process.env.TARGET_MONTHS || "2569_05,2569_04,2569_03").split(",").map((s) => s.trim())

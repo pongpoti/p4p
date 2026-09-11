@@ -15,6 +15,11 @@ const REQUIRED = [
   "SUPABASE_KEY",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHAT_ID",
+  // Was a hardcoded default in config.js. Removed when this repo went
+  // public — the addresses are real mailboxes. Required rather than
+  // optional because an empty skip-list makes the pipeline process and
+  // reply to its own automated mail.
+  "SKIP_SENDERS",
 ];
 
 const OPTIONAL = [
@@ -22,7 +27,7 @@ const OPTIONAL = [
   "CLAUDE_MODEL",      // Falls back to default Sonnet model
   "MAX_MESSAGES",      // Falls back to 10
   "SIMILARITY_THRESHOLD", // Falls back to 0.6
-  "SKIP_SENDERS",      // Falls back to hardcoded default
+  "THREAD_RELAY_SENDERS", // No relay handling if absent
 ];
 
 export function checkEnv() {

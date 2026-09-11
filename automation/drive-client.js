@@ -16,8 +16,8 @@
  *   P4P_FOLDER_ID  — the Drive folder ID of the root "P4P" folder
  *
  * ⚠️  The OAuth account must have write access to the P4P folder.
- *     If the folder belongs to sakhonmso@gmail.com, either:
- *     (a) run setup.js logged in as sakhonmso@gmail.com, or
+ *     If the folder belongs to a different Google account, either:
+ *     (a) run setup.js logged in as that account, or
  *     (b) share the P4P folder with the OAuth account as Editor.
  */
 

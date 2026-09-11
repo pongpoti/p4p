@@ -44,6 +44,11 @@ jobs:
           TELEGRAM_BOT_TOKEN    : ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID      : ${{ secrets.TELEGRAM_CHAT_ID }}
           P4P_FOLDER_ID         : ${{ secrets.P4P_FOLDER_ID }}
+          # Sender lists moved out of config.js: they are real mailboxes and
+          # this repository is public. index.js refuses to start without
+          # SKIP_SENDERS rather than silently replying to its own mail.
+          SKIP_SENDERS          : ${{ secrets.SKIP_SENDERS }}
+          THREAD_RELAY_SENDERS  : ${{ secrets.THREAD_RELAY_SENDERS }}
         run: |
           set -o pipefail
           for attempt in 1 2; do

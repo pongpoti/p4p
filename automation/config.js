@@ -44,9 +44,17 @@ export const MAX_ATTACHMENT_SIZE_BYTES = Number.isFinite(_maxAttSize) && _maxAtt
  */
 export const SEND_ERROR_REPLIES = true;
 
-/** Gmail senders to skip entirely (comma-separated in env, or hardcoded default). */
+/**
+ * Gmail senders to skip entirely (comma-separated).
+ *
+ * Env-only, no hardcoded fallback: these are real personal mailboxes, and
+ * this repository is PUBLIC — a default here publishes the operator's own
+ * address to anyone who reads config.js. Set SKIP_SENDERS as a repository
+ * secret. checkEnv() refuses to start if it is unset, because an empty
+ * skip-list makes the pipeline reply to its own automated mail.
+ */
 export const SKIP_SENDERS = new Set(
-  (process.env.SKIP_SENDERS ?? "sakhonmso@gmail.com,p4pskh@gmail.com")
+  (process.env.SKIP_SENDERS ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
@@ -54,11 +62,13 @@ export const SKIP_SENDERS = new Set(
 
 /**
  * Relay senders: messages FROM these addresses are not skipped outright.
- * Instead the pipeline searches the thread for an xlsx from the original sender.
- * Must be a subset of SKIP_SENDERS (or independently listed).
+ * Instead the pipeline searches the thread for an xlsx from the original
+ * sender. Must be a subset of SKIP_SENDERS (or independently listed).
+ *
+ * Env-only for the same reason as SKIP_SENDERS above.
  */
 export const THREAD_RELAY_SENDERS = new Set(
-  (process.env.THREAD_RELAY_SENDERS ?? "sakhonmso@gmail.com")
+  (process.env.THREAD_RELAY_SENDERS ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)

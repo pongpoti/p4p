@@ -12,7 +12,7 @@
  *
  * Environment variables:
  *   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
- *   TEST_EMAIL   (default: sakhonmso@gmail.com)
+ *   TEST_EMAIL   (required — no default; this repo is public)
  */
 
 import { config as dotenvConfig } from "dotenv";
@@ -22,7 +22,11 @@ import { todayThaiStr }          from "../bangkok-date.js";
 
 dotenvConfig({ override: true });
 
-const TEST_EMAIL = process.env.TEST_EMAIL ?? "sakhonmso@gmail.com";
+const TEST_EMAIL = process.env.TEST_EMAIL;
+if (!TEST_EMAIL) {
+  console.error("Set TEST_EMAIL — no default is baked in, because this repository is public.");
+  process.exit(1);
+}
 // todayThaiStr is Bangkok-safe (see automation/bangkok-date.js) — a raw
 // `new Date()` reads the host's local time, which is UTC in CI.
 
