@@ -1,5 +1,13 @@
 # Going private — cutover checklist
 
+> **Superseded in part (2026-09).** This is the going-*private* runbook, kept
+> for its reasoning and for step 5 (the aggregate Drive folders), which is
+> still outstanding and is independent of repo visibility. If you are going the
+> other way, read [`GOING_PUBLIC.md`](GOING_PUBLIC.md) — in particular, step 6
+> below says a history rewrite "stops being urgent" once private, and that is
+> exactly the assumption that stops holding when the repo goes public again.
+
+
 Ordered runbook for switching `SKH-MSO/p4p` from public to private, plus what
 that switch does and does not fix.
 

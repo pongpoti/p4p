@@ -14,6 +14,11 @@ name: PII guard
 on:
   pull_request:
     branches: [main]
+  # A direct push to main bypassed this guard entirely, which is precisely the
+  # path an urgent fix takes. On push there is no base/head pair, so the range
+  # is the push's own before..after (see the step below).
+  push:
+    branches: [main]
 
 jobs:
   scan:
@@ -27,11 +32,17 @@ jobs:
 
       - name: Scan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
 
+          # On pull_request these are the PR's base/head. On push they are the
+          # commit before the push and its tip; BASE_SHA is all-zeroes for a
+          # new branch, in which case fall back to the tip's first parent.
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA=$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || echo "$HEAD_SHA")
+          fi
           files=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA")
           [ -z "$files" ] && { echo "No added/modified files."; exit 0; }
 
@@ -62,12 +73,16 @@ jobs:
             # 2. Real-looking personal email addresses. Consumer domains are
             #    the tell — institutional aliases and example.com are fine.
             #
-            #    SYSTEM_MAILBOXES are the project's own accounts, not personal
-            #    data: the P4P inbox that receives submissions and the Drive
-            #    owner. They appear legitimately in config, and flagging them
-            #    would fail every PR that touches automation/config.js.
+            #    There is no longer a system-mailbox exemption. The project's own
+            #    two accounts used to be hardcoded in automation/config.js and
+            #    were allowlisted here so they would not fail every PR — but
+            #    that put both addresses in this file in plaintext, and the
+            #    allowlist meant re-introducing them could never be caught.
+            #    They now come from the SKIP_SENDERS / THREAD_RELAY_SENDERS
+            #    secrets, so any consumer-domain address in a changed file is
+            #    a finding. Use example.com in fixtures and docs.
             hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null \
-                   | grep -viE '^(sakhonmso|p4pskh)@gmail\.com$' | sort -u || true)
+                   | sort -u || true)
             if [ -n "$hits" ]; then
               echo "::error file=$f::Personal email address(es) found. These are also the login allow-list; keep them in the dept_heads table."
               echo "$hits" | sed 's/^/    /'

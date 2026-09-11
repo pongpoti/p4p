@@ -1,5 +1,16 @@
 # P4P — Data Exposure Analysis
 
+> **Scope note (2026-09).** This analysis was written against the previous
+> repository, `SKH-MSO/p4p`. The current repository, `pongpoti/p4p`, was
+> started fresh on 2026-08-19; its 59 commits were re-scanned independently and
+> contain **none** of the CRITICAL/HIGH artefacts below — no `csv_2569_01-04/`,
+> no roster rows in any format, no department-head addresses in
+> `dept_heads.sql`, no Drive folder ids, no keys. See
+> [`GOING_PUBLIC.md`](GOING_PUBLIC.md) for that scan and what was fixed on top
+> of it. The reasoning here is still the reference for *why* these things
+> matter; treat the findings as historical, not as a description of this tree.
+
+
 **Scope:** where physician data actually leaves the trust boundary — the
 repository itself, CI artifacts, third-party processors, and the auth paths
 added since the last review.
