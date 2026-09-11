@@ -689,6 +689,25 @@ export async function processBuffer(buffer, { subject = "", body = "", filename,
     }
   }
 
+  // ── Month cross-check (email path, multi-sheet workbooks only) ──────────
+  // A single-sheet file has nothing to choose between — whatever it holds IS
+  // the submission, whether or not it happens to print a month anywhere, and
+  // the sender's subject/body already settled the period (the no_period gate
+  // above already refused anything that didn't say one). A multi-sheet file
+  // is different: firstSheetToRows had to GUESS which sheet to read when
+  // none of them named the target month/year, and nothing past this point
+  // ever rechecks that guess — it would otherwise silently save one sheet's
+  // numbers (whichever came first) under a different sheet's month. Reject
+  // instead of guessing, the same way the upload path already does.
+  if (!monthKey && allSheets.length > 1 && !matchedSheet) {
+    const detail = `ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน ${displayMonthKey(dateKey)} กรุณาตั้งชื่อชีตให้ระบุเดือน หรือส่งเฉพาะชีตที่ต้องการ`;
+    console.error(`│        ❌  month_not_found: ${allSheets.length} sheets (${allSheets.join(", ")}), none identify ${dateKey}`);
+    await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" })))
+      .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    await notifyFailure("month_not_found", { detail });
+    return "rejected";
+  }
+
   const intermediate = {
     _email_subject  : subject,
     _email_body     : body,
