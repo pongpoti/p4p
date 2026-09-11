@@ -1222,50 +1222,56 @@ export function resolveScore(rows) {
 }
 
 /**
- * @param {object} jsonData  { _email_subject, _email_body, _source_file, rows[] }
+ * @param {object} jsonData  { _email_subject, _email_body, _source_file, _selected_sheet, _date_key, rows[] }
  * @param {string} filename
  * @returns {Promise<{ name: string, date: string, score: number }>}
  */
 export async function analyseJson(jsonData, filename = "data.json") {
-  const client    = getClient();
   const rows      = jsonData.rows ?? [];
   const subject   = jsonData._email_subject ?? "";
   const body      = jsonData._email_body    ?? "";
   const file      = jsonData._source_file   ?? filename;
-  const emailDate = jsonData._email_date    ?? null;
+  const sheetName = jsonData._selected_sheet ?? "";
+  const dateKey   = jsonData._date_key;
+
+  if (typeof dateKey !== "string" || !/^\d{4}_\d{2}$/.test(dateKey)) {
+    throw new Error(`analyseJson requires a resolved _date_key ("xxxx_xx"), got ${JSON.stringify(dateKey)}`);
+  }
 
   if (rows.length === 0) throw new Error("No rows to analyse.");
 
-  // Resolve physician name: filename → subject → body → null (fall back to sheet)
-  const resolvedName = resolvePhysicianName(file, subject, body);
-  const nameHint = resolvedName
-    ? `Pre-resolved name (from filename/subject/body): "${resolvedName}"  ← USE THIS VALUE, strip titles if still present.`
-    : `Name not pre-detected — search in order: (1) filename "${file}", (2) email subject/body, (3) row data.`;
-  console.log(`│        👤  JS name pre-scan: ${resolvedName ?? "null (will use sheet)"}`);
+  // Resolve physician name: filename → subject → body → sheet content → null
+  const resolvedName = resolvePhysicianName(file, subject, body)
+    ?? resolvePhysicianNameFromSheet(rows, sheetName)[0]
+    ?? null;
+  console.log(`│        👤  JS name pre-scan: ${resolvedName ?? "null (will use AI)"}`);
 
-  // Resolve BE year across subject/body/filename/row-data, picking the newest
-  // (largest) year among all sources — a stale year in one source (e.g. an
-  // email subject copy-pasted from a previous month) must not shadow a
-  // newer, more reliable year found in the filename or sheet content.
-  let resolvedBE = resolveBeYear(file, subject, body);
-  const rowsBE = resolveBeYearFromRows(rows);
-  if (rowsBE) console.log(`│        📅  JS year from row data: ${rowsBE}`);
-  if (rowsBE && (!resolvedBE || rowsBE > resolvedBE)) resolvedBE = rowsBE;
-  if (!resolvedBE && emailDate) {
-    resolvedBE = resolveBeYear(file, subject, body, emailDate);
-    if (resolvedBE) console.log(`│        📅  JS year from email received date: ${resolvedBE}`);
-  }
-  const yearHint   = resolvedBE
-    ? `Pre-resolved BE year: ${resolvedBE}  ← USE THIS EXACT VALUE, do not recalculate.`
-    : `BE year: unknown — use "0000".`;
-
-  // Resolve score in JS first — gives Claude a reliable anchor
+  // Resolve score in JS first.
   // Use resolveScore (not extractScoreFromRows directly) so that files where
   // fix_p4p_score.py wrote uncached =SUM(...) formulas fall through the
   // two-tier fallback instead of returning the largest plain number (e.g. 2200).
   const { score: jsScore, method: jsMethod } = resolveScore(rows);
   console.log(`│        🔢  JS score pre-scan: ${jsScore !== null ? jsScore.toFixed(2) : "null"} (${jsMethod})`);
 
+  // The period is never in question here — dateKey is already the sender's
+  // own stated period (or their explicit LIFF selection), resolved
+  // deterministically before this function is even called. Once name and
+  // score are ALSO pinned down deterministically, there is nothing left for
+  // an AI reading to add — only a chance to override a right answer with a
+  // wrong one, which is exactly what happened the one time this asked Claude
+  // to re-derive a month from a name run straight into a month abbreviation
+  // with no space: the workbook had no date anywhere in it, subject and
+  // score were already unambiguous, and Claude still answered a different
+  // month than the one actually stated.
+  if (resolvedName && jsScore !== null) {
+    console.log(`│        ⚡  Resolved without AI: name + score both pre-scanned`);
+    return { name: resolvedName, date: dateKey, score: jsScore };
+  }
+
+  const client = getClient();
+  const nameHint = resolvedName
+    ? `Pre-resolved name (from filename/subject/body/sheet): "${resolvedName}"  ← USE THIS VALUE, strip titles if still present.`
+    : `Name not pre-detected — search in order: (1) filename "${file}", (2) email subject/body, (3) row data.`;
   const scoreHint = jsScore !== null
     ? `Pre-detected score (JS, method: ${jsMethod}): ${jsScore.toFixed(2)}  ← USE THIS VALUE.`
     : `No score pre-detected — find it from the label row or column sum.`;
@@ -1283,11 +1289,11 @@ export async function analyseJson(jsonData, filename = "data.json") {
   }
   const rowsJson = fullJson.slice(0, MAX_ROW_JSON_CHARS);
 
-  const bodyPreview = body.trim().slice(0, 400); // trimmed — avoid injecting leading whitespace
-
+  // No date/period section: dateKey is already decided, not a question for
+  // this prompt to answer.
   const prompt = `You are analysing a Thai physician physical workload scorecard exported from Excel.
 Return ONLY this JSON, nothing else:
-{"name": "PHYSICIAN_NAME", "date": "xxxx_xx", "score": "TOTAL"}
+{"name": "PHYSICIAN_NAME", "score": "TOTAL"}
 
 ━━ 1. name ━━
 ${nameHint}
@@ -1297,20 +1303,7 @@ IMPORTANT: The word "เดือน" means "month" in Thai — it is NEVER a la
 If the pre-resolved name above is a single firstname (no space), the physician may have only one name — do NOT search row data for a lastname and do NOT append "เดือน" or any month-related word.
 If pre-resolved name above is provided, use it as-is. Otherwise search: (1) filename, (2) subject/body, (3) row data.
 
-━━ 2. date ━━
-${yearHint}
-
-Month sources — Subject: "${subject}" | Body: "${bodyPreview}" | Filename: "${file}"
-Priority: (1) subject/body, (2) filename, (3) row data.
-ม.ค./มค/มกราคม/Jan/January=01    ก.พ./กพ/กุมภาพันธ์/Feb/February=02
-มี.ค./มีค/มีนาคม/Mar/March=03     เม.ย./เมย/เมษ/เมษา/เมษายน/Apr/April=04
-พ.ค./พค/พฤษภาคม/May=05            มิ.ย./มิย/มิถุนายน/Jun/June=06
-ก.ค./กค/กรกฎาคม/Jul/July=07      ส.ค./สค/สิงหาคม/Aug/August=08
-ก.ย./กย/กันยายน/Sep/September=09  ต.ค./ตค/ตุลาคม/Oct/October=10
-พ.ย./พย/พฤศจิกายน/Nov/November=11 ธ.ค./ธค/ธันวาคม/Dec/December=12
-Format: "xxxx_xx". Unknown month → "00".
-
-━━ 3. score ━━
+━━ 2. score ━━
 ${scoreHint}
 If you find a Thai total label row (รวมคะแนน รวมแต้ม คะแนนรวม ผลรวม รวมทั้งหมด รวม), use the largest non-zero numeric value from it.
 Format: 2 decimal places, no commas.
@@ -1349,16 +1342,6 @@ ${rowsJson}`;
     throw new Error(`Missing or empty "name": ${raw}`);
   }
 
-  // Validate date format xxxx_xx and semantic range
-  const date = parsed?.date;
-  if (typeof date !== "string" || !/^\d{4}_\d{2}$/.test(date)) {
-    throw new Error(`Invalid date format "${date}" — expected xxxx_xx: ${raw}`);
-  }
-  const [yr, mo] = date.split("_").map(Number);
-  if (yr < 2400 || yr > 2700 || mo < 1 || mo > 12) {
-    throw new Error(`Date "${date}" out of valid range (BE year 2400–2700, month 01–12): ${raw}`);
-  }
-
   // Score: prefer Claude's answer; fall back to JS if Claude returns 0/null
   const rawScore = parsed?.score;
   let numeric = 0;
@@ -1382,5 +1365,5 @@ ${rowsJson}`;
   }
 
   // Return score as a number — callers format with .toFixed(2) for display
-  return { name: name.trim(), date, score: numeric };
+  return { name: name.trim(), date: dateKey, score: numeric };
 }
