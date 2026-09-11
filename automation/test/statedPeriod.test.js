@@ -76,6 +76,24 @@ test("a month abbreviation embedded in a person's name is not a stated month", (
   assert.equal(resolveBeMonth("ณัฐกันย์ ลิมปวิทยากุล p4p 69 (1).xlsx", "", ""), null);
 });
 
+test("a month glued straight onto a name, with no space anywhere, still resolves when a bare two-digit year follows it", () => {
+  // Real subjects from a recurring sender: the month abbreviation butts
+  // straight against his name with no separator, and the mail body is
+  // empty — so this was the ONLY source that could name a period, and it
+  // was rejected as "no_period" despite stating one plainly.
+  assert.deepEqual(periodsInText("p4pพ.ประพันธ์สค69"), [{ month: 8, beYear: null }]);
+  assert.deepEqual(periodsInText("p4pพใประพันธ์กค69"), [{ month: 7, beYear: null }]);
+  assert.deepEqual(
+    statedPeriods("P4P พ ประพันธ์.xlsx", "p4pพ.ประพันธ์สค69", ""),
+    { periods: [{ month: 8, beYear: null }], source: "email" },
+  );
+
+  // The name-collision guard this exception sits beside must still hold:
+  // "กันย" glued inside "ณัฐกันย์" has no digits after it, so it must not
+  // start resolving to September just because SOME glued token now can.
+  assert.deepEqual(periodsInText("ณัฐกันย์ลิมปวิทยากุล"), []);
+});
+
 test("the เดือน<month> compound (no space) still resolves, despite the boundary check above", () => {
   // The fix for the name collision above must not re-break this: "เดือน"
   // ("month") directly against a month name, with no space, is how subjects
