@@ -277,6 +277,23 @@ function monthTokenIndex(s, token) {
 }
 
 /**
+ * A forwarded mail's own auto-generated "Date:" (or Outlook's "Sent:") line
+ * states when the QUOTED message was sent — never what period a submission
+ * is for — but periodsInText has no way to tell that apart from the
+ * sender's own words. A physician mailed herself from Yahoo, then forwarded
+ * that mail from Gmail minutes later; Gmail's own
+ * "---------- Forwarded message ---------" block quoted the original
+ * headers verbatim, including "Date: ส. 12 ก.ย. 2026 11:10", and reading
+ * that as a second, stated period turned an unambiguous July submission
+ * into an ambiguous_period rejection. Blanked out rather than removed so
+ * every other index this module computes by position into the string
+ * stays correct.
+ */
+function blankQuotedDateLines(s) {
+  return s.replace(/^[ \t]*(?:Date|Sent)[ \t]*:.*$/gim, (line) => " ".repeat(line.length));
+}
+
+/**
  * EVERY period a piece of text states, in the order they appear —
  * "ส่ง ธ.ค. 2568 และ ม.ค. 2569" is two periods, not one.
  *
@@ -288,7 +305,7 @@ function monthTokenIndex(s, token) {
  * produced January 2568, a period the sender never wrote.
  */
 export function periodsInText(text) {
-  const s = String(text ?? "");
+  const s = blankQuotedDateLines(String(text ?? ""));
   const hits = [];
   for (let mo = 1; mo <= 12; mo++) {
     let at = -1;
