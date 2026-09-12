@@ -1,5 +1,5 @@
 /**
- * lib/telegram-notify.js
+ * lib/telegram-notify.ts
  *
  * The admin's Telegram alert, on the ONE submission path that could not reach
  * automation/telegram.js: `/upload/score` in main.js.
@@ -13,7 +13,7 @@
  * at all, and so did every rejection the instant tier issues.
  *
  * It is a vendored copy rather than an import for the same reason
- * lib/p4p-score.js is one: automation/ is C8's isolation boundary, is its own
+ * lib/p4p-score.ts is one: automation/ is C8's isolation boundary, is its own
  * ESM sub-project, and is not in vercel.json's includeFiles — main.js cannot
  * require it in production even if the module formats agreed. The four
  * formatting functions below are therefore byte-identical to their originals
@@ -21,12 +21,34 @@
  * differs (axios here, fetch there), which is why sendTelegram is not
  * mirrored.
  */
-const axios = require("axios")
+import axios from "axios"
 
 // Shorter than automation's 10 s: this send sits in front of the physician's
 // receipt, so a Telegram outage must cost them a few seconds at most. The
 // alert is for the admin's benefit and never worth failing a submission over.
 const TELEGRAM_TIMEOUT_MS = 5000
+
+export interface ScoreResult {
+  name?: string | null
+  date?: string | null
+  score?: number | string | null
+  matchedName?: string | null
+  similarity?: number | null
+  saved?: boolean
+}
+
+export interface UploadContext {
+  source?: string | null
+  accountName?: string | null
+  email?: string | null
+  monthKey?: string | null
+  rosterMatch?: string | null
+  nameInFile?: string | null
+  monthInFile?: string | null
+  errorType?: string | null
+  attempt?: number | null
+  maxAttempts?: number | null
+}
 
 /**
  * Warning lines shared by both formatters — appended only when the file
@@ -35,8 +57,8 @@ const TELEGRAM_TIMEOUT_MS = 5000
  * come from a verified session), which is the reason to send a Telegram at
  * all. See design §7.6.
  */
-function uploadWarnings(upload) {
-  const out = [];
+function uploadWarnings(upload: UploadContext): string[] {
+  const out: string[] = [];
   if (upload.nameInFile && upload.nameInFile !== upload.accountName) {
     out.push(`⚠️ Name in file : ${upload.nameInFile} (≠ account)`);
   }
@@ -46,7 +68,7 @@ function uploadWarnings(upload) {
   return out;
 }
 
-function accountLine(upload) {
+function accountLine(upload: UploadContext): string {
   const email = upload.email ? ` <${upload.email}>` : "";
   return `👤 Account  : ${upload.accountName ?? "—"}${email}`;
 }
@@ -54,14 +76,13 @@ function accountLine(upload) {
 /**
  * Format a result object as a readable Telegram message.
  *
- * @param {object} result  { name, date, score, matchedName, similarity, saved }
- * @param {string} filename  Source xlsx filename
- * @param {object} [upload]  LINE-upload context — omit entirely on the email
+ * @param result  { name, date, score, matchedName, similarity, saved }
+ * @param filename  Source xlsx filename
+ * @param upload  LINE-upload context — omit entirely on the email
  *   path, which prints its own fixed "Email" source instead:
  *   { source, accountName, email, monthKey, rosterMatch, nameInFile, monthInFile }
- * @returns {string}
  */
-function formatResultMessage(result, filename, upload = null) {
+function formatResultMessage(result: ScoreResult, filename: string | null | undefined, upload: UploadContext | null = null): string {
   const sim  = result.similarity != null
     ? ` (${(result.similarity * 100).toFixed(0)}% match)`
     : "";
@@ -104,12 +125,12 @@ function formatResultMessage(result, filename, upload = null) {
 /**
  * Format an error as a Telegram message.
  *
- * @param {string} error     Human-readable failure description
- * @param {string} filename  Source xlsx filename
- * @param {object} [upload]  As above, plus { errorType, attempt, maxAttempts }.
+ * @param error     Human-readable failure description
+ * @param filename  Source xlsx filename
+ * @param upload  As above, plus { errorType, attempt, maxAttempts }.
  *   Omitted on the email path, which prints its own fixed "Email" source.
  */
-function formatErrorMessage(error, filename, upload = null) {
+function formatErrorMessage(error: string | null | undefined, filename: string | null | undefined, upload: UploadContext | null = null): string {
   if (!upload) {
     return [
       `❌ P4P Processing Error`,
@@ -153,7 +174,7 @@ function formatErrorMessage(error, filename, upload = null) {
  * Plain text, no parse_mode: Thai names are full of characters MarkdownV2
  * would need escaped, and automation/telegram.js records the same reason.
  */
-async function sendTelegram(text) {
+async function sendTelegram(text: unknown): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN
   const chatId = process.env.TELEGRAM_CHAT_ID
   if (!token || !chatId) {
@@ -176,10 +197,10 @@ async function sendTelegram(text) {
       return false
     }
     return true
-  } catch (e) {
+  } catch (e: any) {
     console.warn("[upload] Telegram notify failed: " + (e.response ? JSON.stringify(e.response.data) : e.message))
     return false
   }
 }
 
-module.exports = { sendTelegram, formatResultMessage, formatErrorMessage }
+(module as NodeModule).exports = { sendTelegram, formatResultMessage, formatErrorMessage }

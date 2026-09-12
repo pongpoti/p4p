@@ -1,8 +1,11 @@
-const express = require("express")
-const process = require("node:process")
-const crypto = require("node:crypto")
-const line = require("@line/bot-sdk")
-const axios = require("axios")
+import express, { type NextFunction, type Request, type Response } from "express"
+import process from "node:process"
+import crypto from "node:crypto"
+import * as line from "@line/bot-sdk"
+import axios from "axios"
+import fs from "node:fs"
+import path from "node:path"
+
 const app = express()
 
 const port = process.env.PORT || 3000
@@ -31,19 +34,20 @@ const headers = {
   "Content-Type": "application/json",
   "Authorization": "Bearer " + LINE_ACCESS_TOKEN
 }
-const config = {
-  channelSecret: LINE_CHANNEL_SECRET,
+const config: line.ClientConfig & line.MiddlewareConfig = {
+  channelAccessToken: LINE_ACCESS_TOKEN as string,
+  channelSecret: LINE_CHANNEL_SECRET as string,
 }
 const client = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: LINE_ACCESS_TOKEN,
+  channelAccessToken: LINE_ACCESS_TOKEN as string,
 })
 // Month names, colors, and the 6-month iterator are shared with the rich-menu
-// script via src/constants.cjs (local names kept for readability below).
+// script via src/constants.ts (local names kept for readability below).
 const {
   COLOR_ARRAY: color_array,
   MONTH_NAMES: month_array,
   MONTH_ITERATOR: month_iterator,
-} = require("./src/constants.cjs")
+} = require("./src/constants") as typeof import("./src/constants")
 
 // ── Server-side session validation ───────────────────────────────────────
 // The LINE (LIFF) in-app browser does not persist a client-side Supabase
@@ -52,8 +56,6 @@ const {
 // the tokens here; we keep the refresh token in an HttpOnly cookie and, on every
 // gated page request, exchange it for a fresh access token which we inject into
 // the page. The browser only ever holds a short-lived access token in memory.
-const fs = require("node:fs")
-const path = require("node:path")
 const SUPABASE_URL = "https://zjeizbrzcltkgtlmkbji.supabase.co"
 const SUPABASE_ANON = "sb_publishable_TcCSpznim4fi0Y7E_zuAsg_op19VZQ-"
 const RT_COOKIE = "p4p_rt"
@@ -61,7 +63,7 @@ const COOKIE_BASE = "HttpOnly; Secure; SameSite=Lax; Path=/"
 const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
 // The LIFF app whose registered endpoint is /upload/ (the rich menu's fourth
 // block opens it). Injected into the page the same way the access token is,
-// so the id lives in one place — the env var scripts/setup-richmenu.mjs
+// so the id lives in one place — the env var scripts/setup-richmenu.mts
 // already requires — rather than being hardcoded in two.
 const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
 // Hardcoded fallback for the same reason ADMIN_LINE_USER_ID and
@@ -91,8 +93,8 @@ const UPLOAD_LIFF_ID = process.env.UPLOAD_LIFF_ID || "2008561527-sj7tuMLL"
 // are already versioned in the path and are not ours to hash. A script that
 // cannot be read is served unstamped rather than failing the boot — a missing
 // hash is a stale cache, a throw here is the whole site down.
-function stampAssets(html, pageDir) {
-  return html.replace(/(<script\s+src=")([^":?]+\.js)(")/g, (tag, pre, src, post) => {
+function stampAssets(html: string, pageDir: string): string {
+  return html.replace(/(<script\s+src=")([^":?]+\.js)(")/g, (tag: string, pre: string, src: string, post: string) => {
     const rel = src.startsWith("/") ? src.slice(1) : path.posix.join(pageDir, src)
     try {
       const hash = crypto
@@ -101,7 +103,7 @@ function stampAssets(html, pageDir) {
         .digest("hex")
         .slice(0, 8)
       return pre + src + "?v=" + hash + post
-    } catch (e) {
+    } catch (e: any) {
       console.warn("[assets] could not hash " + rel + " — serving it unversioned: " + e.message)
       return tag
     }
@@ -111,7 +113,7 @@ function stampAssets(html, pageDir) {
 // Gated pages cached as templates; the server fills the token placeholder per
 // request. Files never change at runtime.
 const gatedPages = ["status", "list", "ranking", "upload"]
-const pageTemplates = {}
+const pageTemplates: Record<string, string> = {}
 for (const p of gatedPages) {
   pageTemplates[p] = stampAssets(fs.readFileSync(path.join(__dirname, p, "index.html"), "utf8"), p)
 }
@@ -122,8 +124,8 @@ const verifyTemplate = stampAssets(
   "verify",
 )
 
-function parseCookies(req) {
-  const out = {}
+function parseCookies(req: Request): Record<string, string> {
+  const out: Record<string, string> = {}
   const raw = req.headers.cookie
   if (!raw) return out
   for (const part of raw.split(";")) {
@@ -137,15 +139,20 @@ function parseCookies(req) {
 // cache the access token so we only hit Supabase's refresh endpoint when it's
 // near expiry — refreshing on every page load rotated the refresh token each
 // time, which Supabase can flag as reuse/theft and revoke the whole session.
-function setSessionCookie(res, at, rt) {
+function setSessionCookie(res: Response, at: string, rt: string): void {
   const val = encodeURIComponent(JSON.stringify({ at: at, rt: rt }))
   res.append("Set-Cookie", RT_COOKIE + "=" + val + "; " + COOKIE_BASE + "; Max-Age=34560000")
 }
-function clearSessionCookie(res) {
+function clearSessionCookie(res: Response): void {
   res.append("Set-Cookie", RT_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
 }
 
-function readSessionCookie(req) {
+interface SessionCookie {
+  at: string | null
+  rt: string
+}
+
+function readSessionCookie(req: Request): SessionCookie | null {
   const raw = parseCookies(req)[RT_COOKIE]
   if (!raw) return null
   try {
@@ -162,13 +169,13 @@ function readSessionCookie(req) {
 // Read a JWT's payload without verifying it (the token itself was already
 // validated by Supabase at /auth/session or the refresh call below — this is
 // just for reading claims out of a token we already trust).
-function jwtPayload(token) {
+function jwtPayload(token: string): Record<string, any> {
   try {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
     return JSON.parse(Buffer.from(b64, "base64").toString("utf8"))
   } catch (e) { return {} }
 }
-function jwtExp(token) { return typeof jwtPayload(token).exp === "number" ? jwtPayload(token).exp : 0 }
+function jwtExp(token: string): number { return typeof jwtPayload(token).exp === "number" ? jwtPayload(token).exp : 0 }
 
 // ── Admin auth (/admin/) — separate from the physician email/OTP/LIFF flow ──
 // The admin dashboard has exactly one legitimate user, already identified by
@@ -202,12 +209,12 @@ if (!ADMIN_KEY_USABLE) {
   console.error("[admin] LINE_CHANNEL_SECRET and/or SUPABASE_SERVICE_ROLE_KEY is not set — " +
     "admin login is DISABLED (refusing to sign or accept tokens with a predictable key)")
 }
-function signAdminToken(purpose, exp) {
+function signAdminToken(purpose: string, exp: number): string {
   if (!ADMIN_KEY_USABLE) throw new Error("admin signing key unavailable")
   const sig = crypto.createHmac("sha256", ADMIN_TOKEN_KEY).update(purpose + ":" + exp).digest("hex")
   return exp + "." + sig
 }
-function verifyAdminToken(purpose, token) {
+function verifyAdminToken(purpose: string, token: string | undefined | null): boolean {
   if (!ADMIN_KEY_USABLE) return false
   if (!token || typeof token !== "string") return false
   const i = token.indexOf(".")
@@ -230,14 +237,14 @@ const ADMIN_COOKIE = "p4p_admin"
 // Re-authenticating is a single "admin" DM to the bot — trivial for the one
 // person who ever needs to.
 const ADMIN_SESSION_SECONDS = 7 * 24 * 3600
-function setAdminCookie(res) {
+function setAdminCookie(res: Response): void {
   const exp = Math.floor(Date.now() / 1000) + ADMIN_SESSION_SECONDS
   res.append("Set-Cookie", ADMIN_COOKIE + "=" + signAdminToken("session", exp) + "; " + COOKIE_BASE + "; Max-Age=" + ADMIN_SESSION_SECONDS)
 }
-function clearAdminCookie(res) {
+function clearAdminCookie(res: Response): void {
   res.append("Set-Cookie", ADMIN_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
 }
-function requireAdmin(req, res, next) {
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const token = parseCookies(req)[ADMIN_COOKIE]
   if (!verifyAdminToken("session", token)) return res.status(401).json({ error: "not authenticated" })
   next()
@@ -246,7 +253,7 @@ function requireAdmin(req, res, next) {
 // Calls a service_role-only RPC (admin_list_roster_tables / admin_table_columns)
 // — same "apikey + Authorization both = service role key" pattern used by
 // every /admin/api/* route below, RPC or plain table access alike.
-async function callServiceRpc(fn, args) {
+async function callServiceRpc(fn: string, args?: Record<string, unknown>): Promise<any> {
   const r = await axios.post(
     SUPABASE_URL + "/rest/v1/rpc/" + fn,
     args || {},
@@ -267,27 +274,34 @@ async function callServiceRpc(fn, args) {
 // API, so a raw constraint-violation message (e.g. "null value in column
 // "prefix" violates not-null constraint") is more useful to the admin than a
 // generic "insert failed", and there's no other caller to leak it to.
-function pgErrorMessage(e, fallback) {
+function pgErrorMessage(e: any, fallback: string): string {
   return (e.response && e.response.data && e.response.data.message) || fallback
 }
+
+type StatusError = Error & { status?: number }
 
 // Re-fetches the live roster-table list and checks membership — never trust
 // a :table path param on its own, since it selects which Postgres table the
 // next request reads/writes.
-async function assertRosterTable(table) {
+async function assertRosterTable(table: string): Promise<void> {
   const tables = await callServiceRpc("admin_list_roster_tables")
   if (!Array.isArray(tables) || !tables.includes(table)) {
-    const err = new Error("unknown roster table: " + table)
+    const err = new Error("unknown roster table: " + table) as StatusError
     err.status = 404
     throw err
   }
+}
+
+interface ResolvedAccessToken {
+  at: string | null
+  reason: string | null
 }
 
 // Resolve a usable access token from the session cookie: reuse the cached one
 // while it's fresh, otherwise refresh once (rotating the cookie). Returns
 // { at: null, reason } on failure — no cookie ("no_session") or a failed
 // refresh ("expired", cookie cleared) — or { at, reason: null } on success.
-async function resolveAccessToken(req, res) {
+async function resolveAccessToken(req: Request, res: Response): Promise<ResolvedAccessToken> {
   const sess = readSessionCookie(req)
   if (!sess) return { at: null, reason: "no_session" }
 
@@ -318,7 +332,7 @@ async function resolveAccessToken(req, res) {
 // access token, not the anon key, and the RPC reads the email from the
 // caller's own JWT rather than taking one as a parameter — there is nothing
 // here for an unauthenticated caller to enumerate.
-async function isCurrentUserAllowlisted(accessToken) {
+async function isCurrentUserAllowlisted(accessToken: string): Promise<boolean> {
   try {
     const r = await axios.post(
       SUPABASE_URL + "/rest/v1/rpc/is_current_user_allowlisted",
@@ -326,7 +340,7 @@ async function isCurrentUserAllowlisted(accessToken) {
       { headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, timeout: 8000 }
     )
     return r.data === true
-  } catch (e) {
+  } catch (e: any) {
     console.error("[gate] is_current_user_allowlisted failed:",
       e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
     // Fail open on a transient Supabase hiccup rather than locking out a
@@ -341,8 +355,8 @@ async function isCurrentUserAllowlisted(accessToken) {
 // script -> no CSP change). Whether a LINE account is bound is irrelevant
 // here — that's traceability recorded elsewhere (supabase/functions/line-
 // verify), never a condition for reaching the page.
-function servePage(name) {
-  return async (req, res) => {
+function servePage(name: string) {
+  return async (req: Request, res: Response) => {
     // Canonicalize to a trailing slash first. LIFF opens "/status" (no slash),
     // but the page's relative <script src="app.js"> only resolves to
     // /status/app.js when the URL ends in "/". Without this the page script
@@ -410,7 +424,7 @@ const CSP = [
   "img-src 'self' data:",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.line.me https://access.line.me",
 ].join("; ")
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Content-Security-Policy", CSP)
   res.setHeader("X-Content-Type-Options", "nosniff")
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -424,7 +438,7 @@ app.use((req, res, next) => {
 // this a real, currently-valid session, and if so, stash its refresh token
 // in an HttpOnly cookie. No LINE calls, no service-role key, no `physicians`
 // write happen here — that all lives in the Edge Function now.
-app.post("/auth/session", express.json({ limit: "8kb" }), async (req, res) => {
+app.post("/auth/session", express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   const { access_token, refresh_token } = req.body || {}
   if (!access_token || !refresh_token) return res.status(400).json({ error: "missing tokens" })
   try {
@@ -437,7 +451,7 @@ app.post("/auth/session", express.json({ limit: "8kb" }), async (req, res) => {
   setSessionCookie(res, access_token, refresh_token)
   res.json({ ok: true })
 })
-app.post("/auth/logout", (req, res) => { clearSessionCookie(res); res.json({ ok: true }) })
+app.post("/auth/logout", (req: Request, res: Response) => { clearSessionCookie(res); res.json({ ok: true }) })
 
 // Gated pages: server-validated + token injected (must be registered BEFORE the
 // static mounts so "/status/" hits the handler, while "/status/app.js" etc.
@@ -448,12 +462,12 @@ for (const p of gatedPages) {
 
 // /verify/ itself: the same static page for everyone, every time — no
 // session lookup, no token injection. Binding a LINE account no longer needs
-// a server-injected token or a bounce-back-here round trip (see verify/app.js
+// a server-injected token or a bounce-back-here round trip (see verify/app.ts
 // and supabase/functions/line-verify): the browser already holds whatever
 // tokens it needs by the time it would call either. Registered before the
 // static mount below so it's this handler, not express.static, that serves
 // the trailing-slash-less form too.
-app.get(["/verify", "/verify/"], (req, res) => {
+app.get(["/verify", "/verify/"], (req: Request, res: Response) => {
   // NO trailing-slash redirect here — this page is served identically at both
   // /verify and /verify/.
   //
@@ -501,7 +515,7 @@ const adminTemplate = stampAssets(
   fs.readFileSync(path.join(__dirname, "admin", "index.html"), "utf8"),
   "admin",
 )
-app.get(["/admin", "/admin/"], (req, res) => {
+app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
   // Relative <script src="app.js"> only resolves to /admin/app.js when the URL
   // ends in a slash — the same trap servePage documents for the gated pages.
   // express.static used to answer /admin without one, leaving the page asking
@@ -518,38 +532,38 @@ app.get(["/admin", "/admin/"], (req, res) => {
 
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
 // page itself, which shows the "message the bot" instructions.
-app.get("/admin/login", (req, res) => {
+app.get("/admin/login", (req: Request, res: Response) => {
   const token = String(req.query.token || "")
   if (!verifyAdminToken("login", token)) return res.redirect(302, "/admin/?error=bad_token")
   setAdminCookie(res)
   res.redirect(302, "/admin/")
 })
 
-app.post("/admin/logout", (req, res) => { clearAdminCookie(res); res.json({ ok: true }) })
+app.post("/admin/logout", (req: Request, res: Response) => { clearAdminCookie(res); res.json({ ok: true }) })
 
-app.get("/admin/api/tables", requireAdmin, async (req, res) => {
+app.get("/admin/api/tables", requireAdmin, async (req: Request, res: Response) => {
   try {
     const tables = await callServiceRpc("admin_list_roster_tables")
     res.json({ tables: tables || [] })
-  } catch (e) {
+  } catch (e: any) {
     console.error("[admin] list tables failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to list tables" })
   }
 })
 
-app.get("/admin/api/tables/:table/columns", requireAdmin, async (req, res) => {
+app.get("/admin/api/tables/:table/columns", requireAdmin, async (req: Request<{ table: string }>, res: Response) => {
   try {
     await assertRosterTable(req.params.table)
     const columns = await callServiceRpc("admin_table_columns", { p_table: req.params.table })
     res.json({ columns: columns || [] })
-  } catch (e) {
+  } catch (e: any) {
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] columns failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load columns" })
   }
 })
 
-app.get("/admin/api/tables/:table/rows", requireAdmin, async (req, res) => {
+app.get("/admin/api/tables/:table/rows", requireAdmin, async (req: Request<{ table: string }>, res: Response) => {
   try {
     await assertRosterTable(req.params.table)
     const r = await axios.get(
@@ -557,7 +571,7 @@ app.get("/admin/api/tables/:table/rows", requireAdmin, async (req, res) => {
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
     )
     res.json({ rows: r.data })
-  } catch (e) {
+  } catch (e: any) {
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] rows fetch failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load rows" })
@@ -568,17 +582,17 @@ app.get("/admin/api/tables/:table/rows", requireAdmin, async (req, res) => {
 // request body is client-controlled, so this is what stops an insert/update
 // from writing to a column that doesn't exist (PostgREST would 400 anyway)
 // or overwriting the `index` primary key.
-async function filterToColumns(table, body) {
+async function filterToColumns(table: string, body: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
   const columns = await callServiceRpc("admin_table_columns", { p_table: table })
-  const allowed = new Set((columns || []).filter((c) => !c.is_pk).map((c) => c.column_name))
-  const out = {}
+  const allowed = new Set((columns || []).filter((c: any) => !c.is_pk).map((c: any) => c.column_name))
+  const out: Record<string, unknown> = {}
   for (const k of Object.keys(body || {})) {
-    if (allowed.has(k)) out[k] = body[k]
+    if (allowed.has(k)) out[k] = (body as Record<string, unknown>)[k]
   }
   return out
 }
 
-app.post("/admin/api/tables/:table/rows", requireAdmin, express.json({ limit: "32kb" }), async (req, res) => {
+app.post("/admin/api/tables/:table/rows", requireAdmin, express.json({ limit: "32kb" }), async (req: Request<{ table: string }>, res: Response) => {
   try {
     await assertRosterTable(req.params.table)
     const body = await filterToColumns(req.params.table, req.body)
@@ -596,14 +610,14 @@ app.post("/admin/api/tables/:table/rows", requireAdmin, express.json({ limit: "3
       }
     )
     res.json({ row: (r.data && r.data[0]) || null })
-  } catch (e) {
+  } catch (e: any) {
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] insert failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(400).json({ error: pgErrorMessage(e, "insert failed") })
   }
 })
 
-app.patch("/admin/api/tables/:table/rows/:index", requireAdmin, express.json({ limit: "32kb" }), async (req, res) => {
+app.patch("/admin/api/tables/:table/rows/:index", requireAdmin, express.json({ limit: "32kb" }), async (req: Request<{ table: string; index: string }>, res: Response) => {
   try {
     await assertRosterTable(req.params.table)
     const body = await filterToColumns(req.params.table, req.body)
@@ -621,14 +635,14 @@ app.patch("/admin/api/tables/:table/rows/:index", requireAdmin, express.json({ l
       }
     )
     res.json({ row: (r.data && r.data[0]) || null })
-  } catch (e) {
+  } catch (e: any) {
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] update failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(400).json({ error: pgErrorMessage(e, "update failed") })
   }
 })
 
-app.delete("/admin/api/tables/:table/rows/:index", requireAdmin, async (req, res) => {
+app.delete("/admin/api/tables/:table/rows/:index", requireAdmin, async (req: Request<{ table: string; index: string }>, res: Response) => {
   try {
     await assertRosterTable(req.params.table)
     await axios.delete(
@@ -636,7 +650,7 @@ app.delete("/admin/api/tables/:table/rows/:index", requireAdmin, async (req, res
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
     )
     res.json({ ok: true })
-  } catch (e) {
+  } catch (e: any) {
     if (e.status === 404) return res.status(404).json({ error: "unknown table" })
     console.error("[admin] delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "delete failed" })
@@ -651,20 +665,20 @@ app.delete("/admin/api/tables/:table/rows/:index", requireAdmin, async (req, res
 // with no admin session involved at all (SECURITY_ANALYSIS.md §2c). This is
 // the replacement: the admin's own authenticated dashboard, writing with the
 // service_role key server-side, same posture as the roster CRUD routes above.
-app.get("/admin/api/access-requests", requireAdmin, async (req, res) => {
+app.get("/admin/api/access-requests", requireAdmin, async (req: Request, res: Response) => {
   try {
     const r = await axios.get(
       SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=*&order=requested_at.desc",
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
     )
     res.json({ requests: r.data || [] })
-  } catch (e) {
+  } catch (e: any) {
     console.error("[admin] access-requests list failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load access requests" })
   }
 })
 
-app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req, res) => {
+app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req: Request, res: Response) => {
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
@@ -684,7 +698,7 @@ app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req, 
     // duplicates only overwrites columns present in the payload, so leaving
     // it out preserves whatever department the physicians row already has
     // rather than clobbering it with null.
-    const upsertBody = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
+    const upsertBody: Record<string, unknown> = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
     if (department) upsertBody.department = department
     await axios.post(
       SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
@@ -705,13 +719,13 @@ app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req, 
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
     )
     res.json({ ok: true })
-  } catch (e) {
+  } catch (e: any) {
     console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, "approve failed") })
   }
 })
 
-app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req, res) => {
+app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req: Request, res: Response) => {
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
@@ -721,7 +735,7 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req, r
       { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
     )
     res.json({ ok: true })
-  } catch (e) {
+  } catch (e: any) {
     console.error("[admin] reject access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "reject failed" })
   }
@@ -740,20 +754,53 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req, r
 // hands, reached through the two claim functions. A file this route cannot
 // confidently score is left `pending` for the worker, never guessed at.
 const UPLOAD_BUCKET = "p4p-uploads"
-// Same env var scripts/setup-richmenu.mjs requires — the LIFF app whose
+// Same env var scripts/setup-richmenu.mts requires — the LIFF app whose
 // endpoint is /upload/. Only used to build a "ส่งไฟล์อีกครั้ง" button; a
 // missing value degrades that button to "ติดต่อผู้ดูแล", never a crash.
 const UPLOAD_LIFF_URL = UPLOAD_LIFF_ID ? "https://liff.line.me/" + UPLOAD_LIFF_ID : ""
 
-const receipt = require("./lib/line-receipt-flex")
+interface ReceiptModule {
+  displayMonth(monthKey: string): string
+  formatScore(score: number | string | null | undefined): string
+  buildScoreReceipt(args: { displayName: string; department: string; monthKey: string; score: number | string; receivedAt: string; isLate: boolean }): unknown
+  buildPendingBubble(args: { monthKey: string; queueId: string; ack: boolean }): unknown
+  buildFailureBubble(args: { monthKey: string; errorType: string; detail: string; uploadLiffUrl: string }): unknown
+}
+interface TelegramModule {
+  sendTelegram(text: unknown): Promise<boolean>
+  formatResultMessage(result: Record<string, unknown>, filename: string | null | undefined, upload?: Record<string, unknown> | null): string
+  formatErrorMessage(error: string | null | undefined, filename: string | null | undefined, upload?: Record<string, unknown> | null): string
+}
+interface ScoreExtractResult {
+  score: number | null
+  method: string
+}
+interface ParsedWorkbook {
+  rows: Record<string, unknown>[]
+  sheetName: string
+  sheetCount: number
+  matched: boolean
+  singleSheet: boolean
+}
+interface ScoreModule {
+  resolveBeMonth(filename?: string | null, subject?: string | null, body?: string | null): number | null
+  resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null): number | null
+  resolveBeMonthFromRows(rows: Record<string, unknown>[]): number | null
+  resolveBeYearFromRows(rows: Record<string, unknown>[]): number | null
+  resolveScore(rows: Record<string, unknown>[]): ScoreExtractResult
+  isHighConfidence(method: string): boolean
+  parseWorkbookRowsSafely(buffer: Buffer, opts?: Record<string, unknown>): Promise<ParsedWorkbook>
+}
+
+const receipt = require("./lib/line-receipt-flex") as ReceiptModule
 // The admin's Telegram alert (§7.6). Vendored for the same reason the scorer
 // is — see the file's own header — and a no-op when this deployment has no
 // TELEGRAM_* variables, never a failed submission.
-const tg = require("./lib/telegram-notify")
+const tg = require("./lib/telegram-notify") as TelegramModule
 
-function serviceHeaders(extra) {
+function serviceHeaders(extra?: Record<string, string>): Record<string, string> {
   return Object.assign({
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    apikey: SUPABASE_SERVICE_ROLE_KEY as string,
     Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
   }, extra || {})
 }
@@ -762,21 +809,38 @@ function serviceHeaders(extra) {
 // instant web/lib/months.ts's deadlineISO() and enqueue_p4p_upload()'s own
 // SQL compute. Punctuality is measured against `received_at` (when the
 // physician handed the file over), never against processing time (§9).
-function monthDeadlineMs(monthKey) {
+function monthDeadlineMs(monthKey: string): number {
   const [beYear, month] = String(monthKey || "").split("_").map(Number)
   if (!beYear || !month) return NaN
   // month is 1-based, so passing it as a 0-based index already means "the
   // following month"; December rolls into the next year on its own.
   return Date.UTC(beYear - 543, month, 10, 16, 59, 59)
 }
-function isLateUpload(monthKey, receivedAt) {
+function isLateUpload(monthKey: string, receivedAt: string): boolean {
   const deadline = monthDeadlineMs(monthKey)
   const received = new Date(receivedAt).getTime()
   if (isNaN(deadline) || isNaN(received)) return false
   return received > deadline
 }
 
-async function fetchQueueRow(filter) {
+interface QueueRow {
+  id: string
+  email: string
+  status: string
+  filename: string | null
+  month_key: string
+  object_path: string
+  full_name: string
+  department: string | null
+  roster_index: number | null
+  received_at: string
+  line_user_id?: string | null
+  error_type?: string | null
+  error_detail?: string | null
+  score?: number | null
+}
+
+async function fetchQueueRow(filter: string): Promise<QueueRow | null> {
   const r = await axios.get(
     SUPABASE_URL + "/rest/v1/p4p_upload_queue?" + filter + "&select=*",
     { headers: serviceHeaders(), timeout: 8000 }
@@ -790,7 +854,7 @@ async function fetchQueueRow(filter) {
 // then claim_p4p_score_fallback() may have moved the row to 'processing'.
 // Adding `&status=eq.pending` makes every write here a no-op in that case
 // instead of flipping a row the worker is actively holding.
-async function patchQueueRow(id, patch, extraFilter) {
+async function patchQueueRow(id: string, patch: Record<string, unknown>, extraFilter?: string): Promise<number> {
   const r = await axios.patch(
     SUPABASE_URL + "/rest/v1/p4p_upload_queue?id=eq." + encodeURIComponent(id) + (extraFilter || ""),
     patch,
@@ -802,7 +866,7 @@ async function patchQueueRow(id, patch, extraFilter) {
   return Array.isArray(r.data) ? r.data.length : 0
 }
 
-app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
+app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   // Deliberately just the id: every other fact this route needs is already
   // on the row enqueue_p4p_upload() built from the caller's own JWT. Taking
   // identity or month as a parameter here would reopen the hole every other
@@ -824,10 +888,10 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   }
   const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
 
-  let row
+  let row: QueueRow | null
   try {
     row = await fetchQueueRow("id=eq." + encodeURIComponent(queueId))
-  } catch (e) {
+  } catch (e: any) {
     console.error("[upload] queue lookup failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     return res.status(500).json({ error: "lookup_failed" })
   }
@@ -849,11 +913,11 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // reaching a Telegram from here means row.roster_index was non-null, which
   // enqueue_p4p_upload() only sets on an exact roster hit — anything fuzzy
   // was deferred to the worker, which sends its own.
-  function tgContext(extra) {
+  function tgContext(extra?: Record<string, unknown>): Record<string, unknown> {
     return Object.assign({
       source: "LINE upload",
-      accountName: row.full_name,
-      email: row.email,
+      accountName: row!.full_name,
+      email: row!.email,
       monthKey,
       rosterMatch: "exact",
     }, extra || {})
@@ -863,28 +927,28 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // moment the response is written, and a promise still in flight then simply
   // never resolves. sendTelegram() swallows its own failures and caps itself
   // at 5 s, so the worst case is a slightly slower receipt.
-  async function notifyAdmin(text) {
+  async function notifyAdmin(text: string): Promise<void> {
     await tg.sendTelegram(text)
   }
 
   // Reject (terminal, no retry on either claim function) — same shape as an
   // enqueue-time refusal: nothing here was ever eligible.
-  async function reject(errorType, detail, status, tgExtra) {
+  async function reject(errorType: string, detail?: string, status?: number, tgExtra?: Record<string, unknown>) {
     try {
-      await patchQueueRow(row.id, {
+      await patchQueueRow(row!.id, {
         status: "rejected",
         error_type: errorType,
         error_detail: detail || null,
         finished_at: new Date().toISOString(),
       }, "&status=eq.pending")
-    } catch (e) {
+    } catch (e: any) {
       console.error("[upload] reject patch failed:", e.message)
     }
     // No attempt counter: unlike the worker's failures, a rejection here is
     // terminal on the first try — there is nothing coming back.
     await notifyAdmin(tg.formatErrorMessage(
       detail || errorType,
-      row.filename,
+      row!.filename,
       tgContext(Object.assign({ errorType }, tgExtra || {}))
     ))
     return res.status(status || 422).json({ error: errorType, detail: detail || "" })
@@ -894,22 +958,22 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // is useful data in its own right, and it is what makes the row claimable
   // immediately instead of waiting out the claim query's 30s race guard) and
   // leave status='pending' exactly as enqueue left it.
-  async function defer(method) {
+  async function defer(method: string) {
     try {
-      await patchQueueRow(row.id, { score_method: method })
-    } catch (e) {
+      await patchQueueRow(row!.id, { score_method: method })
+    } catch (e: any) {
       console.error("[upload] defer patch failed:", e.message)
     }
     return res.json({ pending: true })
   }
 
-  let buffer
+  let buffer: Buffer
   try {
     const objectUrl = SUPABASE_URL + "/storage/v1/object/" + UPLOAD_BUCKET + "/" +
       String(row.object_path).split("/").map(encodeURIComponent).join("/")
     const r = await axios.get(objectUrl, { headers: serviceHeaders(), responseType: "arraybuffer", timeout: 15000 })
     buffer = Buffer.from(r.data)
-  } catch (e) {
+  } catch (e: any) {
     // Transient: leave the row pending, the worker will pick it up. The
     // physician sees "กำลังตรวจสอบ" rather than an error they can't act on.
     console.error("[upload] object download failed:", e.response ? e.response.status : e.message)
@@ -920,15 +984,15 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   // timeout (§7.7 rec 3, §11): the guard bounds memory, the timeout bounds
   // CPU, and a file that trips either is deferred or rejected rather than
   // left holding the request open against Vercel's execution limit.
-  const score = require("./lib/p4p-score")
-  let rows
-  let matched
-  let singleSheet
+  const score = require("./lib/p4p-score") as ScoreModule
+  let rows: Record<string, unknown>[]
+  let matched: boolean
+  let singleSheet: boolean
   try {
     ({ rows, matched, singleSheet } = await score.parseWorkbookRowsSafely(buffer, {
       targetMonth: monthNum, targetYear: beYear, filename: row.filename, timeoutMs: 7000,
     }))
-  } catch (e) {
+  } catch (e: any) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
     return reject("other", "ไม่สามารถอ่านไฟล์ได้: " + e.message)
@@ -986,22 +1050,22 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
   if (!score.isHighConfidence(method) || row.roster_index === null || row.roster_index === undefined) {
     return defer(method)
   }
-  if (!(value > 0)) {
+  if (!(value !== null && value > 0)) {
     return reject("zero_score", "ไม่พบคะแนนรวมในไฟล์")
   }
 
   // The roster row is the canonical spelling of the name and department —
   // p4p_submissions is keyed on it, and so is the Drive filename the worker
   // will use later.
-  let rosterRow = null
+  let rosterRow: { index: number; prefix: string | null; firstname: string | null; lastname: string | null; department: string | null } | null = null
   try {
     const r = await axios.get(
       SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) +
-        "?index=eq." + encodeURIComponent(row.roster_index) + "&select=index,prefix,firstname,lastname,department",
+        "?index=eq." + encodeURIComponent(String(row.roster_index)) + "&select=index,prefix,firstname,lastname,department",
       { headers: serviceHeaders(), timeout: 8000 }
     )
     rosterRow = (r.data && r.data[0]) || null
-  } catch (e) {
+  } catch (e: any) {
     console.error("[upload] roster lookup failed:", e.response ? JSON.stringify(e.response.data) : e.message)
   }
   if (!rosterRow) return defer(method)
@@ -1015,12 +1079,12 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
     // return=representation` so a filter that matched nothing surfaces here
     // rather than being reported to the physician as saved.
     const saved = await axios.patch(
-      SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(row.roster_index),
+      SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(String(row.roster_index)),
       { score: value, submitted_at: submittedAt },
       { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
     )
     if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
-  } catch (e) {
+  } catch (e: any) {
     // Fall back to the queue rather than telling the physician a number that
     // was not written.
     console.error("[upload] saveScore failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -1042,7 +1106,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
       },
       { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "resolution=ignore-duplicates,return=minimal" }), timeout: 8000 }
     )
-  } catch (e) {
+  } catch (e: any) {
     // Non-fatal, exactly as on the email path: the score is saved either way.
     console.warn("[upload] logSubmission skipped:", e.response ? JSON.stringify(e.response.data) : e.message)
   }
@@ -1061,7 +1125,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
       // way; the worker's own pass will close the row.
       console.warn("[upload] queue row " + row.id + " was claimed by the worker mid-request")
     }
-  } catch (e) {
+  } catch (e: any) {
     // The score is already in the roster table; losing this write means the
     // worker re-scores the row later and writes the same number again.
     console.error("[upload] queue completion patch failed:", e.message)
@@ -1076,13 +1140,13 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req, res) => {
     // `value.toFixed(2)`, not receipt.formatScore's grouped "1,842.50": the
     // worker's own success alert prints the ungrouped form, and the admin
     // reads both messages side by side.
-    { matchedName, score: value.toFixed(2), saved: true },
+    { matchedName, score: (value as number).toFixed(2), saved: true },
     row.filename,
     tgContext()
   ))
 
   res.json({
-    score: Number(value.toFixed(2)),
+    score: Number((value as number).toFixed(2)),
     month_key: monthKey,
     is_late: isLateUpload(monthKey, row.received_at),
     display_date: receipt.displayMonth(monthKey),
@@ -1104,9 +1168,9 @@ app.use("/upload", express.static("upload"))
 // the same Flex-building code the bot itself sends, with no data in it.
 app.use("/lib", express.static("lib"))
 
-app.post("/line", line.middleware(config), (req, res) => {
+app.post("/line", line.middleware(config), (req: Request, res: Response) => {
   Promise
-    .all(req.body.events.map(handleEvent))
+    .all((req.body.events as LineWebhookEvent[]).map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
       console.error(err)
@@ -1117,14 +1181,14 @@ app.post("/line", line.middleware(config), (req, res) => {
 // The chat-side answer for one queue row, whatever state it is in (§7.5
 // step ④). A missing row is answered too — "nothing here yet" is a real
 // answer to a tap, and silence looks like a broken button.
-function buildUploadResultMessage(row) {
+function buildUploadResultMessage(row: QueueRow | null): unknown {
   if (!row) return { type: "text", text: "ยังไม่พบไฟล์ที่ส่งเข้ามาในระบบ" }
   if (row.status === "done") {
     return receipt.buildScoreReceipt({
       displayName: row.full_name,
-      department: row.department,
+      department: row.department || "",
       monthKey: row.month_key,
-      score: row.score,
+      score: row.score ?? 0,
       receivedAt: row.received_at,
       isLate: isLateUpload(row.month_key, row.received_at),
     })
@@ -1140,7 +1204,15 @@ function buildUploadResultMessage(row) {
   return receipt.buildPendingBubble({ monthKey: row.month_key, queueId: row.id, ack: false })
 }
 
-const handleEvent = async (event) => {
+interface LineWebhookEvent {
+  type: string
+  replyToken?: string
+  postback?: { data?: string }
+  message?: { type: string; text?: string }
+  source: { userId?: string }
+}
+
+const handleEvent = async (event: LineWebhookEvent): Promise<unknown> => {
   // ── Upload result, pulled rather than pushed (§7.5) ──────────────────────
   // The bot cannot put a button in the chat without spending a push, so the
   // upload page makes the physician "say" a trigger line (free, sent as
@@ -1152,11 +1224,11 @@ const handleEvent = async (event) => {
     const data = String((event.postback && event.postback.data) || "")
     if (!data.startsWith("p4p_result=")) return Promise.resolve(null)
     const queueId = decodeURIComponent(data.slice("p4p_result=".length))
-    let row = null
+    let row: QueueRow | null = null
     if (/^[0-9a-f-]{36}$/i.test(queueId)) {
       try {
         row = await fetchQueueRow("id=eq." + encodeURIComponent(queueId))
-      } catch (e) {
+      } catch (e: any) {
         console.error("[upload] postback lookup failed:", e.message)
       }
     }
@@ -1165,12 +1237,12 @@ const handleEvent = async (event) => {
     // but the row names its owner, so check it rather than assume it.
     if (row && row.line_user_id !== event.source.userId) row = null
     return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [buildUploadResultMessage(row)],
+      replyToken: event.replyToken as string,
+      messages: [buildUploadResultMessage(row) as line.messagingApi.Message],
     })
   }
 
-  if (event.type !== 'message' || event.message.type !== 'text') {
+  if (event.type !== 'message' || !event.message || event.message.type !== 'text') {
     return Promise.resolve(null)
   }
   try {
@@ -1181,17 +1253,17 @@ const handleEvent = async (event) => {
   } catch (error) {
     console.error(error)
   }
-  const message = event.message.text.trim().toLowerCase()
+  const message = (event.message.text || "").trim().toLowerCase()
   if (message === "status") {
     return client.replyMessage({
-      "replyToken": event.replyToken,
-      "messages": [createStatusList()]
+      "replyToken": event.replyToken as string,
+      "messages": [createStatusList() as line.messagingApi.Message]
     })
   }
   if (message === "myid") {
     return client.replyMessage({
-      "replyToken": event.replyToken,
-      "messages": [{ "type": "text", "text": event.source.userId }]
+      "replyToken": event.replyToken as string,
+      "messages": [{ "type": "text", "text": event.source.userId as string }]
     })
   }
   if (message === "admin") {
@@ -1205,14 +1277,14 @@ const handleEvent = async (event) => {
     // event in the batch, and LINE would retry it.
     if (!ADMIN_KEY_USABLE) {
       return client.replyMessage({
-        "replyToken": event.replyToken,
+        "replyToken": event.replyToken as string,
         "messages": [{ "type": "text", "text": "ระบบผู้ดูแลปิดใช้งานชั่วคราว: ไม่ได้ตั้งค่า secret บนเซิร์ฟเวอร์" }]
       })
     }
     const exp = Math.floor(Date.now() / 1000) + 600 // 10 minutes
     const url = ADMIN_BASE_URL + "/admin/login?token=" + signAdminToken("login", exp)
     return client.replyMessage({
-      "replyToken": event.replyToken,
+      "replyToken": event.replyToken as string,
       "messages": [{ "type": "text", "text": "ลิงก์เข้าสู่ระบบแอดมิน (ใช้ได้ 10 นาที):\n" + url }]
     })
   }
@@ -1222,21 +1294,21 @@ const handleEvent = async (event) => {
   // physician who types it by hand gets the same answer, so this doubles as
   // a free status command.
   if (message.startsWith("ส่งไฟล์ p4p") || message === "ดูผลคะแนน" || message === "ผลคะแนน") {
-    let row = null
+    let row: QueueRow | null = null
     try {
       row = await fetchQueueRow(
-        "line_user_id=eq." + encodeURIComponent(event.source.userId) + "&order=received_at.desc&limit=1"
+        "line_user_id=eq." + encodeURIComponent(event.source.userId || "") + "&order=received_at.desc&limit=1"
       )
-    } catch (e) {
+    } catch (e: any) {
       console.error("[upload] trigger lookup failed:", e.message)
     }
     const stillWorking = row && (row.status === "pending" || row.status === "processing")
     return client.replyMessage({
-      "replyToken": event.replyToken,
+      "replyToken": event.replyToken as string,
       "messages": [
-        stillWorking
-          ? receipt.buildPendingBubble({ monthKey: row.month_key, queueId: row.id, ack: true })
-          : buildUploadResultMessage(row),
+        (stillWorking
+          ? receipt.buildPendingBubble({ monthKey: row!.month_key, queueId: row!.id, ack: true })
+          : buildUploadResultMessage(row)) as line.messagingApi.Message,
       ],
     })
   }
@@ -1305,7 +1377,7 @@ const createStatusList = () => {
   return object
 }
 
-const createStatusSublist = (i) => {
+const createStatusSublist = (i: number) => {
   const now = new Date()
   const month = now.getMonth()
   const year = now.getFullYear() + 543
@@ -1375,9 +1447,8 @@ const createStatusSublist = (i) => {
 
 // On Vercel the exported app is used as the serverless handler.
 // app.listen only runs for local dev (node main.js).
-if (require.main === module) {
+if ((require as NodeJS.Require).main === module) {
   app.listen(port, () => { console.log("P4P server is live") })
 }
 
-module.exports = app
-
+;(module as NodeModule).exports = app

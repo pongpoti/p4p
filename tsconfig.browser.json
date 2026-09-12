@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "none",
+    "lib": ["ES2019", "DOM"],
+    "types": [],
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmitOnError": true
+  },
+  "include": [
+    "assets/**/*.ts",
+    "verify/app.ts",
+    "status/app.ts",
+    "list/app.ts",
+    "ranking/app.ts",
+    "admin/app.ts",
+    "upload/app.ts",
+    "lib/line-receipt-flex.ts",
+    "lib/isomorphic-globals.d.ts"
+  ]
+}

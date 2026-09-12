@@ -3,8 +3,8 @@
  *
  * Month names and accent colours currently exist in three places:
  *
- *   ../../src/constants.cjs   the Express server's Flex month picker, and
- *                             scripts/update-month-picker.mjs (rich menu)
+ *   ../../src/constants.ts    the Express server's Flex month picker, and
+ *                             scripts/update-month-picker.mts (rich menu)
  *   ../../assets/shared.js    the three legacy browser pages
  *   ../colors.ts, ../months.ts  this app
  *
@@ -36,9 +36,12 @@ interface LegacyConstants {
   MONTH_ITERATOR: [number, number][][]
 }
 
-const serverConstants = require(
-  resolve(repoRoot, "src/constants.cjs"),
-) as LegacyConstants
+// A plain createRequire() can't load .ts (it's Node's native CJS loader, not
+// Vite's transform pipeline) — dynamic import() is, and Vitest's SSR module
+// runner transforms any .ts file it loads this way, static or computed path.
+const serverConstants = (await import(
+  resolve(repoRoot, "src/constants.ts")
+)) as LegacyConstants
 
 /**
  * assets/shared.js is an IIFE that assigns to `window`, so it cannot be
@@ -80,7 +83,7 @@ function extractArrayLiteral(relativePath: string, name: string): string[] {
   return JSON.parse(match[1]) as string[]
 }
 
-describe("src/constants.cjs (Express server + rich menu)", () => {
+describe("src/constants.ts (Express server + rich menu)", () => {
   it("has the same accent colours, in the same order", () => {
     expect(serverConstants.COLOR_ARRAY).toEqual(MONTH_COLORS.map((c) => [c.tw, c.hex]))
   })

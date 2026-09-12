@@ -1,19 +1,19 @@
 /**
- * lib/p4p-score.js
+ * lib/p4p-score.ts
  *
  * Root-side (CommonJS, Vercel/main.js) copy of the pure, no-network scoring
- * arithmetic that `automation/claude-analyst.js` owns canonically. This file
+ * arithmetic that `automation/claude-analyst.ts` owns canonically. This file
  * exists because of C8 (main.js and automation/ are deliberately isolated
  * sub-projects with separate package.json/module-format — root is CommonJS,
  * automation/ is ESM — so real code sharing would mean merging their
  * dependency trees, a bigger structural change than this feature justifies).
  *
  * `extractScoreFromRows` / `resolveScore` below are byte-faithful ports of
- * the same-named exports in automation/claude-analyst.js — DO NOT edit one
+ * the same-named exports in automation/claude-analyst.ts — DO NOT edit one
  * without the other. `web/lib/__tests__/parity.test.ts` already establishes
  * the pattern this repo uses for exactly this situation (a vendored copy plus
  * an automated test that fails loudly the moment the copies diverge); see
- * lib/__tests__/parity.test.js for this pair's version of that test.
+ * lib/__tests__/parity.test.mjs for this pair's version of that test.
  *
  * `resolveBeMonth` / `resolveBeYear` / `resolveBeYearFromRows` are also
  * ported (same file, same reason) — narrower in scope than the design's
@@ -32,37 +32,66 @@
  */
 "use strict"
 
-// ── Month resolution (ported from automation/claude-analyst.js) ───────────
+import type { Worksheet } from "exceljs"
+
+type Row = Record<string, unknown>
+
+interface MonthYear {
+  month: number | null
+  beYear: number | null
+}
+
+interface ExtractResult {
+  score: number | null
+  method: string
+}
+
+interface ZipSafetyResult {
+  entryCount: number
+  uncompressedBytes: number
+}
+
+interface ParsedWorkbook {
+  rows: Row[]
+  sheetName: string
+  sheetCount: number
+  matched: boolean
+  singleSheet: boolean
+}
+
+type CodedError = Error & { code: string }
+
+// ── Month resolution (ported from automation/claude-analyst.ts) ───────────
 
 /**
  * Extract and convert any year expression to a 4-digit BE year. Mirrors
- * automation/claude-analyst.js's resolveBeYear exactly.
+ * automation/claude-analyst.ts's resolveBeYear exactly.
  */
-function resolveBeYear(filename, subject, body, emailDate = null) {
+function resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null, emailDate: string | null = null): number | null {
   const all = [subject ?? "", body ?? "", filename ?? ""]
   const noBody = [subject ?? "", filename ?? ""]
 
   const tier1 = all
     .map((t) => t.match(/(?<!\d)(25\d{2})(?!\d)/))
-    .filter(Boolean)
+    .filter((m): m is RegExpMatchArray => Boolean(m))
     .map((m) => parseInt(m[1], 10))
   if (tier1.length) return Math.max(...tier1)
 
   const tier2 = all
     .map((t) => t.match(/(?<!\d)(20\d{2})(?!\d)/))
-    .filter(Boolean)
+    .filter((m): m is RegExpMatchArray => Boolean(m))
     .map((m) => parseInt(m[1], 10) + 543)
   if (tier2.length) return Math.max(...tier2)
 
   const tier3 = all
     .map((t) => t.match(/(?<!\d)(4[3-9]|[5-9]\d)(?!\d)/))
-    .filter(Boolean)
+    .filter((m): m is RegExpMatchArray => Boolean(m))
     .map((m) => 2500 + parseInt(m[1], 10))
   if (tier3.length) return Math.max(...tier3)
 
   const tier4 = noBody
     .map((t) => t.match(/(?<!\d)([0-3]\d|4[0-2])(?!\d)/))
-    .filter(Boolean)
+    .filter((m): m is RegExpMatchArray => Boolean(m))
     .map((m) => 2000 + parseInt(m[1], 10) + 543)
   if (tier4.length) return Math.max(...tier4)
 
@@ -74,8 +103,8 @@ function resolveBeYear(filename, subject, body, emailDate = null) {
   return null
 }
 
-/** Mirrors automation/claude-analyst.js's resolveBeYearFromRows exactly. */
-function resolveBeYearFromRows(rows) {
+/** Mirrors automation/claude-analyst.ts's resolveBeYearFromRows exactly. */
+function resolveBeYearFromRows(rows: Row[]): number | null {
   const beYearRe = /(?<!\d)(25\d{2})(?!\d)/
   const ceYearRe = /(?<!\d)(20\d{2})(?!\d)/
   for (const row of rows.slice(0, 15)) {
@@ -91,8 +120,8 @@ function resolveBeYearFromRows(rows) {
   return null
 }
 
-/** Mirrors automation/claude-analyst.js's MONTH_TOKEN_MAP exactly. */
-const MONTH_TOKEN_MAP = [
+/** Mirrors automation/claude-analyst.ts's MONTH_TOKEN_MAP exactly. */
+const MONTH_TOKEN_MAP: [string, number][] = [
   ["มกราคม",1],["January",1],["Jan",1],["ม.ค",1],["มกรา",1],["มกร",1],["มค",1],
   ["กุมภาพันธ์",2],["February",2],["Feb",2],["ก.พ",2],["กุมภา",2],["กุมภ",2],["กพ",2],
   ["มีนาคม",3],["March",3],["Mar",3],["มี.ค",3],["มีนา",3],["มีน",3],["มีค",3],
@@ -111,8 +140,8 @@ const MONTH_TOKEN_MAP = [
   ["ธันวาคม",12],["December",12],["Dec",12],["ธ.ค",12],["ธันวา",12],["ธันว",12],["ธค",12],
 ]
 
-/** Mirrors automation/claude-analyst.js's resolveBeMonth exactly. */
-function resolveBeMonth(filename, subject, body) {
+/** Mirrors automation/claude-analyst.ts's resolveBeMonth exactly. */
+function resolveBeMonth(filename?: string | null, subject?: string | null, body?: string | null): number | null {
   const sources = [subject ?? "", body ?? "", filename ?? ""]
   for (const t of sources) {
     for (const [token, mo] of MONTH_TOKEN_MAP) {
@@ -135,10 +164,10 @@ function resolveBeMonth(filename, subject, body) {
 }
 
 /**
- * Mirrors automation/claude-analyst.js's monthFromCellText exactly — see
+ * Mirrors automation/claude-analyst.ts's monthFromCellText exactly — see
  * there for why cell text needs a stricter matcher than resolveBeMonth.
  */
-function monthFromCellText(text) {
+function monthFromCellText(text: unknown): number | null {
   const s = String(text ?? "")
   for (const [token, mo] of MONTH_TOKEN_MAP) {
     if (/^[A-Za-z]+$/.test(token)) {
@@ -158,16 +187,16 @@ function monthFromCellText(text) {
   return null
 }
 
-/** Mirrors automation/claude-analyst.js's monthYearFromText exactly. */
-function monthYearFromText(text) {
+/** Mirrors automation/claude-analyst.ts's monthYearFromText exactly. */
+function monthYearFromText(text: unknown): MonthYear {
   const s = String(text ?? "")
   const month = monthFromCellText(s)
   if (!month) return { month: null, beYear: null }
   return { month, beYear: resolveBeYear("", "", s) }
 }
 
-/** Mirrors automation/claude-analyst.js's monthYearFromRows exactly. */
-function monthYearFromRows(rows) {
+/** Mirrors automation/claude-analyst.ts's monthYearFromRows exactly. */
+function monthYearFromRows(rows: Row[]): MonthYear {
   for (const row of rows.slice(0, 15)) {
     for (const val of Object.values(row)) {
       if (val === null || val === undefined) continue
@@ -178,15 +207,15 @@ function monthYearFromRows(rows) {
   return { month: null, beYear: null }
 }
 
-function resolveBeMonthFromRows(rows) {
+function resolveBeMonthFromRows(rows: Row[]): number | null {
   return monthYearFromRows(rows).month
 }
 
 /**
- * Mirrors automation/claude-analyst.js's sheetMatchScore exactly — see there
+ * Mirrors automation/claude-analyst.ts's sheetMatchScore exactly — see there
  * for what each tier means and why a contradicting sheet scores 0.
  */
-function sheetMatchScore(ws, rows, targetMonth, targetYear) {
+function sheetMatchScore(ws: Pick<Worksheet, "name">, rows: Row[], targetMonth: number | null, targetYear: number | null): number {
   const fromName = monthYearFromText(ws.name)
   if (fromName.month) {
     if (fromName.month !== targetMonth) return 0
@@ -200,29 +229,29 @@ function sheetMatchScore(ws, rows, targetMonth, targetYear) {
 }
 
 
-// ── Score extraction (ported from automation/claude-analyst.js) ───────────
+// ── Score extraction (ported from automation/claude-analyst.ts) ───────────
 
-const GRAND_TOTAL_LABELS = [
+const GRAND_TOTAL_LABELS: string[] = [
   "รวมแต้มทั้งหมด", "รวมคะแนนทั้งหมด", "รวมทั้งสิ้น", "ยอดรวมทั้งหมด",
   "รวมทั้งหมด", "คะแนนรวมทั้งหมด",
 ]
 
-const SUBTOTAL_LABELS = [
+const SUBTOTAL_LABELS: string[] = [
   "รวมคะแนน", "รวมแต้ม", "คะแนนรวม", "ผลรวม", "รวม",
 ]
 
-const TOTAL_LABELS = [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS]
+const TOTAL_LABELS: string[] = [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS]
 
-const stripSpace = (s) => s.replace(/\s+/g, "")
-const includesLabel = (text, label) => stripSpace(text).includes(stripSpace(label))
+const stripSpace = (s: string): string => s.replace(/\s+/g, "")
+const includesLabel = (text: string, label: string): boolean => stripSpace(text).includes(stripSpace(label))
 
-function isYearLike(n) {
+function isYearLike(n: number): boolean {
   if (n >= 1900 && n <= 2099) return true
   if (n >= 2400 && n <= 2699 && Number.isInteger(n)) return true
   return false
 }
 
-function numsFromText(val, skipYearFilter = false) {
+function numsFromText(val: unknown, skipYearFilter = false): number[] {
   const s = String(val ?? "").replace(/,/g, "")
   return [...s.matchAll(/\d+(?:\.\d+)?/g)]
     .map((m) => parseFloat(m[0]))
@@ -233,8 +262,8 @@ const SUMMARY_LABEL = "(?:รวม|ผลรวม|คะแนนรวม|ย
 const SUMMARY_WITH_SEP = new RegExp(`${SUMMARY_LABEL}[^=:\\d]*[=:]\\s*([\\d,]+(?:\\.\\d+)?)`, "g")
 const SUMMARY_BARE = new RegExp(`^${SUMMARY_LABEL}[^\\d]*?\\s+([\\d,]+(?:\\.\\d+)?)$`)
 
-function summaryTextCandidates(rows) {
-  const results = []
+function summaryTextCandidates(rows: Row[]): number[] {
+  const results: number[] = []
   for (const row of rows) {
     for (const val of Object.values(row)) {
       if (typeof val !== "string") continue
@@ -258,7 +287,7 @@ function summaryTextCandidates(rows) {
   return results
 }
 
-function toNum(val) {
+function toNum(val: unknown): number {
   if (val === null || val === undefined || val === "") return NaN
   if (typeof val === "number") return val
   if (typeof val === "boolean") return NaN
@@ -267,8 +296,8 @@ function toNum(val) {
   return parseFloat(s.replace(/,/g, ""))
 }
 
-function collectCandidates(rows, skipYearFilter = false) {
-  const results = []
+function collectCandidates(rows: Row[], skipYearFilter = false): number[] {
+  const results: number[] = []
   for (const row of rows) {
     for (const val of Object.values(row)) {
       const n = toNum(val)
@@ -280,9 +309,9 @@ function collectCandidates(rows, skipYearFilter = false) {
   return results
 }
 
-const SCORE_COLUMN_LABELS = ["รวมแต้ม", "รวมคะแนน", "คะแนนรวม", "แต้มรวม"]
+const SCORE_COLUMN_LABELS: string[] = ["รวมแต้ม", "รวมคะแนน", "คะแนนรวม", "แต้มรวม"]
 
-function findScoreColumn(rows) {
+function findScoreColumn(rows: Row[]): string | null {
   for (const row of rows) {
     const entries = Object.entries(row)
       .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "")
@@ -297,21 +326,21 @@ function findScoreColumn(rows) {
   return null
 }
 
-function declaredScore(row, scoreCol) {
+function declaredScore(row: Row, scoreCol: string | null): number {
   if (!scoreCol) return NaN
   const n = toNum(row[scoreCol])
   return !isNaN(n) && n > 0 ? n : NaN
 }
 
-/** Byte-faithful port of automation/claude-analyst.js's extractScoreFromRows. */
-function extractScoreFromRows(rows) {
+/** Byte-faithful port of automation/claude-analyst.ts's extractScoreFromRows. */
+function extractScoreFromRows(rows: Row[]): ExtractResult {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { score: null, method: "no rows" }
   }
 
   const scoreCol = findScoreColumn(rows)
 
-  const grandCandidates = []
+  const grandCandidates: number[] = []
   for (const row of rows) {
     const allValues = Object.values(row).map((v) => String(v ?? ""))
     const labelCells = allValues.filter((s) =>
@@ -338,7 +367,7 @@ function extractScoreFromRows(rows) {
     return { score: Math.max(...summaryCandidates), method: "free-text summary line" }
   }
 
-  const subCandidates = []
+  const subCandidates: number[] = []
   for (const row of rows) {
     const firstThree = ["col_1", "col_2", "col_3"].map((k) => String(row[k] ?? ""))
     const hasLabel = firstThree.some((s) =>
@@ -383,7 +412,7 @@ function extractScoreFromRows(rows) {
     const weightRaw = row["col_3"]
     if (weightRaw === null || weightRaw === undefined) continue
 
-    let weight
+    let weight: number
     if (typeof weightRaw === "number") {
       weight = weightRaw
     } else {
@@ -410,7 +439,7 @@ function extractScoreFromRows(rows) {
 
 const DAY_COL_RE = /^D([1-9]|[12]\d|3[01])$/
 
-function findHeaderRow(rows) {
+function findHeaderRow(rows: Row[]): Row | null {
   for (const row of rows) {
     const vals = Object.values(row).map((v) => String(v ?? "").trim())
     if (vals.includes("แต้ม") && vals.some((v) => DAY_COL_RE.test(v))) return row
@@ -418,7 +447,7 @@ function findHeaderRow(rows) {
   return null
 }
 
-function reconstructFromDailyCells(rows) {
+function reconstructFromDailyCells(rows: Row[]): number | null {
   const header = findHeaderRow(rows)
   if (!header) return null
 
@@ -444,8 +473,8 @@ function reconstructFromDailyCells(rows) {
   return total > 0 ? total : null
 }
 
-/** Byte-faithful port of automation/claude-analyst.js's resolveScore. */
-function resolveScore(rows) {
+/** Byte-faithful port of automation/claude-analyst.ts's resolveScore. */
+function resolveScore(rows: Row[]): ExtractResult {
   const { score: jsScore, method: jsMethod } = extractScoreFromRows(rows)
 
   const grandRowEmpty = rows.some((row) => {
@@ -460,14 +489,14 @@ function resolveScore(rows) {
 
   if (!grandRowEmpty) return { score: jsScore, method: jsMethod }
 
-  const isSubtotalRow = (row) => {
+  const isSubtotalRow = (row: Row): boolean => {
     const firstThree = ["col_1", "col_2", "col_3"].map((k) => String(row[k] ?? ""))
     return firstThree.some((s) => SUBTOTAL_LABELS.some((lbl) => includesLabel(s, lbl)))
   }
-  const isGrandTotalRow = (row) =>
+  const isGrandTotalRow = (row: Row): boolean =>
     Object.values(row).some((v) => GRAND_TOTAL_LABELS.some((lbl) => includesLabel(String(v ?? ""), lbl)))
 
-  const rowNums = (row) =>
+  const rowNums = (row: Row): number[] =>
     Object.values(row).map(toNum).filter((n) => !isNaN(n) && n > 0 && !isYearLike(n))
 
   const populated = rows.filter((r) => isSubtotalRow(r) && rowNums(r).length > 0)
@@ -513,12 +542,12 @@ function resolveScore(rows) {
 // the case where the workbook itself states the number. Every other method
 // string (sub-total sums, "largest in sheet", the uncached-formula fallback
 // tiers) is low-confidence and must go through the queued/Claude path.
-const HIGH_CONFIDENCE_METHODS = new Set([
+const HIGH_CONFIDENCE_METHODS: Set<string> = new Set([
   "grand-total label row (all columns)",
   "free-text summary line",
 ])
 
-function isHighConfidence(method) {
+function isHighConfidence(method: string): boolean {
   return HIGH_CONFIDENCE_METHODS.has(method)
 }
 
@@ -539,7 +568,7 @@ const ZIP_CENTRAL_DIR_SIGNATURE = 0x02014b50
 const DEFAULT_MAX_ZIP_ENTRIES = 200
 const DEFAULT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 
-function findEndOfCentralDirectory(buf) {
+function findEndOfCentralDirectory(buf: Buffer): number {
   // EOCD is 22 bytes plus an optional comment of up to 65535 bytes — scan
   // backward from the end for the signature rather than assuming a fixed
   // offset.
@@ -554,13 +583,13 @@ function findEndOfCentralDirectory(buf) {
  * Throws with a `.code` on any violation; returns `{ entryCount,
  * uncompressedBytes }` when the archive is within bounds.
  */
-function checkZipSafety(buf, opts = {}) {
+function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompressedBytes?: number } = {}): ZipSafetyResult {
   const maxEntries = opts.maxEntries || DEFAULT_MAX_ZIP_ENTRIES
   const maxUncompressed = opts.maxUncompressedBytes || DEFAULT_MAX_UNCOMPRESSED_BYTES
 
   const eocdPos = findEndOfCentralDirectory(buf)
   if (eocdPos === -1) {
-    const err = new Error("not a valid zip/xlsx archive")
+    const err = new Error("not a valid zip/xlsx archive") as CodedError
     err.code = "NOT_A_ZIP"
     throw err
   }
@@ -570,7 +599,7 @@ function checkZipSafety(buf, opts = {}) {
   const cdOffset = buf.readUInt32LE(eocdPos + 16)
 
   if (totalEntries > maxEntries) {
-    const err = new Error(`too many zip entries: ${totalEntries} > ${maxEntries}`)
+    const err = new Error(`too many zip entries: ${totalEntries} > ${maxEntries}`) as CodedError
     err.code = "ZIP_TOO_MANY_ENTRIES"
     throw err
   }
@@ -593,14 +622,14 @@ function checkZipSafety(buf, opts = {}) {
     // A genuine xlsx this small (bucket cap 5 MB) never needs ZIP64 — treat
     // it as suspicious rather than parse the extra field.
     if (uncompressedSize === 0xffffffff) {
-      const err = new Error("zip64 entries are not supported")
+      const err = new Error("zip64 entries are not supported") as CodedError
       err.code = "ZIP64_UNSUPPORTED"
       throw err
     }
 
     uncompressedTotal += uncompressedSize
     if (uncompressedTotal > maxUncompressed) {
-      const err = new Error(`uncompressed size exceeds ${maxUncompressed} bytes`)
+      const err = new Error(`uncompressed size exceeds ${maxUncompressed} bytes`) as CodedError
       err.code = "ZIP_TOO_LARGE"
       throw err
     }
@@ -610,7 +639,7 @@ function checkZipSafety(buf, opts = {}) {
   }
 
   if (seen !== totalEntries) {
-    const err = new Error("zip central directory is malformed")
+    const err = new Error("zip central directory is malformed") as CodedError
     err.code = "ZIP_MALFORMED"
     throw err
   }
@@ -620,7 +649,7 @@ function checkZipSafety(buf, opts = {}) {
 
 // ── Workbook -> rows (ExcelJS), with a parse timeout ───────────────────────
 
-function nonNullCount(ws) {
+function nonNullCount(ws: Worksheet): number {
   let count = 0
   ws.eachRow((row) => {
     row.eachCell({ includeEmpty: false }, (cell) => {
@@ -630,14 +659,14 @@ function nonNullCount(ws) {
   return count
 }
 
-function rowsFromWorksheet(ws) {
-  const rows = []
+function rowsFromWorksheet(ws: Worksheet): Row[] {
+  const rows: Row[] = []
   ws.eachRow((row) => {
     if (!row.hasValues) return
-    const obj = {}
+    const obj: Row = {}
     row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       const key = "col_" + colNumber
-      const val = cell.value
+      const val = cell.value as any
       const isMasterFormula = val !== null && typeof val === "object" && "formula" in val
       const isCloneFormula = val !== null && typeof val === "object" && "sharedFormula" in val && !("formula" in val)
       if (isMasterFormula || isCloneFormula) {
@@ -655,7 +684,7 @@ function rowsFromWorksheet(ws) {
       }
       if (val === null || val === undefined) obj[key] = null
       else if (val instanceof Date) obj[key] = val.toISOString()
-      else if (typeof val === "object" && Array.isArray(val.richText)) obj[key] = val.richText.map((r) => r.text || "").join("")
+      else if (typeof val === "object" && Array.isArray(val.richText)) obj[key] = val.richText.map((r: any) => r.text || "").join("")
       else if (typeof val === "object" && "text" in val) obj[key] = String(val.text || "")
       else obj[key] = val
     })
@@ -680,12 +709,12 @@ function rowsFromWorksheet(ws) {
  * with more than one non-blank sheet is unaffected: sheet content (tab name,
  * then title row) still picks which sheet to use, exactly as before.
  */
-async function parseWorkbookRows(buffer, opts = {}) {
+async function parseWorkbookRows(buffer: Buffer, opts: { targetMonth?: number | null; targetYear?: number | null; filename?: string } = {}): Promise<ParsedWorkbook> {
   const ExcelJS = require("exceljs")
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(buffer)
 
-  const sheets = workbook.worksheets
+  const sheets: Worksheet[] = workbook.worksheets
   if (sheets.length === 0) throw new Error("Workbook has no sheets.")
 
   let idx = 0
@@ -694,7 +723,7 @@ async function parseWorkbookRows(buffer, opts = {}) {
   const targetMonth = opts.targetMonth || null
   const targetYear = opts.targetYear || null
 
-  const nonEmptyIdx = []
+  const nonEmptyIdx: number[] = []
   sheets.forEach((ws, i) => { if (nonNullCount(ws) >= 3) nonEmptyIdx.push(i) })
   const singleSheet = nonEmptyIdx.length === 1
 
@@ -736,14 +765,14 @@ async function parseWorkbookRows(buffer, opts = {}) {
  * work). On timeout, rejects with `err.code === "PARSE_TIMEOUT"` so the
  * caller can fail closed to the queue rather than hold the request open.
  */
-async function parseWorkbookRowsSafely(buffer, opts = {}) {
+async function parseWorkbookRowsSafely(buffer: Buffer, opts: { targetMonth?: number | null; targetYear?: number | null; filename?: string; timeoutMs?: number; maxEntries?: number; maxUncompressedBytes?: number } = {}): Promise<ParsedWorkbook> {
   checkZipSafety(buffer, opts)
 
   const timeoutMs = opts.timeoutMs || 7000
-  let timer
-  const timeout = new Promise((_, reject) => {
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const err = new Error(`workbook parse exceeded ${timeoutMs}ms`)
+      const err = new Error(`workbook parse exceeded ${timeoutMs}ms`) as CodedError
       err.code = "PARSE_TIMEOUT"
       reject(err)
     }, timeoutMs)
@@ -752,11 +781,11 @@ async function parseWorkbookRowsSafely(buffer, opts = {}) {
   try {
     return await Promise.race([parseWorkbookRows(buffer, opts), timeout])
   } finally {
-    clearTimeout(timer)
+    clearTimeout(timer!)
   }
 }
 
-module.exports = {
+(module as NodeModule).exports = {
   resolveBeYear,
   resolveBeYearFromRows,
   resolveBeMonth,
