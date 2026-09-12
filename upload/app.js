@@ -37,12 +37,31 @@
     var esc = P4P.escHtml;
     // P4P.receipt comes from a SEPARATE <script src="/lib/line-receipt-flex.js">
     // tag (see upload/index.html) — a request that can fail (flaky hospital
-    // wifi) independently of this file's own script tag loading fine. When it
-    // does, every call below degrades to a plain-text/generic equivalent
-    // instead of throwing "receipt is undefined" and blanking the whole result
-    // screen — the score is already saved server-side by this point (or the
-    // rejection reason is already known); only the cosmetic chat-receipt Flex
-    // bubble and the exact grouped-thousands score formatting are lost.
+    // wifi, or a WebView replaying a poisoned cache entry for that URL — see
+    // that file's own header comment) independently of this file's own script
+    // tag loading fine. When it does, every call below degrades to a
+    // GENERIC bubble instead of throwing "receipt is undefined" and blanking
+    // the whole result screen — the score is already saved server-side by this
+    // point (or the rejection reason is already known); only the exact layout,
+    // month-accent colour and grouped-thousands score formatting are lost. The
+    // degraded bubble is still `type: "flex"`: a physician who never sees a
+    // Flex receipt on a successful submission has no visual cue the upload
+    // actually landed, so the fallback must not drop back to a bare text
+    // message.
+    function fallbackFlex(altText, bodyText) {
+        return {
+            type: "flex",
+            altText: altText,
+            contents: {
+                type: "bubble",
+                body: {
+                    type: "box",
+                    layout: "vertical",
+                    contents: [{ type: "text", text: bodyText, wrap: true, weight: "bold", size: "md" }],
+                },
+            },
+        };
+    }
     var receipt = P4P.receipt || {
         THAI_MONTHS_SHORT: [],
         displayMonth: function (monthKey) { return P4P.monthKeyDisplay(monthKey); },
@@ -53,13 +72,16 @@
         formatSubmittedAt: function (iso) { return iso; },
         errorText: function () { return "ระบบไม่สามารถอ่านไฟล์ของท่านได้ กรุณาตรวจสอบไฟล์แล้วส่งใหม่"; },
         buildScoreReceipt: function (args) {
-            return { type: "text", text: "บันทึกคะแนน P4P " + P4P.monthKeyDisplay(args.monthKey) + " แล้ว" };
+            var text = "บันทึกคะแนน P4P " + P4P.monthKeyDisplay(args.monthKey) + " แล้ว";
+            return fallbackFlex(text, "✅ " + text);
         },
-        buildPendingBubble: function () {
-            return { type: "text", text: "ระบบกำลังตรวจสอบไฟล์ของท่าน" };
+        buildPendingBubble: function (args) {
+            var text = "ระบบกำลังตรวจสอบไฟล์ P4P " + P4P.monthKeyDisplay(args.monthKey);
+            return fallbackFlex(text, "⏳ " + text);
         },
-        buildFailureBubble: function () {
-            return { type: "text", text: "ส่งไฟล์ P4P ไม่สำเร็จ" };
+        buildFailureBubble: function (args) {
+            var text = "ส่งไฟล์ P4P " + P4P.monthKeyDisplay(args.monthKey) + " ไม่สำเร็จ";
+            return fallbackFlex(text, "⚠️ " + text);
         },
     };
     var BUCKET = "p4p-uploads";
