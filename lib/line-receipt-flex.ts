@@ -3,7 +3,15 @@
  * tsconfig.browser.json). Edit this file, not the .js twin: main.js
  * `require()`s that compiled file directly, and upload/index.html serves it
  * byte-for-byte via express.static() — it is a build artifact and must not
- * be hand-edited. */
+ * be hand-edited.
+ *
+ * This comment line exists to force `stampAssets()`'s content hash to change
+ * (2026-09): the URL for this file hadn't changed since the TS-conversion
+ * deploy, and a physician's LINE WebView kept replaying an "undefined" P4P.receipt
+ * on every retry — the same cached-forever-regardless-of-headers failure mode
+ * main.ts's own comment above `stampAssets()` documents for ranking/app.js's
+ * 2026-08 incident. A pure comment change is enough: the fix IS the new hash,
+ * not anything in the logic below. */
 /**
  * lib/line-receipt-flex.js
  *
