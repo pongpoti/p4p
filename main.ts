@@ -805,7 +805,7 @@ function serviceHeaders(extra?: Record<string, string>): Record<string, string> 
   }, extra || {})
 }
 
-// The 10th of the month AFTER month_key, 23:59:59 Asia/Bangkok — the same
+// The 5th of the month AFTER month_key, 23:59:59 Asia/Bangkok — the same
 // instant web/lib/months.ts's deadlineISO() and enqueue_p4p_upload()'s own
 // SQL compute. Punctuality is measured against `received_at` (when the
 // physician handed the file over), never against processing time (§9).
@@ -814,7 +814,7 @@ function monthDeadlineMs(monthKey: string): number {
   if (!beYear || !month) return NaN
   // month is 1-based, so passing it as a 0-based index already means "the
   // following month"; December rolls into the next year on its own.
-  return Date.UTC(beYear - 543, month, 10, 16, 59, 59)
+  return Date.UTC(beYear - 543, month, 5, 16, 59, 59)
 }
 function isLateUpload(monthKey: string, receivedAt: string): boolean {
   const deadline = monthDeadlineMs(monthKey)

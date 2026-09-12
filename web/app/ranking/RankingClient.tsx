@@ -131,7 +131,7 @@ export default function RankingClient({
             แพทย์ที่ส่ง P4P ตามกำหนด
           </Typography>
           <Typography sx={{ fontSize: "0.75rem", color: "var(--color-ink-muted)" }}>
-            (ส่งภายในวันที่ 10 ของเดือนถัดไป)
+            (ส่งภายในวันที่ 5 ของเดือนถัดไป)
           </Typography>
 
           <Tabs

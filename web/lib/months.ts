@@ -165,7 +165,7 @@ export function rankingMonths(now: Date = new Date(), max = 24): RankingMonth[] 
 }
 
 /**
- * Submission deadline for a month: the 10th of the FOLLOWING month, 23:59:59
+ * Submission deadline for a month: the 5th of the FOLLOWING month, 23:59:59
  * Bangkok time. The ranking page counts only submissions at or before this.
  */
 export function deadlineISO(key: string): string {
@@ -174,7 +174,7 @@ export function deadlineISO(key: string): string {
   const ceYear = toGregorian(parsed.beYear)
   const nextMonth = parsed.month === 12 ? 1 : parsed.month + 1
   const nextYear = parsed.month === 12 ? ceYear + 1 : ceYear
-  return `${nextYear}-${pad2(nextMonth)}-10T23:59:59+07:00`
+  return `${nextYear}-${pad2(nextMonth)}-05T23:59:59+07:00`
 }
 
 /**

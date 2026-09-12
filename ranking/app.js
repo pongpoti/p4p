@@ -42,7 +42,7 @@
         const nextMo = mo === 12 ? 1 : mo + 1;
         const nextYear = mo === 12 ? ceYear + 1 : ceYear;
         const pad = (n) => String(n).padStart(2, "0");
-        return `${nextYear}-${pad(nextMo)}-10T23:59:59+07:00`;
+        return `${nextYear}-${pad(nextMo)}-05T23:59:59+07:00`;
     }
     function formatTime(isoStr) {
         const d = new Date(isoStr);

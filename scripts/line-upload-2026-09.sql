@@ -43,15 +43,24 @@
 --      with the real failing (email, object_path, month_key) inside a
 --      rolled-back transaction -- roster_match came back 'exact' instead of
 --      raising.
+--      UPDATE 2026-09-12: the ranking/notification cutoff moved from the
+--      10th of the following month to the 5th (product decision — the
+--      deadline is informational only, uploads are still accepted and
+--      scored at any time; only the "on time" label and the ranking's
+--      cutoff change). v_deadline's arithmetic below updated to match; this
+--      file is idempotent, so re-running it after this edit is safe.
+--
 --      Two things are still open, not closed by any of the above:
 --        1. The BE-year → deadline arithmetic (part 3, enqueue_p4p_upload)
 --           duplicates the logic in web/lib/months.ts's deadlineISO() by
---           necessity (SQL can't import a TS module) — confirmed to produce
---           the identical instant (not just a plausible one) for both of
---           that function's own documented test cases
---           (2569_04 → 2026-05-10T23:59:59+07:00, 2569_12 → 2027-01-
---           10T23:59:59+07:00, checked via a direct equality assertion, not
---           eyeballed) but not against that function's full test suite.
+--           necessity (SQL can't import a TS module) — confirmed, when the
+--           cutoff was still the 10th, to produce the identical instant (not
+--           just a plausible one) for both of that function's own documented
+--           test cases (2569_04 → 2026-05-10T23:59:59+07:00, 2569_12 →
+--           2027-01-10T23:59:59+07:00, checked via a direct equality
+--           assertion, not eyeballed) but not against that function's full
+--           test suite. Re-derived by hand for the 2026-09-12 move to the
+--           5th, not re-verified the same way.
 --        2. The name-normalisation in part 3's exact-roster-match step is a
 --           reasonable guess (trim + collapse whitespace + casefold), NOT
 --           a byte-for-byte port of automation/supabase-client.js's
@@ -379,7 +388,7 @@ begin
     v_roster_match := 'deferred';  -- automation/'s matchName() gets the next try
   end if;
 
-  -- Deadline: 10th of the month AFTER month_key, 23:59:59 Asia/Bangkok.
+  -- Deadline: 5th of the month AFTER month_key, 23:59:59 Asia/Bangkok.
   -- Mirrors web/lib/months.ts's deadlineISO() — see this file's header
   -- comment for which two cases this was checked against.
   v_ce_year  := substring(p_month_key from 1 for 4)::integer - 543;
@@ -387,7 +396,7 @@ begin
   v_deadline := timezone(
     'Asia/Bangkok',
     make_date(v_ce_year, v_month_num, 1)
-      + interval '1 month 9 days 23 hours 59 minutes 59 seconds'
+      + interval '1 month 4 days 23 hours 59 minutes 59 seconds'
   );
 
   -- Insert, with the double-tap race (§6.3's "concurrency note") handled
