@@ -48,7 +48,7 @@ function stripFences(str: string): string {
  * but never mentions the year anywhere (subject, body, filename, or sheet).
  * Returns null if no year found.
  */
-export function resolveBeYear(filename: unknown, subject: unknown, body: unknown, emailDate: unknown = null): number | null {
+export function resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null, emailDate: string | null = null): number | null {
   // Use (?<!\d) / (?!\d) instead of \b so that underscore-delimited numbers
   // in filenames like "P4P_2569_02.xlsx" are matched correctly.
   // (\b does NOT fire between _ and a digit because _ is a \w character.)
@@ -60,8 +60,8 @@ export function resolveBeYear(filename: unknown, subject: unknown, body: unknown
   // rather than the first source found — e.g. a stale year left in an email subject
   // (from a copy-pasted previous month's email) must not shadow a newer, more
   // reliable year in the filename or attachment.
-  const all    = [String(subject ?? ""), String(body ?? ""), String(filename ?? "")];
-  const noBody = [String(subject ?? ""), String(filename ?? "")];   // body excluded from short-CE scan (day numbers)
+  const all    = [subject ?? "", body ?? "", filename ?? ""];
+  const noBody = [subject ?? "", filename ?? ""];   // body excluded from short-CE scan (day numbers)
 
   // Tier 1 — full BE year 25xx (unambiguous — always wins)
   const tier1 = all
@@ -96,7 +96,7 @@ export function resolveBeYear(filename: unknown, subject: unknown, body: unknown
   // date. Submissions are near-always for the current or previous month, so
   // the year the email arrived in is a safe last resort.
   if (emailDate) {
-    const d = new Date(emailDate as string | number | Date);
+    const d = new Date(emailDate);
     if (!isNaN(d.getTime())) return d.getFullYear() + 543;
   }
 
@@ -157,8 +157,8 @@ const MONTH_TOKEN_MAP = [
  * Sources checked in order: subject → body → filename.
  * Returns null if not found.
  */
-export function resolveBeMonth(filename: unknown, subject: unknown, body: unknown): number | null {
-  const sources = [String(subject ?? ""), String(body ?? ""), String(filename ?? "")];
+export function resolveBeMonth(filename?: string | null, subject?: string | null, body?: string | null): number | null {
+  const sources = [subject ?? "", body ?? "", filename ?? ""];
   for (const t of sources) {
     for (const [token, mo] of MONTH_TOKEN_MAP) {
       // Latin tokens: require word boundary to avoid "May" inside "Maybe"
@@ -215,7 +215,7 @@ export function resolveBeMonth(filename: unknown, subject: unknown, body: unknow
  * emailDate is not consulted: it says when the mail was sent, not which
  * month it covers.
  */
-export function resolveBeYearByPriority(filename: unknown, subject: unknown, body: unknown): number | null {
+export function resolveBeYearByPriority(filename?: string | null, subject?: string | null, body?: string | null): number | null {
   return resolveBeYear("", subject, body) ?? resolveBeYear(filename ?? "", "", "");
 }
 
