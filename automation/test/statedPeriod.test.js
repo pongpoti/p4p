@@ -94,6 +94,35 @@ test("a month glued straight onto a name, with no space anywhere, still resolves
   assert.deepEqual(periodsInText("ณัฐกันย์ลิมปวิทยากุล"), []);
 });
 
+test("a forwarded mail's own \"Date:\" line is not a stated period", () => {
+  // Real forward from a recurring sender: she mailed herself from Yahoo,
+  // then forwarded that mail from Gmail three minutes later. Gmail's own
+  // "---------- Forwarded message ---------" block quotes the original
+  // headers verbatim, including "Date: ส. 12 ก.ย. 2026 11:10" — the
+  // timestamp of the quoted mail, not a second period — and reading it as
+  // one turned an unambiguous July submission into an ambiguous_period
+  // rejection.
+  const body = [
+    "---------- Forwarded message ---------",
+    "จาก: Chatdao Sutjarit <sender@example.com>",
+    "Date: ส. 12 ก.ย. 2026 11:10",
+    "Subject: p4pฉัตรดาว ก.ค.69",
+    "To: recipient@example.com <recipient@example.com>",
+  ].join("\n");
+  assert.deepEqual(periodsInText(body), [{ month: 7, beYear: null }]);
+  assert.deepEqual(
+    statedPeriods("ฉัตรดาว สุจริต ก.ค.69.xlsx", "Fwd: p4pฉัตรดาว ก.ค.69", body),
+    { periods: [{ month: 7, beYear: null }], source: "email" },
+  );
+
+  // Outlook's own forward header uses "Sent:" instead of "Date:" for the
+  // same field — same failure mode, same fix.
+  assert.deepEqual(
+    periodsInText("From: A\nSent: 12 กันยายน 2026\nSubject: p4p ก.ค. 69"),
+    [{ month: 7, beYear: null }],
+  );
+});
+
 test("the เดือน<month> compound (no space) still resolves, despite the boundary check above", () => {
   // The fix for the name collision above must not re-break this: "เดือน"
   // ("month") directly against a month name, with no space, is how subjects
