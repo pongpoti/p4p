@@ -5,11 +5,22 @@
  * Run once on 1 January each year via GitHub Actions.
  */
 
+import type { drive_v3 } from 'googleapis';
+
 require('dotenv').config();
 
-const { google } = require('googleapis');
+const { google } = require('googleapis') as typeof import('googleapis');
 
-const CONFIG = {
+interface Config {
+  google: {
+    clientId: string | undefined;
+    clientSecret: string | undefined;
+    refreshToken: string | undefined;
+  };
+  rootFolderId: string | undefined;
+}
+
+const CONFIG: Config = {
   google: {
     clientId:     process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -24,14 +35,14 @@ const THAI_MONTHS = [
   'กันยายน', 'ตุลาคม',    'พฤศจิกายน', 'ธันวาคม',
 ];
 
-function log(msg) { console.log(msg); }
+function log(msg: string): void { console.log(msg); }
 
-async function main() {
+async function main(): Promise<void> {
   if (!CONFIG.rootFolderId) throw new Error('GOOGLE_ROOT_FOLDER_ID is not set');
 
   const auth = new google.auth.OAuth2(CONFIG.google.clientId, CONFIG.google.clientSecret);
   auth.setCredentials({ refresh_token: CONFIG.google.refreshToken });
-  const drive = google.drive({ version: 'v3', auth });
+  const drive: drive_v3.Drive = google.drive({ version: 'v3', auth });
 
   const beYear = (new Date().getFullYear() + 543).toString();
   log(`[populate] Target year (BE): ${beYear}`);
@@ -43,8 +54,11 @@ async function main() {
     pageSize: 1,
   });
 
-  if (existing.data.files.length > 0) {
-    log(`[populate] Folder '${beYear}' already exists (${existing.data.files[0].id}). Nothing to do.`);
+  // files(...) was explicitly requested in `fields` above, so Drive always
+  // returns an array (possibly empty) here — the `!` just tells TS what the
+  // API guarantees; it doesn't change what runs.
+  if (existing.data.files!.length > 0) {
+    log(`[populate] Folder '${beYear}' already exists (${existing.data.files![0].id}). Nothing to do.`);
     return;
   }
 
@@ -67,7 +81,8 @@ async function main() {
       requestBody: {
         name: monthName,
         mimeType: 'application/vnd.google-apps.folder',
-        parents: [yearFolderId],
+        // `fields: 'id'` above means Drive always returns an id here.
+        parents: [yearFolderId!],
       },
       fields: 'id',
     });
@@ -77,7 +92,7 @@ async function main() {
   log('[populate] Done.');
 }
 
-main().catch(err => {
+main().catch((err: any) => {
   console.error('[populate] ERROR:', err.message || err);
   process.exit(1);
 });

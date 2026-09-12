@@ -45,7 +45,7 @@ jobs:
           # report.js while this repo was public; the job now refuses to run
           # without it rather than defaulting somewhere wrong.
           P4P_REPORT_FOLDER_ID:  ${{ secrets.P4P_REPORT_FOLDER_ID }}
-        run: node report.js
+        run: npx tsx report.ts
 
       # Report-log artifact upload REMOVED — see .github/workflows/p4p-cron.yml
       # for the reasoning. These logs carry physician names and this repo is

@@ -1,6 +1,5 @@
-'use strict';
 /**
- * process/eligible-list.js — Monthly P4P-eligible physician list (PDF)
+ * process/eligible-list.ts — Monthly P4P-eligible physician list (PDF)
  *
  * Runs on the 1st of every month. Reads that month's just-provisioned
  * roster table (public."YYYY_MM", BE year) from Supabase, groups the
@@ -12,18 +11,30 @@
  * Output: eligible_<BEyear><MM>.pdf → uploaded to ELIGIBLE_FOLDER_ID.
  */
 
-const { createClient } = require('@supabase/supabase-js');
-const fs               = require('fs');
-const path             = require('path');
-const { Readable }     = require('stream');
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { drive_v3 } from 'googleapis';
+
+const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js');
+const fs               = require('fs') as typeof import('fs');
+const path             = require('path') as typeof import('path');
+const { Readable }     = require('stream') as typeof import('stream');
 const {
   log, withRetry, createDriveClient, driveListAll,
-} = require('./lib');
+} = require('./lib') as typeof import('./lib');
 
 // ═══════════════════════════════════════════════════════════════════
 //  Config
 // ═══════════════════════════════════════════════════════════════════
-const CONFIG = {
+interface Config {
+  supabase: {
+    url: string | undefined;
+    key: string | undefined;
+  };
+  folderId: string | undefined;
+  fontDir: string;
+}
+
+const CONFIG: Config = {
   supabase: {
     url: process.env.SUPABASE_URL,
     key: process.env.SUPABASE_KEY,
@@ -42,7 +53,7 @@ if (!CONFIG.folderId) {
   process.exit(1);
 }
 
-const THAI_MONTHS = {
+const THAI_MONTHS: Record<number, string> = {
   1: 'มกราคม',   2: 'กุมภาพันธ์', 3: 'มีนาคม',
   4: 'เมษายน',   5: 'พฤษภาคม',   6: 'มิถุนายน',
   7: 'กรกฎาคม',  8: 'สิงหาคม',   9: 'กันยายน',
@@ -50,7 +61,7 @@ const THAI_MONTHS = {
 };
 
 /** Escape a value before interpolating it into the PDF-render HTML template. */
-function escHtml(s) {
+function escHtml(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -60,18 +71,48 @@ function escHtml(s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Data shapes
+// ═══════════════════════════════════════════════════════════════════
+
+/** A row from the month's roster table (public."YYYY_MM"). Fetched via
+ *  select('*') because the column set has drifted across months in the
+ *  past — only the fields this script actually reads are named below. */
+interface RosterRow {
+  firstname?: string | null;
+  lastname?: string | null;
+  department?: string | null;
+  prefix?: string | null;
+  position?: string | null;
+  type?: string | null;
+  rank?: string | null;
+  [key: string]: unknown;
+}
+
+interface TargetMonth {
+  key: string;
+  beYear: number;
+  month: number;
+  fileName: string;
+}
+
+interface DeptGroup {
+  dept: string;
+  rows: RosterRow[];
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Step 1 — target month key: the Bangkok "current" month (the one just
 //  provisioned by provision-month.yml the day before this runs).
 // ═══════════════════════════════════════════════════════════════════
-function getTargetMonth() {
+function getTargetMonth(): TargetMonth {
   // Manual override (workflow_dispatch "target_month" input) — force a
   // specific month instead of "whatever month it is right now in Bangkok".
   // Format: "<BE year>-<month>", e.g. "2569-07" for July 2026 CE.
   const override = process.env.TARGET_MONTH?.trim();
   if (override) {
     const m = /^(\d{4})-(\d{1,2})$/.exec(override);
-    const beYear = m && Number(m[1]);
-    const month  = m && Number(m[2]);
+    const beYear = m ? Number(m[1]) : NaN;
+    const month  = m ? Number(m[2]) : NaN;
     if (!m || month < 1 || month > 12) {
       throw new Error(`Invalid TARGET_MONTH "${override}" — expected "<BE year>-<month>", e.g. "2569-07".`);
     }
@@ -87,7 +128,7 @@ function getTargetMonth() {
 }
 
 /** Bangkok "generated at" timestamp, e.g. "1 ส.ค. 2568, 09.00 น." */
-function formatRunTime() {
+function formatRunTime(): string {
   const now    = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const day    = now.getUTCDate();
   const month  = now.getUTCMonth() + 1;
@@ -100,9 +141,9 @@ function formatRunTime() {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 2 — fetch the month's roster from Supabase
 // ═══════════════════════════════════════════════════════════════════
-async function fetchRoster(supabase, monthKey) {
+async function fetchRoster(supabase: SupabaseClient, monthKey: string): Promise<RosterRow[]> {
   // select('*') rather than naming columns: roster table shape has drifted
-  // across months in the past (see process/process.js's sbVal() fallback
+  // across months in the past (see process/process.ts's sbVal() fallback
   // pattern), and an explicit select() 400s hard on a missing column where
   // '*' just omits it — fields are read with a '' fallback below regardless.
   const { data, error } = await supabase.from(monthKey).select('*');
@@ -117,22 +158,22 @@ async function fetchRoster(supabase, monthKey) {
 //  Step 3 — group by department, Thai-sorted (ascending, INTERN last),
 //  rows within each department sorted by name (Thai collation).
 // ═══════════════════════════════════════════════════════════════════
-function sortDepartments(depts) {
+function sortDepartments(depts: string[]): string[] {
   const nonIntern = [...depts].filter(d => d !== 'INTERN').sort((a, b) => a.localeCompare(b, 'th'));
   return depts.includes('INTERN') ? [...nonIntern, 'INTERN'] : nonIntern;
 }
 
-function groupByDepartment(rows) {
-  const byDept = new Map();
+function groupByDepartment(rows: RosterRow[]): DeptGroup[] {
+  const byDept = new Map<string, RosterRow[]>();
   for (const r of rows) {
     const dept = (r.department ?? '').trim() || 'ไม่ระบุ';
     if (!byDept.has(dept)) byDept.set(dept, []);
-    byDept.get(dept).push(r);
+    byDept.get(dept)!.push(r);
   }
 
   return sortDepartments([...byDept.keys()]).map(dept => ({
     dept,
-    rows: byDept.get(dept).sort((a, b) => {
+    rows: byDept.get(dept)!.sort((a, b) => {
       const nameA = `${a.firstname ?? ''} ${a.lastname ?? ''}`.trim();
       const nameB = `${b.firstname ?? ''} ${b.lastname ?? ''}`.trim();
       return nameA.localeCompare(nameB, 'th');
@@ -144,7 +185,7 @@ function groupByDepartment(rows) {
 //  Step 4 — HTML template (Thai fonts embedded as base64 — no network
 //  dependency, no garbled/missing glyphs on the CI runner).
 // ═══════════════════════════════════════════════════════════════════
-function loadFontFaceCss() {
+function loadFontFaceCss(): string {
   const regular = fs.readFileSync(path.join(CONFIG.fontDir, 'Sarabun-Regular.woff2')).toString('base64');
   const bold    = fs.readFileSync(path.join(CONFIG.fontDir, 'Sarabun-Bold.woff2')).toString('base64');
   return `
@@ -161,7 +202,12 @@ function loadFontFaceCss() {
   `;
 }
 
-function buildCoverHtml({ beYear, month }, totalCount, deptCount, runTime) {
+function buildCoverHtml(
+  { beYear, month }: Pick<TargetMonth, 'beYear' | 'month'>,
+  totalCount: number,
+  deptCount: number,
+  runTime: string
+): string {
   return `
     <section class="cover">
       <div class="cover-hospital">โรงพยาบาลสมุทรสาคร</div>
@@ -175,7 +221,7 @@ function buildCoverHtml({ beYear, month }, totalCount, deptCount, runTime) {
     </section>`;
 }
 
-function buildDeptSectionHtml({ dept, rows }) {
+function buildDeptSectionHtml({ dept, rows }: DeptGroup): string {
   const displayDept = dept === 'INTERN' ? 'แพทย์เพิ่มพูนทักษะ (INTERN)' : dept;
 
   const bodyRows = rows.length === 0
@@ -214,7 +260,7 @@ function buildDeptSectionHtml({ dept, rows }) {
     </section>`;
 }
 
-function buildHtml(target, groups, runTime) {
+function buildHtml(target: TargetMonth, groups: DeptGroup[], runTime: string): string {
   const totalCount = groups.reduce((sum, g) => sum + g.rows.length, 0);
   const cover       = buildCoverHtml(target, totalCount, groups.length, runTime);
   const deptSections = groups.map(buildDeptSectionHtml).join('');
@@ -319,13 +365,16 @@ function buildHtml(target, groups, runTime) {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 5 — render to PDF via Puppeteer
 // ═══════════════════════════════════════════════════════════════════
-async function renderPdf(html) {
-  const puppeteer = require('puppeteer');
+async function renderPdf(html: string): Promise<Uint8Array> {
+  const puppeteer = require('puppeteer') as typeof import('puppeteer');
   const browser   = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
   try {
     const page = await browser.newPage();
+    // @ts-expect-error - puppeteer's SetContentWaitForOptions type excludes
+    // 'networkidle0' (only page.goto() declares it), but the runtime accepts
+    // it identically; keeping it preserves the original wait behaviour.
     await page.setContent(html, { waitUntil: 'networkidle0' });
     return await page.pdf({
       format: 'A4',
@@ -340,7 +389,7 @@ async function renderPdf(html) {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 6 — upload / overwrite in Drive
 // ═══════════════════════════════════════════════════════════════════
-async function uploadPdf(drive, buffer, fileName) {
+async function uploadPdf(drive: drive_v3.Drive, buffer: Uint8Array, fileName: string): Promise<drive_v3.Schema$File> {
   const mime     = 'application/pdf';
   const folderId = CONFIG.folderId;
   const safeName = fileName.replace(/'/g, "\\'");
@@ -354,12 +403,12 @@ async function uploadPdf(drive, buffer, fileName) {
   if (existing.length > 0) {
     const [first, ...dupes] = existing;
     for (const d of dupes) {
-      await withRetry(() => drive.files.delete({ fileId: d.id }));
+      await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate: ${d.id}`, 'warn');
     }
     log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
     const res = await withRetry(() => drive.files.update({
-      fileId: first.id,
+      fileId: first.id!,
       requestBody: { name: fileName },
       media: { mimeType: mime, body: Readable.from([buffer]) },
       fields: 'id, name, webViewLink',
@@ -369,7 +418,7 @@ async function uploadPdf(drive, buffer, fileName) {
 
   log(`  [Drive] Creating "${fileName}"`);
   const res = await withRetry(() => drive.files.create({
-    requestBody: { name: fileName, parents: [folderId], mimeType: mime },
+    requestBody: { name: fileName, parents: [folderId!], mimeType: mime },
     media: { mimeType: mime, body: Readable.from([buffer]) },
     fields: 'id, name, webViewLink',
   }));
@@ -379,11 +428,11 @@ async function uploadPdf(drive, buffer, fileName) {
 // ═══════════════════════════════════════════════════════════════════
 //  Main
 // ═══════════════════════════════════════════════════════════════════
-async function main() {
+async function main(): Promise<void> {
   const target = getTargetMonth();
   log(`Generating eligible-physician PDF for ${target.key} → ${target.fileName}`);
 
-  const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
+  const supabase = createClient(CONFIG.supabase.url!, CONFIG.supabase.key!);
   const rows      = await fetchRoster(supabase, target.key);
 
   if (rows.length === 0) {
@@ -404,10 +453,10 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(err => {
+  main().catch((err: any) => {
     console.error('❌ eligible-list.js failed:', err);
     process.exit(1);
   });
 }
 
-module.exports = { getTargetMonth, groupByDepartment, sortDepartments, buildHtml };
+export = { getTargetMonth, groupByDepartment, sortDepartments, buildHtml };

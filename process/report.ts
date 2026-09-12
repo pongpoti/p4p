@@ -1,6 +1,6 @@
 'use strict';
 /**
- * report.js — Missing submission tracker
+ * report.ts — Missing submission tracker
  *
  * For each of the last 6 months, compares Supabase person list against
  * Google Drive Excel files (Supabase as reference). Reports physicians
@@ -18,19 +18,24 @@
  *   6. Upload / overwrite in Drive
  */
 
-const { createClient } = require('@supabase/supabase-js');
-const ExcelJS          = require('exceljs');
-const { Readable }     = require('stream');
-const fs               = require('fs');
-const os               = require('os');
-const path             = require('path');
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Borders } from 'exceljs';
+import type { drive_v3 } from 'googleapis';
+import type { DriveFile, MonthInfo } from './types';
+
+const { createClient } = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js');
+const ExcelJS          = require('exceljs') as typeof import('exceljs');
+const { Readable }     = require('stream') as typeof import('stream');
+const fs               = require('fs') as typeof import('fs');
+const os               = require('os') as typeof import('os');
+const path             = require('path') as typeof import('path');
 const {
   log, withRetry, stripExt, normaliseName,
   createDriveClient, driveListAll, listFolders, listExcelFiles,
-} = require('./lib');
+} = require('./lib') as typeof import('./lib');
 
 /** Escape a value before interpolating it into the PNG-render HTML template. */
-function escHtml(s) {
+function escHtml(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -42,7 +47,22 @@ function escHtml(s) {
 // ═══════════════════════════════════════════════════════════════════
 //  Config
 // ═══════════════════════════════════════════════════════════════════
-const CONFIG = {
+interface Config {
+  google: {
+    clientId: string | undefined;
+    clientSecret: string | undefined;
+    refreshToken: string | undefined;
+  };
+  supabase: {
+    url: string | undefined;
+    key: string | undefined;
+  };
+  rootFolderId: string | undefined;
+  reportFolderId: string | undefined;
+  reportFileName: string;
+}
+
+const CONFIG: Config = {
   google: {
     clientId:     process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -54,7 +74,7 @@ const CONFIG = {
   },
   rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,
   // Was hardcoded. A Drive folder id is a LOCATOR, not a secret — but this
-  // repository was public, so the literal handed anyone who read report.js a
+  // repository was public, so the literal handed anyone who read report.ts a
   // direct address for a folder that is shared "anyone with the link". Config
   // that points at real data belongs in the environment, next to
   // GOOGLE_ROOT_FOLDER_ID on the line above.
@@ -73,14 +93,14 @@ if (!CONFIG.reportFolderId) {
 // ═══════════════════════════════════════════════════════════════════
 //  Thai month names
 // ═══════════════════════════════════════════════════════════════════
-const THAI_MONTHS = {
+const THAI_MONTHS: Record<number, string> = {
   1: 'มกราคม',   2: 'กุมภาพันธ์', 3: 'มีนาคม',
   4: 'เมษายน',   5: 'พฤษภาคม',   6: 'มิถุนายน',
   7: 'กรกฎาคม',  8: 'สิงหาคม',   9: 'กันยายน',
   10: 'ตุลาคม', 11: 'พฤศจิกายน', 12: 'ธันวาคม',
 };
 
-const THAI_MONTH_ABBR = {
+const THAI_MONTH_ABBR: Record<number, string> = {
   1: 'ม.ค.',  2: 'ก.พ.',  3: 'มี.ค.',
   4: 'เม.ย.', 5: 'พ.ค.',  6: 'มิ.ย.',
   7: 'ก.ค.',  8: 'ส.ค.',  9: 'ก.ย.',
@@ -88,7 +108,7 @@ const THAI_MONTH_ABBR = {
 };
 
 /** Format current Bangkok time as "25 เม.ย. 69, 14.14" */
-function formatRunTime() {
+function formatRunTime(): string {
   // Bangkok = UTC+7
   const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const day    = now.getUTCDate();
@@ -100,16 +120,31 @@ function formatRunTime() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Data shapes
+// ═══════════════════════════════════════════════════════════════════
+interface ReportPerson {
+  fullname: string;
+  department: string;
+}
+
+interface MonthGroup {
+  monthLabel: string;
+  abbMonthLabel: string;
+  key: string;
+  rows: ReportPerson[];
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Utilities / Google API clients / Drive helpers
 //  — normaliseName, stripExt, log, sleep, withRetry, createAuth,
 //    createDriveClient, driveListAll, listFolders, listExcelFiles now live
-//    in ./lib.js (shared with process.js — see that file's header comment).
+//    in ./lib.ts (shared with process.ts — see that file's header comment).
 // ═══════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════
 //  Step 1 — 6-month window, excluding the current month (newest first)
 // ═══════════════════════════════════════════════════════════════════
-function getTargetMonths() {
+function getTargetMonths(): MonthInfo[] {
   const now = new Date();
   // i starts at 1 to skip the current month entirely
   return Array.from({ length: 6 }, (_, i) => {
@@ -124,25 +159,25 @@ function getTargetMonths() {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 2a — Get normalised Drive file name set for a month
 // ═══════════════════════════════════════════════════════════════════
-async function getDriveNameSet(drive, { beYear, month }) {
-  const yearFolders = await listFolders(drive, CONFIG.rootFolderId);
+async function getDriveNameSet(drive: drive_v3.Drive, { beYear, month }: MonthInfo): Promise<Set<string> | null> {
+  const yearFolders = await listFolders(drive, CONFIG.rootFolderId!);
   const yearFolder  = yearFolders.find(f => f.name === String(beYear));
   if (!yearFolder) return null;
 
   const thai       = THAI_MONTHS[month];
   const candidates = [`${month} - ${thai}`, `${String(month).padStart(2, '0')} - ${thai}`];
-  const monthFolders = await listFolders(drive, yearFolder.id);
-  const monthFolder  = monthFolders.find(f => candidates.includes(f.name));
+  const monthFolders = await listFolders(drive, yearFolder.id!);
+  const monthFolder  = monthFolders.find(f => candidates.includes(f.name!));
   if (!monthFolder) return null;
 
-  const files = await listExcelFiles(drive, monthFolder.id);
-  return new Set(files.map(f => normaliseName(stripExt(f.name))));
+  const files = await listExcelFiles(drive, monthFolder.id!);
+  return new Set(files.map(f => normaliseName(stripExt(f.name!))));
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  Step 2b — Get Supabase persons for a month
 // ═══════════════════════════════════════════════════════════════════
-async function getSupabasePersons(supabase, tableKey) {
+async function getSupabasePersons(supabase: SupabaseClient, tableKey: string): Promise<ReportPerson[] | null> {
   const { data, error } = await supabase
     .from(tableKey)
     .select('firstname, lastname, department');
@@ -153,7 +188,7 @@ async function getSupabasePersons(supabase, tableKey) {
   }
   if (!data || data.length === 0) return null;
 
-  return data.map(r => ({
+  return data.map((r: any) => ({
     fullname:   normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
     department: (r.department ?? '').trim(),
   }));
@@ -162,7 +197,7 @@ async function getSupabasePersons(supabase, tableKey) {
 // ═══════════════════════════════════════════════════════════════════
 //  Department sort helper — Thai ascending, INTERN last
 // ═══════════════════════════════════════════════════════════════════
-function sortDepartments(depts) {
+function sortDepartments(depts: string[]): string[] {
   const nonIntern = [...depts].filter(d => d !== 'INTERN').sort((a, b) => a.localeCompare(b, 'th'));
   return depts.includes('INTERN') ? [...nonIntern, 'INTERN'] : nonIntern;
 }
@@ -170,10 +205,10 @@ function sortDepartments(depts) {
 // ═══════════════════════════════════════════════════════════════════
 //  Shared cell style helpers
 // ═══════════════════════════════════════════════════════════════════
-const BORDER_THIN   = { style: 'thin' };
-const BORDER_MEDIUM = { style: 'medium' };
-const FULL_THIN     = { top: BORDER_THIN,   left: BORDER_THIN,   bottom: BORDER_THIN,   right: BORDER_THIN };
-const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_MEDIUM, right: BORDER_MEDIUM };
+const BORDER_THIN   = { style: 'thin' } as const;
+const BORDER_MEDIUM = { style: 'medium' } as const;
+const FULL_THIN: Partial<Borders>   = { top: BORDER_THIN,   left: BORDER_THIN,   bottom: BORDER_THIN,   right: BORDER_THIN };
+const FULL_MEDIUM: Partial<Borders> = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_MEDIUM, right: BORDER_MEDIUM };
 
 // ═══════════════════════════════════════════════════════════════════
 //  Step 5 — Build Excel workbook
@@ -182,7 +217,7 @@ const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_
 //               - table: ชื่อ-นามสกุล | กลุ่มงาน
 //               - footnote merged row immediately below table
 // ═══════════════════════════════════════════════════════════════════
-async function buildExcel(monthGroups, runTime, allDepts) {
+async function buildExcel(monthGroups: MonthGroup[], runTime: string, allDepts: Set<string>): Promise<Buffer> {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
   // already in descending month order; rows sorted by Thai name asc
   // allDepts: Set of every department seen in Supabase across all months
@@ -197,7 +232,7 @@ async function buildExcel(monthGroups, runTime, allDepts) {
     const ws = wb.addWorksheet('ภาพรวม');
 
     // Departments with at least one missing physician (incomplete)
-    const incompleteDeptSet = new Set();
+    const incompleteDeptSet = new Set<string>();
     monthGroups.forEach(g => g.rows.forEach(r => incompleteDeptSet.add(r.department)));
     const incompleteDepts = sortDepartments([...incompleteDeptSet]);
 
@@ -225,26 +260,30 @@ async function buildExcel(monthGroups, runTime, allDepts) {
     // Incomplete dept rows
     for (const dept of incompleteDepts) {
       const counts  = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
-      const rowData = { dept };
+      const rowData: Record<string, string | number> = { dept };
       monthGroups.forEach((g, i) => { rowData[g.monthLabel] = counts[i]; });
       const row = ws.addRow(rowData);
       row.height = 18;
       row.eachCell({ includeEmpty: true }, cell => {
         cell.border    = FULL_THIN;
-        cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
+        // exceljs's .d.ts declares Cell.col as `string`, but at runtime it is
+        // always the 1-based column NUMBER (see exceljs/lib/doc/cell.js's
+        // `get col()`) — Number(...) is a no-op on the real value and keeps
+        // this comparison type-correct without changing behaviour.
+        cell.alignment = { vertical: 'middle', horizontal: Number(cell.col) === 1 ? 'left' : 'center' };
       });
     }
 
     // รวม row (totals)
     const colTotals = monthGroups.map(g => g.rows.length);
-    const totalRowData = { dept: 'รวม' };
+    const totalRowData: Record<string, string | number> = { dept: 'รวม' };
     monthGroups.forEach((g, i) => { totalRowData[g.monthLabel] = colTotals[i]; });
     const totalRow = ws.addRow(totalRowData);
     totalRow.height = 18;
     totalRow.eachCell({ includeEmpty: true }, cell => {
       cell.font      = { bold: true };
       cell.border    = FULL_MEDIUM;
-      cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
+      cell.alignment = { vertical: 'middle', horizontal: Number(cell.col) === 1 ? 'left' : 'center' };
     });
 
 
@@ -309,12 +348,12 @@ async function buildExcel(monthGroups, runTime, allDepts) {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 6 — Upload / overwrite in Drive
 // ═══════════════════════════════════════════════════════════════════
-async function uploadReport(drive, buffer) {
+async function uploadReport(drive: drive_v3.Drive, buffer: Buffer): Promise<drive_v3.Schema$File> {
   const mime     = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const fileName = CONFIG.reportFileName;
   const folderId = CONFIG.reportFolderId;
   // Escape single quotes before interpolating into the Drive query string
-  // (matches process.js's uploadFileToDrive) — the fixed config values here
+  // (matches process.ts's uploadFileToDrive) — the fixed config values here
   // don't currently contain one, but the query syntax breaks silently if
   // they ever do.
   const safeName = fileName.replace(/'/g, "\\'");
@@ -328,12 +367,12 @@ async function uploadReport(drive, buffer) {
   if (existing.length > 0) {
     const [first, ...dupes] = existing;
     for (const d of dupes) {
-      await withRetry(() => drive.files.delete({ fileId: d.id }));
+      await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate: ${d.id}`, 'warn');
     }
     log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
     const res = await withRetry(() => drive.files.update({
-      fileId: first.id,
+      fileId: first.id!,
       requestBody: { name: fileName },
       media: { mimeType: mime, body: Readable.from([buffer]) },
       fields: 'id, name, webViewLink',
@@ -343,7 +382,7 @@ async function uploadReport(drive, buffer) {
 
   log(`  [Drive] Creating "${fileName}"`);
   const res = await withRetry(() => drive.files.create({
-    requestBody: { name: fileName, parents: [folderId], mimeType: mime },
+    requestBody: { name: fileName, parents: [folderId!], mimeType: mime },
     media: { mimeType: mime, body: Readable.from([buffer]) },
     fields: 'id, name, webViewLink',
   }));
@@ -354,7 +393,7 @@ async function uploadReport(drive, buffer) {
 //  PNG — HTML template
 // ═══════════════════════════════════════════════════════════════════
 // One PNG per month — receives a single group
-function buildHtml(group, runTime) {
+function buildHtml(group: MonthGroup, runTime: string): string {
   const rows = group.rows.length === 0
     ? `<tr><td class="no-data" colspan="3">ไม่มีข้อมูล</td></tr>`
     : group.rows.map((r, i) => `
@@ -363,8 +402,6 @@ function buildHtml(group, runTime) {
           <td class="name">${escHtml(r.fullname)}</td>
           <td class="dept">${escHtml(r.department)}</td>
         </tr>`).join('');
-
-  const emptyMsg = '';
 
   return `<!DOCTYPE html>
 <html>
@@ -496,14 +533,17 @@ function buildHtml(group, runTime) {
 // ═══════════════════════════════════════════════════════════════════
 //  PNG — render via Puppeteer
 // ═══════════════════════════════════════════════════════════════════
-async function renderPng(html) {
-  const puppeteer = require('puppeteer');
+async function renderPng(html: string): Promise<Buffer> {
+  const puppeteer = require('puppeteer') as typeof import('puppeteer');
   const browser   = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 800, deviceScaleFactor: 2 }); // 1920px wide = Full HD
+    // @ts-expect-error - puppeteer's SetContentWaitForOptions type excludes
+    // 'networkidle0' (only page.goto() declares it), but the runtime accepts
+    // it identically; keeping it preserves the original wait behaviour.
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     // screenshot() returns Uint8Array in Puppeteer v22+ — convert explicitly
     const raw = await page.screenshot({ fullPage: true, type: 'png' });
@@ -516,7 +556,7 @@ async function renderPng(html) {
 // ═══════════════════════════════════════════════════════════════════
 //  PNG — upload / overwrite in Drive
 // ═══════════════════════════════════════════════════════════════════
-async function uploadPng(drive, buffer, fileName) {
+async function uploadPng(drive: drive_v3.Drive, buffer: Buffer, fileName: string): Promise<drive_v3.Schema$File> {
   const mime     = 'image/png';
   const folderId = CONFIG.reportFolderId;
   // See uploadReport() above for why this is escaped.
@@ -536,10 +576,10 @@ async function uploadPng(drive, buffer, fileName) {
 
     if (existing.length > 0) {
       const [first, ...dupes] = existing;
-      for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id }));
+      for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
       const res = await withRetry(() => drive.files.update({
-        fileId: first.id,
+        fileId: first.id!,
         requestBody: { name: fileName },
         media: { mimeType: mime, body: fs.createReadStream(tmpPath) },
         fields: 'id, name, webViewLink',
@@ -549,7 +589,7 @@ async function uploadPng(drive, buffer, fileName) {
 
     log(`  [Drive] Creating "${fileName}"`);
     const res = await withRetry(() => drive.files.create({
-      requestBody: { name: fileName, parents: [folderId], mimeType: mime },
+      requestBody: { name: fileName, parents: [folderId!], mimeType: mime },
       media: { mimeType: mime, body: fs.createReadStream(tmpPath) },
       fields: 'id, name, webViewLink',
     }));
@@ -562,15 +602,17 @@ async function uploadPng(drive, buffer, fileName) {
 // ═══════════════════════════════════════════════════════════════════
 //  Main
 // ═══════════════════════════════════════════════════════════════════
-async function main() {
-  const missingEnv = [
-    ['GOOGLE_CLIENT_ID',       CONFIG.google.clientId],
-    ['GOOGLE_CLIENT_SECRET',   CONFIG.google.clientSecret],
-    ['GOOGLE_REFRESH_TOKEN',   CONFIG.google.refreshToken],
-    ['SUPABASE_URL',           CONFIG.supabase.url],
-    ['SUPABASE_KEY',           CONFIG.supabase.key],
-    ['GOOGLE_ROOT_FOLDER_ID',  CONFIG.rootFolderId],
-  ].filter(([, v]) => !v).map(([k]) => k);
+async function main(): Promise<void> {
+  const missingEnv = (
+    [
+      ['GOOGLE_CLIENT_ID',       CONFIG.google.clientId],
+      ['GOOGLE_CLIENT_SECRET',   CONFIG.google.clientSecret],
+      ['GOOGLE_REFRESH_TOKEN',   CONFIG.google.refreshToken],
+      ['SUPABASE_URL',           CONFIG.supabase.url],
+      ['SUPABASE_KEY',           CONFIG.supabase.key],
+      ['GOOGLE_ROOT_FOLDER_ID',  CONFIG.rootFolderId],
+    ] as [string, string | undefined][]
+  ).filter(([, v]) => !v).map(([k]) => k);
 
   if (missingEnv.length > 0) {
     console.error('\n❌  Missing env vars:', missingEnv.join(', '));
@@ -578,7 +620,7 @@ async function main() {
   }
 
   const drive    = createDriveClient();
-  const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
+  const supabase = createClient(CONFIG.supabase.url!, CONFIG.supabase.key!);
   const months   = getTargetMonths(); // newest first
 
   console.log('══════════════════════════════════════════════════════');
@@ -588,8 +630,8 @@ async function main() {
   console.log('');
 
   // monthGroups: one entry per incomplete month, in descending order
-  const monthGroups = [];
-  const allDeptSet  = new Set(); // all departments seen across all SB months
+  const monthGroups: MonthGroup[] = [];
+  const allDeptSet  = new Set<string>(); // all departments seen across all SB months
   let totalMissing  = 0;
 
   for (const monthInfo of months) {
@@ -659,7 +701,7 @@ async function main() {
     pageSize: 100,
   });
   for (const f of existingPngs) {
-    await withRetry(() => drive.files.delete({ fileId: f.id }));
+    await withRetry(() => drive.files.delete({ fileId: f.id! }));
     log(`  ✗ Deleted: ${f.name}`);
   }
   if (existingPngs.length === 0) log('  (none found)');
@@ -676,7 +718,7 @@ async function main() {
   }
 }
 
-main().catch(err => {
+main().catch((err: any) => {
   console.error('\n❌ Fatal:', err.stack ?? err.message);
   process.exit(1);
 });

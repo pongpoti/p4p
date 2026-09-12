@@ -20,48 +20,68 @@
  * the output from the current Drive + Supabase data.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { drive_v3, sheets_v4 } from 'googleapis';
+import type { DriveFile, MonthInfo } from './types';
+
 require('dotenv').config();
 
-const { google }        = require('googleapis');
-const { createClient }  = require('@supabase/supabase-js');
-const { Readable }      = require('stream');
-const fs                = require('fs');
-const os                = require('os');
-const path              = require('path');
-const { spawnSync }     = require('child_process');
-const ExcelJS           = require('exceljs');
+const { google }        = require('googleapis') as typeof import('googleapis');
+const { createClient }  = require('@supabase/supabase-js') as typeof import('@supabase/supabase-js');
+const { Readable }      = require('stream') as typeof import('stream');
+const fs                = require('fs') as typeof import('fs');
+const os                = require('os') as typeof import('os');
+const path              = require('path') as typeof import('path');
+const { spawnSync }     = require('child_process') as typeof import('child_process');
+const ExcelJS           = require('exceljs') as typeof import('exceljs');
 const {
   log, sleep, withRetry, stripExt, normaliseName,
   createAuth, createDriveClient, driveListAll, listFolders, listExcelFiles,
-} = require('./lib');
+} = require('./lib') as typeof import('./lib');
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
 // ═══════════════════════════════════════════════════════════════════
-const CONFIG = {
+interface Config {
   google: {
-    clientId:     process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+  };
+  supabase: {
+    url: string;
+    key: string;
+  };
+  rootFolderId: string;
+  outputFolderId: string;
+  sk03FolderId: string;
+  sk03TemplateId: string; // spreadsheet ID of SK03 template
+}
+
+const CONFIG: Config = {
+  google: {
+    clientId:     process.env.GOOGLE_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN!,
   },
   supabase: {
-    url: process.env.SUPABASE_URL,
-    key: process.env.SUPABASE_KEY,
+    url: process.env.SUPABASE_URL!,
+    key: process.env.SUPABASE_KEY!,
   },
-  rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,
-  outputFolderId: process.env.GOOGLE_MERGE_FOLDER_ID,
-  sk03FolderId:   process.env.GOOGLE_SK03_FOLDER_ID,
-  sk03TemplateId: process.env.GOOGLE_SK03_TEMPLATE_ID, // spreadsheet ID of SK03 template
+  rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID!,
+  outputFolderId: process.env.GOOGLE_MERGE_FOLDER_ID!,
+  sk03FolderId:   process.env.GOOGLE_SK03_FOLDER_ID!,
+  sk03TemplateId: process.env.GOOGLE_SK03_TEMPLATE_ID!,
 };
 
 // ─── Thai month names ────────────────────────────────────────────
-const THAI_MONTHS = {
+const THAI_MONTHS: Record<number, string> = {
   1:'มกราคม', 2:'กุมภาพันธ์', 3:'มีนาคม', 4:'เมษายน',
   5:'พฤษภาคม', 6:'มิถุนายน', 7:'กรกฎาคม', 8:'สิงหาคม',
   9:'กันยายน', 10:'ตุลาคม', 11:'พฤศจิกายน', 12:'ธันวาคม',
 };
 
-const THAI_MONTH_ABBR = {
+const THAI_MONTH_ABBR: Record<number, string> = {
   1:'ม.ค.', 2:'ก.พ.', 3:'มี.ค.', 4:'เม.ย.',
   5:'พ.ค.', 6:'มิ.ย.', 7:'ก.ค.', 8:'ส.ค.',
   9:'ก.ย.', 10:'ต.ค.', 11:'พ.ย.', 12:'ธ.ค.',
@@ -69,7 +89,7 @@ const THAI_MONTH_ABBR = {
 
 // ─── Dept colours & sort order ───────────────────────────────────
 // ORDER of keys defines sheet order. INTERN is last.
-const DEPT_COLORS = {
+const DEPT_COLORS: Record<string, string> = {
   'กุมารเวชกรรม':                          '#C8D3B8',
   'จักษุวิทยา':                            '#EEE7D3',
   'จิตเวชและยาเสพติด':                     '#D9B4E2',
@@ -90,6 +110,41 @@ const DEPT_COLORS = {
   'อายุรกรรม':                              '#A3DDBD',
   'INTERN':                               '#ECC1D1',
 };
+
+// ─── Data shapes ──────────────────────────────────────────────────
+
+/** A physician row as read from a monthly Supabase roster table
+ *  (public."<BEyear>_<MM>"), normalised by getSupabaseMonthData(). */
+interface SupabasePerson {
+  fullname: string;
+  firstname: string;
+  lastname: string;
+  department: string;
+  prefix: string;
+  position: string;
+  level: string;
+  rank: string;
+  type: string;
+  std_score: number;
+  boss_score: number;
+  perf_score: number;
+  score: number | null;      // overrides perf_score in col J when not null
+  index: number | string | null;
+}
+
+/** A row from the management_stipends table (see automation/sql/management_stipends.sql). */
+interface ManagementStipendRow {
+  physician_name: string;
+  remark: string | null;
+  amount: number | null;
+  is_dept_head: boolean;
+}
+
+interface MgmtEntry {
+  remark: string | null;
+  amount: number | null;
+}
+
 // ─── Management allowance data ───────────────────────────────────
 // Key: firstname + " " + lastname (no prefix). Provides col M (staff) and col E + I (dept).
 //
@@ -100,35 +155,36 @@ const DEPT_COLORS = {
 // populates these two module-level bindings once per run, before any
 // month is processed (see main()); everything else in this file
 // (getMgmt(), DEPT_HEAD_SET.has(...)) is unchanged.
-let MGMT_LOOKUP   = {};
-let DEPT_HEAD_SET = new Set();
+let MGMT_LOOKUP: Record<string, MgmtEntry> = {};
+let DEPT_HEAD_SET: Set<string> = new Set();
 
 /**
  * Fetch management_stipends and populate MGMT_LOOKUP / DEPT_HEAD_SET.
  * Call once per run (not once per month — this data isn't month-specific).
  */
-async function loadManagementStipends(supabase) {
+async function loadManagementStipends(supabase: SupabaseClient): Promise<void> {
   const { data, error } = await supabase
     .from('management_stipends')
     .select('physician_name, remark, amount, is_dept_head');
   if (error) throw new Error(`management_stipends read error: ${error.message}`);
 
+  const rows = (data ?? []) as ManagementStipendRow[];
   MGMT_LOOKUP = Object.fromEntries(
-    (data ?? []).map(d => [normaliseName(d.physician_name), { remark: d.remark, amount: d.amount }])
+    rows.map(d => [normaliseName(d.physician_name), { remark: d.remark, amount: d.amount }])
   );
   DEPT_HEAD_SET = new Set(
-    (data ?? []).filter(d => d.is_dept_head).map(d => normaliseName(d.physician_name))
+    rows.filter(d => d.is_dept_head).map(d => normaliseName(d.physician_name))
   );
-  log(`  [Mgmt] Loaded ${data?.length ?? 0} management_stipends row(s), ${DEPT_HEAD_SET.size} dept-head(s)`);
+  log(`  [Mgmt] Loaded ${rows.length} management_stipends row(s), ${DEPT_HEAD_SET.size} dept-head(s)`);
 }
 
 /** Return management entry for a person, or null */
-function getMgmt(person) {
+function getMgmt(person: { firstname: string; lastname: string }): MgmtEntry | null {
   const key = normaliseName(`${person.firstname} ${person.lastname}`);
   return MGMT_LOOKUP[key] ?? null;
 }
 
-const DEPT_ORDER     = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
+const DEPT_ORDER: Record<string, number> = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
 const DEPT_ORDER_MAX = Object.keys(DEPT_COLORS).length;
 
 // ─── Supabase column name mapping ────────────────────────────────
@@ -148,7 +204,7 @@ const SB = {
 // ═══════════════════════════════════════════════════════════════════
 //  STEP 1 — 6-month window
 // ═══════════════════════════════════════════════════════════════════
-function getTargetMonths() {
+function getTargetMonths(): MonthInfo[] {
   const now = new Date();
   return Array.from({ length: 6 }, (_, i) => {
     const d      = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -164,17 +220,17 @@ function getTargetMonths() {
 // ═══════════════════════════════════════════════════════════════════
 // stripExt, normaliseName, log, sleep, withRetry, createAuth,
 // createDriveClient, driveListAll, listFolders, listExcelFiles now live in
-// ./lib.js (shared with report.js — see that file's header comment).
-function toSheetName(name)     { return name.replace(/[\\/:?*[\]]/g, '').substring(0, 31).trim(); }
+// ./lib.ts (shared with report.ts — see that file's header comment).
+function toSheetName(name: string): string { return name.replace(/[\\/:?*[\]]/g, '').substring(0, 31).trim(); }
 
-function hexToArgb(hex) {
+function hexToArgb(hex?: string | null): string | undefined {
   if (!hex) return undefined;
   const c = hex.replace('#', '').toUpperCase();
   return c.length === 6 ? `FF${c}` : undefined;
 }
 
 /** Convert #RRGGBB to Sheets API {red, green, blue} (0-1 range) */
-function hexToRgb(hex) {
+function hexToRgb(hex: string): { red: number; green: number; blue: number } {
   const c = hex.replace('#', '');
   return {
     red:   parseInt(c.slice(0, 2), 16) / 255,
@@ -187,32 +243,37 @@ function hexToRgb(hex) {
  * Convert a monthKey (e.g. "2568_12") to the Thai sheet name base
  * used by the GAS scripts (e.g. "ธ.ค. 68"), matching the merge step's key.
  */
-function monthKeyToSheetBase(monthKey) {
+function monthKeyToSheetBase(monthKey: string): string {
   const [beYear, monthStr] = monthKey.split('_');
   const month = parseInt(monthStr, 10);
   return `${THAI_MONTH_ABBR[month]} ${beYear.slice(2)}`;  // e.g. "ธ.ค. 68"
 }
 
-function sbVal(row, colName, defaultVal = null) {
+function sbVal<T>(row: Record<string, unknown>, colName: string, defaultVal: T): T {
   const v = row[colName];
-  return (v !== null && v !== undefined && v !== '') ? v : defaultVal;
+  return (v !== null && v !== undefined && v !== '') ? (v as T) : defaultVal;
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  Google API clients
 // ═══════════════════════════════════════════════════════════════════
-// createAuth/createDriveClient now live in ./lib.js — createSheetsClient
-// stays here since report.js has no use for a Sheets client.
-function createSheetsClient() {
+// createAuth/createDriveClient now live in ./lib.ts — createSheetsClient
+// stays here since report.ts has no use for a Sheets client.
+function createSheetsClient(): sheets_v4.Sheets {
   return google.sheets({ version: 'v4', auth: createAuth() });
 }
 
-async function downloadFile(drive, fileId) {
+async function downloadFile(drive: drive_v3.Drive, fileId: string): Promise<Buffer> {
   const res = await withRetry(() => drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' }));
-  return Buffer.from(res.data);
+  return Buffer.from(res.data as ArrayBuffer);
 }
 
-async function uploadFileToDrive(drive, folderId, fileName, buffer) {
+async function uploadFileToDrive(
+  drive: drive_v3.Drive,
+  folderId: string,
+  fileName: string,
+  buffer: Buffer
+): Promise<drive_v3.Schema$File> {
   const mime     = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const safeName = fileName.replace(/'/g, "\\'");
   const existing = await driveListAll(drive, {
@@ -222,12 +283,12 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
   if (existing.length > 0) {
     const [first, ...dupes] = existing;
     for (const d of dupes) {
-      await withRetry(() => drive.files.delete({ fileId: d.id }));
+      await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate id: ${d.id}`, 'warn');
     }
     log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
     const res = await withRetry(() => drive.files.update({
-      fileId: first.id,
+      fileId: first.id!,
       requestBody: { name: fileName },
       media: { mimeType: mime, body: Readable.from([buffer]) },
       fields: 'id, name, webViewLink',
@@ -245,28 +306,34 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
 // ═══════════════════════════════════════════════════════════════════
 //  STEP 2 — Google Drive: find month folder
 // ═══════════════════════════════════════════════════════════════════
-async function getDriveMonthData(drive, { beYear, month }) {
+interface DriveMonthData {
+  names: string[];
+  files: DriveFile[];
+  folderId: string;
+}
+
+async function getDriveMonthData(drive: drive_v3.Drive, { beYear, month }: MonthInfo): Promise<DriveMonthData | null> {
   const yearFolders = await listFolders(drive, CONFIG.rootFolderId);
   const yearFolder  = yearFolders.find(f => f.name === String(beYear));
   if (!yearFolder) { log(`  [Drive] Year folder "${beYear}" not found`, 'warn'); return null; }
 
   const thai       = THAI_MONTHS[month];
   const candidates = [`${month} - ${thai}`, `${String(month).padStart(2,'0')} - ${thai}`];
-  const monthFolders = await listFolders(drive, yearFolder.id);
-  const monthFolder  = monthFolders.find(f => candidates.includes(f.name));
+  const monthFolders = await listFolders(drive, yearFolder.id!);
+  const monthFolder  = monthFolders.find(f => candidates.includes(f.name!));
   if (!monthFolder) { log(`  [Drive] Month folder not found (tried: ${candidates.join(' | ')})`, 'warn'); return null; }
 
-  const files = await listExcelFiles(drive, monthFolder.id);
+  const files = await listExcelFiles(drive, monthFolder.id!);
   if (files.length === 0) { log(`  [Drive] No Excel files in "${monthFolder.name}"`, 'warn'); return null; }
 
-  const names = files.map(f => normaliseName(stripExt(f.name)));
-  return { names, files, folderId: monthFolder.id };
+  const names = files.map(f => normaliseName(stripExt(f.name!)));
+  return { names, files, folderId: monthFolder.id! };
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  STEP 3 — Supabase
 // ═══════════════════════════════════════════════════════════════════
-async function getSupabaseMonthData(supabase, tableKey) {
+async function getSupabaseMonthData(supabase: SupabaseClient, tableKey: string): Promise<SupabasePerson[] | null> {
   const { data, error } = await supabase.from(tableKey).select('*');
   if (error) {
     if (error.code === '42P01' || error.message?.includes('does not exist')) {
@@ -276,7 +343,7 @@ async function getSupabaseMonthData(supabase, tableKey) {
   }
   if (!data || data.length === 0) { log(`  [Supabase] Table "${tableKey}" is empty`, 'warn'); return null; }
 
-  return data.map(r => ({
+  return data.map((r: any) => ({
     fullname:   normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
     firstname:  r.firstname  ?? '',
     lastname:   r.lastname   ?? '',
@@ -289,16 +356,16 @@ async function getSupabaseMonthData(supabase, tableKey) {
     std_score:  sbVal(r, SB.std,      2200),
     boss_score: sbVal(r, SB.boss,     0),
     perf_score: sbVal(r, SB.perf,     0),
-    score:      sbVal(r, SB.score,    null), // overrides perf_score in col J when not null
-    index:      sbVal(r, SB.index,    null),
+    score:      sbVal<number | null>(r, SB.score, null), // overrides perf_score in col J when not null
+    index:      sbVal<number | string | null>(r, SB.index, null),
   }));
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  STEP 4 — Compare lists
 // ═══════════════════════════════════════════════════════════════════
-function listsMatch(driveNames, supabasePersons) {
-  const normDrive = driveNames.map(normaliseName);
+function listsMatch(driveNames: string[], supabasePersons: SupabasePerson[]): boolean {
+  const normDrive = driveNames.map(n => normaliseName(n));
   const normSB    = supabasePersons.map(p => normaliseName(p.fullname));
   if (normDrive.length !== normSB.length) {
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
@@ -330,13 +397,13 @@ const SUBTOTAL_LABELS = [
 ];
 const TOTAL_LABELS = [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS];
 
-function isYearLike(n) {
+function isYearLike(n: number): boolean {
   if (n >= 1900 && n <= 2099) return true;
   if (n >= 2400 && n <= 2699 && Number.isInteger(n)) return true;
   return false;
 }
 
-function toNum(val) {
+function toNum(val: unknown): number {
   if (val === null || val === undefined || val === '') return NaN;
   if (typeof val === 'number')  return val;
   if (typeof val === 'boolean') return NaN;
@@ -345,15 +412,15 @@ function toNum(val) {
   return parseFloat(s.replace(/,/g, ''));
 }
 
-function numsFromText(val) {
+function numsFromText(val: unknown): number[] {
   const s = String(val ?? '').replace(/,/g, '');
   return [...s.matchAll(/\d+(?:\.\d+)?/g)]
     .map(m => parseFloat(m[0]))
     .filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
 }
 
-function collectScoreCandidates(rows) {
-  const results = [];
+function collectScoreCandidates(rows: Record<string, unknown>[]): number[] {
+  const results: number[] = [];
   for (const row of rows) {
     for (const val of Object.values(row)) {
       const n = toNum(val);
@@ -364,11 +431,16 @@ function collectScoreCandidates(rows) {
   return results;
 }
 
-function extractScoreFromRows(rows) {
+interface ScoreResult {
+  score: number | null;
+  method: string;
+}
+
+function extractScoreFromRows(rows: Record<string, unknown>[]): ScoreResult {
   if (!Array.isArray(rows) || rows.length === 0) return { score: null, method: 'no rows' };
 
   // Pass 1: grand-total labels (search all columns — these never appear as column headers)
-  const grandCandidates = [];
+  const grandCandidates: number[] = [];
   for (const row of rows) {
     const allValues = Object.values(row).map(v => String(v ?? ''));
     const labelCells = allValues.filter(s => GRAND_TOTAL_LABELS.some(lbl => s.includes(lbl)));
@@ -382,7 +454,7 @@ function extractScoreFromRows(rows) {
   }
 
   // Pass 2: sub-total labels (first 3 columns only — avoids col-header false matches)
-  const subCandidates = [];
+  const subCandidates: number[] = [];
   for (const row of rows) {
     const firstThree = ['col_1', 'col_2', 'col_3'].map(k => String(row[k] ?? ''));
     if (firstThree.some(s => SUBTOTAL_LABELS.some(lbl => s.includes(lbl)))) {
@@ -425,14 +497,14 @@ function extractScoreFromRows(rows) {
   return { score: null, method: 'no candidates found' };
 }
 
-function resolveScore(rows) {
+function resolveScore(rows: Record<string, unknown>[]): ScoreResult {
   const { score: jsScore, method: jsMethod } = extractScoreFromRows(rows);
 
-  const isGrandRow = row =>
+  const isGrandRow = (row: Record<string, unknown>) =>
     Object.values(row).some(v => GRAND_TOTAL_LABELS.some(lbl => String(v ?? '').includes(lbl)));
-  const isSubRow = row =>
+  const isSubRow = (row: Record<string, unknown>) =>
     ['col_1', 'col_2', 'col_3'].some(k => SUBTOTAL_LABELS.some(lbl => String(row[k] ?? '').includes(lbl)));
-  const rowNums = row =>
+  const rowNums = (row: Record<string, unknown>) =>
     Object.values(row).map(toNum).filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
 
   // Detect: grand-total label row present but holds no numbers (uncached formula)
@@ -476,28 +548,31 @@ function resolveScore(rows) {
 }
 
 /** Convert an Excel buffer to the { col_1, col_2, … } row format used by resolveScore */
-async function excelToRows(buffer) {
+async function excelToRows(buffer: Buffer): Promise<Record<string, unknown>[]> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
+  // exceljs's bundled types predate Node 22's generic `Buffer<ArrayBufferLike>`
+  // — a real Buffer at runtime, just a structural mismatch against the old type.
+  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const ws = wb.worksheets[0];
   if (!ws) return [];
 
-  const rows = [];
+  const rows: Record<string, unknown>[] = [];
   ws.eachRow({ includeEmpty: false }, row => {
-    const obj = {};
+    const obj: Record<string, unknown> = {};
     row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-      let val = cell.value;
+      let val: unknown = cell.value;
       if (val !== null && typeof val === 'object') {
+        const v = val as Record<string, unknown>;
         if (val instanceof Date)           val = val.toISOString();
-        else if (val.richText)             val = val.richText.map(r => r.text).join('');
-        else if (val.result !== undefined) {
-          val = val.result;
+        else if (v.richText)               val = (v.richText as { text: string }[]).map(r => r.text).join('');
+        else if (v.result !== undefined) {
+          val = v.result;
           // result itself can be a Date (date formula) or error object {error:'#REF!'}
           if (val instanceof Date)                          val = val.toISOString();
           else if (val !== null && typeof val === 'object') val = null;
         }
-        else if (val.formula !== undefined) val = null;  // formula with no cached result
-        else if (val.text !== undefined)    val = val.text;
+        else if (v.formula !== undefined) val = null;  // formula with no cached result
+        else if (v.text !== undefined)    val = v.text;
         else                               val = String(val);
       }
       obj[`col_${colNum}`] = val;
@@ -510,7 +585,13 @@ async function excelToRows(buffer) {
 }
 
 /** Step 4.5 — for each person with score=null, extract sum score from their Drive Excel */
-async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) {
+async function fillMissingScores(
+  drive: drive_v3.Drive,
+  driveFiles: DriveFile[],
+  sbData: SupabasePerson[],
+  monthKey: string,
+  supabase: SupabaseClient
+): Promise<void> {
   const nullScorePersons = sbData.filter(p => p.score === null);
   if (nullScorePersons.length === 0) {
     log('  [Score] All persons already have scores');
@@ -518,9 +599,9 @@ async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) 
   }
   log(`  [Score] ${nullScorePersons.length} person(s) with null score — extracting from Excel…`);
 
-  const driveMap = {};
+  const driveMap: Record<string, DriveFile> = {};
   for (const file of driveFiles) {
-    driveMap[normaliseName(stripExt(file.name))] = file;
+    driveMap[normaliseName(stripExt(file.name!))] = file;
   }
 
   let updated = 0;
@@ -533,7 +614,7 @@ async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) 
     }
     log(`  [Score] ↓ ${person.fullname}`);
     try {
-      const buffer = await downloadFile(drive, file.id);
+      const buffer = await downloadFile(drive, file.id!);
       const rows   = await excelToRows(buffer);
       const { score, method } = resolveScore(rows);
       if (score === null || score <= 0) {
@@ -554,7 +635,7 @@ async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) 
           updated++;
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       log(`  [Score] ⚠ Error for "${normName}": ${err.message}`, 'warn');
     }
   }
@@ -565,7 +646,9 @@ async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) 
 //  STEP 5 — Merge Excel files (via Python/openpyxl)
 // ═══════════════════════════════════════════════════════════════════
 
-function sortByDeptThenName(a, b, deptMap) {
+type NamedDriveFile = DriveFile & { origName: string; normName: string };
+
+function sortByDeptThenName(a: NamedDriveFile, b: NamedDriveFile, deptMap: Record<string, string>): number {
   const dA   = deptMap[a.normName] ?? '';
   const dB   = deptMap[b.normName] ?? '';
   const idxA = DEPT_ORDER[dA] ?? DEPT_ORDER_MAX;
@@ -575,12 +658,17 @@ function sortByDeptThenName(a, b, deptMap) {
 }
 
 /** Merge all Excel files → one workbook with one sheet per person (via Python/openpyxl) */
-async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
-  const deptMap = {};
+async function mergeAndUpload(
+  drive: drive_v3.Drive,
+  driveFiles: DriveFile[],
+  supabasePersons: SupabasePerson[],
+  monthKey: string
+): Promise<drive_v3.Schema$File | null> {
+  const deptMap: Record<string, string> = {};
   supabasePersons.forEach(p => { deptMap[normaliseName(p.fullname)] = p.department; });
 
-  const filesWithName = driveFiles.map(f => ({
-    ...f, origName: stripExt(f.name), normName: normaliseName(stripExt(f.name)),
+  const filesWithName: NamedDriveFile[] = driveFiles.map(f => ({
+    ...f, origName: stripExt(f.name!), normName: normaliseName(stripExt(f.name!)),
   }));
   filesWithName.sort((a, b) => sortByDeptThenName(a, b, deptMap));
 
@@ -593,13 +681,18 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
   log(`\n  [Merge] Temp dir: ${tmpDir}`);
 
   try {
-    const manifestEntries = [];
-    const usedSheetNames  = new Set();
+    interface ManifestEntry {
+      path: string;
+      sheet_name: string;
+      tab_color: string;
+    }
+    const manifestEntries: ManifestEntry[] = [];
+    const usedSheetNames  = new Set<string>();
 
     // Download each file into the temp directory
     for (const file of filesWithName) {
       log(`\n  [Merge] ↓ ${file.origName}`);
-      const buffer   = await downloadFile(drive, file.id);
+      const buffer   = await downloadFile(drive, file.id!);
       const filePath = path.join(tmpDir, `${file.id}.xlsx`);
       fs.writeFileSync(filePath, buffer);
 
@@ -661,13 +754,13 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
 
 // ─── Sheets API helpers ───────────────────────────────────────────
 /** Grid range helper — all indices 0-based, r2/c2 inclusive */
-function gridRange(sheetId, r1, c1, r2, c2) {
+function gridRange(sheetId: number, r1: number, c1: number, r2: number, c2: number): sheets_v4.Schema$GridRange {
   return { sheetId, startRowIndex: r1, endRowIndex: r2 + 1, startColumnIndex: c1, endColumnIndex: c2 + 1 };
 }
 
-const SOLID = { style: 'SOLID', width: 1 };
+const SOLID: sheets_v4.Schema$Border = { style: 'SOLID', width: 1 };
 
-function bordersReq(sheetId, r1, c1, r2, c2, inner = false) {
+function bordersReq(sheetId: number, r1: number, c1: number, r2: number, c2: number, inner = false): sheets_v4.Schema$Request {
   return {
     updateBorders: {
       range: gridRange(sheetId, r1, c1, r2, c2),
@@ -683,10 +776,11 @@ function bordersReq(sheetId, r1, c1, r2, c2, inner = false) {
  * Build the 22-column data rows for an overall (staff/intern) sheet.
  * Mirrors the appendRow + setFormula loop in both GAS scripts.
  */
-function buildOverallRows(persons, S, isIntern) {
+function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolean): (string | number)[][] {
   const rateCell = isIntern ? 'Y13' : 'Y14';
   return persons.map((p, idx) => {
     const r = S + idx;
+    const isDeptHead = DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`));
     return [
       idx + 1,                                               // A: sequence
       p.prefix    || '',                                     // B
@@ -696,8 +790,8 @@ function buildOverallRows(persons, S, isIntern) {
       p.rank      || '',                                     // F: rank (supabase 'rank')
       p.type      || '',                                     // G: type (supabase 'type')
       p.std_score  ?? 2200,                                  // H
-      DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`)) ? 1320 : 0, // I: dept-head extra score
-      (p.score ?? p.perf_score ?? 0) - (DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`)) ? 1320 : 0), // J: score minus dept-head extra (already in col I)
+      isDeptHead ? 1320 : 0,                                 // I: dept-head extra score
+      (p.score ?? p.perf_score ?? 0) - (isDeptHead ? 1320 : 0), // J: score minus dept-head extra (already in col I)
       `=I${r}+J${r}`,                                       // K
       `=K${r}-H${r}`,                                       // L
       getMgmt(p)?.amount ?? p.boss_score ?? 0,              // M: mgmt amount or boss score (moved from I)
@@ -718,10 +812,17 @@ function buildOverallRows(persons, S, isIntern) {
  * Write stat formulas (S5, U5) and side panel values.
  * Staff and intern have different side panel structure — mirrors both GAS scripts.
  */
-async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, internSheetName) {
+async function writeOverallMeta(
+  sheets: sheets_v4.Sheets,
+  ssId: string,
+  sheetName: string,
+  lastRow: number,
+  isIntern: boolean,
+  internSheetName: string
+): Promise<void> {
   const S = 8;
 
-  const panelData = isIntern
+  const panelData: sheets_v4.Schema$ValueRange[] = isIntern
     ? [  // ── Intern side panel (rows 8, 11, 15) ────────────────
         { range: `'${sheetName}'!X8:Y8`,   values: [['งบจัดสรร', '']] },
         { range: `'${sheetName}'!X9:Y9`,   values: [['เฉพาะ intern', 0]] },
@@ -775,15 +876,22 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
  * - Data area borders
  * - Side panel grey headers + borders + merges
  */
-async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isIntern) {
+async function formatOverallSheet(
+  sheets: sheets_v4.Sheets,
+  ssId: string,
+  sheetId: number,
+  persons: SupabasePerson[],
+  lastRow: number,
+  isIntern: boolean
+): Promise<void> {
   const S     = 8;
   const R8    = S - 1;          // 0-based row 8
   const RLast = lastRow - 1;    // 0-based last data row
   const GRAY  = { red: 0.831, green: 0.831, blue: 0.831 };
-  const GRAY_CELL   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
+  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
   const GRAY_FIELDS = 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)';
 
-  const fmtReqs = [];
+  const fmtReqs: sheets_v4.Schema$Request[] = [];
 
   const WHITE = { red: 1, green: 1, blue: 1 };
 
@@ -854,8 +962,14 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
  * Append 6 blank rows then signature rows at lastRow+4 and lastRow+5.
  * Mirrors GAS: both staff and intern scripts.
  */
-async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) {
-  const blankRows = Array.from({ length: 6 }, () => Array.from({ length: 26 }, () => ' '));
+async function writeOverallSignature(
+  sheets: sheets_v4.Sheets,
+  ssId: string,
+  sheetName: string,
+  sheetId: number,
+  lastRow: number
+): Promise<void> {
+  const blankRows: string[][] = Array.from({ length: 6 }, () => Array.from({ length: 26 }, () => ' '));
   await withRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
     range: `'${sheetName}'!A${lastRow + 1}`,
@@ -908,7 +1022,17 @@ async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) 
  * rowNumMap key: "prefix firstname  lastname" (double space before lastname)
  * rowNumMap value: 1-based row number in staff or intern sheet
  */
-async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear, month, staffSheetName, internSheetName, rowNumMap) {
+async function buildDeptSheets(
+  sheets: sheets_v4.Sheets,
+  ssId: string,
+  depTmplSheetId: number,
+  allPersons: SupabasePerson[],
+  beYear: number,
+  month: number,
+  staffSheetName: string,
+  internSheetName: string,
+  rowNumMap: Record<string, number>
+): Promise<void> {
   const D = 6; // first data row in dep_template (rows 1-5 are header)
 
   for (const dept of Object.keys(DEPT_COLORS)) {
@@ -926,7 +1050,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       spreadsheetId: CONFIG.sk03TemplateId, sheetId: depTmplSheetId,
       requestBody: { destinationSpreadsheetId: ssId },
     }));
-    const sheetId = copyRes.data.sheetId;
+    const sheetId = copyRes.data.sheetId!;
 
     // Rename + tab colour
     const rgb = DEPT_COLORS[dept] ? hexToRgb(DEPT_COLORS[dept]) : null;
@@ -955,7 +1079,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
     // Data rows: [count, "prefix firstname  lastname", "position+rank", type, mgmt_amount, 0, 0, " ", remark]
     // Note: double space before lastname — this is the key for rowNumMap lookup
     // F and G are later overwritten by formulas; E stays as the direct management_stipends amount.
-    const rows = persons.map((p, idx) => {
+    const rows: (string | number)[][] = persons.map((p, idx) => {
       const mgmt = getMgmt(p);
       return [
         idx + 1,
@@ -976,7 +1100,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
 
     const lastRow      = D + persons.length - 1;
     const isInternDept = dept === 'INTERN';
-    const formulaData  = [];
+    const formulaData: sheets_v4.Schema$ValueRange[] = [];
 
     // Set E, F, G formulas referencing staff/intern sheet via row_num
     // Non-INTERN: E = staff!M, F = staff!N, G = E+F
@@ -1021,7 +1145,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
     }));
 
     // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one)
-    const blankRows = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
+    const blankRows: string[][] = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
     await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${lastRow + 1}`,
@@ -1057,9 +1181,9 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
 
   // Delete "ชีต1" if still present (created with the spreadsheet, normally deleted in staff step)
   const meta   = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }));
-  const sheet1 = meta.data.sheets.find(s => s.properties.title === 'ชีต1');
+  const sheet1 = meta.data.sheets!.find(s => s.properties!.title === 'ชีต1');
   if (sheet1) {
-    await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties.sheetId } }] } }));
+    await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties!.sheetId! } }] } }));
     log('  [SK03] Deleted default "ชีต1" sheet');
   }
 }
@@ -1073,7 +1197,13 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
  *   2. intern GAS → adds intern sheet + patches Supabase row_num
  *   3. dep GAS    → adds one dept sheet per department
  */
-async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
+async function createSK03(
+  drive: drive_v3.Drive,
+  sheets: sheets_v4.Sheets,
+  supabasePersons: SupabasePerson[],
+  monthKey: string,
+  supabase: SupabaseClient
+): Promise<string> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
   const month  = parseInt(monthStr);
@@ -1084,8 +1214,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const S = 8; // first data row in overall sheets
 
   // ── Sort people (DEPT_COLORS order → name within dept) ───────────
-  const staffArray  = [];
-  const internArray = [];
+  const staffArray: SupabasePerson[]  = [];
+  const internArray: SupabasePerson[] = [];
   for (const dept of Object.keys(DEPT_COLORS)) {
     const sorted = supabasePersons
       .filter(p => p.department === dept)
@@ -1104,27 +1234,27 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const ssId = (await withRetry(() => drive.files.create({
     requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
     fields: 'id',
-  }))).data.id;
+  }))).data.id!;
   log(`  [SK03] id: ${ssId}`);
 
   for (const old of existing) {
-    await withRetry(() => drive.files.delete({ fileId: old.id }));
+    await withRetry(() => drive.files.delete({ fileId: old.id! }));
     log(`  [SK03] Deleted old file: ${old.id}`);
   }
 
   // ── Fetch template sheet IDs ──────────────────────────────────────
-  const tmplSheets = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }))).data.sheets;
-  const findTmpl   = name => {
-    const s = tmplSheets.find(sh => sh.properties.title === name);
+  const tmplSheets = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }))).data.sheets!;
+  const findTmpl   = (name: string): number => {
+    const s = tmplSheets.find(sh => sh.properties!.title === name);
     if (!s) throw new Error(`Template sheet "${name}" not found`);
-    return s.properties.sheetId;
+    return s.properties!.sheetId!;
   };
   const overallTmplId = findTmpl('overall_template');
   const depTmplId     = findTmpl('dep_template');
 
   // Get all existing sheets (to delete after copying the first new sheet)
-  const ssSheets   = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }))).data.sheets;
-  const oldSheetIds = ssSheets.map(sh => sh.properties.sheetId);
+  const ssSheets   = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }))).data.sheets!;
+  const oldSheetIds = ssSheets.map(sh => sh.properties!.sheetId!);
 
   // ══════════════════════════════════════════════════════════════════
   //  1. Staff sheet
@@ -1133,7 +1263,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const staffSheetId = (await withRetry(() => sheets.spreadsheets.sheets.copyTo({
     spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
     requestBody: { destinationSpreadsheetId: ssId },
-  }))).data.sheetId;
+  }))).data.sheetId!;
 
   // Delete all pre-existing sheets first (avoids name conflict on rename),
   // then rename the newly copied sheet to the target name.
@@ -1162,7 +1292,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   // Totals row: M, N, O = SUM immediately below last person, above signature.
   // Use values.append so it auto-extends the grid — no grid limit errors.
   const RED = { red: 0.933, green: 0.294, blue: 0.169 }; // #EE4B2B
-  const totalsRow = Array.from({ length: 26 }, () => '');  // 26 blank cells (cols A-Z)
+  const totalsRow: (string | number)[] = Array.from({ length: 26 }, () => '');  // 26 blank cells (cols A-Z)
   totalsRow[12] = `=SUM(M${S}:M${staffLastRow})`;  // col M (idx 12)
   totalsRow[13] = `=SUM(N${S}:N${staffLastRow})`;  // col N (idx 13)
   totalsRow[14] = `=SUM(O${S}:O${staffLastRow})`;  // col O (idx 14)
@@ -1217,7 +1347,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const internSheetId = (await withRetry(() => sheets.spreadsheets.sheets.copyTo({
     spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
     requestBody: { destinationSpreadsheetId: ssId },
-  }))).data.sheetId;
+  }))).data.sheetId!;
 
   await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: internSheetId, title: internSheetName }, fields: 'title' } },
@@ -1235,7 +1365,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
 
   // Intern totals row: N and O only (no M — management fee not applicable for interns)
-  const internTotalsRow = Array.from({ length: 26 }, () => '');
+  const internTotalsRow: (string | number)[] = Array.from({ length: 26 }, () => '');
   internTotalsRow[13] = `=SUM(N${S}:N${internLastRow})`;  // col N (idx 13)
   internTotalsRow[14] = `=SUM(O${S}:O${internLastRow})`;  // col O (idx 14)
 
@@ -1284,8 +1414,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   //  3. Department sheets
   // ══════════════════════════════════════════════════════════════════
   // Build row_num lookup: "prefix firstname  lastname" → row in staff/intern sheet
-  const rowNumMap = {};
-  const addToRowNumMap = (p, row) => {
+  const rowNumMap: Record<string, number> = {};
+  const addToRowNumMap = (p: SupabasePerson, row: number): void => {
     const key = `${p.prefix} ${p.firstname}  ${p.lastname}`;
     if (key in rowNumMap) log(`  [SK03] ⚠ rowNumMap duplicate key: "${key}" — overwriting row ${rowNumMap[key]} with ${row}`, 'warn');
     rowNumMap[key] = row;
@@ -1302,7 +1432,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 // ═══════════════════════════════════════════════════════════════════
 //  DATAFLOW DIAGRAM
 // ═══════════════════════════════════════════════════════════════════
-function showDataflow() {
+function showDataflow(): void {
   console.log('');
   console.log('  ┌──────────────────────┐     ┌──────────────────────┐');
   console.log('  │     Google Drive      │     │       Supabase        │');
@@ -1340,8 +1470,8 @@ function showDataflow() {
 // ═══════════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════════
-async function main() {
-  const missing = [
+async function main(): Promise<void> {
+  const missing = ([
     ['GOOGLE_CLIENT_ID',         CONFIG.google.clientId],
     ['GOOGLE_CLIENT_SECRET',     CONFIG.google.clientSecret],
     ['GOOGLE_REFRESH_TOKEN',     CONFIG.google.refreshToken],
@@ -1351,7 +1481,7 @@ async function main() {
     ['GOOGLE_MERGE_FOLDER_ID',   CONFIG.outputFolderId],
     ['GOOGLE_SK03_FOLDER_ID',    CONFIG.sk03FolderId],
     ['GOOGLE_SK03_TEMPLATE_ID',  CONFIG.sk03TemplateId],
-  ].filter(([, v]) => !v).map(([k]) => k);
+  ] as Array<[string, string]>).filter(([, v]) => !v).map(([k]) => k);
 
   if (missing.length > 0) {
     console.error('\n❌  Missing variables in .env:');
@@ -1371,7 +1501,7 @@ async function main() {
   // Pre-flight: verify SK03 template has required sheets before processing any month
   log('[Pre-flight] Verifying SK03 template sheets…');
   const tmplCheck = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }));
-  const tmplTitles = tmplCheck.data.sheets.map(s => s.properties.title);
+  const tmplTitles = tmplCheck.data.sheets!.map(s => s.properties!.title);
   for (const required of ['overall_template', 'dep_template']) {
     if (!tmplTitles.includes(required)) {
       console.error(`\n❌  SK03 template is missing sheet: "${required}"`);
@@ -1388,7 +1518,12 @@ async function main() {
   console.log('Candidate window:', months.map(m => m.key).join(', '), `(targets the latest ${TARGET_COMPLETE_MONTHS} complete months)`);
   console.log('');
 
-  const results = { processed: 0, skipped: 0, failed: [] };
+  interface Results {
+    processed: number;
+    skipped: number;
+    failed: { key: string; error: string }[];
+  }
+  const results: Results = { processed: 0, skipped: 0, failed: [] };
 
   // ── Phase A — discovery ──────────────────────────────────────────
   // Walk newest → oldest. Steps 2-4 already signal "not ready yet" by
@@ -1400,7 +1535,13 @@ async function main() {
   // months are found, or the window is exhausted — this is a fixed top-N
   // scan, not unbounded backlog-hunting past older months.
   console.log(`┌─ Discovery ${'─'.repeat(40)}`);
-  const completeMonths = [];
+  interface CompleteMonth {
+    key: string;
+    monthInfo: MonthInfo;
+    driveData: DriveMonthData;
+    sbData: SupabasePerson[];
+  }
+  const completeMonths: CompleteMonth[] = [];
   for (const monthInfo of months) {
     if (completeMonths.length >= TARGET_COMPLETE_MONTHS) break;
     const { key } = monthInfo;
@@ -1462,7 +1603,7 @@ async function main() {
 
       results.processed++;
       console.log('└─ ✓ complete\n');
-    } catch (err) {
+    } catch (err: any) {
       console.error(`  [ERROR] ${err.stack ?? err.message}`);
       results.failed.push({ key, error: err.message });
       console.log('└─ failed\n');
@@ -1478,4 +1619,4 @@ async function main() {
   console.log('');
 }
 
-main().catch(err => { console.error('\nFatal:', err.stack ?? err); process.exit(1); });
+main().catch((err: any) => { console.error('\nFatal:', err.stack ?? err); process.exit(1); });

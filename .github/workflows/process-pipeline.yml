@@ -56,7 +56,7 @@ jobs:
           GOOGLE_ROOT_FOLDER_ID:  ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
-        run: node preprocess-drive.js
+        run: npx tsx preprocess-drive.ts
 
       - name: Run process pipeline
         working-directory: process
@@ -70,7 +70,7 @@ jobs:
           GOOGLE_SK03_TEMPLATE_ID: ${{ secrets.GOOGLE_SK03_TEMPLATE_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
-        run: node process.js
+        run: npx tsx process.ts
 
       # Run-log artifact upload REMOVED — see .github/workflows/p4p-cron.yml
       # for the reasoning. These logs carry physician names and this repo is

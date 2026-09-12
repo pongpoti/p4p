@@ -2,9 +2,10 @@
   "name": "p4p-process",
   "version": "1.0.0",
   "description": "P4P physician workload Excel merge pipeline — Google Drive + Supabase",
-  "main": "process.js",
+  "main": "process.ts",
   "scripts": {
-    "start": "node process.js"
+    "start": "tsx process.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -13,5 +14,10 @@
     "googleapis": "^144.0.0",
     "jszip": "^3.10.1",
     "puppeteer": "^25.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0"
   }
 }
