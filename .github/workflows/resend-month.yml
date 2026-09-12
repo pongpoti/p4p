@@ -2,7 +2,7 @@ name: P4P Resend Month(s)
 
 # Manual one-off: report on specific past month(s) outside the normal
 # 3-month tracker window, regardless of completeness — see
-# automation/scripts/resend-month.mjs for why this exists.
+# automation/scripts/resend-month.ts for why this exists.
 on:
   workflow_dispatch:
     inputs:
@@ -55,4 +55,4 @@ jobs:
           TARGET_MONTHS:        ${{ inputs.target_months }}
           TEST_DEPT:            ${{ inputs.test_dept }}
           TEST_EMAIL:           ${{ inputs.test_email }}
-        run: node scripts/resend-month.mjs
+        run: npx tsx scripts/resend-month.ts

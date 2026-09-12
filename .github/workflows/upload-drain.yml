@@ -3,7 +3,7 @@ name: "! drain LINE uploads"
 on:
   schedule:
     # Hourly RELAY, not a polling interval: each run long-polls the queue for
-    # ~60 minutes (see automation/scripts/drain-uploads.mjs), so one run hands
+    # ~60 minutes (see automation/scripts/drain-uploads.ts), so one run hands
     # over to the next and the queue is never unattended for more than a few
     # seconds. :05 keeps it clear of the top-of-hour crowd.
     - cron: "5 * * * *"
@@ -68,4 +68,4 @@ jobs:
           # Turns the failure bubble's button into a real retry link.
           UPLOAD_LIFF_ID        : ${{ secrets.UPLOAD_LIFF_ID }}
           DRAIN_MINUTES         : "60"
-        run: node scripts/drain-uploads.mjs
+        run: npx tsx scripts/drain-uploads.ts

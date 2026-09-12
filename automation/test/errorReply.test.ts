@@ -1,0 +1,42 @@
+import { test } from "node:test";
+import assert   from "node:assert/strict";
+import { buildHtmlErrorReply } from "../templates/error-reply.js";
+
+const strip = (html: string) =>
+  html.replace(/<style[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
+test("month_mismatch names both months, so the physician can fix it unaided", () => {
+  const text = strip(buildHtmlErrorReply({
+    safeFilename: "P4P.xlsx",
+    errorType   : "month_mismatch",
+    statedDate  : "กรกฎาคม 2569",
+    detectedDate: "มิถุนายน 2569",
+  }));
+  assert.match(text, /เดือนที่ระบุไม่ตรงกับไฟล์/, "banner names the actual problem");
+  assert.match(text, /เดือนที่ท่านระบุ กรกฎาคม 2569/);
+  assert.match(text, /เดือนที่พบในไฟล์ มิถุนายน 2569/);
+  assert.doesNotMatch(text, /เกิดข้อผิดพลาดในการประมวลผล/, "must not fall back to the generic copy");
+});
+
+test("the detected-date row keeps its old label when there is nothing to compare against", () => {
+  const text = strip(buildHtmlErrorReply({
+    errorType   : "wrong_date",
+    detectedDate: "2570_13",
+  }));
+  assert.match(text, /วันที่ที่ตรวจพบ 2570_13/);
+});
+
+test("no_period and ambiguous_period each say what to do next", () => {
+  const noPeriod = strip(buildHtmlErrorReply({ errorType: "no_period" }));
+  assert.match(noPeriod, /ไม่ได้ระบุเดือนที่ส่ง/);
+  assert.match(noPeriod, /ก\.ค\. 2569/, "gives a concrete example to copy");
+
+  const ambiguous = strip(buildHtmlErrorReply({ errorType: "ambiguous_period" }));
+  assert.match(ambiguous, /ระบุหลายเดือนในอีเมลเดียว/);
+  assert.match(ambiguous, /ส่งแยกอีเมลละหนึ่งเดือน/);
+});
+
+test("an unknown error type still renders the generic copy rather than blank", () => {
+  const text = strip(buildHtmlErrorReply({ errorType: "something_new" }));
+  assert.match(text, /เกิดข้อผิดพลาดในการประมวลผล/);
+});

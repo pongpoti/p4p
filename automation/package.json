@@ -2,15 +2,16 @@
   "name": "gmail-server-to-server",
   "version": "1.0.0",
   "description": "Server-to-server Gmail API access via OAuth2 refresh token",
-  "main": "index.js",
+  "main": "index.ts",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "setup": "node setup.js",
-    "start": "node index.js",
-    "test": "node --test test/*.test.js"
+    "setup": "tsx setup.ts",
+    "start": "tsx index.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -19,5 +20,10 @@
     "exceljs": "^4.4.0",
     "googleapis": "^144.0.0",
     "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
   }
 }

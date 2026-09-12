@@ -48,7 +48,7 @@ jobs:
           set -o pipefail
           for attempt in 1 2; do
             echo "▶ Attempt $attempt"
-            node index.js 2>&1 | tee run.log && break
+            npx tsx index.ts 2>&1 | tee run.log && break
             if [ $attempt -lt 2 ]; then
               echo "⚠️ Attempt $attempt failed — retrying in 30s…"
               sleep 30

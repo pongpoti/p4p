@@ -38,4 +38,4 @@ jobs:
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
           P4P_FOLDER_ID:        ${{ secrets.P4P_FOLDER_ID }}
           TARGET_DATE:          ${{ inputs.target_date }}
-        run: node scripts/check-month.mjs
+        run: npx tsx scripts/check-month.ts

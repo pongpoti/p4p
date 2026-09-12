@@ -51,4 +51,4 @@ jobs:
           TARGET_MONTHS:        ${{ github.event.inputs.target_months }}
           BACKFILL_AFTER:       ${{ github.event.inputs.after }}
           DRY_RUN:              ${{ github.event.inputs.dry_run }}
-        run: node scripts/backfill-submissions.mjs
+        run: npx tsx scripts/backfill-submissions.ts

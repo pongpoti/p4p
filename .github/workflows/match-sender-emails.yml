@@ -28,7 +28,7 @@ jobs:
 
       - run: npm ci
 
-      # match-sender-emails.mjs writes results straight to the
+      # match-sender-emails.ts writes results straight to the
       # sender_physician_match Supabase table (saveSenderMatch) — that table
       # is RLS-locked with zero anon/authenticated policies (see
       # automation/sql/sender_physician_match.sql), unlike a committed file.
@@ -48,4 +48,4 @@ jobs:
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
-        run: node scripts/match-sender-emails.mjs
+        run: npx tsx scripts/match-sender-emails.ts
