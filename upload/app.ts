@@ -36,11 +36,11 @@
   var db = P4P.db as SupabaseClientLike
   var esc = P4P.escHtml
 
-  // P4P.receipt comes from a SEPARATE <script src="/lib/line-receipt-flex.js">
-  // tag (see upload/index.html) — a request that can fail (flaky hospital
-  // wifi, or a WebView replaying a poisoned cache entry for that URL — see
-  // that file's own header comment) independently of this file's own script
-  // tag loading fine. When it does, every call below degrades to a
+  // P4P.receipt comes from a SEPARATE <script src="/lib/line-receipt-flex.browser.js">
+  // tag (see upload/index.html, and that file's own header comment for why
+  // it is a separate file from the one main.ts require()s) — a request that
+  // can still fail outright (flaky hospital wifi) independently of this
+  // file's own script tag loading fine. When it does, every call below degrades to a
   // GENERIC bubble instead of throwing "receipt is undefined" and blanking
   // the whole result screen — the score is already saved server-side by this
   // point (or the rejection reason is already known); only the exact layout,

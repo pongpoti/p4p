@@ -1,18 +1,32 @@
-/** GENERATED FILE'S SOURCE — this file is compiled to
- * lib/line-receipt-flex.js by `npm run build:browser` (see
- * tsconfig.browser.json). Edit this file, not the .js twin: main.js
- * `require()`s that compiled file directly, and upload/index.html serves it
- * byte-for-byte via express.static() — it is a build artifact and must not
- * be hand-edited.
+/** GENERATED FILE'S SOURCE — `npm run build:browser` (see
+ * tsconfig.browser.json) compiles this to TWO committed twins. Edit this
+ * file, not either .js twin — both are build artifacts and must not be
+ * hand-edited:
  *
- * This comment line exists to force `stampAssets()`'s content hash to change
- * (2026-09): the URL for this file hadn't changed since the TS-conversion
- * deploy, and a physician's LINE WebView kept replaying an "undefined" P4P.receipt
- * on every retry — the same cached-forever-regardless-of-headers failure mode
- * main.ts's own comment above `stampAssets()` documents for ranking/app.js's
- * 2026-08 incident. A pure comment change is enough: the fix IS the new hash,
- * not anything in the logic below. */
-/**
+ *   • lib/line-receipt-flex.js         `require()`d by main.ts (Node).
+ *   • lib/line-receipt-flex.browser.js served to the browser by
+ *                                      upload/index.html's <script src>,
+ *                                      byte-for-byte via express.static().
+ *
+ * These MUST be two separate files, not one shared between both loaders as
+ * an earlier version of this comment described. Root cause of a 2026-09
+ * incident (physicians' upload receipts silently losing their Flex
+ * formatting, degrading to a fallback bubble): main.ts's `require("./lib/
+ * line-receipt-flex")` makes Vercel's Node builder trace and recompile
+ * lib/line-receipt-flex.ts itself for the deployed function — with
+ * `esModuleInterop`, so its output starts with
+ * `Object.defineProperty(exports, "__esModule", ...)`. That recompiled file
+ * was what ended up served at /lib/line-receipt-flex.js, not the plain
+ * ("module": "none") browser build tsconfig.browser.json actually produces
+ * — and `exports` is not a global in a browser, so the script threw on its
+ * very first line and P4P.receipt was never set. Two earlier fixes (PR #176,
+ * #177) misdiagnosed this as flaky wifi / WebView cache poisoning and only
+ * treated the symptom. Giving the browser its own filename, which nothing
+ * in main.ts's require()/import graph ever names, means Vercel's Node
+ * builder has no reason to touch it — it is staged into the deployment
+ * unchanged (vercel.json's `includeFiles: ["lib/**"]`) and served exactly
+ * as tsconfig.browser.json compiled it.
+ *
  * lib/line-receipt-flex.js
  *
  * The LINE Flex receipt for a P4P upload — success, pending and failure —
@@ -21,13 +35,13 @@
  *   • main.js          `require("./lib/line-receipt-flex")` — the /line
  *                      webhook's postback branch (§7.5 steps ②/④) answers
  *                      with these bubbles.
- *   • upload/app.js    `<script src="/lib/line-receipt-flex.js">` — the page
- *                      hands the success bubble to `liff.sendMessages()` so
- *                      the receipt lands in the chat as the physician's own
- *                      message, free (§7.5).
+ *   • upload/app.js    `<script src="/lib/line-receipt-flex.browser.js">` —
+ *                      the page hands the success bubble to
+ *                      `liff.sendMessages()` so the receipt lands in the
+ *                      chat as the physician's own message, free (§7.5).
  *
- * Hence the UMD-lite footer: one file, two loaders, no build step. Note this
- * is NOT shared with `automation/` — that is C8's isolation boundary, so the
+ * Hence the UMD-lite footer: one source, two loaders. Note this is NOT
+ * shared with `automation/` — that is C8's isolation boundary, so the
  * worker keeps its own copy in automation/templates/line-receipt.js.
  *
  * The palette is deliberately the bot's existing one (`createStatusList()` in
