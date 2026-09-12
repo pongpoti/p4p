@@ -1,6 +1,6 @@
 name: root tests
 
-# The parity guard between lib/p4p-score.js and automation/claude-analyst.js
+# The parity guard between lib/p4p-score.ts and automation/claude-analyst.ts
 # only guards anything if it actually runs: a vendored copy that nothing
 # checks is just two files that will disagree eventually (see
 # lib/__tests__/parity.test.mjs).
@@ -8,21 +8,21 @@ on:
   push:
     paths:
       - "lib/**"
-      - "main.js"
+      - "main.ts"
       - "assets/**"
       - "upload/**"
       - "src/**"
-      - "automation/claude-analyst.js"
+      - "automation/claude-analyst.ts"
       - "package.json"
       - ".github/workflows/root-tests.yml"
   pull_request:
     paths:
       - "lib/**"
-      - "main.js"
+      - "main.ts"
       - "assets/**"
       - "upload/**"
       - "src/**"
-      - "automation/claude-analyst.js"
+      - "automation/claude-analyst.ts"
       - "package.json"
       - ".github/workflows/root-tests.yml"
 
