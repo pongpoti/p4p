@@ -35,7 +35,33 @@
     var P4P = window.P4P;
     var db = P4P.db;
     var esc = P4P.escHtml;
-    var receipt = P4P.receipt;
+    // P4P.receipt comes from a SEPARATE <script src="/lib/line-receipt-flex.js">
+    // tag (see upload/index.html) — a request that can fail (flaky hospital
+    // wifi) independently of this file's own script tag loading fine. When it
+    // does, every call below degrades to a plain-text/generic equivalent
+    // instead of throwing "receipt is undefined" and blanking the whole result
+    // screen — the score is already saved server-side by this point (or the
+    // rejection reason is already known); only the cosmetic chat-receipt Flex
+    // bubble and the exact grouped-thousands score formatting are lost.
+    var receipt = P4P.receipt || {
+        THAI_MONTHS_SHORT: [],
+        displayMonth: function (monthKey) { return P4P.monthKeyDisplay(monthKey); },
+        formatScore: function (score) {
+            var n = Number(score);
+            return isFinite(n) ? n.toFixed(2) : "-";
+        },
+        formatSubmittedAt: function (iso) { return iso; },
+        errorText: function () { return "ระบบไม่สามารถอ่านไฟล์ของท่านได้ กรุณาตรวจสอบไฟล์แล้วส่งใหม่"; },
+        buildScoreReceipt: function (args) {
+            return { type: "text", text: "บันทึกคะแนน P4P " + P4P.monthKeyDisplay(args.monthKey) + " แล้ว" };
+        },
+        buildPendingBubble: function () {
+            return { type: "text", text: "ระบบกำลังตรวจสอบไฟล์ของท่าน" };
+        },
+        buildFailureBubble: function () {
+            return { type: "text", text: "ส่งไฟล์ P4P ไม่สำเร็จ" };
+        },
+    };
     var BUCKET = "p4p-uploads";
     // LIFF often nests an already percent-encoded querystring inside
     // liff.state (e.g. "?liff.state=%3Fprobe%3D1"), so reading
