@@ -10,6 +10,7 @@
     "test": "tsx --test lib/__tests__/*.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
     "build:browser": "tsc -p tsconfig.browser.json",
+    "build:constants": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --outDir src src/constants.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
