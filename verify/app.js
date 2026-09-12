@@ -161,7 +161,7 @@
     function sanitizeName(raw) {
         return (String(raw || "")
             // eslint-disable-next-line no-control-regex
-            .replace(/[ -]/g, " ") // C0 controls + DEL
+            .replace(/[\u0000-\u001F\u007F]/g, " ") // C0 controls + DEL
             .replace(/\s+/g, " ")
             .trim()
             .slice(0, NAME_MAX));
