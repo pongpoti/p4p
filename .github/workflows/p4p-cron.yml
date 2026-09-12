@@ -3,8 +3,18 @@ name: "! extract email"
 on:
   schedule:
     # :17 avoids queuing behind everyone else's top-of-hour crons (mirrors process-pipeline.yml)
-    - cron: "17 */2 * * *"   # every 2 hours, offset to :17
+    - cron: "17 * * * *"   # hourly, offset to :17
   workflow_dispatch:          # also allow manual trigger from GitHub UI
+
+# Runs are normally seconds long, but the 30-minute timeout below leaves
+# room for a slow one (a burst of submissions, a slow Claude API call).
+# Without this, an overrun run and the next hourly trigger would both hit
+# the same Gmail inbox at once. Queue instead of cancelling — the job
+# emails senders and writes to Supabase, so killing one mid-run could leave
+# a submission half-processed.
+concurrency:
+  group: extract-email
+  cancel-in-progress: false
 
 permissions:
   contents: read
