@@ -3,7 +3,7 @@
  * submission deadlines.
  *
  * Ported from list/app.js, ranking/app.js, status/app.js and
- * ../../src/constants.cjs, which each had their own partial copy of this.
+ * ../../src/constants.ts, which each had their own partial copy of this.
  *
  * A "month key" is the name of a Supabase roster table: `BBBB_MM`, where BBBB
  * is a Buddhist-Era year and MM is a zero-padded 1-based month — e.g. 2569_04.
@@ -112,7 +112,7 @@ export function thaiLabelFromKey(key: unknown): string | null {
  * The `count` most recent months, newest first, as month keys.
  *
  * Drives the /list/ month picker (6) and matches MONTH_ITERATOR in
- * src/constants.cjs, which the LINE Flex month picker uses (also 6).
+ * src/constants.ts, which the LINE Flex month picker uses (also 6).
  */
 export function recentMonthKeys(count: number, now: Date = new Date()): string[] {
   const keys: string[] = []
