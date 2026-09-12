@@ -5,7 +5,7 @@
  * is reproduced exactly — it is rendered by the LINE client, not by us, and the
  * URLs point at a registered LIFF app, so this is transcription rather than a
  * rewrite. The only change is sourcing months and colours from lib/ instead of
- * src/constants.cjs.
+ * src/constants.ts.
  */
 import { monthColorHex, MONTH_COLORS } from "../colors"
 import { recentMonthKeys, THAI_MONTHS, parseMonthKey } from "../months"

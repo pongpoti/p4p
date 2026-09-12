@@ -1,16 +1,16 @@
 /**
  * Month accent colours.
  *
- * These currently live in TWO places: ../../src/constants.cjs (used by the
- * Express server for Flex messages and by scripts/update-month-picker.mjs) and
+ * These currently live in TWO places: ../../src/constants.ts (used by the
+ * Express server for Flex messages and by scripts/update-month-picker.mts) and
  * ../../assets/shared.js (used by the browser pages). This module is the
  * replacement for both, but it cannot delete either one until the Express
  * server is retired at cutover.
  *
  * Until then the copies must not drift, so lib/__tests__/parity.test.ts reads
- * src/constants.cjs directly and asserts it still matches this file. If you
+ * src/constants.ts directly and asserts it still matches this file. If you
  * change a colour here and that test fails, change it there too — the rich menu
- * and the Flex month picker are generated from the CJS copy.
+ * and the Flex month picker are generated from this copy.
  */
 
 /** A month's accent colour. `tw` is the Tailwind v3 class name that the LINE

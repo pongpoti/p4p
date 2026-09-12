@@ -40,4 +40,4 @@ jobs:
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           UPLOAD_LIFF_ID: '2008561527-sj7tuMLL'
-        run: node scripts/setup-richmenu.mjs
+        run: npx tsx scripts/setup-richmenu.mts

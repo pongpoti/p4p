@@ -36,4 +36,4 @@ jobs:
           GOOGLE_CLIENT_SECRET:  ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN:  ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           GOOGLE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
-        run: node populate.js
+        run: npx tsx populate.ts

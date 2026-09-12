@@ -1,24 +1,25 @@
+import type { Metadata } from "next"
+import VerifyClient from "./VerifyClient"
+
 /**
- * PLACEHOLDER — /verify/ is Phase 5 and has not been built yet.
+ * OTP login + access-request + silent LINE reauth.
  *
- * It exists now because the middleware gate redirects here, so without it every
- * unauthenticated request would 404 and the redirect chain could not be tested
- * end to end. Both /verify and /verify/ render this via a middleware rewrite.
+ * Served at BOTH /verify and /verify/ via a middleware rewrite (see
+ * ../../middleware.ts) — no redirect between them, because that redirect
+ * used to destroy LIFF's `#access_token=…` login fragment and looped a
+ * physician forever inside LINE's webview (see lib/gate/targets.ts).
  *
- * Replaced in Phase 5 by the real OTP + access-request + LINE-bind flow.
+ * No server-side gating and no access token to resolve here, unlike
+ * /status/, /list/ and /ranking/: LINE identity capture and the `physicians`
+ * write live entirely in the browser plus a Supabase Edge Function (see
+ * scripts/auth-rewrite-2026-08.sql and supabase/functions/line-verify). The
+ * page is the same for every visitor, every time — dynamic only because
+ * static optimisation is disabled app-wide for the CSP nonce (middleware.ts).
  */
 export const dynamic = "force-dynamic"
 
-export default function VerifyPlaceholder() {
-  return (
-    <main className="mx-auto max-w-[520px] px-5 py-16 text-center">
-      <h1 className="font-[family-name:var(--font-manrope)] text-lg font-bold text-[var(--color-secondary)]">
-        ยืนยันตัวตน
-      </h1>
-      <p className="mt-3 text-sm text-[var(--color-ink-muted)]">
-        Phase 5 — not implemented yet. The Express app at <code>/verify/</code> is still the
-        live implementation.
-      </p>
-    </main>
-  )
+export const metadata: Metadata = { title: "ยืนยันอีเมล — SAKHONMSO P4P" }
+
+export default function VerifyPage() {
+  return <VerifyClient />
 }

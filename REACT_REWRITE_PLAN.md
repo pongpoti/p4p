@@ -14,13 +14,45 @@
 > load and reused) rather than reproduce the old state machine this plan
 > describes in detail. The URL-shape and CSP contracts in §1 are unaffected.
 
-**Status:** Phases 0–4 implemented in [`web/`](web/). Phases 5–7 proposed.
+**Status:** Phases 0–4 implemented in [`web/`](web/). Phase 5 (`/verify/`) implemented
+2026-09. Phases 6–7 still proposed, and now blocked on the gap documented in §1b below.
 **Scope:** the four physician pages (`/verify/`, `/status/`, `/list/`, `/ranking/`), the
 **`/admin/` roster dashboard** (§1a), the shared browser helpers in `assets/`, and the HTTP
 surface of `main.js` (gate, session, admin API, webhooks).
 **Explicitly out of scope:** `automation/`, `process/`, `scripts/`, and every SQL migration.
 No database schema changes. The LINE Flex-message builders move file but keep their logic
 byte-for-byte.
+
+> **2026-09 update — a real gap found while resuming this plan, and one open question
+> about Phase 6 that a previous attempt left unanswered.**
+>
+> 1. **`/upload/` is not in this plan's scope anywhere above, and has no `web/` port.**
+>    It was added to `main.js` (see `UPLOAD_VIA_LINE_DESIGN.md`, commit `c972703`) after this
+>    plan was written: a fifth gated page (LINE rich-menu file upload), plus the
+>    `POST /upload/score` route (main.js's single largest handler — synchronous Excel
+>    scoring, the confidence gate, Supabase Storage read, roster write, Telegram alert) and
+>    postback/message handling in the `/line` webhook (`buildUploadResultMessage`, the
+>    "ส่งไฟล์ P4P"/"ดูผลคะแนน" triggers). None of it is mentioned in §1's table, §2's target
+>    architecture, or §7's phasing. **Phase 6 cannot retire `main.js` until `/upload/` either
+>    gets its own phase (design + build + the same staging-LIFF verification every other
+>    physician page needed) or a hybrid routing plan is worked out that leaves it on
+>    Express indefinitely.** Treat this as a real scoping gap, not an oversight to route
+>    around silently.
+> 2. **One dual-routing attempt exists in git history with no recorded reason for its
+>    revert.** Commit `2928626` ("Route /admin/\* and /_next/\* to the Next.js rewrite,
+>    alongside Express") added a second `@vercel/next` build to `vercel.json` and routed
+>    `/admin`, `/admin/*`, `/_next/*` to it while leaving Express as the catch-all for
+>    everything else; it was reverted 81 seconds later by commit `2bcf93b`, whose message is
+>    the bare auto-generated revert text — no PR discussion, no follow-up note anywhere in
+>    this repo explaining why. Before Phase 6 attempts anything resembling that dual-build
+>    routing again, reproduce it on a preview deployment and find out what actually broke
+>    (build failure? routing swallowing non-admin paths? doubled cold starts? or simply an
+>    abandoned experiment?) rather than assuming it is safe to redo.
+> 3. **The Telegram webhook path in §1's contract is stale.** `/telegram/webhook` does not
+>    exist in `main.js` today (grep finds none) — Telegram is outbound-alert-only now
+>    (`lib/telegram-notify.ts`), the old inline-button approve/reject flow having been
+>    replaced by the `/admin/` dashboard. Nothing to port there; §1 point 2's file list can
+>    drop it whenever this doc is next revised.
 
 ---
 
@@ -407,13 +439,15 @@ state machine from the start rather than porting the old form-first flow and add
 later. See `main.js`'s `/line/silent-auth` handler and the comment block above it for the
 full reasoning.
 
-**Phase 6 — cutover.** See §9.
+**Phase 6 — cutover.** See §9. **Blocked** until the `/upload/` gap (see the 2026-09 update
+above) has its own plan, and until the unexplained `2928626`/`2bcf93b` revert is understood
+on a preview deployment.
 
 **Phase 7 — decommission.** Delete `main.js`, `verify/`, `status/`, `list/`, `ranking/`,
-`admin/`, `assets/`, `src/constants.cjs`. Rewrite `eslint.config.mjs` (its browser-globals
-block and `supabase`/`liff`/`P4P` globals become meaningless). Delete the parity guard in
-`web/lib/__tests__/parity.test.ts` along with the legacy sources it watches. Retire the
-staging LIFF apps.
+`admin/`, `upload/`, `assets/`, `src/constants.ts` (formerly `.cjs`). Rewrite
+`eslint.config.mjs` (its browser-globals block and `supabase`/`liff`/`P4P` globals become
+meaningless). Delete the parity guard in `web/lib/__tests__/parity.test.ts` along with the
+legacy sources it watches. Retire the staging LIFF apps.
 
 ---
 

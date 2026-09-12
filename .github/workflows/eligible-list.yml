@@ -53,4 +53,4 @@ jobs:
           # in eligible-list.js while this repo was public.
           P4P_ELIGIBLE_FOLDER_ID: ${{ secrets.P4P_ELIGIBLE_FOLDER_ID }}
           TARGET_MONTH: ${{ inputs.target_month }}
-        run: node eligible-list.js
+        run: npx tsx eligible-list.ts

@@ -58,4 +58,4 @@ jobs:
         if: steps.guard.outputs.run == 'true'
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-        run: node scripts/update-month-picker.mjs
+        run: npx tsx scripts/update-month-picker.mts

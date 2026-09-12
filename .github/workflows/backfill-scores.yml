@@ -61,4 +61,4 @@ jobs:
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
           TARGET_YEAR:          ${{ inputs.year }}
           TARGET_MONTH:         ${{ inputs.month }}
-        run: node scripts/backfill-drive-scores.mjs
+        run: npx tsx scripts/backfill-drive-scores.ts

@@ -56,7 +56,7 @@ jobs:
           GOOGLE_ROOT_FOLDER_ID:  ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
-        run: node preprocess-drive.js
+        run: npx tsx preprocess-drive.ts
 
       - name: Run process pipeline
         working-directory: process
@@ -70,7 +70,7 @@ jobs:
           GOOGLE_SK03_TEMPLATE_ID: ${{ secrets.GOOGLE_SK03_TEMPLATE_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
-        run: node process.js
+        run: npx tsx process.ts
 
       # Run-log artifact upload REMOVED — see .github/workflows/p4p-cron.yml
       # for the reasoning. These logs carry physician names and this repo is
@@ -114,7 +114,7 @@ jobs:
           SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
           # Department -> head email comes from the Supabase dept_heads
           # table (see automation/sql/dept_heads.sql), not a secret.
-          # Oversight summary recipient. Was hardcoded in score-tracker.mjs,
+          # Oversight summary recipient. Was hardcoded in score-tracker.ts,
           # which published a personal address in this public repo. If this
           # secret is missing the summary copy is skipped with a warning and
           # the dept-head reports still send.
@@ -124,4 +124,4 @@ jobs:
           # Manual-run test overrides — blank on the scheduled run (see workflow_dispatch inputs above)
           TEST_DEPT:            ${{ inputs.test_dept }}
           TEST_EMAIL:           ${{ inputs.test_email }}
-        run: node scripts/score-tracker.mjs
+        run: npx tsx scripts/score-tracker.ts

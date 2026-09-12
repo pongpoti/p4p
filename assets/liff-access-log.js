@@ -1,3 +1,9 @@
+"use strict";
+/** GENERATED FILE'S SOURCE — this file is compiled to
+ * assets/liff-access-log.js by `npm run build:browser` (see
+ * tsconfig.browser.json). Edit this file, not the .js twin, which is a
+ * build artifact served byte-for-byte by express.static() and must not be
+ * hand-edited. */
 /**
  * liff-access-log.js — reports one "page opened" beacon per load to the
  * log_liff_access() RPC, for the Telegram access-alert
@@ -27,20 +33,21 @@
  * Never blocks or affects the page: any failure is caught and logged to the
  * console only.
  */
-;(function (global) {
-  "use strict"
-
-  var PAGES = ["/status/", "/list/", "/ranking/", "/upload/"]
-  var path = global.location.pathname
-  if (PAGES.indexOf(path) === -1 || !global.P4P || !global.P4P.db) return
-  var page = path.replace(/\//g, "")
-
-  global.P4P.db
-    .rpc("log_liff_access", { p_page: page })
-    .then(function (res) {
-      if (res && res.error) console.warn("[liff-access-log] rpc error:", res.error)
+;
+(function (global) {
+    "use strict";
+    var PAGES = ["/status/", "/list/", "/ranking/", "/upload/"];
+    var path = global.location.pathname;
+    if (PAGES.indexOf(path) === -1 || !global.P4P || !global.P4P.db)
+        return;
+    var page = path.replace(/\//g, "");
+    global.P4P.db
+        .rpc("log_liff_access", { p_page: page })
+        .then(function (res) {
+        if (res && res.error)
+            console.warn("[liff-access-log] rpc error:", res.error);
     })
-    .catch(function (err) {
-      console.warn("[liff-access-log] report failed:", err)
-    })
-})(window)
+        .catch(function (err) {
+        console.warn("[liff-access-log] report failed:", err);
+    });
+})(window);

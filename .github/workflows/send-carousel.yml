@@ -51,17 +51,17 @@ jobs:
         # value here and sets a bad precedent for future secrets.)
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
-        run: node scripts/validate-flex.mjs "${{ inputs.version }}"
+        run: npx tsx scripts/validate-flex.mts "${{ inputs.version }}"
 
       - name: Test-send to a single user
         if: inputs.mode == 'test'
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: node scripts/send-test-flex.mjs "${{ inputs.version }}"
+        run: npx tsx scripts/send-test-flex.mts "${{ inputs.version }}"
 
       - name: Broadcast to all followers
         if: inputs.mode == 'broadcast'
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
-        run: node scripts/broadcast-flex.mjs "${{ inputs.version }}"
+        run: npx tsx scripts/broadcast-flex.mts "${{ inputs.version }}"
