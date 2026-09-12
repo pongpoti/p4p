@@ -2,11 +2,11 @@
  * Build update-card PNGs and Flex carousel JSON for a release.
  *
  * Usage:
- *   node scripts/build-cards.mjs          ← builds latest (v1)
- *   node scripts/build-cards.mjs v1       ← explicit version
- *   node scripts/build-cards.mjs v2       ← future release
+ *   npx tsx scripts/build-cards.mts          ← builds latest (v1)
+ *   npx tsx scripts/build-cards.mts v1       ← explicit version
+ *   npx tsx scripts/build-cards.mts v2       ← future release
  *
- * Each release lives in scripts/releases/<version>.mjs and outputs to:
+ * Each release lives in scripts/releases/<version>.mts and outputs to:
  *   assets/cards/<version>/*.png
  *   assets/cards/feature-carousel.<version>.flex.json
  */
@@ -15,13 +15,40 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
+import type { messagingApi } from '@line/bot-sdk'
 import { svgToPng } from './render.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+// Shape of a scripts/releases/<version>.mts module, as consumed here. Kept
+// local (rather than imported from a releases file) since either release
+// module is loaded dynamically below and neither is a fixed dependency of
+// this script.
+interface SvgSpec {
+  file: string
+  width: number
+  svg: string
+}
+
+interface FeatureSpec {
+  img: string
+  title: string
+  bullets: string[]
+}
+
+interface ReleaseModule {
+  RELEASE: string
+  BASE_URL: string
+  ALT_TEXT: string
+  THEME_COLOR?: string
+  THEME_LABEL_COLOR?: string
+  svgs: SvgSpec[]
+  features: FeatureSpec[]
+}
+
 const LATEST  = 'v1'
 const version = process.argv[2] ?? LATEST
-const release = await import(`./releases/${version}.mjs`)
+const release = (await import(`./releases/${version}.mjs`)) as ReleaseModule
 const { RELEASE, BASE_URL, ALT_TEXT, svgs, features } = release
 // Optional per-release accent for the TEXT area (bullet dot, divider bar,
 // "ฟีเจอร์" eyebrow label) — separate from the hero PNGs' own colours, which
@@ -42,17 +69,17 @@ mkdirSync(OUT, { recursive: true })
 // live (2026-09-08): a badge-position fix was pushed, deployed, and still
 // didn't appear on a fresh test send because the URL hadn't changed. A
 // bare filename is stable across edits; the hash isn't.
-const hashes = {}
+const hashes: Record<string, string> = {}
 for (const { file, svg, width } of svgs) {
   const png = svgToPng(svg, width)
   writeFileSync(join(OUT, file), png)
   hashes[file] = createHash('sha1').update(png).digest('hex').slice(0, 8)
   console.log(`✓ ${RELEASE}/${file} — ${(png.length / 1024).toFixed(1)} KB`)
 }
-const urlFor = (file) => `${BASE_URL}/${file}?v=${hashes[file]}`
+const urlFor = (file: string): string => `${BASE_URL}/${file}?v=${hashes[file]}`
 
 // ── Build Flex carousel JSON ──────────────────────────────────────────────────
-const bulletRow = (text) => ({
+const bulletRow = (text: string): messagingApi.FlexBox => ({
   type: 'box', layout: 'baseline', spacing: 'sm', margin: 'md',
   contents: [
     { type: 'text', text: '•', size: 'sm', color: THEME_COLOR, weight: 'bold', flex: 0 },
@@ -60,7 +87,7 @@ const bulletRow = (text) => ({
   ],
 })
 
-const featureBubble = ({ img, title, bullets }) => ({
+const featureBubble = ({ img, title, bullets }: FeatureSpec): messagingApi.FlexBubble => ({
   type: 'bubble',
   size: 'mega',
   hero: {
@@ -78,7 +105,7 @@ const featureBubble = ({ img, title, bullets }) => ({
   },
 })
 
-const message = {
+const message: messagingApi.FlexMessage = {
   type: 'flex',
   altText: ALT_TEXT,
   contents: {

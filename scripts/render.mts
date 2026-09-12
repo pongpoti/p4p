@@ -25,7 +25,7 @@ const fontFiles = [
 // NOTE: resvg-js 2.6.2 ignores `fitTo` when custom fonts are supplied, so we
 // set the output size by writing explicit width/height onto the root <svg>; the
 // viewBox keeps the original coordinate system.
-export function svgToPng(svg, width = 2500) {
+export function svgToPng(svg: string, width = 2500): Buffer {
   const vb = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/)
   if (vb) {
     const height = Math.round((width * Number(vb[2])) / Number(vb[1]))

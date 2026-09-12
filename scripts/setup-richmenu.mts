@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import axios from 'axios'
+import type { messagingApi } from '@line/bot-sdk'
 import { svgToPng } from './render.mjs'
 import {
   getMonthData, generateSVG, buildMenuPayload, setAlias, createAndUpload,
@@ -37,8 +38,17 @@ const API     = 'https://api.line.me'
 const authHdr = { Authorization: `Bearer ${TOKEN}` }
 const jsonHdr = { ...authHdr, 'Content-Type': 'application/json' }
 
-const log = (m) => process.stdout.write(`${m}\n`)
-const ok  = (m) => log(`✓ ${m}`)
+const log = (m: string): void => { process.stdout.write(`${m}\n`) }
+const ok  = (m: string): void => log(`✓ ${m}`)
+
+// Pull the readable part of an axios (or generic) error out for logging,
+// mirroring the original `e.response?.data?.message ?? e.message` — no
+// stringify fallback added, so an all-undefined error still logs "undefined"
+// exactly as before.
+function axiosErrorMessage(err: unknown): string | undefined {
+  const e = err as { response?: { data?: { message?: string } }; message?: string }
+  return e?.response?.data?.message ?? e?.message
+}
 
 // Look up an alias's CURRENT richMenuId before touching it, purely so the
 // old object can be deleted once the alias points elsewhere — setAlias()
@@ -46,25 +56,25 @@ const ok  = (m) => log(`✓ ${m}`)
 // menu object the alias used to point to. Left alone, every re-run of this
 // script would leak one orphaned rich menu per aliased block: harmless to a
 // user (nothing still points at it), but it still counts against the
-// account's rich-menu quota forever. update-month-picker.mjs's own standalone
+// account's rich-menu quota forever. update-month-picker.mts's own standalone
 // CLI runner already does this same lookup-then-delete for exactly this
-// reason; this mirrors it for both aliases setup-richmenu.mjs manages.
-async function currentAliasTarget(aliasId) {
+// reason; this mirrors it for both aliases setup-richmenu.mts manages.
+async function currentAliasTarget(aliasId: string): Promise<string | null> {
   try {
-    const res = await axios.get(`${API}/v2/bot/richmenu/alias/${aliasId}`, { headers: authHdr })
+    const res = await axios.get<{ richMenuId: string }>(`${API}/v2/bot/richmenu/alias/${aliasId}`, { headers: authHdr })
     return res.data.richMenuId
   } catch {
     return null
   }
 }
 
-async function deleteOldMenu(oldId, newId, label) {
+async function deleteOldMenu(oldId: string | null, newId: string, label: string): Promise<void> {
   if (!oldId || oldId === newId) return
   try {
     await axios.delete(`${API}/v2/bot/richmenu/${oldId}`, { headers: authHdr })
     ok(`Deleted old ${label} menu ${oldId}`)
   } catch (e) {
-    log(`⚠  Could not delete old ${label} menu ${oldId}: ${e.response?.data?.message ?? e.message}`)
+    log(`⚠  Could not delete old ${label} menu ${oldId}: ${axiosErrorMessage(e)}`)
   }
 }
 
@@ -103,7 +113,7 @@ const svgPath = join(__dirname, '../src/richmenu.svg')
 const mainPng = svgToPng(readFileSync(svgPath, 'utf8'))
 ok(`PNG ready — ${(mainPng.length / 1024).toFixed(1)} KB`)
 
-const mainPayload = {
+const mainPayload: messagingApi.RichMenuRequest = {
   // 2500×1686 ("large"), two rows: the three read-only pages keep row 1 at
   // their original 833×843 bounds — nobody re-learns a menu they use every
   // month — and the new upload action takes all of row 2.

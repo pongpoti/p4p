@@ -1,7 +1,7 @@
 /**
  * One-off: push the latest feature carousel to a single LINE user.
  * Usage:
- *   $env:LINE_ACCESS_TOKEN="<token>"; $env:LINE_USER_ID="<Uxxxxxxx>"; node scripts/send-test-flex.mjs [version]
+ *   $env:LINE_ACCESS_TOKEN="<token>"; $env:LINE_USER_ID="<Uxxxxxxx>"; npx tsx scripts/send-test-flex.mts [version]
  *
  * version defaults to v1.
  */
@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import type { messagingApi } from '@line/bot-sdk'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -29,7 +30,7 @@ if (!/^U[0-9a-f]{32}$/i.test(userId)) {
 }
 
 const jsonPath = join(__dirname, `../assets/cards/feature-carousel.${ver}.flex.json`)
-const message  = JSON.parse(readFileSync(jsonPath, 'utf-8'))
+const message: messagingApi.FlexMessage = JSON.parse(readFileSync(jsonPath, 'utf-8'))
 
 const res = await fetch('https://api.line.me/v2/bot/message/push', {
   method: 'POST',

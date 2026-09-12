@@ -1,9 +1,25 @@
+// One rendered hero image: an inline SVG string plus the pixel width to
+// rasterize it at (height follows from the SVG's own viewBox aspect ratio).
+export interface SvgSpec {
+  file: string
+  width: number
+  svg: string
+}
+
+// One feature bubble in the carousel, keyed to one of the SvgSpecs above by
+// filename.
+export interface FeatureSpec {
+  img: string
+  title: string
+  bullets: string[]
+}
+
 export const RELEASE  = 'v1'
 export const BASE_URL = 'https://skh-mso-p4p.vercel.app/assets/cards/v1'
 export const ALT_TEXT = 'อัปเดตใหม่ — ระบบ P4P มีฟีเจอร์ใหม่ 3 อย่าง'
 
 // SVG strings + render widths. Height is derived from viewBox aspect ratio.
-export const svgs = [
+export const svgs: SvgSpec[] = [
   {
     file: 'cover.png',
     width: 1080,  // → 1080×1520 (270:380)
@@ -93,7 +109,7 @@ export const svgs = [
 ]
 
 // Feature cards (one bubble per entry, in carousel order after the cover)
-export const features = [
+export const features: FeatureSpec[] = [
   {
     img: 'status.png',
     title: 'สถานะการส่ง P4P',

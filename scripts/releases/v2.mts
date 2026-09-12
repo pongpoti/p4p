@@ -1,12 +1,28 @@
+// One rendered hero image: an inline SVG string plus the pixel width to
+// rasterize it at (height follows from the SVG's own viewBox aspect ratio).
+export interface SvgSpec {
+  file: string
+  width: number
+  svg: string
+}
+
+// One feature bubble in the carousel, keyed to one of the SvgSpecs above by
+// filename.
+export interface FeatureSpec {
+  img: string
+  title: string
+  bullets: string[]
+}
+
 export const RELEASE  = 'v2'
-// NOTE: v1.mjs points this at skh-mso-p4p.vercel.app, which is not one of
+// NOTE: v1.mts points this at skh-mso-p4p.vercel.app, which is not one of
 // this project's live domains (checked against the actual Vercel project —
 // see the domains list in `vercel --prod` / the dashboard). That looks like
 // a stale reference surviving a project rename; v1's carousel may have been
 // serving broken images this whole time. Using the real current domain here.
 export const BASE_URL = 'https://p4p-sakhonmso.vercel.app/assets/cards/v2'
 export const ALT_TEXT = 'อัปเดตใหม่ — ระบบ P4P มีฟีเจอร์ใหม่ 2 อย่าง'
-// Blue theme (v1 is green). Picked up by build-cards.mjs for the TEXT area
+// Blue theme (v1 is green). Picked up by build-cards.mts for the TEXT area
 // below the hero image — bullet dot, divider bar, "ฟีเจอร์" eyebrow label —
 // which lives in the shared card builder, not in these SVGs, so it needs
 // its own hook to actually change colour along with the artwork below.
@@ -14,7 +30,7 @@ export const THEME_COLOR       = '#0B84FF'
 export const THEME_LABEL_COLOR = '#0A6FD6'
 
 // SVG strings + render widths. Height is derived from viewBox aspect ratio.
-export const svgs = [
+export const svgs: SvgSpec[] = [
   {
     file: 'cover.png',
     width: 1080,  // → 1080×1520 (270:380)
@@ -140,7 +156,7 @@ export const svgs = [
 ]
 
 // Feature cards (one bubble per entry, in carousel order after the cover)
-export const features = [
+export const features: FeatureSpec[] = [
   {
     img: 'upload.png',
     title: 'ส่งไฟล์ P4P ผ่าน LINE',
