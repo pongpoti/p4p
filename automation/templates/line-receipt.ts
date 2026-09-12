@@ -24,7 +24,7 @@ const THAI_MONTHS = [
 ];
 
 // Month accent colours, index 0 = January — the hero rule matches the month
-// tab the receipt's button opens (mirrors src/constants.cjs's COLOR_ARRAY).
+// tab the receipt's button opens (mirrors src/constants.ts's COLOR_ARRAY).
 const MONTH_ACCENTS = [
   "#ffa2a2", "#ffb86a", "#ffdf20", "#bbf451", "#7bf1a8", "#46ecd5",
   "#53eafd", "#74d4ff", "#8ec5ff", "#a3b3ff", "#c4b4ff", "#f4a8ff",

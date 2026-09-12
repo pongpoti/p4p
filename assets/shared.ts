@@ -60,7 +60,7 @@
   // one place to watch).
 
   // The six months the pages offer, most recent first, as "2569_06" keys.
-  // Derived rather than tabulated — the same single rule src/constants.cjs's
+  // Derived rather than tabulated — the same single rule src/constants.ts's
   // MONTH_ITERATOR encodes: the i-th most recent month before month m is
   // (m - i) mod 12, crossing into the previous year when m - i goes negative.
   function recentMonthKeys(count?: number, now?: Date): string[] {
