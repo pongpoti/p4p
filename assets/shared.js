@@ -76,7 +76,7 @@
         var name = THAI_MONTHS[parseInt(parts[1], 10) - 1];
         return name ? name + " " + parts[0] : String(key || "");
     }
-    // The 10th of the month AFTER the work month, 23:59:59 Asia/Bangkok — the
+    // The 5th of the month AFTER the work month, 23:59:59 Asia/Bangkok — the
     // same instant web/lib/months.ts's deadlineISO() and the enqueue RPC's SQL
     // compute. Ranking counts a submission late past this (§9).
     function deadlineDate(key) {
@@ -87,9 +87,9 @@
             return null;
         // month is 1-based, so using it as a 0-based index already means "the
         // following month"; December rolls into the next year by itself.
-        return new Date(Date.UTC(beYear - 543, month, 10, 16, 59, 59));
+        return new Date(Date.UTC(beYear - 543, month, 5, 16, 59, 59));
     }
-    // "10 ก.ค. 23:59" — always rendered in Bangkok time, whatever the device says.
+    // "5 ก.ค. 23:59" — always rendered in Bangkok time, whatever the device says.
     function deadlineDisplay(key) {
         var d = deadlineDate(key);
         if (!d)
@@ -101,7 +101,7 @@
         return parseInt(parts.day, 10) + " " + THAI_MONTHS_SHORT[parseInt(parts.month, 10) - 1] +
             " " + parts.hour + ":" + parts.minute;
     }
-    // "ภายใน 10 ก.ค." — same cutoff as deadlineDisplay but without the time,
+    // "ภายใน 5 ก.ค." — same cutoff as deadlineDisplay but without the time,
     // for the "กำหนดส่ง" label: the exact hour doesn't need surfacing there,
     // just the day to submit by. deadlineDisplay itself stays untouched since
     // the late-notice banner still wants the precise time you missed.

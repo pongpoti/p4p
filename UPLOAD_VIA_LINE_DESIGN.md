@@ -1586,12 +1586,12 @@ does not touch the part of the system that has been tuned against real files.
 ## 9. Punctuality, deadlines and resubmission
 
 **`submitted_at` is `received_at`, never the drain time.** Ranking counts a
-submission when `submitted_at <= deadlineISO(month)` — the 10th of the
-following month, 23:59:59 +07:00 (`web/lib/months.ts`, `ranking/app.js`). If
-the worker wrote its own clock instead, a file handed over at 23:55 on the 10th
-and drained at 00:05 would silently become late. The queue row carries
-`received_at` from the moment of enqueue and `processBuffer` receives it as the
-submission timestamp.
+submission when `submitted_at <= deadlineISO(month)` — the 5th of the
+following month, 23:59:59 +07:00 (`web/lib/months.ts`, `ranking/app.js`;
+moved from the 10th on 2026-09-12). If the worker wrote its own clock
+instead, a file handed over at 23:55 on the 5th and drained at 00:05 would
+silently become late. The queue row carries `received_at` from the moment of
+enqueue and `processBuffer` receives it as the submission timestamp.
 
 **Resubmission** follows the email path's existing semantics exactly, because
 they are already correct:

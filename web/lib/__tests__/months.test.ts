@@ -166,12 +166,12 @@ describe("rankingMonths", () => {
 })
 
 describe("deadlineISO", () => {
-  it("is the 10th of the following month, Bangkok time", () => {
-    expect(deadlineISO("2569_04")).toBe("2026-05-10T23:59:59+07:00")
+  it("is the 5th of the following month, Bangkok time", () => {
+    expect(deadlineISO("2569_04")).toBe("2026-05-05T23:59:59+07:00")
   })
 
   it("rolls December into the next Gregorian year", () => {
-    expect(deadlineISO("2569_12")).toBe("2027-01-10T23:59:59+07:00")
+    expect(deadlineISO("2569_12")).toBe("2027-01-05T23:59:59+07:00")
   })
 
   it("throws rather than building a nonsense filter", () => {

@@ -112,7 +112,11 @@ already-applied file is safe.
     Read the file's own header before running it — it records exactly what
     was and was not verified, including a 2026-09-06 production fix
     (`roster_index` was bigint, should always have been uuid — see the
-    file's header for how this was found and confirmed fixed live).
+    file's header for how this was found and confirmed fixed live) and a
+    2026-09-12 product decision moving the deadline used for `is_late` (and
+    the matching ranking/notification cutoff elsewhere) from the 10th of the
+    following month to the 5th — still informational only, uploads are
+    accepted and scored at any time.
 19. `scripts/liff-access-no-throttle-2026-09.sql` — **applied live
     2026-09-08**: removes step 17's 10-minute dedup window for
     status/list/ranking's access alert (explicit product decision — every
