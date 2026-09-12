@@ -104,10 +104,10 @@ test("a forwarded mail's own \"Date:\" line is not a stated period", () => {
   // rejection.
   const body = [
     "---------- Forwarded message ---------",
-    "จาก: Chatdao Sutjarit <csutjarit@yahoo.com>",
+    "จาก: Chatdao Sutjarit <sender@example.com>",
     "Date: ส. 12 ก.ย. 2026 11:10",
     "Subject: p4pฉัตรดาว ก.ค.69",
-    "To: chsutjarit@gmail.com <chsutjarit@gmail.com>",
+    "To: recipient@example.com <recipient@example.com>",
   ].join("\n");
   assert.deepEqual(periodsInText(body), [{ month: 7, beYear: null }]);
   assert.deepEqual(
