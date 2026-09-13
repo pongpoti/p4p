@@ -170,11 +170,26 @@
 
   // ── State ────────────────────────────────────────────────────────────────
   var MONTHS = P4P.recentMonthKeys(6)
-  // Default to the PREVIOUS month: the month people are actually submitting
-  // for. MONTHS[0] is the current (usually still in progress) one.
+  // Default to the PREVIOUS month until loadMonthSubmissions() knows better —
+  // MONTHS[0] is the current (usually still in progress) one. Once
+  // submission data loads, pickDefaultMonth() overrides this with the oldest
+  // month in the window that hasn't been sent yet, so a physician who owes
+  // several months lands on the one most overdue instead of always last month.
   var selectedMonth = MONTHS[1] || MONTHS[0]
+  var userPickedMonth = false
   var identity: UploadIdentity | null = null
   var pickedFile: File | null = null
+
+  // MONTHS is newest-first (MONTHS[0] is the current month), so the oldest
+  // month is at the end — walk backward and take the first one still unsent.
+  // If everything in the window is already sent, fall back to the previous
+  // month, same as the pre-override default.
+  function pickDefaultMonth(submittedByMonth: Record<string, string>): string {
+    for (var i = MONTHS.length - 1; i >= 0; i--) {
+      if (!(submittedByMonth && submittedByMonth[MONTHS[i]])) return MONTHS[i]
+    }
+    return MONTHS[1] || MONTHS[0]
+  }
 
   function show(el: HTMLElement): void { el.classList.remove("hidden") }
   function hide(el: HTMLElement): void { el.classList.add("hidden") }
@@ -252,26 +267,44 @@
       : "กำหนดส่ง " + P4P.deadlineDueDisplay(selectedMonth)
   }
 
+  // A month is "late" the instant isLateFor() flips true (the second after
+  // its deadline), so a plain floor() would read "เลยกำหนด 0 วัน" for most of
+  // that first day — ceil (clamped to at least 1) counts the deadline's own
+  // day as day one overdue instead.
+  function daysOverdue(key: string): number {
+    var d = P4P.deadlineDate(key)
+    if (!d) return 0
+    return Math.max(1, Math.ceil((Date.now() - d.getTime()) / 86400000))
+  }
+
   function renderMonths(submittedByMonth: Record<string, string>): void {
     monthsEl.innerHTML = ""
     MONTHS.forEach(function (key) {
       var monthIdx = parseInt(key.split("_")[1], 10) - 1
       var accent = (P4P.COLOR_ARRAY[monthIdx] || [])[1] || "#ccc"
       var submitted = submittedByMonth && submittedByMonth[key]
+      // Late only means something for a month nobody has sent yet — a
+      // submitted month's own deadline is moot.
+      var late = !submitted && P4P.isLateFor(key)
       var btn = document.createElement("button")
       btn.type = "button"
-      btn.className = "chip" + (submitted ? " sent" : "")
+      btn.className = "chip" + (submitted ? " sent" : "") + (late ? " overdue" : "")
       btn.setAttribute("aria-pressed", key === selectedMonth ? "true" : "false")
       btn.dataset.month = key
+
+      var subText = submitted
+        ? "ส่งแล้ว " + esc(P4P.shortDate(submitted))
+        : late
+        ? esc("เลยกำหนด " + daysOverdue(key) + " วัน")
+        : "ส่ง" + esc(P4P.deadlineDueDisplay(key))
 
       btn.innerHTML =
         '<span class="m-name"><span class="m-dot" style="background:' + esc(accent) + '"></span>' +
         esc(P4P.monthKeyDisplay(key)) + "</span>" +
-        '<span class="m-sub">' +
-        (submitted ? "ส่งแล้ว " + esc(P4P.shortDate(submitted)) : "ส่ง" + esc(P4P.deadlineDueDisplay(key))) +
-        "</span>"
+        '<span class="m-sub">' + subText + "</span>"
 
       btn.addEventListener("click", function () {
+        userPickedMonth = true
         if (selectedMonth === key) return
         selectedMonth = key
         // Array.from(...).forEach(...) rather than Array.prototype.forEach.call
@@ -301,6 +334,14 @@
     })).then(function (pairs) {
       var map: Record<string, string> = {}
       pairs.forEach(function (p) { if (p[1]) map[p[0]] = p[1] })
+      if (!userPickedMonth) {
+        var defaultMonth = pickDefaultMonth(map)
+        if (defaultMonth !== selectedMonth) {
+          selectedMonth = defaultMonth
+          renderDeadline()
+          loadIdentity()
+        }
+      }
       renderMonths(map)
     })
   }
