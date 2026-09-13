@@ -240,23 +240,39 @@
             ? "เลยกำหนดส่งของเดือนนี้แล้ว (" + P4P.deadlineDisplay(selectedMonth) + ") — ระบบยังบันทึกคะแนนให้ตามปกติ แต่การจัดอันดับจะนับว่าส่งช้า"
             : "กำหนดส่ง " + P4P.deadlineDueDisplay(selectedMonth);
     }
+    // A month is "late" the instant isLateFor() flips true (the second after
+    // its deadline), so a plain floor() would read "เลยกำหนด 0 วัน" for most of
+    // that first day — ceil (clamped to at least 1) counts the deadline's own
+    // day as day one overdue instead.
+    function daysOverdue(key) {
+        var d = P4P.deadlineDate(key);
+        if (!d)
+            return 0;
+        return Math.max(1, Math.ceil((Date.now() - d.getTime()) / 86400000));
+    }
     function renderMonths(submittedByMonth) {
         monthsEl.innerHTML = "";
         MONTHS.forEach(function (key) {
             var monthIdx = parseInt(key.split("_")[1], 10) - 1;
             var accent = (P4P.COLOR_ARRAY[monthIdx] || [])[1] || "#ccc";
             var submitted = submittedByMonth && submittedByMonth[key];
+            // Late only means something for a month nobody has sent yet — a
+            // submitted month's own deadline is moot.
+            var late = !submitted && P4P.isLateFor(key);
             var btn = document.createElement("button");
             btn.type = "button";
-            btn.className = "chip" + (submitted ? " sent" : "");
+            btn.className = "chip" + (submitted ? " sent" : "") + (late ? " overdue" : "");
             btn.setAttribute("aria-pressed", key === selectedMonth ? "true" : "false");
             btn.dataset.month = key;
+            var subText = submitted
+                ? "ส่งแล้ว " + esc(P4P.shortDate(submitted))
+                : late
+                    ? esc("เลยกำหนด " + daysOverdue(key) + " วัน")
+                    : "ส่ง" + esc(P4P.deadlineDueDisplay(key));
             btn.innerHTML =
                 '<span class="m-name"><span class="m-dot" style="background:' + esc(accent) + '"></span>' +
                     esc(P4P.monthKeyDisplay(key)) + "</span>" +
-                    '<span class="m-sub">' +
-                    (submitted ? "ส่งแล้ว " + esc(P4P.shortDate(submitted)) : "ส่ง" + esc(P4P.deadlineDueDisplay(key))) +
-                    "</span>";
+                    '<span class="m-sub">' + subText + "</span>";
             btn.addEventListener("click", function () {
                 userPickedMonth = true;
                 if (selectedMonth === key)
