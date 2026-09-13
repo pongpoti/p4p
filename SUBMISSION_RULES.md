@@ -81,6 +81,12 @@ resolved is compared; an unstated year is not a disagreement.
 | Two months | 1 | `ambiguous_period` | send one month per email |
 | Two months, generic filenames | 2+ | `ambiguous_period` | name each file |
 | Two months, each filename names its month | 2+ | each scored to its own month | success per file |
+| One month, multi-sheet workbook, no sheet scores above 0 for it | 1 | `month_not_found` | names the required month and asks for a renamed tab or a single-sheet file |
+
+`month_not_found` fires only for multi-sheet workbooks (a single sheet is
+always used, whatever it's named — see §3). The reply's "รายละเอียด" row
+carries the specific month and sheet-name list from the rejection, not just
+the generic per-errorType text.
 
 Pre-existing rejections unchanged by these rules: `wrong_extension`,
 `temp_file`, `file_link`, `zero_score`, `physician_not_found`, `wrong_date`,
@@ -97,7 +103,9 @@ Shared by both paths (`parseWorkbookRows` in `lib/p4p-score.js`,
 `firstSheetToRows` in `automation/index.js` — same algorithm, two copies kept
 honest by `lib/__tests__/parity.test.mjs`).
 
-Each sheet is scored against the target period, best match wins:
+Each sheet is scored against the target period, best match wins. The tab-name
+tier and the content tier are scored **independently and the higher one
+wins** — a sheet's name and its content are not read as a single verdict:
 
 | Score | Signal |
 |---|---|
@@ -105,11 +113,18 @@ Each sheet is scored against the target period, best match wins:
 | 3 | tab name states the month, no year to check |
 | 2 | **content** states the month and a matching year |
 | 1 | content states the month, no year to check |
-| 0 | states nothing, or **contradicts** the target |
+| 0 | neither the tab name nor the content states the target month/year |
 
-A contradicting sheet scores 0 rather than ranking last: a sheet that says it
-is some other month is the wrong answer, not a weak match. When nothing scores
-above 0 the choice falls back to position (sheet 0, or sheet 1 if sheet 0 is
+A tab name that names *some other* month does not veto the sheet: it simply
+scores 0 on the name tier, and the content tier is still checked and can
+still win (e.g. a stale tab left over from copying last month's file, whose
+title row correctly says the new month, scores 2 — the sheet is not thrown
+out just because nobody renamed the tab). Tab names still outrank content
+*when both agree with the target*, since 3/4 beats 1/2 — a name is a
+deliberate label, a title row can itself be a leftover — but a contradicting
+name no longer discards the content's answer. Only when **neither** tier
+names the target month does the sheet score 0. When nothing scores above 0
+the choice falls back to position (sheet 0, or sheet 1 if sheet 0 is
 near-empty).
 
 Tab names are read with the same strict reader as cell content

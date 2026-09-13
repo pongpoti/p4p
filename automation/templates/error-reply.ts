@@ -11,6 +11,8 @@
  * @param data.statedDate    Period the email/filename asked for, shown when
  *   errorType="month_mismatch" — paired with detectedDate, the two together are what
  *   make that rejection self-explanatory instead of "something went wrong".
+ * @param data.detail    Specific, per-submission explanation (e.g. which sheet
+ *   names or month were involved) shown alongside the generic per-errorType text.
  */
 // Escape here (the single place these values reach HTML) rather than relying
 // on every caller to pre-escape — filename/detectedName/detectedDate all
@@ -31,6 +33,7 @@ export interface ErrorReplyData {
   detectedDate?: string;
   detectedName?: string;
   statedDate?: string;
+  detail?: string;
 }
 
 interface ErrorContent {
@@ -39,11 +42,12 @@ interface ErrorContent {
   instruction: string;
 }
 
-export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", detectedDate = "", detectedName = "", statedDate = "" }: ErrorReplyData): string {
+export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", detectedDate = "", detectedName = "", statedDate = "", detail = "" }: ErrorReplyData): string {
   safeFilename = escHtml(safeFilename);
   detectedDate = escHtml(detectedDate);
   detectedName = escHtml(detectedName);
   statedDate   = escHtml(statedDate);
+  detail       = escHtml(detail);
   const CONTENT: Record<string, ErrorContent> = {
     wrong_extension: {
       bannerTitle  : "ประเภทไฟล์ไม่ถูกต้อง",
@@ -84,6 +88,11 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
       bannerTitle  : "ระบุหลายเดือนในอีเมลเดียว",
       bannerBody   : "ระบบพบว่าอีเมลนี้ระบุมากกว่าหนึ่งเดือน จึงไม่สามารถทราบได้ว่าไฟล์ที่แนบมาเป็นของเดือนใด<br>ระบบจะไม่เดาเดือนให้ เพื่อป้องกันการบันทึกคะแนนผิดเดือน",
       instruction  : "กรุณาส่งแยกอีเมลละหนึ่งเดือน หรือหากแนบหลายไฟล์ กรุณาตั้งชื่อไฟล์ให้ระบุเดือนของแต่ละไฟล์ เช่น \"P4P ก.ค. 2569.xlsx\"",
+    },
+    month_not_found: {
+      bannerTitle  : "ไม่พบชีตของเดือนที่ระบุ",
+      bannerBody   : "ไฟล์ที่แนบมามีหลายชีต แต่ไม่มีชีตใดระบุเดือนที่ท่านต้องการส่ง<br>ระบบจะไม่เดาว่าชีตใดถูกต้อง เพื่อป้องกันการบันทึกคะแนนผิดเดือน",
+      instruction  : "กรุณาตั้งชื่อชีต (แท็บ) ให้ระบุเดือนที่ต้องการส่ง เช่น \"ส.ค. 2569\" หรือส่งเฉพาะไฟล์ที่มีชีตเดียวสำหรับเดือนนั้น แล้วส่งใหม่อีกครั้ง",
     },
     physician_not_found: {
       bannerTitle  : "ไม่พบชื่อแพทย์ในระบบ",
@@ -129,7 +138,14 @@ export function buildHtmlErrorReply({ safeFilename = "", errorType = "other", de
         </tr>`
     : "";
 
-  const detailRows = filenameRow + statedRow + dateRow + nameRow;
+  const detailRow = detail
+    ? `<tr>
+          <td>รายละเอียด</td>
+          <td>${detail}</td>
+        </tr>`
+    : "";
+
+  const detailRows = filenameRow + statedRow + dateRow + nameRow + detailRow;
 
   return `<!DOCTYPE html>
 <html lang="th">

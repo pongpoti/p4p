@@ -417,25 +417,31 @@ export function resolveBeMonthFromRows(rows: Row[]): number | null {
  *   2  content states the month, and a year that matches
  *   1  content states the month, with no year to check
  *   0  states nothing, or states a month/year that CONTRADICTS the target
+ *      in both the tab name and the content
  *
- * A contradicting sheet scores 0 rather than ranking last: a sheet that
- * says it is some other month is not a weak match for this one, it is the
- * wrong answer, and letting it lose to the positional default (and then to
- * the month_mismatch check) is the honest outcome. Tab names outrank
- * content because a name is a deliberate label, while a title row can be a
- * leftover from the month the file was copied from.
+ * The name and content tiers are scored independently and the higher one
+ * wins, rather than a contradicting name short-circuiting before content is
+ * ever read: a stale tab left over from copying last month's file (name says
+ * July, title row says August) must not outweigh a title row that agrees
+ * with the target, or the correct sheet is thrown out from under a
+ * physician who never touched the tab label. Tab names still outrank
+ * content when both are stated and agree with the target — 3/4 beats 1/2 —
+ * because a name is a deliberate label, while a title row can itself be a
+ * leftover; it is only a *contradicting* name that no longer vetoes the
+ * sheet outright.
  */
 export function sheetMatchScore(ws: NamedSheet, rows: Row[], targetMonth: number, targetYear: number | null): number {
   const fromName = monthYearFromText(ws.name);
-  if (fromName.month) {
-    if (fromName.month !== targetMonth) return 0;
-    if (fromName.beYear && targetYear && fromName.beYear !== targetYear) return 0;
-    return fromName.beYear && targetYear ? 4 : 3;
+  let nameScore = 0;
+  if (fromName.month && fromName.month === targetMonth && !(fromName.beYear && targetYear && fromName.beYear !== targetYear)) {
+    nameScore = fromName.beYear && targetYear ? 4 : 3;
   }
   const hit = monthYearFromRows(rows);
-  if (hit.month !== targetMonth) return 0;
-  if (hit.beYear && targetYear && hit.beYear !== targetYear) return 0;
-  return hit.beYear && targetYear ? 2 : 1;
+  let contentScore = 0;
+  if (hit.month && hit.month === targetMonth && !(hit.beYear && targetYear && hit.beYear !== targetYear)) {
+    contentScore = hit.beYear && targetYear ? 2 : 1;
+  }
+  return Math.max(nameScore, contentScore);
 }
 
 // ── JS-side physician name resolver ───────────────────────────────────────

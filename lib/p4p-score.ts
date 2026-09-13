@@ -213,19 +213,22 @@ function resolveBeMonthFromRows(rows: Row[]): number | null {
 
 /**
  * Mirrors automation/claude-analyst.ts's sheetMatchScore exactly — see there
- * for what each tier means and why a contradicting sheet scores 0.
+ * for what each tier means and why the name and content tiers are scored
+ * independently (max wins) rather than a contradicting name short-circuiting
+ * before content is ever read.
  */
 function sheetMatchScore(ws: Pick<Worksheet, "name">, rows: Row[], targetMonth: number | null, targetYear: number | null): number {
   const fromName = monthYearFromText(ws.name)
-  if (fromName.month) {
-    if (fromName.month !== targetMonth) return 0
-    if (fromName.beYear && targetYear && fromName.beYear !== targetYear) return 0
-    return fromName.beYear && targetYear ? 4 : 3
+  let nameScore = 0
+  if (fromName.month && fromName.month === targetMonth && !(fromName.beYear && targetYear && fromName.beYear !== targetYear)) {
+    nameScore = fromName.beYear && targetYear ? 4 : 3
   }
   const hit = monthYearFromRows(rows)
-  if (hit.month !== targetMonth) return 0
-  if (hit.beYear && targetYear && hit.beYear !== targetYear) return 0
-  return hit.beYear && targetYear ? 2 : 1
+  let contentScore = 0
+  if (hit.month && hit.month === targetMonth && !(hit.beYear && targetYear && hit.beYear !== targetYear)) {
+    contentScore = hit.beYear && targetYear ? 2 : 1
+  }
+  return Math.max(nameScore, contentScore)
 }
 
 
