@@ -445,6 +445,7 @@ const ALERT_SUBJECTS: Record<string, string> = {
   month_mismatch      : "[แจ้งข้อผิดพลาด] เดือนที่ระบุไม่ตรงกับไฟล์",
   no_period           : "[แจ้งข้อผิดพลาด] ไม่ได้ระบุเดือนที่ส่ง",
   ambiguous_period    : "[แจ้งข้อผิดพลาด] ระบุหลายเดือนในอีเมลเดียว",
+  month_not_found     : "[แจ้งข้อผิดพลาด] ไม่พบชีตของเดือนที่ระบุ",
   other           : "[แจ้งข้อผิดพลาด] ไม่สามารถประมวลผลไฟล์ P4P ได้",
 };
 
@@ -454,6 +455,7 @@ interface SendAlertReplyOpts {
   detectedDate?: string;
   detectedName?: string;
   statedDate?: string;
+  detail?: string;
   replyTo: string;
   messageId: string;
   gmail: GmailClient;
@@ -467,18 +469,20 @@ interface SendAlertReplyOpts {
  * @param opts.safeFilename   HTML-escaped filename (may be empty)
  * @param opts.detectedDate Shown for wrong_date errors
  * @param opts.detectedName Shown for physician_not_found errors
+ * @param opts.detail          Specific, per-submission explanation (e.g. which
+ *   month/sheets were involved) shown alongside the generic per-errorType text
  * @param opts.replyTo        Sender email address
  * @param opts.messageId      Gmail message ID for thread reply
  * @param opts.gmail          Shared Gmail client
  */
-async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", statedDate = "", replyTo, messageId, gmail }: SendAlertReplyOpts): Promise<void> {
+async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", statedDate = "", detail = "", replyTo, messageId, gmail }: SendAlertReplyOpts): Promise<void> {
   if (!SEND_ERROR_REPLIES) {
     console.log(`│        ⏸️   Alert reply [${errorType}] suppressed (SEND_ERROR_REPLIES=false)`);
     return;
   }
   if (!replyTo || !messageId) return;
   const subject  = ALERT_SUBJECTS[errorType] ?? ALERT_SUBJECTS.other!;
-  const htmlReply = buildHtmlErrorReply({ safeFilename, errorType, detectedDate, detectedName, statedDate });
+  const htmlReply = buildHtmlErrorReply({ safeFilename, errorType, detectedDate, detectedName, statedDate, detail });
   try {
     await gmail.sendMessage({
       to              : replyTo,
@@ -586,7 +590,7 @@ export async function processBuffer(buffer: Buffer, {
     await sendAlertReply({
       errorType,
       safeFilename: filename ?? "",
-      detectedDate, detectedName, statedDate,
+      detectedDate, detectedName, statedDate, detail,
       replyTo, messageId, gmail: gmail!,
     });
   };
@@ -1386,12 +1390,19 @@ async function main(): Promise<void> {
         processedAnyAttachment = results.some(
           (r) => r.status === "fulfilled" && r.value === true
         );
+        // "replied" (a validation alert was already sent) and "rejected"
+        // (ditto, on the reject-without-guessing paths) both count as this
+        // message having been handled — otherwise it stays unread/unstarred
+        // and the next hourly run re-fetches and re-alerts on it forever.
+        const handledOtherwise = results.some(
+          (r) => r.status === "fulfilled" && (r.value === "replied" || r.value === "rejected")
+        );
         results.forEach((r, idx) => {
           if (r.status === "rejected") {
             console.error(`│      ❌  Thread attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
           }
         });
-        if (processedAnyAttachment) {
+        if (processedAnyAttachment || handledOtherwise) {
           const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
           const removeLabels = ["UNREAD", _sourceLabel];
           try {
@@ -1459,6 +1470,13 @@ async function main(): Promise<void> {
     const repliedToAny = results.some(
       (r) => r.status === "fulfilled" && r.value === "replied"
     );
+    // A "rejected" outcome (no_period, ambiguous_period, month_mismatch,
+    // month_not_found) already sent the sender an alert reply — it must count
+    // as handled too, or this message stays unread/unstarred and the next
+    // hourly run re-fetches it and sends the same alert again indefinitely.
+    const rejectedAny = results.some(
+      (r) => r.status === "fulfilled" && r.value === "rejected"
+    );
     results.forEach((r, idx) => {
       if (r.status === "rejected") {
         console.error(`│      ❌  Attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
@@ -1467,7 +1485,7 @@ async function main(): Promise<void> {
 
     // ── Mark message: read + starred + labeled ────────────────────────
     // Applied after a successful processing OR after an alert reply was sent.
-    if (processedAnyAttachment || repliedToAny) {
+    if (processedAnyAttachment || repliedToAny || rejectedAny) {
       const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
       const removeLabels = ["UNREAD", _sourceLabel];
       try {

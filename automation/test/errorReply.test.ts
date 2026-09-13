@@ -40,3 +40,27 @@ test("an unknown error type still renders the generic copy rather than blank", (
   const text = strip(buildHtmlErrorReply({ errorType: "something_new" }));
   assert.match(text, /เกิดข้อผิดพลาดในการประมวลผล/);
 });
+
+test("month_not_found has its own copy instead of falling back to the generic error", () => {
+  const text = strip(buildHtmlErrorReply({ errorType: "month_not_found" }));
+  assert.match(text, /ไม่พบชีตของเดือนที่ระบุ/, "banner names the actual problem");
+  assert.match(text, /ตั้งชื่อชีต/, "tells the sender how to fix it — rename the tab");
+  assert.doesNotMatch(text, /เกิดข้อผิดพลาดในการประมวลผล/, "must not fall back to the generic copy");
+});
+
+test("detail carries the specific per-submission explanation into the reply", () => {
+  // month_not_found's CONTENT copy is generic on purpose (no per-file facts);
+  // `detail` is how the exact month/sheet list the rejection computed
+  // actually reaches the sender instead of staying Telegram-only.
+  const text = strip(buildHtmlErrorReply({
+    errorType: "month_not_found",
+    detail   : "ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน สิงหาคม 2569 กรุณาตั้งชื่อชีตให้ระบุเดือน หรือส่งเฉพาะชีตที่ต้องการ",
+  }));
+  assert.match(text, /รายละเอียด ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน สิงหาคม 2569/);
+});
+
+test("detail is HTML-escaped like every other user-influenced field", () => {
+  const text = buildHtmlErrorReply({ errorType: "month_not_found", detail: "<script>x</script> & \"quoted\"" });
+  assert.doesNotMatch(text, /<script>x<\/script>/);
+  assert.match(text, /&lt;script&gt;x&lt;\/script&gt;/);
+});
