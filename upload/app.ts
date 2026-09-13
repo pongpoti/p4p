@@ -257,18 +257,18 @@
     MONTHS.forEach(function (key) {
       var monthIdx = parseInt(key.split("_")[1], 10) - 1
       var accent = (P4P.COLOR_ARRAY[monthIdx] || [])[1] || "#ccc"
+      var submitted = submittedByMonth && submittedByMonth[key]
       var btn = document.createElement("button")
       btn.type = "button"
-      btn.className = "chip"
+      btn.className = "chip" + (submitted ? " sent" : "")
       btn.setAttribute("aria-pressed", key === selectedMonth ? "true" : "false")
       btn.dataset.month = key
 
-      var submitted = submittedByMonth && submittedByMonth[key]
       btn.innerHTML =
         '<span class="m-name"><span class="m-dot" style="background:' + esc(accent) + '"></span>' +
         esc(P4P.monthKeyDisplay(key)) + "</span>" +
         '<span class="m-sub">' +
-        (submitted ? "ส่งแล้ว " + esc(P4P.shortDate(submitted)) : esc(P4P.deadlineDueDisplay(key))) +
+        (submitted ? "ส่งแล้ว " + esc(P4P.shortDate(submitted)) : "ส่ง" + esc(P4P.deadlineDueDisplay(key))) +
         "</span>"
 
       btn.addEventListener("click", function () {
