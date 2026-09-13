@@ -170,11 +170,26 @@
 
   // ── State ────────────────────────────────────────────────────────────────
   var MONTHS = P4P.recentMonthKeys(6)
-  // Default to the PREVIOUS month: the month people are actually submitting
-  // for. MONTHS[0] is the current (usually still in progress) one.
+  // Default to the PREVIOUS month until loadMonthSubmissions() knows better —
+  // MONTHS[0] is the current (usually still in progress) one. Once
+  // submission data loads, pickDefaultMonth() overrides this with the oldest
+  // month in the window that hasn't been sent yet, so a physician who owes
+  // several months lands on the one most overdue instead of always last month.
   var selectedMonth = MONTHS[1] || MONTHS[0]
+  var userPickedMonth = false
   var identity: UploadIdentity | null = null
   var pickedFile: File | null = null
+
+  // MONTHS is newest-first (MONTHS[0] is the current month), so the oldest
+  // month is at the end — walk backward and take the first one still unsent.
+  // If everything in the window is already sent, fall back to the previous
+  // month, same as the pre-override default.
+  function pickDefaultMonth(submittedByMonth: Record<string, string>): string {
+    for (var i = MONTHS.length - 1; i >= 0; i--) {
+      if (!(submittedByMonth && submittedByMonth[MONTHS[i]])) return MONTHS[i]
+    }
+    return MONTHS[1] || MONTHS[0]
+  }
 
   function show(el: HTMLElement): void { el.classList.remove("hidden") }
   function hide(el: HTMLElement): void { el.classList.add("hidden") }
@@ -272,6 +287,7 @@
         "</span>"
 
       btn.addEventListener("click", function () {
+        userPickedMonth = true
         if (selectedMonth === key) return
         selectedMonth = key
         // Array.from(...).forEach(...) rather than Array.prototype.forEach.call
@@ -301,6 +317,14 @@
     })).then(function (pairs) {
       var map: Record<string, string> = {}
       pairs.forEach(function (p) { if (p[1]) map[p[0]] = p[1] })
+      if (!userPickedMonth) {
+        var defaultMonth = pickDefaultMonth(map)
+        if (defaultMonth !== selectedMonth) {
+          selectedMonth = defaultMonth
+          renderDeadline()
+          loadIdentity()
+        }
+      }
       renderMonths(map)
     })
   }
