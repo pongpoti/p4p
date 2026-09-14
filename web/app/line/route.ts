@@ -46,15 +46,33 @@ async function lineApi(path: string, body: unknown): Promise<void> {
   }
 }
 
+const FILE_MESSAGE_TYPES = new Set(["image", "video", "audio", "file"])
+
 async function handleEvent(event: LineEvent): Promise<void> {
-  if (event.type !== "message" || event.message?.type !== "text") return
+  if (event.type !== "message") return
+
+  const messageType = event.message?.type
+  const replyToken = event.replyToken
+
+  // Any non-text upload (image/video/audio/file) gets the same canned reply
+  // pointing the user back to the menu instead of falling through silently.
+  if (messageType && FILE_MESSAGE_TYPES.has(messageType)) {
+    if (replyToken) {
+      await lineApi("message/reply", {
+        replyToken,
+        messages: [{ type: "text", text: "กรุณาเลือกเมนูเพื่อส่งไฟล์" }],
+      })
+    }
+    return
+  }
+
+  if (messageType !== "text") return
 
   if (event.source?.userId) {
     await lineApi("chat/loading/start", { chatId: event.source.userId })
   }
 
-  const message = (event.message.text ?? "").trim().toLowerCase()
-  const replyToken = event.replyToken
+  const message = (event.message?.text ?? "").trim().toLowerCase()
   if (!replyToken) return
 
   if (message === "status") {
