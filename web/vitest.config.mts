@@ -1,6 +1,12 @@
+import path from "node:path"
 import { defineConfig } from "vitest/config"
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname, "."),
+    },
+  },
   test: {
     // Phase 0 covers pure logic only, so the default node environment is
     // enough. Component tests (Phase 2+) add jsdom + @testing-library/react.
