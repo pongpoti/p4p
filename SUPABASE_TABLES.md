@@ -49,7 +49,11 @@ scorecard, alongside email. One row per submitted file, carrying two
   the scoring lifecycle (`status`, `attempts`, `claimed_at`, `finished_at`,
   `error_type`, `error_detail`, `score`, `score_method`, `notified_at`) and
   the archive lifecycle (`archive_status`, `archive_attempts`,
-  `archive_last_attempt_at`, `archived_at`).
+  `archive_last_attempt_at`, `archived_at`), and the chat-receipt outcome
+  (`receipt_status`, `receipt_context`, `receipt_error`, `receipt_reported_at`)
+  — the browser sends the receipt itself via `liff.sendMessages()`, so it
+  reports back through `POST /upload/receipt` whether the send actually
+  happened (`scripts/upload-receipt-outcome-2026-09.sql`).
 - `received_at` is THE punctuality timestamp — when the physician handed the
   file over, never when a runner got to it.
 - A partial unique index on `(email, month_key) WHERE status IN

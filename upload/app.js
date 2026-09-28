@@ -201,16 +201,71 @@
             }).catch(function (err) { console.warn("line bind skipped:", err); });
         }).catch(function () { });
     }
-    /** Send message objects into the chat AS THE PHYSICIAN — free, not a push. */
+    function liffContextType() {
+        try {
+            var ctx = liff.getContext();
+            return (ctx && ctx.type) || null;
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * Send message objects into the chat AS THE PHYSICIAN — free, not a push.
+     * Resolves (never rejects) with what happened, so the caller can report a
+     * receipt that never arrived instead of it vanishing silently.
+     *
+     * LIFF posts into whichever chat the page was opened FROM. Opened from a
+     * group or multi-person chat (a forwarded link), the receipt — name and
+     * score — would land in front of everyone there, so that case is refused.
+     */
     function sendToChat(messages) {
         return liffReady.then(function (ok) {
-            if (!ok || !liff.isInClient())
-                return false;
-            return liff.sendMessages(messages).then(function () { return true; });
+            if (!ok)
+                return { reason: "liff_init_failed", contextType: null, error: null };
+            var contextType = liffContextType();
+            if (!liff.isInClient())
+                return { reason: "not_in_client", contextType: contextType, error: null };
+            if (contextType === "group" || contextType === "room") {
+                return { reason: "group_chat", contextType: contextType, error: null };
+            }
+            return liff.sendMessages(messages).then(function () { return { reason: "sent", contextType: contextType, error: null }; }, function (err) {
+                console.warn("liff.sendMessages failed:", err);
+                var e = err;
+                var text = e ? [e.code, e.message].filter(Boolean).join(": ") : "";
+                return { reason: "send_failed", contextType: contextType, error: text || String(err) };
+            });
         }).catch(function (err) {
-            console.warn("liff.sendMessages failed:", err);
-            return false;
+            return { reason: "send_failed", contextType: null, error: String(err) };
         });
+    }
+    /**
+     * Tell the server how the receipt went (see /upload/receipt in main.ts),
+     * and when it did not go, tell the physician too — the score is saved
+     * either way, but they should not sit waiting for a chat message that is
+     * never coming. `fallbackHtml` is what to show them in that case.
+     */
+    function reportReceipt(queueId, outcome, fallbackHtml) {
+        if (outcome.reason !== "sent") {
+            var note = document.createElement("div");
+            note.className = "notice warn";
+            note.innerHTML = fallbackHtml;
+            resultBody.appendChild(note);
+        }
+        if (!queueId)
+            return;
+        fetch("/upload/receipt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            keepalive: true,
+            body: JSON.stringify({
+                queue_id: queueId,
+                reason: outcome.reason,
+                context_type: outcome.contextType,
+                error: outcome.error,
+            }),
+        }).catch(function (err) { console.warn("receipt report skipped:", err); });
     }
     // ── Identity + month chips ───────────────────────────────────────────────
     function renderIdentity() {
@@ -408,7 +463,14 @@
         resultBody.innerHTML = html;
         show(stepResult);
     }
-    function showInstantResult(payload) {
+    // Where to send a physician whose receipt did not go through. Opened from a
+    // group chat, the fix is to use the P4P chat's own menu instead.
+    function chatHint(outcome) {
+        return outcome.reason === "group_chat" || outcome.reason === "not_in_client"
+            ? " (ครั้งต่อไปกรุณาเปิดหน้านี้จากเมนูในแชท P4P)"
+            : "";
+    }
+    function showInstantResult(payload, queueId) {
         resultTitle.textContent = "ส่งไฟล์สำเร็จ";
         var late = payload.is_late;
         resultCard('<div id="result-score">' + esc(receipt.formatScore(payload.score)) + "</div>" +
@@ -431,9 +493,12 @@
                 score: payload.score,
                 receivedAt: payload.received_at,
                 isLate: !!payload.is_late,
-            })]);
+            })]).then(function (outcome) {
+            reportReceipt(queueId, outcome, "ไม่สามารถส่งใบยืนยันเข้าแชท LINE ได้ — คะแนนของท่านบันทึกเรียบร้อยแล้ว " +
+                "กรุณาบันทึกหน้าจอนี้ไว้เป็นหลักฐาน" + chatHint(outcome));
+        });
     }
-    function showDeferredResult() {
+    function showDeferredResult(queueId) {
         resultTitle.textContent = "กำลังตรวจสอบ";
         resultCard('<div class="notice info">ระบบได้รับไฟล์ของท่านแล้ว กำลังตรวจสอบคะแนน ' +
             "และจะแจ้งผลทางแชท LINE ภายในไม่กี่นาที</div>" +
@@ -442,8 +507,11 @@
         // A TEXT message (not a Flex) on purpose: only text fires a webhook, and
         // that webhook is what earns the bot a free reply carrying the "ดูผลคะแนน"
         // button (design §7.5 step ②). The bot ignores what this says.
-        sendToChat([{ type: "text", text: "ส่งไฟล์ P4P " + P4P.monthKeyDisplay(selectedMonth) }]);
-        pollForResult();
+        sendToChat([{ type: "text", text: "ส่งไฟล์ P4P " + P4P.monthKeyDisplay(selectedMonth) }]).then(function (outcome) {
+            reportReceipt(queueId, outcome, "ระบบจะไม่สามารถแจ้งผลทางแชทได้ — กรุณาเปิดหน้านี้ใหม่ภายหลังเพื่อดูผลในประวัติการส่ง " +
+                "หรือพิมพ์ “ผลคะแนน” ในแชท P4P" + chatHint(outcome));
+        });
+        pollForResult(queueId);
     }
     function showRejected(payload) {
         resultTitle.textContent = "ส่งไฟล์ไม่สำเร็จ";
@@ -453,7 +521,7 @@
     }
     // A fallback for a physician still watching the page — the primary path to
     // a deferred result is the chat message, not this poll.
-    function pollForResult() {
+    function pollForResult(queueId) {
         var tries = 0;
         var timer = setInterval(function () {
             tries += 1;
@@ -475,7 +543,7 @@
                         received_at: row.received_at,
                         display_name: identity && identity.full_name,
                         department: identity && identity.department,
-                    });
+                    }, queueId);
                 }
                 else if (row.status === "failed" || row.status === "rejected") {
                     clearInterval(timer);
@@ -499,6 +567,7 @@
         // (storage.objects keeps it in bucket_id), and the leading uid is what
         // the storage policy pins to auth.uid().
         var objectPath = UID + "/" + selectedMonth + "/" + randomId() + ".xlsx";
+        var queueId = null;
         putObject(objectPath, file, function (frac) {
             progressBar.style.width = Math.round(frac * 100) + "%";
         })
@@ -515,7 +584,7 @@
             .then(function (r) {
             if (r.error)
                 throw r.error;
-            var queueId = r.data && r.data.queue_id;
+            queueId = (r.data && r.data.queue_id) || null;
             if (!queueId)
                 throw new Error("enqueue returned no queue_id");
             return fetch("/upload/score", {
@@ -538,8 +607,8 @@
             if (out.payload && out.payload.error)
                 return showRejected(out.payload);
             if (out.payload && out.payload.pending)
-                return showDeferredResult();
-            showInstantResult(out.payload);
+                return showDeferredResult(queueId);
+            showInstantResult(out.payload, queueId);
         })
             .catch(function (err) {
             console.error(err);
