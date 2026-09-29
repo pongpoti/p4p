@@ -149,3 +149,46 @@ test("an empty r:id is not treated as a missing link", async () => {
   const result = await repairWorkbookPackage(Buffer.from(await zip.generateAsync({ type: "nodebuffer" })));
   assert.equal(result.status, "repaired");
 });
+
+/** Add a part (with its content type) to a package. */
+async function withPart(input: Buffer, part: string, contentType: string): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(input);
+  zip.file(part, "<x/>");
+  const ct = await zip.file("[Content_Types].xml")!.async("string");
+  zip.file("[Content_Types].xml", ct.replace("</Types>", `<Override PartName="/${part}" ContentType="${contentType}"/></Types>`));
+  return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+}
+
+test("threaded-comment authors and customXml items are relinked too", async () => {
+  let broken = await damage(await workbook(["ส.ค.69"]), 0);
+  broken = await withPart(broken, "xl/persons/person.xml", "application/vnd.ms-excel.person+xml");
+  broken = await withPart(broken, "customXml/item1.xml", "application/xml");
+  const result = await repairWorkbookPackage(broken);
+  assert.equal(result.status, "repaired");
+  if (result.status !== "repaired") return;
+  const after = await read(result.buffer);
+  assert.match(after.rels, /relationships\/person" Target="persons\/person\.xml"/);
+  assert.match(after.rels, /relationships\/customXml" Target="\.\.\/customXml\/item1\.xml"/);
+  assert.equal(await packageProblem(result.buffer), null);
+});
+
+test("a workbook-level part with no known link makes the file manual, not half-repaired", async () => {
+  const broken = await withPart(await damage(await workbook(["ส.ค.69"]), 0), "xl/richData/rdrichvalue.xml", "application/vnd.ms-excel.rdrichvalue+xml");
+  const result = await repairWorkbookPackage(broken);
+  assert.equal(result.status, "manual");
+  if (result.status === "manual") assert.match(result.reason, /xl\/richData\/rdrichvalue\.xml/);
+});
+
+test("after damage and repair, every other part is byte-identical to the original", async () => {
+  const original = await fromGoogleSheets(await workbook(["ส.ค.69"]));
+  const result   = await repairWorkbookPackage(await damage(original, 0));
+  assert.equal(result.status, "repaired");
+  if (result.status !== "repaired") return;
+  const before = await JSZip.loadAsync(original);
+  const after  = await JSZip.loadAsync(result.buffer);
+  const rewritten = new Set(["xl/_rels/workbook.xml.rels", "[Content_Types].xml", "xl/workbook.xml", "xl/calcChain.xml"]);
+  for (const [p, f] of Object.entries(before.files)) {
+    if (f.dir || rewritten.has(p)) continue;
+    assert.deepEqual(await after.file(p)?.async("nodebuffer"), await f.async("nodebuffer"), `${p} changed`);
+  }
+});
