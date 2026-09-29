@@ -1,0 +1,58 @@
+name: Restore Drive copies from the emailed originals
+
+# Replaces the named archived copies with the physician's own emailed file
+# (see automation/scripts/restore-from-email.ts). Run it first with "apply"
+# unticked: that is a dry run which only reports what it would change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Files to restore: 2569_01#1a2b3c4d=<gmail message id>, comma-separated (labels from the verification report)'
+        required: true
+        type: string
+      apply:
+        description: 'Write the restored files (unticked = dry run, nothing is changed)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-from-email
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: ${{ inputs.apply && 'Restore' || 'Dry run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: automation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: automation/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore
+        env:
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          P4P_FOLDER_ID:        ${{ secrets.P4P_FOLDER_ID }}
+          TARGETS:              ${{ inputs.targets }}
+          APPLY:                ${{ inputs.apply }}
+        run: npx tsx scripts/restore-from-email.ts
