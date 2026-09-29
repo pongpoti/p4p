@@ -25,7 +25,7 @@
  *   node scripts/drain-uploads.mjs
  */
 
-import { processBuffer, extractFirstSheetBuffer } from "../index.js";
+import { processBuffer, extractFirstSheetBuffer, monthSheet } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
   markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
@@ -79,7 +79,10 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
   const buffer   = await downloadObject(row.object_path);
   const roster   = await resolveRoster(row);
   const name     = roster?.matchedName ?? row.full_name;
-  const oneSheet = await extractFirstSheetBuffer(buffer);
+  // The tab for this month, the same one the score was read from.
+  const [beYear, month] = row.month_key.split("_").map(Number);
+  const { name: monthTab } = await monthSheet(buffer, month!, beYear!);
+  const oneSheet = await extractFirstSheetBuffer(buffer, monthTab);
   if (!oneSheet) throw new Error("first sheet is blank — nothing to archive");
 
   const { fileName, replaced } = await drive.uploadFile(oneSheet, name, row.month_key);

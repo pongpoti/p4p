@@ -152,6 +152,119 @@ async function originalSheetNames(zip: JSZip): Promise<string[] | null> {
   return names.length >= count ? names.slice(0, count) : null;
 }
 
+/** Tab names in <sheets> order; null when the package has no workbook. */
+export async function workbookSheetNames(input: Buffer): Promise<string[] | null> {
+  const wb = await (await JSZip.loadAsync(input)).file("xl/workbook.xml")?.async("string");
+  if (wb === undefined) return null;
+  return (wb.match(/<sheet\s[^>]*>/g) ?? []).map((t) => xmlUnescape(xmlAttr(t, "name") ?? ""));
+}
+
+/** Workbook relationships removed along with the sheets that are not kept. */
+const DROPPED_REL_TYPE = /\/(?:worksheet|chartsheet|dialogsheet|xlMacrosheet|xlIntlMacrosheet|calcChain)$/;
+
+/**
+ * The package with only the tab at `keepPos` (in <sheets> order), the way
+ * the archive keeps one month of a multi-tab workbook: every other part is
+ * carried over byte for byte. A one-tab workbook comes back unchanged; null
+ * when there is no such tab or the package has no workbook.
+ */
+export async function keepOneSheet(input: Buffer, keepPos: number): Promise<Buffer | null> {
+  const origZip  = await JSZip.loadAsync(input);
+  const wbFile   = origZip.file("xl/workbook.xml");
+  const relsFile = origZip.file("xl/_rels/workbook.xml.rels");
+  if (!wbFile || !relsFile) return null;
+  const wbXml   = await wbFile.async("string");
+  const relsXml = await relsFile.async("string");
+
+  const sheetTags = wbXml.match(/<sheet\s[^>]*>/g) ?? [];
+  if (sheetTags.length <= 1) return keepPos === 0 && sheetTags.length === 1 ? input : null;
+  const keepTag = sheetTags[keepPos];
+  if (!keepTag) return null;
+
+  // Excel reaches styles, sharedStrings and theme ONLY through this rels file.
+  // Drop the other SHEETS' relationships and nothing else: an earlier version
+  // kept just the one worksheet relationship, and Excel then opened every
+  // Drive copy with all text blank and all formatting gone (Google's preview
+  // and openpyxl find those parts by path, which is why it went unnoticed).
+  // calcChain goes too — it indexes cells on the dropped sheets, and Excel
+  // rebuilds it on the next save.
+  const rels = (relsXml.match(/<Relationship\s[^>]*>/g) ?? []).map((tag) => ({
+    tag,
+    id      : xmlAttr(tag, "Id"),
+    type    : xmlAttr(tag, "Type") ?? "",
+    target  : xmlAttr(tag, "Target") ?? "",
+    external: xmlAttr(tag, "TargetMode") === "External",
+  }));
+  const keepRel = rels.find((r) => r.id === xmlAttr(keepTag, "r:id"));
+  if (!keepRel) return null;
+
+  const dropRels  = rels.filter((r) => r !== keepRel && DROPPED_REL_TYPE.test(r.type));
+  const dropParts = new Set<string>();
+  for (const r of dropRels) {
+    if (r.external) continue;
+    const part = workbookPartPath(r.target);
+    dropParts.add(part);
+    dropParts.add(relsPathOf(part));
+  }
+
+  const droppedNames = sheetTags
+    .filter((_, i) => i !== keepPos)
+    .map((t) => xmlUnescape(xmlAttr(t, "name") ?? ""));
+
+  let newWb = wbXml.replace(
+    /<sheets>[\s\S]*?<\/sheets>/,
+    `<sheets>${keepTag.replace(/\sstate="[^"]*"/, "").replace(/\s*\/?>$/, "/>")}</sheets>`
+  );
+  // The kept sheet is now tab 0.
+  newWb = newWb.replace(/<workbookView\s[^>]*>/g, (t) => t.replace(/\s(?:activeTab|firstSheet)="[^"]*"/g, ""));
+  // Sheet-scoped names point by position; global ones may name a dropped
+  // sheet. Either kind left dangling makes Excel "repair" the workbook.
+  newWb = newWb.replace(/<definedName\s[^>]*>[\s\S]*?<\/definedName>/g, (dn) => {
+    const open  = dn.slice(0, dn.indexOf(">") + 1);
+    const local = xmlAttr(open, "localSheetId");
+    if (local !== null) {
+      return Number(local) === keepPos ? dn.replace(/\slocalSheetId="\d+"/, ' localSheetId="0"') : "";
+    }
+    const body = xmlUnescape(dn.slice(open.length, dn.lastIndexOf("<")));
+    const refsDropped = droppedNames.some(
+      (n) => body.includes(`${n}!`) || body.includes(`'${n.replace(/'/g, "''")}'!`)
+    );
+    return refsDropped ? "" : dn;
+  });
+  newWb = newWb.replace(/<definedNames>\s*<\/definedNames>/, "");
+
+  let newRels = relsXml;
+  for (const r of dropRels) newRels = newRels.replace(r.tag, "");
+
+  const outZip = new JSZip();
+  for (const [filePath, fileObj] of Object.entries(origZip.files)) {
+    if (fileObj.dir || dropParts.has(filePath)) continue;
+
+    let data: string | Buffer;
+    if (filePath === "xl/workbook.xml") {
+      data = newWb;
+    } else if (filePath === "xl/_rels/workbook.xml.rels") {
+      data = newRels;
+    } else if (filePath === "[Content_Types].xml") {
+      // An Override naming a part that is no longer in the package is itself
+      // a corruption to Excel.
+      data = (await fileObj.async("string")).replace(/<Override\s[^>]*>/g, (tag) =>
+        dropParts.has((xmlAttr(tag, "PartName") ?? "").replace(/^\//, "")) ? "" : tag
+      );
+    } else {
+      data = await fileObj.async("nodebuffer");
+    }
+    // No directory entries — Excel never writes them.
+    outZip.file(filePath, data, { createFolders: false });
+  }
+
+  return outZip.generateAsync({
+    type              : "nodebuffer",
+    compression       : "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+}
+
 export type RepairResult =
   | { status: "ok" }
   | { status: "repaired"; buffer: Buffer; changes: string[] }

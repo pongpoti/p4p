@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert   from "node:assert/strict";
 import ExcelJS  from "exceljs";
 import JSZip    from "jszip";
-import { extractFirstSheetBuffer } from "../index.js";
+import { extractFirstSheetBuffer, monthSheet } from "../index.js";
 
 // extractFirstSheetBuffer() is what gets archived to Drive. It once rebuilt
 // xl/_rels/workbook.xml.rels with only the worksheet relationship, so Excel
@@ -105,4 +105,21 @@ test("dropping a sheet keeps styles, sharedStrings and theme linked", async () =
 test("a blank workbook is still refused", async () => {
   const out = await extractFirstSheetBuffer(await workbook([{ name: "empty", cells: [["A1", "x"]] }]));
   assert.equal(out, null);
+});
+
+test("a workbook with a tab per month archives the month that was scored", async () => {
+  const july  = { name: "ก.ค.69", cells: [["A1", "ชื่อแพทย์ สมชาย ใจดี"], ["A2", "เดือน กรกฎาคม 2569"], ["C5", 7]] as [string, string | number][] };
+  const input = await workbook([july, physicianSheet]);
+
+  const month = await monthSheet(input, 8, 2569);
+  assert.deepEqual(month, { name: "ส.ค.69", matched: true, sheets: ["ก.ค.69", "ส.ค.69"] });
+
+  const out = await extractFirstSheetBuffer(input, month.name);
+  assert.ok(out);
+  const wb = (await parts(out)).wb;
+  assert.deepEqual((wb.match(/<sheet\s[^>]*>/g) ?? []).map((t) => t.match(/name="([^"]*)"/)![1]), ["ส.ค.69"]);
+
+  // Without a name it is still the first tab with content, as before.
+  const first = (await parts((await extractFirstSheetBuffer(input))!)).wb;
+  assert.match(first, /name="ก\.ค\.69"/);
 });

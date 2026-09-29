@@ -17,6 +17,9 @@
  *   identical     the Drive file is the attachment, byte for byte
  *   same-content  everything Excel shows is the attachment's; only the
  *                 left-out tabs, calcChain and internal link ids differ
+ *   wrong-tab     same content, but of another tab of the workbook than the
+ *                 month the copy is filed under (the archive used to keep
+ *                 the first tab, not the one the score was read from)
  *   differs       something shown is not what was sent — listed
  *   line-upload   no email: sent through the LINE upload page, whose
  *                 original is not kept (checked only for opening cleanly)
@@ -33,6 +36,9 @@
  *                 1 December of the year before TARGET_YEAR)
  *   SUPABASE_URL, SUPABASE_KEY  optional — tell LINE uploads apart
  *
+ * The report ends with the wrong-tab and differs copies as targets for the
+ * "Restore Drive copies from the emailed originals" workflow.
+ *
  * Public CI logs: files appear as month + a hash of the file ID, and nothing
  * from a message (sender, subject, filename) is printed. Run locally to see
  * names.
@@ -47,8 +53,10 @@ import * as path from "path";
 import JSZip from "jszip";
 import { config as dotenvConfig } from "dotenv";
 import { compareWithOriginal, type Comparison } from "../xlsx-compare.js";
-import { packageProblem } from "../xlsx-package.js";
+import { packageProblem, workbookSheetNames } from "../xlsx-package.js";
+import { monthSheet } from "../index.js";
 import { IN_CI, XLSX_MIME, createDrive, download, googleAuth, labelOf, listChildren, md5, monthFolders, pool, withRetry } from "./drive-walk.js";
+import { partBytes, xlsxParts } from "./mail-originals.js";
 
 dotenvConfig({ override: true });
 
@@ -60,7 +68,7 @@ const GMAIL_CONCURRENCY = 6;
 const DRIVE_CONCURRENCY = 4;
 const MAX_CANDIDATES    = 5;
 
-type Outcome = "identical" | "same-content" | "differs" | "line-upload" | "no-original" | "unreadable" | "error";
+type Outcome = "identical" | "same-content" | "wrong-tab" | "differs" | "line-upload" | "no-original" | "unreadable" | "error";
 
 interface FileRow {
   month  : string;
@@ -68,6 +76,7 @@ interface FileRow {
   outcome: Outcome;
   detail : string;
   notes  : string[];
+  restore: string | null;   // "2569_01#1a2b3c4d=<message id>" for the restore workflow
 }
 
 const sha256 = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
@@ -85,20 +94,12 @@ async function sheetHashes(buf: Buffer): Promise<string[] | null> {
 }
 
 // ── Gmail: index every .xlsx attachment by its sheet parts ────────────────
-interface Original { file: string; date: number }
+interface Original { file: string; date: number; messageId: string }
 
 interface OriginalIndex {
   byMd5  : Map<string, Original>;       // whole attachment
   bySheet: Map<string, Set<string>>;    // sheet-part hash → attachment md5s
   stats  : { messages: number; attachments: number; distinct: number; notXlsx: number };
-}
-
-function xlsxParts(part: gmail_v1.Schema$MessagePart | undefined, out: gmail_v1.Schema$MessagePart[] = []): gmail_v1.Schema$MessagePart[] {
-  if (!part) return out;
-  const named = part.filename && (/\.xls[xm]$/i.test(part.filename) || /spreadsheetml/.test(part.mimeType ?? ""));
-  if (named && (part.body?.attachmentId || part.body?.data)) out.push(part);
-  for (const child of part.parts ?? []) xlsxParts(child, out);
-  return out;
 }
 
 async function indexOriginals(gmail: gmail_v1.Gmail, dir: string): Promise<OriginalIndex> {
@@ -117,22 +118,22 @@ async function indexOriginals(gmail: gmail_v1.Gmail, dir: string): Promise<Origi
     const msg = (await withRetry(() => gmail.users.messages.get({ userId: "me", id, format: "full", fields: "id,internalDate,payload" }))).data;
     const date = Number(msg.internalDate ?? 0);
     for (const [n, part] of xlsxParts(msg.payload).entries()) {
-      const data = part.body?.attachmentId
-        ? (await withRetry(() => gmail.users.messages.attachments.get({ userId: "me", messageId: id, id: part.body!.attachmentId! }))).data.data
-        : part.body?.data;
-      if (!data) continue;
-      const buf = Buffer.from(data, "base64url");
+      const buf = await partBytes(gmail, id, part);
+      if (!buf) continue;
       index.stats.attachments++;
 
       const sum  = md5(buf);
       const seen = index.byMd5.get(sum);
-      if (seen) { seen.date = Math.max(seen.date, date); continue; }
+      if (seen) {
+        if (date > seen.date) Object.assign(seen, { date, messageId: id });
+        continue;
+      }
       const hashes = await sheetHashes(buf);
       if (!hashes) { index.stats.notXlsx++; continue; }
 
       const file = path.join(dir, `${id}-${n}.xlsx`);
       writeFileSync(file, buf);
-      index.byMd5.set(sum, { file, date });
+      index.byMd5.set(sum, { file, date, messageId: id });
       index.stats.distinct++;
       for (const h of hashes) {
         if (!index.bySheet.has(h)) index.bySheet.set(h, new Set());
@@ -164,11 +165,28 @@ function summarise(c: Comparison): { detail: string; notes: string[] } {
   return { detail: c.status === "differs" ? c.problems.join("; ") : notes.join("; "), notes };
 }
 
+/**
+ * For a copy of one tab of a multi-tab workbook: whether that tab is the
+ * month the copy is filed under, by the pipeline's own choice of tab.
+ * Null when it is, or when no tab of the original identifies the month.
+ */
+async function wrongTab(copy: Buffer, original: Buffer, monthKey: string): Promise<string | null> {
+  const names = await workbookSheetNames(original).catch(() => null);
+  if (!names || names.length < 2) return null;
+  const [beYear, month] = monthKey.split("_").map(Number);
+  const pick = await monthSheet(original, month!, beYear!).catch(() => null);
+  if (!pick?.matched) return null;
+  const kept = (await workbookSheetNames(copy))?.[0];
+  if (kept === undefined || kept === pick.name) return null;
+  return `holds tab ${names.indexOf(kept) + 1} of ${names.length}; this month is tab ${names.indexOf(pick.name) + 1}`;
+}
+
 async function checkFile(
   drive: drive_v3.Drive, month: string, file: drive_v3.Schema$File, index: OriginalIndex, line: Set<string> | null,
 ): Promise<FileRow> {
-  const row = (outcome: Outcome, detail = "", notes: string[] = []): FileRow => ({
-    month, outcome, notes,
+  const target = (o: Original): string => `${month}#${createHash("sha256").update(file.id!).digest("hex").slice(0, 8)}=${o.messageId}`;
+  const row = (outcome: Outcome, detail = "", notes: string[] = [], restore: string | null = null): FileRow => ({
+    month, outcome, notes, restore,
     label : labelOf(month, file),
     detail: IN_CI ? detail.split(file.id!).join("<file>") : detail,
   });
@@ -192,17 +210,19 @@ async function checkFile(
 
     // Newest first: the Drive copy is overwritten by each re-send.
     const ordered = candidates.map((c) => index.byMd5.get(c)!).sort((a, b) => b.date - a.date).slice(0, MAX_CANDIDATES);
-    let best: Comparison | null = null;
+    let best: { c: Comparison; o: Original } | null = null;
     for (const o of ordered) {
-      const c = await compareWithOriginal(buf, readFileSync(o.file));
+      const original = readFileSync(o.file);
+      const c = await compareWithOriginal(buf, original);
       if (c.status !== "differs") {
         const { detail, notes } = summarise(c);
-        return row(c.status, detail, notes);
+        const wrong = c.status === "same-content" ? await wrongTab(buf, original, month) : null;
+        return wrong ? row("wrong-tab", wrong, notes, target(o)) : row(c.status, detail, notes);
       }
-      if (!best || (best.status === "differs" && c.problems.length < best.problems.length)) best = c;
+      if (!best || (best.c.status === "differs" && c.problems.length < best.c.problems.length)) best = { c, o };
     }
-    const { detail, notes } = summarise(best!);
-    return row("differs", detail, notes);
+    const { detail, notes } = summarise(best!.c);
+    return row("differs", detail, notes, target(best!.o));
   } catch (err) {
     return row("error", err instanceof Error ? err.message : String(err));
   }
@@ -236,13 +256,13 @@ async function main(): Promise<void> {
       const done = await pool(xlsx, DRIVE_CONCURRENCY, (f) => checkFile(drive, monthKey, f, index, line));
       rows.push(...done);
       const n = (o: Outcome) => done.filter((r) => r.outcome === o).length;
-      console.log(`${monthKey}: ${xlsx.length} xlsx — identical ${n("identical")}, same content ${n("same-content")}, DIFFERS ${n("differs")}, LINE ${n("line-upload")}, no original ${n("no-original")}, unreadable ${n("unreadable")}, errors ${n("error")}`);
+      console.log(`${monthKey}: ${xlsx.length} xlsx — identical ${n("identical")}, same content ${n("same-content")}, WRONG TAB ${n("wrong-tab")}, DIFFERS ${n("differs")}, LINE ${n("line-upload")}, no original ${n("no-original")}, unreadable ${n("unreadable")}, errors ${n("error")}`);
     }
 
     // ── Report ────────────────────────────────────────────────────────────
-    const outcomes: Outcome[] = ["identical", "same-content", "differs", "line-upload", "no-original", "unreadable", "error"];
+    const outcomes: Outcome[] = ["identical", "same-content", "wrong-tab", "differs", "line-upload", "no-original", "unreadable", "error"];
     const heading: Record<Outcome, string> = {
-      "identical": "Identical file", "same-content": "Same content", "differs": "Differs", "line-upload": "LINE upload",
+      "identical": "Identical file", "same-content": "Same content", "wrong-tab": "Wrong month's tab", "differs": "Differs", "line-upload": "LINE upload",
       "no-original": "No email found", "unreadable": "Unreadable", "error": "Errors",
     };
     const months = [...new Set(rows.map((r) => r.month))];
@@ -271,11 +291,16 @@ async function main(): Promise<void> {
       md.push("", "Every same-content copy also differs in internal link ids, which Excel never shows.", "");
     }
 
-    const attention = rows.filter((r) => ["differs", "no-original", "unreadable", "error"].includes(r.outcome) || (r.outcome === "line-upload" && r.detail));
+    const attention = rows.filter((r) => ["wrong-tab", "differs", "no-original", "unreadable", "error"].includes(r.outcome) || (r.outcome === "line-upload" && r.detail));
     if (attention.length) {
       md.push("### Needs attention", "", "| File | Outcome | Detail |", "|---|---|---|");
       for (const r of attention) md.push(`| ${r.label} | ${r.outcome} | ${r.detail.slice(0, 600).replace(/\|/g, "\\|")} |`);
       md.push("");
+    }
+
+    const restore = rows.map((r) => r.restore).filter(Boolean);
+    if (restore.length) {
+      md.push("### Restore from email", "", `Paste into the "Restore Drive copies from the emailed originals" workflow (${restore.length} file(s)):`, "", "```", restore.join(","), "```", "");
     }
 
     const report = md.join("\n");
