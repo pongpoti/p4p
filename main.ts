@@ -1156,6 +1156,81 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   })
 })
 
+// ── /upload/receipt — did the chat receipt actually reach the chat? ─────────
+// The receipt goes out through liff.sendMessages() in the physician's own
+// browser, so without this route a failed send is invisible to everyone: the
+// page swallows the error (it must never block a submission) and nothing
+// server-side ever hears about it. The page reports the outcome here once per
+// submission; a send that did not happen is stamped on the queue row and
+// Telegrammed to the admin, who can then follow up by hand.
+const RECEIPT_REASONS = new Set([
+  "sent", "liff_init_failed", "not_in_client", "group_chat", "send_failed",
+])
+
+app.post("/upload/receipt", express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+  const body = req.body || {}
+  const queueId = String(body.queue_id || "")
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(queueId)) {
+    return res.status(400).json({ error: "bad_request", detail: "queue_id must be a uuid" })
+  }
+  const reason = String(body.reason || "")
+  if (!RECEIPT_REASONS.has(reason)) {
+    return res.status(400).json({ error: "bad_request", detail: "unknown reason" })
+  }
+  // Browser-supplied and only ever shown to the admin — bounded, never trusted.
+  const contextType = body.context_type ? String(body.context_type).slice(0, 40) : null
+  const errorText = body.error ? String(body.error).slice(0, 500) : null
+
+  // Same gate and ownership check as /upload/score, for the same reasons.
+  const { at, reason: authReason } = await resolveAccessToken(req, res)
+  if (!at) return res.status(401).json({ error: "no_session", reason: authReason })
+  if (!(await isCurrentUserAllowlisted(at))) {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: "blocked" })
+  }
+  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+
+  let row: QueueRow | null
+  try {
+    row = await fetchQueueRow("id=eq." + encodeURIComponent(queueId))
+  } catch (e: any) {
+    console.error("[upload] receipt lookup failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    return res.status(500).json({ error: "lookup_failed" })
+  }
+  if (!row) return res.status(404).json({ error: "not_found" })
+  if (String(row.email).toLowerCase() !== callerEmail) {
+    return res.status(403).json({ error: "forbidden" })
+  }
+
+  const sent = reason === "sent"
+  try {
+    await patchQueueRow(row.id, {
+      receipt_status: reason,
+      receipt_context: contextType,
+      receipt_error: errorText,
+      receipt_reported_at: new Date().toISOString(),
+    })
+  } catch (e: any) {
+    // Diagnostics only — the Telegram below still carries the facts.
+    console.error("[upload] receipt patch failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+  }
+
+  if (!sent) {
+    console.warn("[upload] chat receipt not delivered for " + row.id + ": " + reason +
+      (contextType ? " (context " + contextType + ")" : "") + (errorText ? " — " + errorText : ""))
+    await tg.sendTelegram(
+      "⚠️ ส่งใบยืนยันเข้าแชท LINE ไม่สำเร็จ\n" +
+      "แพทย์: " + row.full_name + "\n" +
+      "เดือน: " + receipt.displayMonth(row.month_key) + "\n" +
+      "ไฟล์: " + (row.filename || "-") + "\n" +
+      "สาเหตุ: " + reason +
+      (contextType ? "\nเปิดจาก: " + contextType : "") +
+      (errorText ? "\nข้อผิดพลาด: " + errorText : "")
+    )
+  }
+  res.json({ ok: true })
+})
+
 app.use("/status", express.static("status"))
 app.use("/list", express.static("list"))
 app.use("/ranking", express.static("ranking"))
