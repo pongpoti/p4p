@@ -57,9 +57,12 @@ const LINKED_PARTS: { type: string; re: RegExp; all?: boolean }[] = [
   { type: `${REL}/sheetMetadata`,        re: /^xl\/metadata\.xml$/ },
   { type: `${REL}/connections`,          re: /^xl\/connections\.xml$/ },
   { type: `${REL}/volatileDependencies`, re: /^xl\/volatileDependencies\.xml$/ },
-  // Threaded-comment authors. Found in a damaged February copy.
-  { type: "http://schemas.microsoft.com/office/2017/10/relationships/person", re: /^xl\/persons\/person\d*\.xml$/ },
+  // Threaded-comment authors. Found in a damaged February copy; an August
+  // one carried three (person.xml, person0.xml, person1.xml), each linked.
+  { type: "http://schemas.microsoft.com/office/2017/10/relationships/person", re: /^xl\/persons\/person\d*\.xml$/, all: true },
   { type: `${REL}/customXml`,            re: /^customXml\/item\d+\.xml$/, all: true },
+  // WPS Office's own workbook data. Found in a damaged February copy.
+  { type: "http://www.wps.cn/officeDocument/2023/relationships/customStorage", re: /^xl\/customStorage\/customStorage\d*\.xml$/ },
 ];
 
 /**
@@ -69,7 +72,7 @@ const LINKED_PARTS: { type: string; re: RegExp; all?: boolean }[] = [
  * (Parts of the sheets the old extraction dropped — drawings, legacy
  * comments, printer settings … — live elsewhere and are harmless orphans.)
  */
-const WORKBOOK_LEVEL = /^(?:xl\/(?!comments\d*\.xml$)[^/]+|xl\/(?:persons|richData|externalLinks|pivotCache|slicerCaches|timelineCaches|model|customData)\/[^/]+|customXml\/[^/]+)$/;
+const WORKBOOK_LEVEL = /^(?:xl\/(?!comments\d*\.xml$)[^/]+|xl\/(?:persons|richData|externalLinks|pivotCache|slicerCaches|timelineCaches|model|customData|customStorage)\/[^/]+|customXml\/[^/]+)$/;
 
 /** Parts workbook.xml names by r:id; matched back to their files by number. */
 const REFERENCED_PARTS = [

@@ -128,6 +128,25 @@ test("threaded-comment authors and customXml items are relinked too", async () =
   assert.equal(await packageProblem(result.buffer), null);
 });
 
+test("every comment-author part and WPS customStorage are relinked", async () => {
+  let broken = await damage(await workbook(["ส.ค.69"]), 0);
+  for (const p of ["person.xml", "person0.xml", "person1.xml"]) broken = await withPart(broken, `xl/persons/${p}`, "application/vnd.ms-excel.person+xml");
+  broken = await withPart(broken, "xl/customStorage/customStorage.xml", "application/xml");
+  const result = await repairWorkbookPackage(broken);
+  assert.equal(result.status, "repaired", JSON.stringify(result));
+  if (result.status !== "repaired") return;
+  const after = await read(result.buffer);
+  for (const p of ["person.xml", "person0.xml", "person1.xml"]) assert.match(after.rels, new RegExp(`relationships/person" Target="persons/${p.replace(".", "\\.")}"`));
+  assert.match(after.rels, /wps\.cn\/officeDocument\/2023\/relationships\/customStorage" Target="customStorage\/customStorage\.xml"/);
+});
+
+test("a copy missing only its customStorage link is repaired, not passed as ok", async () => {
+  const intact = await withPart(await workbook(["ส.ค.69"]), "xl/customStorage/customStorage.xml", "application/xml");
+  const result = await repairWorkbookPackage(intact);
+  assert.equal(result.status, "repaired");
+  if (result.status === "repaired") assert.deepEqual(result.changes, ["linked xl/customStorage/customStorage.xml"]);
+});
+
 test("a workbook-level part with no known link makes the file manual, not half-repaired", async () => {
   const broken = await withPart(await damage(await workbook(["ส.ค.69"]), 0), "xl/richData/rdrichvalue.xml", "application/vnd.ms-excel.rdrichvalue+xml");
   const result = await repairWorkbookPackage(broken);
