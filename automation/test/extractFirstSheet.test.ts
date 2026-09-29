@@ -28,7 +28,7 @@ async function workbook(sheets: { name: string; cells: [string, string | number]
 const physicianSheet = {
   name : "ส.ค.69",
   cells: [
-    ["A1", "ชื่อแพทย์ วรงค์พร"],
+    ["A1", "ชื่อแพทย์ สมชาย ใจดี"],
     ["A2", "เดือน สิงหาคม 2569"],
     ["B5", "ประเภทงาน"],
     ["C5", 42],
@@ -95,7 +95,7 @@ test("dropping a sheet keeps styles, sharedStrings and theme linked", async () =
   await back.xlsx.load(out as unknown as ExcelJS.Buffer);
   assert.equal(back.worksheets.length, 1);
   const ws = back.worksheets[0]!;
-  assert.equal(ws.getCell("A1").value, "ชื่อแพทย์ วรงค์พร");
+  assert.equal(ws.getCell("A1").value, "ชื่อแพทย์ สมชาย ใจดี");
   assert.equal(ws.getCell("B5").value, "ประเภทงาน");
   assert.equal(ws.getCell("C5").value, 42);
   assert.equal(ws.getCell("B5").font?.bold, true);
