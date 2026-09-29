@@ -334,9 +334,10 @@ export async function bumpSenderMatch({
  * @param date          Table name, e.g. "2569_02"
  * @param index         Primary key value (column "index")
  * @param score         Score to save (float8)
- * @param submittedAt ISO timestamp. When omitted, the existing
- *                                      submitted_at value is left untouched (used
- *                                      by the score-only backfill).
+ * @param submittedAt ISO timestamp. Only ever moves submitted_at EARLIER
+ *                                      (or fills it when empty) — see below. When
+ *                                      omitted, submitted_at is left untouched
+ *                                      (used by the score-only backfill).
  */
 export async function saveScore(date: string, index: number | string, score: number, submittedAt?: string): Promise<void> {
   if (!isValidDate(date)) {
@@ -349,16 +350,10 @@ export async function saveScore(date: string, index: number | string, score: num
     throw new Error(`Cannot save score — value is not a finite number: ${score}`);
   }
 
-  // Only overwrite submitted_at when a timestamp is supplied. Passing
-  // `submitted_at: undefined` happens to be dropped by JSON.stringify today, but
-  // relying on that is fragile — build the patch explicitly instead.
-  const patch: { score: number; submitted_at?: string } = { score };
-  if (submittedAt !== undefined) patch.submitted_at = submittedAt;
-
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from(date)
-    .update(patch)
+    .update({ score })
     .eq("index", index)
     .select("index");
 
@@ -368,5 +363,19 @@ export async function saveScore(date: string, index: number | string, score: num
   // believes the score was saved and reports success while nothing changed.
   if (!data || data.length === 0) {
     throw new Error(`Supabase update on table "${date}" matched no row for index ${index} — score was NOT saved`);
+  }
+
+  // submitted_at is the punctuality timestamp the ranking reads, so it keeps
+  // the EARLIEST submission: a re-send of a month (a corrected file, or an old
+  // file attached by mistake) updates the score above but must never move an
+  // on-time submission past the deadline. Written only when empty or later
+  // than this one; 0 rows matched here just means an earlier time is kept.
+  if (submittedAt !== undefined) {
+    const { error: tsError } = await supabase
+      .from(date)
+      .update({ submitted_at: submittedAt })
+      .eq("index", index)
+      .or(`submitted_at.is.null,submitted_at.gt."${submittedAt}"`);
+    if (tsError) throw new Error(`Supabase submitted_at update error on table "${date}": ${tsError.message}`);
   }
 }

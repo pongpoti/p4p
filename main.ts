@@ -1078,12 +1078,23 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
     // saveScore(): the score column on the month's roster row. `Prefer:
     // return=representation` so a filter that matched nothing surfaces here
     // rather than being reported to the physician as saved.
+    const rowUrl = SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(String(row.roster_index))
     const saved = await axios.patch(
-      SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(String(row.roster_index)),
-      { score: value, submitted_at: submittedAt },
+      rowUrl,
+      { score: value },
       { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
     )
     if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+    // submitted_at is what the ranking reads for punctuality, so it keeps the
+    // EARLIEST submission — same rule as automation's saveScore(). A re-upload
+    // of a month updates the score above but never moves an on-time
+    // submission past the deadline; 0 rows here just means an earlier time
+    // is already recorded.
+    await axios.patch(
+      rowUrl + "&or=" + encodeURIComponent("(submitted_at.is.null,submitted_at.gt.\"" + submittedAt + "\")"),
+      { submitted_at: submittedAt },
+      { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=minimal" }), timeout: 8000 }
+    )
   } catch (e: any) {
     // Fall back to the queue rather than telling the physician a number that
     // was not written.
