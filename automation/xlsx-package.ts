@@ -93,9 +93,9 @@ const CONTENT_TYPES: Record<string, string> = {
   [`${REL}/pivotCacheDefinition`]: `${SML}.pivotCacheDefinition+xml`,
 };
 
-interface Rel { tag: string; id: string; type: string; target: string; external: boolean }
+export interface Rel { tag: string; id: string; type: string; target: string; external: boolean }
 
-function parseRels(xml: string): Rel[] {
+export function parseRels(xml: string): Rel[] {
   return (xml.match(/<Relationship\s[^>]*>/g) ?? []).map((tag) => ({
     tag,
     id      : xmlAttr(tag, "Id") ?? "",
