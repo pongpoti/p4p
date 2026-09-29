@@ -16,6 +16,7 @@ import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByInd
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
+import { relsPathOf, workbookPartPath, xmlAttr, xmlUnescape } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
 import log                              from "./logger.js";
@@ -287,10 +288,12 @@ async function stripFormulasFromBuffer(inputBuffer: Buffer): Promise<Buffer> {
  * Strategy:
  *   1. Use the formula-stripped buffer to safely determine which sheet has
  *      content (ExcelJS can't reliably read shared-formula files otherwise).
- *   2. Map the chosen sheet index back to its raw XML path in the original zip.
- *   3. Build a new minimal xlsx zip using only that sheet's original XML,
- *      carrying over all shared resources (styles, sharedStrings, theme, etc.)
- *      but removing references to the other sheets from workbook.xml.
+ *   2. A one-sheet workbook is returned exactly as received.
+ *   3. Otherwise copy the original package minus the other sheets: their
+ *      <sheet> entries, workbook relationships, parts and content-type
+ *      overrides, plus calcChain and any defined name pointing at them.
+ *      Every other part and relationship (styles, sharedStrings, theme, …)
+ *      is carried over untouched.
  *
  * Returns a Buffer, or null if no usable sheet is found.
  */
@@ -329,99 +332,102 @@ export async function extractFirstSheetBuffer(buffer: Buffer): Promise<Buffer | 
 
   if (nonNullCount(source.worksheets[sheetIndex]!) < 3) return null;
 
-  // ── Step 2: transplant original sheet XML into a new single-sheet zip ──
-  const origZip = await JSZip.loadAsync(buffer);
+  // ── Step 2: drop the other sheets from the ORIGINAL package ────────────
+  const origZip  = await JSZip.loadAsync(buffer);
+  const wbFile   = origZip.file("xl/workbook.xml");
+  const relsFile = origZip.file("xl/_rels/workbook.xml.rels");
+  if (!wbFile || !relsFile) return null;
+  const wbXml   = await wbFile.async("string");
+  const relsXml = await relsFile.async("string");
 
-  // Resolve the correct sheet XML file via workbook.xml + rels.
-  // Sorting sheetN.xml filenames by number is NOT reliable — Excel can reorder
-  // sheets visually without renumbering the underlying XML files, so
-  // sheetPaths[sheetIndex] can point to the wrong sheet in reordered workbooks.
-  const wbXml   = await origZip.files["xl/workbook.xml"]!.async("string");
-  const relsXml = await origZip.files["xl/_rels/workbook.xml.rels"]!.async("string");
+  const sheetTags = wbXml.match(/<sheet\s[^>]*>/g) ?? [];
 
-  const sheetsBlockM = wbXml.match(/<sheets>([\s\S]*?)<\/sheets>/);
-  if (!sheetsBlockM) return null;
+  // Nothing to drop: archive the physician's file byte-for-byte.
+  if (sheetTags.length <= 1) return buffer;
 
-  // r:id values for each sheet in visual order (as listed in workbook.xml)
-  const sheetRIds = [...sheetsBlockM[1]!.matchAll(/r:id="([^"]+)"/g)].map((m) => m[1]!);
-  if (sheetIndex >= sheetRIds.length) return null;
+  // Match the <sheet> by name: ExcelJS does not load chartsheets, so its index
+  // can disagree with <sheets> order. Position is only the fallback.
+  const keepName = source.worksheets[sheetIndex]!.name;
+  let keepPos = sheetTags.findIndex((t) => xmlUnescape(xmlAttr(t, "name") ?? "") === keepName);
+  if (keepPos < 0) keepPos = sheetIndex;
+  const keepTag = sheetTags[keepPos];
+  if (!keepTag) return null;
 
-  const targetRId = sheetRIds[sheetIndex]!;
-  const relM = relsXml.match(new RegExp(`Id="${targetRId}"[^>]+Target="([^"]+)"`));
-  if (!relM) return null;
+  // Excel reaches styles, sharedStrings and theme ONLY through this rels file.
+  // Drop the other SHEETS' relationships and nothing else: an earlier version
+  // kept just the one worksheet relationship, and Excel then opened every
+  // Drive copy with all text blank and all formatting gone (Google's preview
+  // and openpyxl find those parts by path, which is why it went unnoticed).
+  // calcChain goes too — it indexes cells on the dropped sheets, and Excel
+  // rebuilds it on the next save.
+  const rels = (relsXml.match(/<Relationship\s[^>]*>/g) ?? []).map((tag) => ({
+    tag,
+    id      : xmlAttr(tag, "Id"),
+    type    : xmlAttr(tag, "Type") ?? "",
+    target  : xmlAttr(tag, "Target") ?? "",
+    external: xmlAttr(tag, "TargetMode") === "External",
+  }));
+  const keepRel = rels.find((r) => r.id === xmlAttr(keepTag, "r:id"));
+  if (!keepRel) return null;
 
-  const targetRelPath   = relM[1]!;               // e.g. "worksheets/sheet2.xml"
-  const targetSheetPath = `xl/${targetRelPath}`; // e.g. "xl/worksheets/sheet2.xml"
-  const sheetNumM       = targetRelPath.match(/sheet(\d+)\.xml$/i);
-  if (!sheetNumM) return null;
-  const targetSheetNum  = parseInt(sheetNumM[1]!); // 1-based, for internal XML references
+  const dropRels  = rels.filter((r) => r !== keepRel && DROPPED_REL_TYPE.test(r.type));
+  const dropParts = new Set<string>();
+  for (const r of dropRels) {
+    if (r.external) continue;
+    const part = workbookPartPath(r.target);
+    dropParts.add(part);
+    dropParts.add(relsPathOf(part));
+  }
 
-  // Build output zip: copy everything except the other sheet XMLs and their rels
+  const droppedNames = sheetTags
+    .filter((_, i) => i !== keepPos)
+    .map((t) => xmlUnescape(xmlAttr(t, "name") ?? ""));
+
+  let newWb = wbXml.replace(
+    /<sheets>[\s\S]*?<\/sheets>/,
+    `<sheets>${keepTag.replace(/\sstate="[^"]*"/, "").replace(/\s*\/?>$/, "/>")}</sheets>`
+  );
+  // The kept sheet is now tab 0.
+  newWb = newWb.replace(/<workbookView\s[^>]*>/g, (t) => t.replace(/\s(?:activeTab|firstSheet)="[^"]*"/g, ""));
+  // Sheet-scoped names point by position; global ones may name a dropped
+  // sheet. Either kind left dangling makes Excel "repair" the workbook.
+  newWb = newWb.replace(/<definedName\s[^>]*>[\s\S]*?<\/definedName>/g, (dn) => {
+    const open  = dn.slice(0, dn.indexOf(">") + 1);
+    const local = xmlAttr(open, "localSheetId");
+    if (local !== null) {
+      return Number(local) === keepPos ? dn.replace(/\slocalSheetId="\d+"/, ' localSheetId="0"') : "";
+    }
+    const body = xmlUnescape(dn.slice(open.length, dn.lastIndexOf("<")));
+    const refsDropped = droppedNames.some(
+      (n) => body.includes(`${n}!`) || body.includes(`'${n.replace(/'/g, "''")}'!`)
+    );
+    return refsDropped ? "" : dn;
+  });
+  newWb = newWb.replace(/<definedNames>\s*<\/definedNames>/, "");
+
+  let newRels = relsXml;
+  for (const r of dropRels) newRels = newRels.replace(r.tag, "");
+
   const outZip = new JSZip();
-
   for (const [filePath, fileObj] of Object.entries(origZip.files)) {
-    if (fileObj.dir) continue;
+    if (fileObj.dir || dropParts.has(filePath)) continue;
 
-    // Drop worksheets other than our target
-    if (/^xl\/worksheets\/sheet\d+\.xml$/.test(filePath) && filePath !== targetSheetPath) continue;
-    if (/^xl\/worksheets\/_rels\/sheet\d+\.xml\.rels$/.test(filePath)) {
-      const num = parseInt(filePath.match(/sheet(\d+)/)![1]!);
-      if (num !== targetSheetNum) continue;
-    }
-
-    // Rewrite workbook.xml to reference only the chosen sheet
+    let data: string | Buffer;
     if (filePath === "xl/workbook.xml") {
-      let wbXml = await fileObj.async("string");
-      // Keep only the target <sheet> element; renumber it as sheet 1
-      wbXml = wbXml.replace(/<sheets>[\s\S]*?<\/sheets>/, (sheetsBlock) => {
-        const sheetMatches = [...sheetsBlock.matchAll(/<sheet [^/]*/g)];
-        if (sheetMatches.length <= sheetIndex) return sheetsBlock; // safety
-        let targetTag = sheetMatches[sheetIndex]![0];
-        // Renumber r:id to rId1 and sheetId to 1
-        targetTag = targetTag
-          .replace(/r:id="[^"]*"/, 'r:id="rId1"')
-          .replace(/sheetId="[^"]*"/, 'sheetId="1"');
-        return `<sheets>${targetTag}/></sheets>`;
-      });
-      outZip.file(filePath, wbXml);
-      continue;
-    }
-
-    // Rewrite workbook.xml.rels to keep only the target sheet relationship
-    if (filePath === "xl/_rels/workbook.xml.rels") {
-      let relsXml = await fileObj.async("string");
-      // Find the rId that pointed to the target sheet
-      const targetRel = new RegExp(
-        `<Relationship[^>]+Id="([^"]+)"[^>]+Target="worksheets/sheet${targetSheetNum}\\.xml"[^>]*/>`
+      data = newWb;
+    } else if (filePath === "xl/_rels/workbook.xml.rels") {
+      data = newRels;
+    } else if (filePath === "[Content_Types].xml") {
+      // An Override naming a part that is no longer in the package is itself
+      // a corruption to Excel.
+      data = (await fileObj.async("string")).replace(/<Override\s[^>]*>/g, (tag) =>
+        dropParts.has((xmlAttr(tag, "PartName") ?? "").replace(/^\//, "")) ? "" : tag
       );
-      const m = relsXml.match(targetRel);
-      if (m) {
-        const origRid = m[1]!;
-        // Keep only this relationship, renamed to rId1
-        relsXml = relsXml.replace(
-          /<Relationships[^>]*>([\s\S]*?)<\/Relationships>/,
-          (_, inner) => {
-            const kept = inner
-              .split(/(?=<Relationship)/)
-              .find((rel: string) => rel.includes(`Id="${origRid}"`)) ?? "";
-            const renumbered = kept
-              .replace(`Id="${origRid}"`, 'Id="rId1"')
-              .replace(`Target="worksheets/sheet${targetSheetNum}.xml"`, 'Target="worksheets/sheet1.xml"');
-            return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${renumbered}</Relationships>`;
-          }
-        );
-      }
-      outZip.file(filePath, relsXml);
-      continue;
+    } else {
+      data = await fileObj.async("nodebuffer");
     }
-
-    // Rename target sheet XML to sheet1.xml in the output
-    const outPath = filePath === targetSheetPath
-      ? "xl/worksheets/sheet1.xml"
-      : filePath.replace(`sheet${targetSheetNum}.xml`, "sheet1.xml");
-
-    const data = await fileObj.async("nodebuffer");
-    outZip.file(outPath, data);
+    // No directory entries — Excel never writes them.
+    outZip.file(filePath, data, { createFolders: false });
   }
 
   const out = await outZip.generateAsync({
@@ -432,6 +438,9 @@ export async function extractFirstSheetBuffer(buffer: Buffer): Promise<Buffer | 
 
   return out;
 }
+
+/** Workbook relationships removed along with the sheets that are not kept. */
+const DROPPED_REL_TYPE = /\/(?:worksheet|chartsheet|dialogsheet|xlMacrosheet|xlIntlMacrosheet|calcChain)$/;
 
 // ── Alert reply helper ────────────────────────────────────────────────────
 
