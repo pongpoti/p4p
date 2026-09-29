@@ -46,19 +46,39 @@ export function relsPathOf(part: string): string {
   return path.posix.join(path.posix.dirname(part), "_rels", `${path.posix.basename(part)}.rels`);
 }
 
-/** Workbook-level parts that only xl/_rels/workbook.xml.rels leads Excel to. */
-const LINKED_PARTS = [
-  { type: `${REL}/styles`,        re: /^xl\/styles\.xml$/ },
-  { type: `${REL}/theme`,         re: /^xl\/theme\/theme\d+\.xml$/ },
-  { type: `${REL}/sharedStrings`, re: /^xl\/sharedStrings\.xml$/ },
-  { type: `${REL}/sheetMetadata`, re: /^xl\/metadata\.xml$/ },
-  { type: `${REL}/connections`,   re: /^xl\/connections\.xml$/ },
+/**
+ * Workbook-level parts that only xl/_rels/workbook.xml.rels leads Excel to.
+ * `all`: every matching part gets its own link (otherwise the lowest-numbered).
+ */
+const LINKED_PARTS: { type: string; re: RegExp; all?: boolean }[] = [
+  { type: `${REL}/styles`,               re: /^xl\/styles\.xml$/ },
+  { type: `${REL}/theme`,                re: /^xl\/theme\/theme\d+\.xml$/ },
+  { type: `${REL}/sharedStrings`,        re: /^xl\/sharedStrings\.xml$/ },
+  { type: `${REL}/sheetMetadata`,        re: /^xl\/metadata\.xml$/ },
+  { type: `${REL}/connections`,          re: /^xl\/connections\.xml$/ },
+  { type: `${REL}/volatileDependencies`, re: /^xl\/volatileDependencies\.xml$/ },
+  // Threaded-comment authors. Found in a damaged February copy.
+  { type: "http://schemas.microsoft.com/office/2017/10/relationships/person", re: /^xl\/persons\/person\d*\.xml$/ },
+  { type: `${REL}/customXml`,            re: /^customXml\/item\d+\.xml$/, all: true },
 ];
+
+/**
+ * Parts Excel reaches from the workbook rather than from a sheet. One of
+ * these left without any link after a repair means the file held something
+ * this module does not know how to reconnect — it is reported, not written.
+ * (Parts of the sheets the old extraction dropped — drawings, legacy
+ * comments, printer settings … — live elsewhere and are harmless orphans.)
+ */
+const WORKBOOK_LEVEL = /^(?:xl\/(?!comments\d*\.xml$)[^/]+|xl\/(?:persons|richData|externalLinks|pivotCache|slicerCaches|timelineCaches|model|customData)\/[^/]+|customXml\/[^/]+)$/;
 
 /** Parts workbook.xml names by r:id; matched back to their files by number. */
 const REFERENCED_PARTS = [
   { element: "externalReference", type: `${REL}/externalLink`,         re: /^xl\/externalLinks\/externalLink\d+\.xml$/ },
   { element: "pivotCache",        type: `${REL}/pivotCacheDefinition`, re: /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/ },
+  // A workbook that started life in Google Sheets carries Google's round-trip
+  // blob (xl/metadata, no extension) and names it from an <extLst> entry.
+  // About a quarter of the July copies were made from such a template.
+  { element: "sheetsCustomData",  type: "http://customschemas.google.com/relationships/workbookmetadata", re: /^xl\/metadata$/ },
 ];
 
 /** Content type for each relationship type a repair may have to declare. */
@@ -89,9 +109,28 @@ function partNumber(p: string): number {
   return Number(p.match(/(\d+)\.xml$/)?.[1] ?? 0);
 }
 
-/** Every r:id workbook.xml uses (sheets, external links, pivot caches, …). */
+/** Every part some .rels file in the package points at. */
+async function relTargets(zip: JSZip): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const p of Object.keys(zip.files)) {
+    const m = p.match(/^(.*?)_rels\/[^/]*\.rels$/);   // [^/]* — the package's own is just "_rels/.rels"
+    if (!m) continue;
+    const base = m[1]!.replace(/\/$/, "");           // the source part's folder
+    for (const r of parseRels(await zip.file(p)!.async("string"))) {
+      if (r.external) continue;
+      out.add(r.target.startsWith("/") ? r.target.slice(1) : path.posix.normalize(path.posix.join(base, r.target)));
+    }
+  }
+  return out;
+}
+
+/**
+ * Every r:id workbook.xml uses (sheets, external links, pivot caches, …).
+ * An empty r:id="" can never resolve and was never a link the old extraction
+ * removed, so it is not counted.
+ */
 function referencedIds(wbXml: string): string[] {
-  return [...wbXml.matchAll(/\sr:id="([^"]*)"/g)].map((m) => m[1]!);
+  return [...wbXml.matchAll(/\sr:id="([^"]+)"/g)].map((m) => m[1]!);
 }
 
 /**
@@ -161,24 +200,29 @@ export async function repairWorkbookPackage(input: Buffer): Promise<RepairResult
     return `rId${n}`;
   };
   const link = (id: string, type: string, part: string): void => {
-    const target = part.slice("xl/".length);
+    const target = path.posix.relative("xl", part);
     added.push({ tag: `<Relationship Id="${id}" Type="${type}" Target="${target}"/>`, id, type, target, external: false });
     changes.push(`linked ${part}`);
   };
 
   // 1. Parts only the rels file leads to.
-  const linkedTypes = new Set(rels.map((r) => r.type));
+  const linkedTypes   = new Set(rels.map((r) => r.type));
+  const linkedTargets = new Set(rels.filter((r) => !r.external).map((r) => workbookPartPath(r.target)));
   for (const spec of LINKED_PARTS) {
-    if (linkedTypes.has(spec.type)) continue;
-    const part = parts.filter((p) => spec.re.test(p)).sort((a, b) => partNumber(a) - partNumber(b))[0];
-    if (part) link(freshId(), spec.type, part);
+    const matching = parts.filter((p) => spec.re.test(p)).sort((a, b) => partNumber(a) - partNumber(b));
+    if (spec.all) {
+      for (const part of matching) if (!linkedTargets.has(part)) link(freshId(), spec.type, part);
+    } else if (!linkedTypes.has(spec.type) && matching[0]) {
+      link(freshId(), spec.type, matching[0]);
+    }
   }
 
   // 2. Parts workbook.xml names by an r:id the rels file no longer has. They
   //    were written in reference order, so the Nth reference is file N.
   for (const spec of REFERENCED_PARTS) {
-    const refs = [...wbXml.matchAll(new RegExp(`<${spec.element}\\s[^>]*>`, "g"))]
-      .map((m) => xmlAttr(m[0], "r:id") ?? "");
+    const refs = [...wbXml.matchAll(new RegExp(`<(?:\\w+:)?${spec.element}\\s[^>]*>`, "g"))]
+      .map((m) => xmlAttr(m[0], "r:id") ?? "")
+      .filter(Boolean);
     const dangling = refs.filter((id) => !relIds.has(id));
     if (dangling.length === 0) continue;
     const files = parts.filter((p) => spec.re.test(p)).sort((a, b) => partNumber(a) - partNumber(b));
@@ -206,6 +250,14 @@ export async function repairWorkbookPackage(input: Buffer): Promise<RepairResult
   if (parts.includes(calcChain) && !rels.some((r) => workbookPartPath(r.target) === calcChain)) {
     drop.add(calcChain);
     changes.push("removed stale calcChain.xml");
+  }
+
+  // Every workbook-level part must now be reachable from some rels file.
+  const reached = await relTargets(zip);
+  for (const r of added) reached.add(workbookPartPath(r.target));
+  const unlinked = parts.filter((p) => WORKBOOK_LEVEL.test(p) && !drop.has(p) && !reached.has(p) && p !== "[Content_Types].xml");
+  if (unlinked.length) {
+    return { status: "manual", reason: `no known way to relink ${unlinked.join(", ")}` };
   }
 
   // The old extraction always kept exactly one sheet, but left sheet-scoped
