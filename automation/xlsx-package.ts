@@ -59,6 +59,10 @@ const LINKED_PARTS = [
 const REFERENCED_PARTS = [
   { element: "externalReference", type: `${REL}/externalLink`,         re: /^xl\/externalLinks\/externalLink\d+\.xml$/ },
   { element: "pivotCache",        type: `${REL}/pivotCacheDefinition`, re: /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/ },
+  // A workbook that started life in Google Sheets carries Google's round-trip
+  // blob (xl/metadata, no extension) and names it from an <extLst> entry.
+  // About a quarter of the July copies were made from such a template.
+  { element: "sheetsCustomData",  type: "http://customschemas.google.com/relationships/workbookmetadata", re: /^xl\/metadata$/ },
 ];
 
 /** Content type for each relationship type a repair may have to declare. */
@@ -89,9 +93,13 @@ function partNumber(p: string): number {
   return Number(p.match(/(\d+)\.xml$/)?.[1] ?? 0);
 }
 
-/** Every r:id workbook.xml uses (sheets, external links, pivot caches, …). */
+/**
+ * Every r:id workbook.xml uses (sheets, external links, pivot caches, …).
+ * An empty r:id="" can never resolve and was never a link the old extraction
+ * removed, so it is not counted.
+ */
 function referencedIds(wbXml: string): string[] {
-  return [...wbXml.matchAll(/\sr:id="([^"]*)"/g)].map((m) => m[1]!);
+  return [...wbXml.matchAll(/\sr:id="([^"]+)"/g)].map((m) => m[1]!);
 }
 
 /**
@@ -177,8 +185,9 @@ export async function repairWorkbookPackage(input: Buffer): Promise<RepairResult
   // 2. Parts workbook.xml names by an r:id the rels file no longer has. They
   //    were written in reference order, so the Nth reference is file N.
   for (const spec of REFERENCED_PARTS) {
-    const refs = [...wbXml.matchAll(new RegExp(`<${spec.element}\\s[^>]*>`, "g"))]
-      .map((m) => xmlAttr(m[0], "r:id") ?? "");
+    const refs = [...wbXml.matchAll(new RegExp(`<(?:\\w+:)?${spec.element}\\s[^>]*>`, "g"))]
+      .map((m) => xmlAttr(m[0], "r:id") ?? "")
+      .filter(Boolean);
     const dangling = refs.filter((id) => !relIds.has(id));
     if (dangling.length === 0) continue;
     const files = parts.filter((p) => spec.re.test(p)).sort((a, b) => partNumber(a) - partNumber(b));
