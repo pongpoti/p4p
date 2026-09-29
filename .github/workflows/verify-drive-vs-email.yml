@@ -1,0 +1,76 @@
+name: Verify Drive copies against the emailed originals
+
+# READ-ONLY. Pairs every archived .xlsx in the P4P Drive tree with the
+# attachment it came from in the Gmail inbox and checks that the copy shows
+# exactly what was sent (see automation/scripts/verify-drive-vs-email.ts).
+# Nothing in Drive or Gmail is changed. The result is the run's summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'BE year folder, e.g. 2569 (blank = every year)'
+        required: false
+        default: '2569'
+        type: string
+      month:
+        description: 'Month number (all = every month)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+          - '7'
+          - '8'
+          - '9'
+          - '10'
+          - '11'
+          - '12'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-drive-vs-email
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify ${{ inputs.year || 'all years' }} / ${{ inputs.month }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: automation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: automation/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify
+        env:
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          P4P_FOLDER_ID:        ${{ secrets.P4P_FOLDER_ID }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
+          TARGET_YEAR:          ${{ inputs.year }}
+          TARGET_MONTH:         ${{ inputs.month != 'all' && inputs.month || '' }}
+        run: npx tsx scripts/verify-drive-vs-email.ts
