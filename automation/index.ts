@@ -16,6 +16,7 @@ import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByInd
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
+import { relsPathOf, workbookPartPath, xmlAttr, xmlUnescape } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
 import log                              from "./logger.js";
@@ -375,7 +376,7 @@ export async function extractFirstSheetBuffer(buffer: Buffer): Promise<Buffer | 
     if (r.external) continue;
     const part = workbookPartPath(r.target);
     dropParts.add(part);
-    dropParts.add(path.posix.join(path.posix.dirname(part), "_rels", `${path.posix.basename(part)}.rels`));
+    dropParts.add(relsPathOf(part));
   }
 
   const droppedNames = sheetTags
@@ -440,24 +441,6 @@ export async function extractFirstSheetBuffer(buffer: Buffer): Promise<Buffer | 
 
 /** Workbook relationships removed along with the sheets that are not kept. */
 const DROPPED_REL_TYPE = /\/(?:worksheet|chartsheet|dialogsheet|xlMacrosheet|xlIntlMacrosheet|calcChain)$/;
-
-/** One attribute's raw (still XML-escaped) value from a single start tag. */
-function xmlAttr(tag: string, name: string): string | null {
-  const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
-  return m ? m[1]! : null;
-}
-
-function xmlUnescape(s: string): string {
-  return s
-    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-/** A Target from xl/_rels/workbook.xml.rels as a path inside the zip. */
-function workbookPartPath(target: string): string {
-  return target.startsWith("/") ? target.slice(1) : path.posix.normalize(`xl/${target}`);
-}
 
 // ── Alert reply helper ────────────────────────────────────────────────────
 
