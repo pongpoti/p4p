@@ -112,7 +112,7 @@ test("a workbook with a tab per month archives the month that was scored", async
   const input = await workbook([july, physicianSheet]);
 
   const month = await monthSheet(input, 8, 2569);
-  assert.deepEqual(month, { name: "ส.ค.69", matched: true, sheets: ["ก.ค.69", "ส.ค.69"] });
+  assert.deepEqual(month, { name: "ส.ค.69", matched: true, sheets: ["ก.ค.69", "ส.ค.69"], says: ["ส.ค.69"] });
 
   const out = await extractFirstSheetBuffer(input, month.name);
   assert.ok(out);
@@ -122,4 +122,12 @@ test("a workbook with a tab per month archives the month that was scored", async
   // Without a name it is still the first tab with content, as before.
   const first = (await parts((await extractFirstSheetBuffer(input))!)).wb;
   assert.match(first, /name="ก\.ค\.69"/);
+});
+
+test("a tab whose title says the month counts, whatever the tab is called", async () => {
+  // January's data under a stale "May" tab, next to an empty "Jan" template.
+  const may = { name: "May", cells: [["A1", "ชื่อแพทย์ สมชาย ใจดี"], ["A2", "เดือน มกราคม 2569"], ["C5", 30]] as [string, string | number][] };
+  const jan = { name: "Jan", cells: [["A3", "ประเภทงาน"], ["B3", "กิจกรรม"], ["C3", "D1"]] as [string, string | number][] };
+  const month = await monthSheet(await workbook([may, jan]), 1, 2569);
+  assert.deepEqual([...month.says].sort(), ["Jan", "May"]);
 });
