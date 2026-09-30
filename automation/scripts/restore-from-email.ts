@@ -14,6 +14,18 @@
  * "2569_01#4c825d2c" is the label the verification report gives a file
  * (month + a hash of its Drive file ID); after "=" is the Gmail message ID.
  *
+ * A correction made on a copy that opened blank (the physician downloaded a
+ * damaged Drive copy, fixed numbers they could see, and sent it back without
+ * any text or formatting) names the earlier, formatted email after a "+":
+ *
+ *   TARGETS="2569_07#7f7be144=<correction message id>+<earlier message id>"
+ *
+ * The new copy is then the earlier file's tab with every number and formula
+ * of the correction (xlsx-refill.ts). The correction must hold no text at
+ * all, the earlier file must share at least half its cells with it, and the
+ * result must carry every one of the correction's values and every format
+ * of the earlier file.
+ *
  * For each target:
  *   1. the email must be where the copy came from: the copy still holds at
  *      least half of the values of one of its tabs, at the same cells;
@@ -46,7 +58,8 @@ import { Readable } from "stream";
 import { config as dotenvConfig } from "dotenv";
 import { compareWithOriginal } from "../xlsx-compare.js";
 import { keepOneSheet, packageProblem } from "../xlsx-package.js";
-import { cellDrift, readTabs } from "../xlsx-cells.js";
+import { cellDrift, readTabs, reproduced } from "../xlsx-cells.js";
+import { hasNoText, refillValues } from "../xlsx-refill.js";
 import { pickRestoreTab } from "../restore-pick.js";
 import { IN_CI, XLSX_MIME, createDrive, download, googleAuth, listChildren, md5, monthFolders, withRetry } from "./drive-walk.js";
 import { partBytes, xlsxParts } from "./mail-originals.js";
@@ -56,14 +69,24 @@ dotenvConfig({ override: true });
 const APPLY = process.env.APPLY === "true";
 const MIN_AGREEMENT = 0.5;
 
-interface Target { month: string; hash: string; messageId: string }
+interface Target { month: string; hash: string; messageId: string; styleId: string | null }
 
 function parseTargets(raw: string): Target[] {
   return raw.split(/[,\s]+/).filter(Boolean).map((t) => {
-    const m = t.match(/^(\d{4}_\d{2})#([0-9a-f]{8})=([0-9a-zA-Z]+)$/);
-    if (!m) throw new Error(`Bad target "${t}" — expected 2569_01#1a2b3c4d=<gmail message id>`);
-    return { month: m[1]!, hash: m[2]!, messageId: m[3]! };
+    const m = t.match(/^(\d{4}_\d{2})#([0-9a-f]{8})=([0-9a-zA-Z]+)(?:\+([0-9a-zA-Z]+))?$/);
+    if (!m) throw new Error(`Bad target "${t}" — expected 2569_01#1a2b3c4d=<gmail message id>[+<earlier message id>]`);
+    return { month: m[1]!, hash: m[2]!, messageId: m[3]!, styleId: m[4] ?? null };
   });
+}
+
+async function emailWorkbooks(gmail: ReturnType<typeof google.gmail>, messageId: string): Promise<Buffer[]> {
+  const msg = (await withRetry(() => gmail.users.messages.get({ userId: "me", id: messageId, format: "full", fields: "id,payload" }))).data;
+  const out: Buffer[] = [];
+  for (const part of xlsxParts(msg.payload)) {
+    const bytes = await partBytes(gmail, messageId, part);
+    if (bytes) out.push(bytes);
+  }
+  return out;
 }
 
 const idHash = (id: string): string => createHash("sha256").update(id).digest("hex").slice(0, 8);
@@ -83,13 +106,7 @@ async function restore(drive: drive_v3.Drive, gmail: ReturnType<typeof google.gm
   if (!copyTab) return "skipped: the Drive copy has no worksheet";
 
   // ── The emailed workbook, and the tab for the copy's month ────────────
-  const msg = (await withRetry(() => gmail.users.messages.get({ userId: "me", id: t.messageId, format: "full", fields: "id,payload" }))).data;
-  const originals: Buffer[] = [];
-  for (const part of xlsxParts(msg.payload)) {
-    const original = await partBytes(gmail, t.messageId, part);
-    if (original) originals.push(original);
-  }
-  const pick = await pickRestoreTab(copyTab, originals, Number(mm), Number(year));
+  const pick = await pickRestoreTab(copyTab, await emailWorkbooks(gmail, t.messageId), Number(mm), Number(year));
   if (!pick) return "skipped: the message has no readable .xlsx attachment";
   const { closest, best } = pick;
   if (closest.agreement < MIN_AGREEMENT) return `skipped: the copy did not come from this email (it holds ${pct(closest.agreement)} of its closest tab)`;
@@ -97,17 +114,44 @@ async function restore(drive: drive_v3.Drive, gmail: ReturnType<typeof google.gm
   const which = `tab ${best.keepPos + 1} of ${best.tabs} (${how}; the copy holds ${pct(closest.agreement)} of the email tab it came from)`;
 
   // ── The new copy, checked against the original ────────────────────────
-  const restored = await keepOneSheet(best.original, best.keepPos);
-  if (!restored) return `skipped: could not keep ${which}`;
-  const check = await compareWithOriginal(restored, best.original);
+  const emailed = await keepOneSheet(best.original, best.keepPos);
+  if (!emailed) return `skipped: could not keep ${which}`;
+  const check = await compareWithOriginal(emailed, best.original);
   if (check.status === "differs") return `skipped: rebuilt copy does not match the email (${check.problems.join("; ")})`;
+
+  let restored = emailed;
+  let detail: string;
+  if (t.styleId) {
+    // A correction made on a copy that opened blank: its numbers into the
+    // formatted workbook sent earlier (xlsx-refill.ts).
+    if (!(await hasNoText(emailed))) return "skipped: this email's file has its own text, so it is not a blank re-save — restore it without \"+\"";
+    const valuesTab = (await readTabs(emailed))[0]!;
+    const earlier   = await pickRestoreTab(valuesTab, await emailWorkbooks(gmail, t.styleId), Number(mm), Number(year));
+    if (!earlier) return "skipped: the earlier message has no readable .xlsx attachment";
+    if (earlier.closest.agreement < MIN_AGREEMENT) return `skipped: the earlier file is not the one corrected (the correction holds ${pct(earlier.closest.agreement)} of its closest tab)`;
+    if (!earlier.best.says) return "skipped: no tab of the earlier file says this month";
+    const styled = await keepOneSheet(earlier.best.original, earlier.best.keepPos);
+    const refill = styled && (await refillValues(styled, emailed));
+    if (!styled || !refill) return "skipped: could not combine the two files";
+    const styledTab = (await readTabs(styled))[0]!;
+    const outTab    = (await readTabs(refill.buffer))[0]!;
+    if (reproduced(outTab, valuesTab) < 1) return "skipped: the combined file lost some of the correction's values";
+    const formats = cellDrift(styledTab, outTab).styles;
+    if (formats > refill.added) return `skipped: the combined file changed ${formats} cell format(s) of the earlier file`;
+    restored = refill.buffer;
+    const corrected = cellDrift(styledTab, outTab).values;
+    detail = `formatting and text from tab ${earlier.best.keepPos + 1} of ${earlier.best.tabs} of the earlier email, every number and formula from this one ` +
+             `(${corrected} cell value(s) differ from the earlier file; ${refill.added} cell(s) had no format there)`;
+  } else {
+    detail = which;
+  }
   const problem = await packageProblem(restored);
   if (problem) return `skipped: rebuilt copy does not open cleanly (${problem})`;
-  if (restored.equals(current)) return "already the emailed file";
+  if (restored.equals(current)) return t.styleId ? "already refilled" : "already the emailed file";
 
   const before = await compareWithOriginal(current, best.original);
   const drift  = cellDrift(copyTab, (await readTabs(restored))[0]!);
-  const detail = `${which}; now ${before.status}, will be ${check.status}; ${drift.values} cell value(s) and ${drift.styles} cell format(s) change`;
+  detail = `${detail}; now ${before.status}${t.styleId ? "" : `, will be ${check.status}`}; ${drift.values} cell value(s) and ${drift.styles} cell format(s) change`;
   if (!APPLY) return `would restore — ${detail}`;
 
   // ── Write it ──────────────────────────────────────────────────────────
