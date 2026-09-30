@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert   from "node:assert/strict";
 import ExcelJS  from "exceljs";
-import { cellDrift, readTabs, valueAgreement } from "../xlsx-cells.js";
+import { cellDrift, readTabs, reproduced, valueAgreement } from "../xlsx-cells.js";
 import { compareWithOriginal } from "../xlsx-compare.js";
 import { keepOneSheet, workbookSheetNames } from "../xlsx-package.js";
 import { workbook } from "./fixtures.js";
@@ -39,4 +39,22 @@ test("a changed merged header counts as one changed value", async () => {
   const [a] = await readTabs(await make("ชื่อแพทย์ สมชาย ใจดี"));
   const [b] = await readTabs(await make("-1"));
   assert.equal(cellDrift(a!, b!).values, 1);
+});
+
+test("a rebuild that repeats a merged header still reproduces the original, and changes no value", async () => {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("ส.ค.69");
+  ws.mergeCells("A1:J1");
+  ws.getCell("A1").value = "ชื่อแพทย์ สมชาย ใจดี";
+  ws.getCell("B2").value = 42;
+  const [original] = await readTabs(Buffer.from(await wb.xlsx.writeBuffer()));
+
+  const flat = new ExcelJS.Workbook();
+  const fs   = flat.addWorksheet("ส.ค.69");
+  for (const col of "ABCDEFGHIJ") fs.getCell(`${col}1`).value = "ชื่อแพทย์ สมชาย ใจดี";
+  fs.getCell("B2").value = 42;
+  const [rebuilt] = await readTabs(Buffer.from(await flat.xlsx.writeBuffer()));
+
+  assert.equal(reproduced(rebuilt!, original!), 1);
+  assert.equal(cellDrift(rebuilt!, original!).values, 0);
 });

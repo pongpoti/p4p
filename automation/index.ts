@@ -93,6 +93,8 @@ interface FirstSheetResult {
   allSheets: string[];
   chosenSheet: string;
   matched: boolean;
+  /** Per sheet (ExcelJS order): how strongly it identifies as the target month; 0 = not at all. */
+  scores: number[];
 }
 
 /**
@@ -143,12 +145,14 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
   // identified itself as the month asked for" rather than "there were
   // several sheets and one of them did".
   let matched = false;
+  const scores = workbook.worksheets.map(() => 0);
   if (targetMonth !== null) {
     const defaultIndex = wsIndex;
     let bestScore = 0;
     workbook.worksheets.forEach((ws, i) => {
       if (nonNullCount(ws) < 3) return;
       const s = sheetMatchScore(ws, rowsOfSheet(ws), targetMonth, targetYear);
+      scores[i] = s;
       if (s > bestScore) {
         bestScore = s;
         wsIndex = i;
@@ -161,7 +165,7 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
   }
 
   const worksheet = workbook.worksheets[wsIndex]!;
-  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched };
+  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched, scores };
 }
 
 /** One worksheet -> the col_N row objects the extractor and Claude expect. */
@@ -284,11 +288,14 @@ async function stripFormulasFromBuffer(inputBuffer: Buffer): Promise<Buffer> {
 /**
  * The tab of a workbook the pipeline reads for a given month: the one whose
  * name or title rows say that month (and year), else the first with content.
- * `matched` is false when no tab identified itself as that month.
+ * `matched` is false when no tab identified itself as that month; `says`
+ * lists every tab that does (a stale tab name can put the month's data in a
+ * tab called after another month, next to an empty template that has the
+ * right name).
  */
-export async function monthSheet(buffer: Buffer, targetMonth: number, targetYear: number | null): Promise<{ name: string; matched: boolean; sheets: string[] }> {
-  const { chosenSheet, matched, allSheets } = await firstSheetToRows(buffer, { targetMonth, targetYear });
-  return { name: chosenSheet, matched, sheets: allSheets };
+export async function monthSheet(buffer: Buffer, targetMonth: number, targetYear: number | null): Promise<{ name: string; matched: boolean; sheets: string[]; says: string[] }> {
+  const { chosenSheet, matched, allSheets, scores } = await firstSheetToRows(buffer, { targetMonth, targetYear });
+  return { name: chosenSheet, matched, sheets: allSheets, says: allSheets.filter((_, i) => scores[i]! > 0) };
 }
 
 /**

@@ -177,7 +177,9 @@ async function wrongTab(copy: Buffer, original: Buffer, monthKey: string): Promi
   const pick = await monthSheet(original, month!, beYear!).catch(() => null);
   if (!pick?.matched) return null;
   const kept = (await workbookSheetNames(copy))?.[0];
-  if (kept === undefined || kept === pick.name) return null;
+  // A tab whose name or title rows say the month is this month's, even when
+  // another tab (an empty template, say) carries the month's name.
+  if (kept === undefined || kept === pick.name || pick.says.includes(kept)) return null;
   return `holds tab ${names.indexOf(kept) + 1} of ${names.length}; this month is tab ${names.indexOf(pick.name) + 1}`;
 }
 
