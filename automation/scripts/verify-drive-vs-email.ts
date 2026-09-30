@@ -17,6 +17,9 @@
  *   identical     the Drive file is the attachment, byte for byte
  *   same-content  everything Excel shows is the attachment's; only the
  *                 left-out tabs, calcChain and internal link ids differ
+ *   refilled      a blank-copy already rebuilt (restore-from-email "+"): the
+ *                 same sender's earlier formatted file with every number of
+ *                 the correction, exactly as the restore makes it
  *   blank-copy    the attachment itself has no text or formatting: the
  *                 physician corrected a Drive copy that opened blank and
  *                 sent it back; the same sender's earlier formatted file
@@ -59,9 +62,8 @@ import { config as dotenvConfig } from "dotenv";
 import { compareWithOriginal, type Comparison } from "../xlsx-compare.js";
 import { packageProblem, workbookSheetNames } from "../xlsx-package.js";
 import { monthSheet } from "../index.js";
-import { readTabs } from "../xlsx-cells.js";
 import { hasNoText } from "../xlsx-refill.js";
-import { pickRestoreTab } from "../restore-pick.js";
+import { earlierFormatted, refilledCopy, type Original } from "./blank-copies.js";
 import { IN_CI, XLSX_MIME, createDrive, download, googleAuth, labelOf, listChildren, md5, monthFolders, pool, withRetry } from "./drive-walk.js";
 import { partBytes, xlsxParts } from "./mail-originals.js";
 
@@ -75,7 +77,7 @@ const GMAIL_CONCURRENCY = 6;
 const DRIVE_CONCURRENCY = 4;
 const MAX_CANDIDATES    = 5;
 
-type Outcome = "identical" | "same-content" | "blank-copy" | "wrong-tab" | "differs" | "line-upload" | "no-original" | "unreadable" | "error";
+type Outcome = "identical" | "same-content" | "refilled" | "blank-copy" | "wrong-tab" | "differs" | "line-upload" | "no-original" | "unreadable" | "error";
 
 interface FileRow {
   month  : string;
@@ -101,11 +103,11 @@ async function sheetHashes(buf: Buffer): Promise<string[] | null> {
 }
 
 // ── Gmail: index every .xlsx attachment by its sheet parts ────────────────
-interface Original { file: string; date: number; messageId: string; from: string }
 
 interface OriginalIndex {
   byMd5  : Map<string, Original>;       // whole attachment
   bySheet: Map<string, Set<string>>;    // sheet-part hash → attachment md5s
+  blank  : Original[];                  // attachments with no text at all (see earlierFormatted)
   stats  : { messages: number; attachments: number; distinct: number; notXlsx: number };
 }
 
@@ -120,7 +122,7 @@ async function indexOriginals(gmail: gmail_v1.Gmail, dir: string): Promise<Origi
     pageToken = res.nextPageToken ?? undefined;
   } while (pageToken);
 
-  const index: OriginalIndex = { byMd5: new Map(), bySheet: new Map(), stats: { messages: ids.length, attachments: 0, distinct: 0, notXlsx: 0 } };
+  const index: OriginalIndex = { byMd5: new Map(), bySheet: new Map(), blank: [], stats: { messages: ids.length, attachments: 0, distinct: 0, notXlsx: 0 } };
   await pool(ids, GMAIL_CONCURRENCY, async (id) => {
     const msg = (await withRetry(() => gmail.users.messages.get({ userId: "me", id, format: "full", fields: "id,internalDate,payload" }))).data;
     const date = Number(msg.internalDate ?? 0);
@@ -143,6 +145,7 @@ async function indexOriginals(gmail: gmail_v1.Gmail, dir: string): Promise<Origi
       writeFileSync(file, buf);
       index.byMd5.set(sum, { file, date, messageId: id, from });
       index.stats.distinct++;
+      if (await hasNoText(buf)) index.blank.push(index.byMd5.get(sum)!);
       for (const h of hashes) {
         if (!index.bySheet.has(h)) index.bySheet.set(h, new Set());
         index.bySheet.get(h)!.add(sum);
@@ -191,28 +194,6 @@ async function wrongTab(copy: Buffer, original: Buffer, monthKey: string): Promi
   return `holds tab ${names.indexOf(kept) + 1} of ${names.length}; this month is tab ${names.indexOf(pick.name) + 1}`;
 }
 
-/**
- * For a copy with no text at all — a physician corrected numbers on a Drive
- * copy that opened blank and sent it back — the same sender's latest earlier
- * file whose tab says this month and shares at least half its cells: the
- * formatted file to refill (restore-from-email.ts, "+").
- */
-async function earlierFormatted(copy: Buffer, sent: Original, monthKey: string, index: OriginalIndex): Promise<Original | null> {
-  const copyTab = (await readTabs(copy))[0];
-  if (!copyTab || !sent.from) return null;
-  const [beYear, month] = monthKey.split("_").map(Number);
-  let best: { o: Original; agreement: number } | null = null;
-  for (const o of index.byMd5.values()) {
-    if (o.from !== sent.from || o.date >= sent.date) continue;
-    const buf = readFileSync(o.file);
-    if (await hasNoText(buf).catch(() => true)) continue;
-    const pick = await pickRestoreTab(copyTab, [buf], month!, beYear!).catch(() => null);
-    if (!pick?.best.says || pick.closest.agreement < 0.5) continue;
-    if (!best || o.date > best.o.date) best = { o, agreement: pick.closest.agreement };
-  }
-  return best?.o ?? null;
-}
-
 async function checkFile(
   drive: drive_v3.Drive, month: string, file: drive_v3.Schema$File, index: OriginalIndex, line: Set<string> | null,
 ): Promise<FileRow> {
@@ -225,7 +206,7 @@ async function checkFile(
   try {
     const buf = await download(drive, file.id!);
     const blank = async (o: Original): Promise<FileRow> => {
-      const earlier = await earlierFormatted(buf, o, month, index);
+      const earlier = await earlierFormatted(buf, o, month, index.byMd5.values());
       return earlier
         ? row("blank-copy", "no text or formatting — a correction sent on a copy that opened blank; the earlier formatted email was found", [], `${target(o)}+${earlier.messageId}`)
         : row("blank-copy", "no text or formatting, and no earlier formatted email from the same sender for this month");
@@ -241,6 +222,7 @@ async function checkFile(
       candidates = candidates === null ? [...has] : candidates.filter((c) => has.has(c));
     }
     if (!candidates?.length) {
+      if (await refilledCopy(buf, month, index.blank, [...index.byMd5.values()])) return row("refilled");
       const problem = await packageProblem(buf).catch((e) => `not readable (${e instanceof Error ? e.message : e})`);
       const opens   = problem ? `does not open cleanly: ${problem}` : "";
       if (line?.has(`${month}|${normName(file.name ?? "")}`)) return row("line-upload", opens);
@@ -296,13 +278,13 @@ async function main(): Promise<void> {
       const done = await pool(xlsx, DRIVE_CONCURRENCY, (f) => checkFile(drive, monthKey, f, index, line));
       rows.push(...done);
       const n = (o: Outcome) => done.filter((r) => r.outcome === o).length;
-      console.log(`${monthKey}: ${xlsx.length} xlsx — identical ${n("identical")}, same content ${n("same-content")}, BLANK ${n("blank-copy")}, WRONG TAB ${n("wrong-tab")}, DIFFERS ${n("differs")}, LINE ${n("line-upload")}, no original ${n("no-original")}, unreadable ${n("unreadable")}, errors ${n("error")}`);
+      console.log(`${monthKey}: ${xlsx.length} xlsx — identical ${n("identical")}, same content ${n("same-content")}, refilled ${n("refilled")}, BLANK ${n("blank-copy")}, WRONG TAB ${n("wrong-tab")}, DIFFERS ${n("differs")}, LINE ${n("line-upload")}, no original ${n("no-original")}, unreadable ${n("unreadable")}, errors ${n("error")}`);
     }
 
     // ── Report ────────────────────────────────────────────────────────────
-    const outcomes: Outcome[] = ["identical", "same-content", "blank-copy", "wrong-tab", "differs", "line-upload", "no-original", "unreadable", "error"];
+    const outcomes: Outcome[] = ["identical", "same-content", "refilled", "blank-copy", "wrong-tab", "differs", "line-upload", "no-original", "unreadable", "error"];
     const heading: Record<Outcome, string> = {
-      "identical": "Identical file", "same-content": "Same content", "blank-copy": "Blank re-save", "wrong-tab": "Wrong month's tab", "differs": "Differs", "line-upload": "LINE upload",
+      "identical": "Identical file", "same-content": "Same content", "refilled": "Refilled correction", "blank-copy": "Blank re-save", "wrong-tab": "Wrong month's tab", "differs": "Differs", "line-upload": "LINE upload",
       "no-original": "No email found", "unreadable": "Unreadable", "error": "Errors",
     };
     const months = [...new Set(rows.map((r) => r.month))];
