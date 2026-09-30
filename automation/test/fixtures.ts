@@ -46,3 +46,48 @@ export async function damage(input: Buffer, keep: number): Promise<Buffer> {
   }
   return Buffer.from(await out.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
 }
+
+/** A physician's formatted report, and the same report corrected on a Drive
+ *  copy that opened blank: numbers and formulas only, no text, no formatting. */
+
+const days = ["D5", "E5", "F5"];
+
+/** The day-number header every report has, which a correction never changes. */
+function dayHeader(ws: ExcelJS.Worksheet): void {
+  for (let d = 1; d <= 10; d++) ws.getCell(4, 3 + d).value = d;
+}
+
+export async function formatted(tab = "ก.ค.69", month = "กรกฎาคม"): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(tab);
+  ws.mergeCells("A1:G1");
+  ws.getCell("A1").value = `ชื่อแพทย์ สมหญิง ใจดี เดือน ${month} 2569`;
+  ws.getCell("A1").font  = { bold: true, size: 16 };
+  dayHeader(ws);
+  ws.getCell("B5").value = "ROUND ผู้ป่วยใน";
+  for (const addr of [...days, "G5"]) {
+    ws.getCell(addr).fill   = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9CB9C" } };
+    ws.getCell(addr).border = { top: { style: "thin" }, bottom: { style: "thin" } };
+  }
+  ws.getCell("D5").value = 3;
+  ws.getCell("E5").value = 2;
+  ws.getCell("F5").value = 4;
+  ws.getCell("G5").value = { formula: "SUM(D5:F5)", result: 9 };
+  ws.getCell("B7").value = "รวมแต้มทั้งหมด";
+  ws.getCell("G7").value = { formula: "G5*5", result: 45 };
+  ws.getCell("G7").font  = { bold: true };
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+export async function blankCorrection(extra: [string, number][] = []): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("ก.ค.69");
+  ws.mergeCells("A1:G1");
+  dayHeader(ws);
+  ws.getCell("D5").value = 3;
+  ws.getCell("F5").value = 4;                                      // E5 removed
+  ws.getCell("G5").value = { formula: "SUM(D5:F5)", result: 7 };
+  ws.getCell("G7").value = { formula: "G5*5", result: 35 };
+  for (const [addr, v] of extra) ws.getCell(addr).value = v;
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
