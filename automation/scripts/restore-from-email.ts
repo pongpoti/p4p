@@ -18,9 +18,9 @@
  *   1. the email must be where the copy came from: the copy still holds at
  *      least half of the values of one of its tabs, at the same cells;
  *   2. the tab restored is that one when its name or title rows say the
- *      copy's month; otherwise the tab the pipeline reads for the month
- *      (the copy holds another month's tab); when no tab says the month,
- *      the one the copy came from;
+ *      copy's month; otherwise the tab the pipeline reads for the month in
+ *      the same attachment (the copy holds another month's tab); when that
+ *      workbook has no tab for the month, the one the copy came from;
  *   3. the new copy is that tab kept the way the archive keeps it today
  *      (xlsx-package keepOneSheet) — the original file itself when it has
  *      one tab — and must compare as identical or same content with the
@@ -45,11 +45,11 @@ import { appendFileSync } from "fs";
 import { Readable } from "stream";
 import { config as dotenvConfig } from "dotenv";
 import { compareWithOriginal } from "../xlsx-compare.js";
-import { keepOneSheet, packageProblem, workbookSheetNames } from "../xlsx-package.js";
-import { cellDrift, readTabs, reproduced } from "../xlsx-cells.js";
+import { keepOneSheet, packageProblem } from "../xlsx-package.js";
+import { cellDrift, readTabs } from "../xlsx-cells.js";
+import { pickRestoreTab } from "../restore-pick.js";
 import { IN_CI, XLSX_MIME, createDrive, download, googleAuth, listChildren, md5, monthFolders, withRetry } from "./drive-walk.js";
 import { partBytes, xlsxParts } from "./mail-originals.js";
-import { monthSheet } from "../index.js";
 
 dotenvConfig({ override: true });
 
@@ -84,27 +84,15 @@ async function restore(drive: drive_v3.Drive, gmail: ReturnType<typeof google.gm
 
   // ── The emailed workbook, and the tab for the copy's month ────────────
   const msg = (await withRetry(() => gmail.users.messages.get({ userId: "me", id: t.messageId, format: "full", fields: "id,payload" }))).data;
-  type Pick = { original: Buffer; keepPos: number; tabs: number; agreement: number; byMonth: boolean; says: boolean };
-  let closest: Pick | null = null;    // the tab most like the copy
-  let forMonth: Pick | null = null;   // the tab the pipeline reads for this month
+  const originals: Buffer[] = [];
   for (const part of xlsxParts(msg.payload)) {
     const original = await partBytes(gmail, t.messageId, part);
-    if (!original) continue;
-    const names = await workbookSheetNames(original).catch(() => null);
-    if (!names) continue;
-    const month = await monthSheet(original, Number(mm), Number(year)).catch(() => null);
-    for (const [i, tab] of (await readTabs(original)).entries()) {
-      const pos  = names.indexOf(tab.name) >= 0 ? names.indexOf(tab.name) : i;
-      const pick = { original, keepPos: pos, tabs: names.length, agreement: reproduced(copyTab, tab), byMonth: false, says: month?.says.includes(tab.name) ?? false };
-      if (!closest || pick.agreement > closest.agreement) closest = pick;
-      if (month?.matched && tab.name === month.name && (!forMonth || pick.agreement > forMonth.agreement)) forMonth = { ...pick, byMonth: true };
-    }
+    if (original) originals.push(original);
   }
-  if (!closest) return "skipped: the message has no readable .xlsx attachment";
+  const pick = await pickRestoreTab(copyTab, originals, Number(mm), Number(year));
+  if (!pick) return "skipped: the message has no readable .xlsx attachment";
+  const { closest, best } = pick;
   if (closest.agreement < MIN_AGREEMENT) return `skipped: the copy did not come from this email (it holds ${pct(closest.agreement)} of its closest tab)`;
-  // The copy's own tab when it is this month's; the month's tab when the
-  // copy holds another month; the copy's own tab when no tab says the month.
-  const best  = closest.says ? closest : (forMonth ?? closest);
   const how   = best === closest ? (closest.says ? "the tab the copy came from, this month's" : "the tab the copy came from") : "this month's tab — the copy held another";
   const which = `tab ${best.keepPos + 1} of ${best.tabs} (${how}; the copy holds ${pct(closest.agreement)} of the email tab it came from)`;
 
