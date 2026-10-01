@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert   from "node:assert/strict";
 import ExcelJS  from "exceljs";
 import JSZip    from "jszip";
-import { extractFirstSheetBuffer, monthSheet } from "../index.js";
+import { extractFirstSheetBuffer, guessingBetweenTabs, monthSheet } from "../index.js";
 
 // extractFirstSheetBuffer() is what gets archived to Drive. It once rebuilt
 // xl/_rels/workbook.xml.rels with only the worksheet relationship, so Excel
@@ -112,7 +112,7 @@ test("a workbook with a tab per month archives the month that was scored", async
   const input = await workbook([july, physicianSheet]);
 
   const month = await monthSheet(input, 8, 2569);
-  assert.deepEqual(month, { name: "ส.ค.69", matched: true, sheets: ["ก.ค.69", "ส.ค.69"], says: ["ส.ค.69"] });
+  assert.deepEqual(month, { name: "ส.ค.69", matched: true, sheets: ["ก.ค.69", "ส.ค.69"], says: ["ส.ค.69"], filled: ["ก.ค.69", "ส.ค.69"] });
 
   const out = await extractFirstSheetBuffer(input, month.name);
   assert.ok(out);
@@ -131,3 +131,29 @@ test("a tab whose title says the month counts, whatever the tab is called", asyn
   const month = await monthSheet(await workbook([may, jan]), 1, 2569);
   assert.deepEqual([...month.says].sort(), ["Jan", "May"]);
 });
+
+// The email path refuses a workbook when it would have to guess which tab is
+// the report. A report whose title names no month, sent with an empty form
+// tab beside it, leaves nothing to guess.
+const report = { name: "ใบ p4p", cells: [["A1", "ชื่อแพทย์"], ["B1", "สมหญิง ใจดี"], ["B5", "ประเภทงาน"], ["C5", 42]] as [string, string | number][] };
+const emptyForm = { name: "ใบแนบ OPD", cells: [] as [string, string | number][] };
+
+test("an empty tab beside the report is nothing to choose between", async () => {
+  const month = await monthSheet(await workbook([report, emptyForm]), 9, 2569);
+  assert.equal(month.matched, false, "the report names no month — the email subject does");
+  assert.deepEqual(month.filled, ["ใบ p4p"]);
+  assert.equal(month.name, "ใบ p4p");
+  assert.equal(guessingBetweenTabs(month.filled, month.matched), false);
+});
+
+test("two tabs with content and no month named is still a guess", async () => {
+  const other = { ...report, name: "ใบ p4p (2)" };
+  const month = await monthSheet(await workbook([report, other]), 9, 2569);
+  assert.equal(guessingBetweenTabs(month.filled, month.matched), true);
+
+  const september = { name: "ก.ย.69", cells: [["A1", "ชื่อแพทย์ สมหญิง ใจดี"], ["A2", "เดือน กันยายน 2569"], ["C5", 9]] as [string, string | number][] };
+  const named = await monthSheet(await workbook([report, september]), 9, 2569);
+  assert.equal(guessingBetweenTabs(named.filled, named.matched), false, "a tab that names the month settles it");
+  assert.equal(named.name, "ก.ย.69");
+});
+
