@@ -95,6 +95,8 @@ interface FirstSheetResult {
   matched: boolean;
   /** Per sheet (ExcelJS order): how strongly it identifies as the target month; 0 = not at all. */
   scores: number[];
+  /** The sheets holding anything (3+ non-empty cells) — the only ones a report could be on. */
+  filled: string[];
 }
 
 /**
@@ -146,6 +148,7 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
   // several sheets and one of them did".
   let matched = false;
   const scores = workbook.worksheets.map(() => 0);
+  const filled = workbook.worksheets.filter((ws) => nonNullCount(ws) >= 3).map((ws) => ws.name);
   if (targetMonth !== null) {
     const defaultIndex = wsIndex;
     let bestScore = 0;
@@ -165,7 +168,7 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
   }
 
   const worksheet = workbook.worksheets[wsIndex]!;
-  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched, scores };
+  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched, scores, filled };
 }
 
 /** One worksheet -> the col_N row objects the extractor and Claude expect. */
@@ -293,9 +296,20 @@ async function stripFormulasFromBuffer(inputBuffer: Buffer): Promise<Buffer> {
  * tab called after another month, next to an empty template that has the
  * right name).
  */
-export async function monthSheet(buffer: Buffer, targetMonth: number, targetYear: number | null): Promise<{ name: string; matched: boolean; sheets: string[]; says: string[] }> {
-  const { chosenSheet, matched, allSheets, scores } = await firstSheetToRows(buffer, { targetMonth, targetYear });
-  return { name: chosenSheet, matched, sheets: allSheets, says: allSheets.filter((_, i) => scores[i]! > 0) };
+export async function monthSheet(buffer: Buffer, targetMonth: number, targetYear: number | null): Promise<{ name: string; matched: boolean; sheets: string[]; says: string[]; filled: string[] }> {
+  const { chosenSheet, matched, allSheets, scores, filled } = await firstSheetToRows(buffer, { targetMonth, targetYear });
+  return { name: chosenSheet, matched, sheets: allSheets, says: allSheets.filter((_, i) => scores[i]! > 0), filled };
+}
+
+/**
+ * Email path: whether reading this workbook would mean guessing which tab is
+ * the report — more than one tab holds something and none of them names the
+ * month. Empty tabs offer nothing to choose between: a report sent with an
+ * unused attachment form beside it (a blank "ใบแนบ OPD", say) is as
+ * unambiguous as a one-tab file.
+ */
+export function guessingBetweenTabs(filled: string[], matched: boolean): boolean {
+  return filled.length > 1 && !matched;
 }
 
 /**
@@ -607,9 +621,9 @@ export async function processBuffer(buffer: Buffer, {
   const dateKey = `${targetYear}_${String(targetMonth).padStart(2, "0")}`;
 
   // Parse workbook
-  let rows: Row[], allSheets: string[], chosenSheet: string, matchedSheet: boolean;
+  let rows: Row[], allSheets: string[], chosenSheet: string, matchedSheet: boolean, filledSheets: string[];
   try {
-    ({ rows, allSheets, chosenSheet, matched: matchedSheet } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
+    ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`│        ❌  Failed to parse workbook: ${message}`);
@@ -678,10 +692,11 @@ export async function processBuffer(buffer: Buffer, {
   // none of them named the target month/year, and nothing past this point
   // ever rechecks that guess — it would otherwise silently save one sheet's
   // numbers (whichever came first) under a different sheet's month. Reject
-  // instead of guessing, the same way the upload path already does.
-  if (!monthKey && allSheets.length > 1 && !matchedSheet) {
+  // instead of guessing, the same way the upload path already does. Only
+  // tabs holding something count: an empty one leaves nothing to guess.
+  if (!monthKey && guessingBetweenTabs(filledSheets, matchedSheet)) {
     const detail = `ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน ${displayMonthKey(dateKey)} กรุณาตั้งชื่อชีตให้ระบุเดือน หรือส่งเฉพาะชีตที่ต้องการ`;
-    console.error(`│        ❌  month_not_found: ${allSheets.length} sheets (${allSheets.join(", ")}), none identify ${dateKey}`);
+    console.error(`│        ❌  month_not_found: ${filledSheets.length} sheets with content (${filledSheets.join(", ")}), none identify ${dateKey}`);
     await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" }) as never))
       .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await notifyFailure("month_not_found", { detail });
