@@ -202,3 +202,72 @@ test("dotted ชื่อแพทย์ placeholder yields no junk candidate", 
   const got = resolvePhysicianNameFromSheet(rows, "Sheet1");
   assert.ok(!got.includes("ชื่อแพทย์"), `got ${JSON.stringify(got)}`);
 });
+
+// ── Titles typed with no dot ─────────────────────────────────────────────────
+// Real case (run #811): an X-ray department sent 13 files named like
+// "P4P สค 69 พญ นันทิกา NM.xlsx" and "P4P สค 69 นพ ไกรวุฒิ  RT.xlsx".  The title
+// was read as the first word of the name ("พญ นันทิกา"), which matched no one.
+
+test("a title with no dot is a title, not part of the name", () => {
+  assert.equal(resolvePhysicianName("P4P สค 69 พญ สมศรี NM.xlsx", "", ""), "สมศรี");
+  assert.equal(resolvePhysicianName("P4P สค 69 นพ สมปอง  RT.xlsx", "", ""), "สมปอง");
+  assert.equal(resolvePhysicianName("P4P สค 69 พญ มณีรัตน์  RT.xlsx", "", ""), "มณีรัตน์");
+  assert.equal(resolvePhysicianName("P4P สค 69 นพ สมชาย ใจดี.xlsx", "", ""), "สมชาย ใจดี");
+});
+
+test("a title with no dot is recognised in the subject too", () => {
+  assert.equal(resolvePhysicianName("", "P4P พญ สมศรี รักดี สค 69", ""), "สมศรี รักดี");
+});
+
+test("a name that merely starts with title letters is left whole", () => {
+  assert.equal(resolvePhysicianName("P4P นพดล ใจดี สค 69.xlsx", "", ""), "นพดล ใจดี");
+  assert.equal(resolvePhysicianName("P4P พญาไท ใจดี สค 69.xlsx", "", ""), "พญาไท ใจดี");
+});
+
+test("the department tag after an undotted title is not the surname", () => {
+  assert.equal(resolvePhysicianName("P4P สค 69 พญ รัตนา VIR.xlsx", "", ""), "รัตนา");
+});
+
+// ── Title banner on a sheet with no ชื่อแพทย์ label ──────────────────────────
+
+test("recovers the name from a title banner in row 1", () => {
+  // Merged cells repeat the banner in every column; it must yield one candidate.
+  const banner = "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.สมปอง รักดี";
+  const rows = [{ col_1: banner, col_2: banner, col_3: banner }, { col_1: "รายการ", col_2: "ค่าคะแนน" }];
+  const got = resolvePhysicianNameFromSheet(rows, "P4P สค 69 นพ สมปอง RT");
+  assert.deepEqual(got, ["สมปอง", "สมปอง รักดี"]);
+});
+
+test("recovers the name from a dotted-abbreviation banner", () => {
+  const rows = [{ col_1: "พ.ญ. สมศรี รักษ์ดี" }];
+  const got = resolvePhysicianNameFromSheet(rows, "P4P สค 69 พญ สมศรี NM");
+  assert.ok(got.includes("สมศรี รักษ์ดี"), `got ${JSON.stringify(got)}`);
+});
+
+test("the full banner name is there for a roster spelling the tab name gets wrong", () => {
+  // The file says "มณีรัตน์", the roster "มณีรัตน": only the banner carries the
+  // spelling that matches.
+  const rows = [{ col_1: "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา พญ.มณีรัตน รักดี" }];
+  const got = resolvePhysicianNameFromSheet(rows, "P4P สค 69 พญ มณีรัตน์  RT");
+  assert.deepEqual(got, ["มณีรัตน์", "มณีรัตน รักดี"]);
+});
+
+test("a labelled name cell still comes before a banner", () => {
+  const rows = [
+    { col_1: "ตารางเก็บคะแนน P4P แพทย์ นพ.สมปอง รักดี" },
+    { col_1: "ชื่อแพทย์ พญ. สมศรี ใจดี" },
+  ];
+  const got = resolvePhysicianNameFromSheet(rows, "Sheet1");
+  assert.ok(got.indexOf("สมศรี ใจดี") < got.indexOf("สมปอง รักดี"), `got ${JSON.stringify(got)}`);
+});
+
+test("a heading with no title, or a titled line far down the sheet, is not a candidate", () => {
+  const rows = [
+    { col_1: "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา" },
+    { col_1: "รายการ" },
+    { col_1: "ค่าคะแนน" },
+    { col_1: "ลงชื่อ นพ.สมชาย ใจดี ผู้ตรวจสอบ" },
+  ];
+  const got = resolvePhysicianNameFromSheet(rows, "Sheet1");
+  assert.deepEqual(got, []);
+});

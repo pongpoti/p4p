@@ -584,7 +584,12 @@ function extractNameFromText(text: string | null | undefined): string | null {
     // Comma typed where the title's dot belongs — "," and "." sit on adjacent
     // keys, so "นพ,สมชาย" / "พญ,แพร" are a frequent slip.  Runs after the month
     // rules so "ม.ค." is already "มค" and cannot be mangled here.
-    .replace(/(นพ|พญ|ทพญ|ทพ|ดร)\s*,\s*/g, "$1.");
+    .replace(/(นพ|พญ|ทพญ|ทพ|ดร)\s*,\s*/g, "$1.")
+    // A title typed with no dot at all — "พญ นันทิกา", "นพ ไกรวุฒิ  RT" — is still
+    // a title, not the first word of the name.  Only the whole word counts (a
+    // space or the start of the text on each side, so "นพดล" is left alone) and
+    // only when a Thai word follows it.
+    .replace(/(^|[\s_\-(])(นพ|พญ|ทพญ|ทพ|ดร)\s+(?=[฀-๿]{2,})/g, "$1$2.");
 
   // Pattern 1: run on titleNorm so title dots are intact but dotted variants
   // are already collapsed ("พ.ญ.ศาศวัต" → "พญ.ศาศวัต" → matched correctly).
@@ -731,6 +736,8 @@ export function resolvePhysicianNameCandidates(filename: unknown, subject: unkno
  * written correctly inside the file even when the sender mis-named it:
  *   • a "ชื่อแพทย์ นพ. วราวุธ เมธีศิริวัฒน์" header cell, or
  *   • the worksheet tab name ("ปัทมิกา เจียรวุฒิสาร เมย.69").
+ *   • a title banner in the top rows ("… นพ.อุกฤษ ชูชินปราการ"), for sheets with
+ *     no ชื่อแพทย์ label.
  *
  * Returns an ordered, de-duplicated list of "firstname lastname" candidates
  * (titles stripped), most-reliable first.  Caller tries matchName on each.
@@ -765,6 +772,23 @@ export function resolvePhysicianNameFromSheet(rows: Row[] = [], sheetName: strin
 
   // 2. Worksheet tab name (e.g. "ปัทมิกา เจียรวุฒิสาร เมย.69").
   add(extractNameFromText(sheetName ?? ""));
+
+  // 3. A title banner with the name in it, on sheets that carry no ชื่อแพทย์
+  //    label at all — "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.อุกฤษ ชูชินปราการ",
+  //    "พ.ญ. นันทิกา วรรณทรัพย์ผล".  Last, so a labelled cell or the tab name still
+  //    wins; only the top rows, where a banner sits (a signature line further
+  //    down names someone else); and only a cell that carries a dotted title,
+  //    so no ordinary heading becomes a candidate.
+  const TITLED_RE = /(?:^|[\s(_\-])(?:นพ|พญ|ทพญ|ทพ|ดร|น\.พ|พ\.ญ|ท\.พ\.ญ|ท\.พ|ด\.ร)\./;
+  const banners = new Set<string>();
+  for (const row of (rows ?? []).slice(0, 3)) {
+    for (const val of Object.values(row ?? {})) {
+      const s = String(val ?? "").trim();
+      if (!s || banners.has(s) || !TITLED_RE.test(s)) continue;
+      banners.add(s);
+      add(extractNameFromText(s));
+    }
+  }
 
   return candidates;
 }
