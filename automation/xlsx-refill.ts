@@ -26,12 +26,23 @@ interface Cell { attrs: string; inner: string }
 const CELL = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
 const ROW  = /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g;
 
+/** An attribute of the matched element itself — never of what it contains (a cell's <f t="shared">). */
+const own = (m: RegExpMatchArray, name: string): string | null => xmlAttr(`<x${m[1]}>`, name);
+
 function colOf(addr: string): number {
   let n = 0;
   for (const ch of addr.replace(/\d+$/, "")) n = n * 26 + ch.charCodeAt(0) - 64;
   return n;
 }
 const rowOf = (addr: string): number => Number(addr.replace(/^[A-Z]+/, ""));
+
+/**
+ * A cell holding text: a shared or inline string, or — as SheetJS writes
+ * every label — a t="str" value with no formula behind it (with a formula,
+ * t="str" is only a computed result).
+ */
+const isText = (t: string | null, inner: string): boolean =>
+  ((t === "s" || t === "inlineStr" || t === "str") && /<(?:v|is)\b/.test(inner)) && !(t === "str" && /<f\b/.test(inner));
 
 async function onlySheet(zip: JSZip): Promise<string | null> {
   const wb   = await zip.file("xl/workbook.xml")?.async("string");
@@ -50,9 +61,9 @@ async function contentCells(zip: JSZip, sheetXml: string): Promise<Map<string, C
   const data = sheetXml.match(/<sheetData>([\s\S]*?)<\/sheetData>/)?.[1] ?? "";
   for (const m of data.matchAll(CELL)) {
     const inner = m[2] ?? "";
-    const addr  = xmlAttr(m[0], "r");
+    const addr  = own(m, "r");
     if (!addr || !/<(?:f|v|is)\b/.test(inner)) continue;
-    const t = xmlAttr(m[0], "t");
+    const t = own(m, "t");
     if (t === "s") {
       const text = strs[Number(inner.match(/<v>(\d+)<\/v>/)?.[1])];
       out.set(addr, { attrs: ' t="inlineStr"', inner: `<is>${text ?? ""}</is>` });
@@ -88,12 +99,12 @@ export async function refillValues(styled: Buffer, values: Buffer): Promise<{ bu
     const cells: { col: number; xml: string }[] = [];
     let grew = false;
     for (const m of body.matchAll(CELL)) {
-      const addr = xmlAttr(m[0], "r")!;
-      const t    = xmlAttr(m[0], "t");
+      const addr = own(m, "r")!;
+      const t    = own(m, "t");
       const mine = fill.get(addr) ?? null;
       pending.delete(addr);
-      const keepText = !mine && (t === "s" || t === "inlineStr") && /<(?:v|is)\b/.test(m[2] ?? "");
-      cells.push({ col: colOf(addr), xml: keepText ? m[0] : cellXml(addr, xmlAttr(m[0], "s"), mine) });
+      const keepText = !mine && isText(t, m[2] ?? "");
+      cells.push({ col: colOf(addr), xml: keepText ? m[0] : cellXml(addr, own(m, "s"), mine) });
     }
     for (const [addr, c] of pending) {
       if (rowOf(addr) !== rowNum) continue;
@@ -108,7 +119,7 @@ export async function refillValues(styled: Buffer, values: Buffer): Promise<{ bu
   const newData = sheetXml.replace(/<sheetData>([\s\S]*?)<\/sheetData>|<sheetData\/>/, (_, data: string | undefined) => {
     const rows: { num: number; xml: string }[] = [];
     for (const m of (data ?? "").matchAll(ROW)) {
-      const num = Number(xmlAttr(m[0], "r"));
+      const num = Number(own(m, "r"));
       const { xml, grew } = refillRow(num, m[2] ?? "");
       // A row's spans are a hint Excel checks against its cells; drop it when cells were added.
       const attrs = grew ? m[1]!.replace(/\sspans="[^"]*"/, "") : m[1]!;
@@ -136,14 +147,16 @@ export async function refillValues(styled: Buffer, values: Buffer): Promise<{ bu
 }
 
 /**
- * True when no sheet holds any text — no shared or inline strings: what a
- * copy that opened blank looks like once re-saved. Only such a file may be
- * refilled; one with text of its own is a correction to take as it is.
+ * True when no sheet holds any text (see isText): what a copy that opened
+ * blank looks like once re-saved. Only such a file may be refilled; one with
+ * text of its own is a correction to take as it is.
  */
 export async function hasNoText(buffer: Buffer): Promise<boolean> {
   const zip = await JSZip.loadAsync(buffer);
   for (const p of Object.keys(zip.files).filter((p) => /^xl\/worksheets\/[^/]+\.xml$/.test(p))) {
-    if (/<c\b[^>]*\st="(?:s|inlineStr)"/.test(await zip.file(p)!.async("string"))) return false;
+    for (const m of (await zip.file(p)!.async("string")).matchAll(CELL)) {
+      if (isText(own(m, "t"), m[2] ?? "")) return false;
+    }
   }
   return true;
 }
