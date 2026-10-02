@@ -834,7 +834,7 @@ is an improvement; that is not a reason to settle for one.
 ```yaml
 # .github/workflows/upload-drain.yml
 on:
-  schedule:    [ { cron: "5 * * * *" } ]      # hourly relay, not the trigger
+  schedule:    [ { cron: "5,25,45 * * * *" } ] # relay, not the trigger
   workflow_dispatch:
 concurrency:
   group: p4p-upload-drain
@@ -863,7 +863,10 @@ Two honest caveats:
   uncomfortable.
 - **A gap is possible** if GitHub delays the hourly start past the previous
   loop's exit. Uploads wait, they are not lost — the queue holds them and the
-  next run drains them in order.
+  next run drains them in order. (Seen in production on 2026-10-02: GitHub
+  dropped five hourly ticks in a row, leaving ~5.7 h unattended. The schedule
+  now ticks three times an hour; the concurrency group keeps at most one run
+  pending behind the live one, so a single dropped tick no longer opens a gap.)
 
 #### Rejected: instant dispatch from the database
 
@@ -1941,7 +1944,7 @@ repo-scoped token in the browser. Never.
 | `supabase/functions/line-verify` | **unchanged** — `/upload/` reuses its existing `mode:"bind"` for the §5.5 opportunistic binding. Listed only so nobody re-implements binding; the precondition is that the new LIFF app sits under the same LINE Login channel, per §13 Phase 0 |
 | `automation/telegram.js` | **done** — optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.6); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **done** — long-polling drain (archive first, then score fallback) (§7.3), plus the `archive_pending` age alert (§7.7 rec 2) |
-| `.github/workflows/upload-drain.yml` | **done** — hourly relay + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
+| `.github/workflows/upload-drain.yml` | **done** — 20-minute relay ticks + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
 | `automation/test/*`, root-level test suite | **done** — `lib/__tests__/` (parity, confidence gate, zip guard + parse timeout, deadline/month-window/picker checks; `npm test` at the root) and `automation/test/` (Telegram layouts on both paths, the failure bubble). The parity guard was verified to actually fail on a one-digit drift, not just to pass. |
 | `/admin/` (`AdminClient.tsx` or `admin/app.js`, `web/app/admin/api/…`) | new panel for `archive_pending` age and re-upload counts (§7.7 rec 2 and the policy question) — Phase 5, built only if usage shows it's needed |
 | `SUPABASE_TABLES.md`, `DATA_EXPOSURE_ANALYSIS.md`, `SECURITY_ANALYSIS.md` | document the queue table and the bucket |

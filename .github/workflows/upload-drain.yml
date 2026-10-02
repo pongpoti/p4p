@@ -2,11 +2,16 @@ name: "! drain LINE uploads"
 
 on:
   schedule:
-    # Hourly RELAY, not a polling interval: each run long-polls the queue for
-    # ~60 minutes (see automation/scripts/drain-uploads.ts), so one run hands
-    # over to the next and the queue is never unattended for more than a few
-    # seconds. :05 keeps it clear of the top-of-hour crowd.
-    - cron: "5 * * * *"
+    # RELAY, not a polling interval: each run long-polls the queue for ~60
+    # minutes (see automation/scripts/drain-uploads.ts). Three ticks an hour,
+    # not one, because GitHub drops scheduled runs under load — on 2026-10-02
+    # it skipped five hourly ticks in a row and the queue sat unattended for
+    # ~5.7 h. With the concurrency group below, a tick that lands while a run
+    # is alive just waits as the one pending run (a newer tick replaces it,
+    # showing up as "cancelled"), so the next run is already queued when the
+    # current one exits, and one dropped tick no longer leaves a gap.
+    # :05/:25/:45 keeps clear of the top-of-hour crowd.
+    - cron: "5,25,45 * * * *"
   workflow_dispatch:
 
 # Never two drains at once. Both claim functions take FOR UPDATE SKIP LOCKED
