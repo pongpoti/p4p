@@ -194,6 +194,10 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
 // ── Stuck-archive alerting ────────────────────────────────────────────────
 // The queue guarantees retries; it does not guarantee anyone looks (§7.7
 // rec 2). Once per run, not per iteration — this is a nudge, not a firehose.
+// Sent only once the queue has first gone idle, never at startup: after a
+// gap between runs, a row that merely waited for a runner looks "stuck" at
+// startup and is archived seconds later. Waiting for the first empty claim
+// means only rows the queue could not clear (failed and backing off) remain.
 async function alertStuckArchives() {
   try {
     const stuck = await listStuckArchives(STUCK_HOURS);
@@ -215,9 +219,8 @@ async function main() {
   const until = Date.now() + RUN_MINUTES * 60_000;
   console.log(`┌─ P4P upload drain — polling every ${POLL_MS}ms for ${RUN_MINUTES} min`);
 
-  await alertStuckArchives();
-
   let handled = 0;
+  let alerted = false;
   while (Date.now() < until) {
     let didWork = false;
 
@@ -279,9 +282,17 @@ async function main() {
       }
     }
 
+    if (!didWork && !alerted) {
+      alerted = true;
+      await alertStuckArchives();
+    }
+
     // Only sleep when the queue was empty — a busy queue drains back to back.
     if (!didWork) await sleep(POLL_MS);
   }
+
+  // A run that never went idle still owes its one look.
+  if (!alerted) await alertStuckArchives();
 
   console.log(`└─ drain finished — ${handled} row(s) handled`);
 }
