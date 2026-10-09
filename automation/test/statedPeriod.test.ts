@@ -123,6 +123,50 @@ test("a forwarded mail's own \"Date:\" line is not a stated period", () => {
   );
 });
 
+test("a reply's \"On <date> … wrote:\" attribution line is not a stated period", () => {
+  // Real reply from a recurring sender (2026-10-06): his Aug+Sep send of
+  // 1 Oct got an auto-reply, and he answered the same thread with a July
+  // correction — "แก้ไข P4P 7/69", file "…ก.ค.69.xlsx". Gmail's attribution
+  // line carries the quoted mail's send date, "Oct 1, 2026", and the body
+  // reader took "Oct" as the sender naming October. The body outranks the
+  // filename, so the July file was filed — and scored — under 2569_10.
+  // Gmail wraps the line at ~72 chars, leaving "wrote:" on its own line.
+  const body = [
+    "แก้ไข P4P 7/69 พ.สมชาย",
+    "",
+    "On Thu, Oct 1, 2026 at 5:53 PM Somchai Jaidee-Example <somchai@example.com>",
+    "wrote:",
+    "",
+    ">",
+    ">",
+  ].join("\n");
+  assert.deepEqual(periodsInText(body), []);
+  assert.deepEqual(
+    statedPeriods("P4P สมชาย อายุรกรรม ก.ค.69.xlsx", "Re: P4P สมชาย 8-9/69", body),
+    { periods: [{ month: 7, beYear: null }], source: "filename" },
+  );
+
+  // Same line, unwrapped (a shorter name keeps it on one line).
+  assert.deepEqual(
+    periodsInText("ส่งแล้วครับ\n\nOn Tue, Sep 29, 2026 at 11:14 AM P4P <p4p@example.com> wrote:"),
+    [],
+  );
+
+  // Thai-locale Gmail words the same line differently — and it is real: this
+  // is the attribution on a reply received in this mailbox.
+  assert.deepEqual(
+    periodsInText("ขอบคุณมากค่ะ\n\nในวันที่ อังคาร 29 ก.ย. 2026 เวลา 11:14 Samut Sakhon Medical Staff Organization <sakhonmso@gmail.com> เขียนว่า:"),
+    [],
+  );
+
+  // Blanking the attribution must not swallow what the sender actually wrote
+  // above it: a stated month in their own words still routes.
+  assert.deepEqual(
+    periodsInText("ส่ง P4P เดือน ก.ค. 2569\n\nOn Thu, Oct 1, 2026 at 5:53 PM A B <a@b.c> wrote:"),
+    [{ month: 7, beYear: 2569 }],
+  );
+});
+
 test("a conjunction typed flush against a month does not hide that month", () => {
   // Real subject from a recurring sender, two workbooks attached (สค and
   // กันยา): "และ" ("and") is glued straight onto กันยายน with no space, so the

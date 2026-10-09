@@ -297,20 +297,35 @@ function monthTokenIndex(s: string, token: string): number {
 }
 
 /**
- * A forwarded mail's own auto-generated "Date:" (or Outlook's "Sent:") line
- * states when the QUOTED message was sent — never what period a submission
- * is for — but periodsInText has no way to tell that apart from the
- * sender's own words. A physician mailed herself from Yahoo, then forwarded
- * that mail from Gmail minutes later; Gmail's own
- * "---------- Forwarded message ---------" block quoted the original
- * headers verbatim, including "Date: ส. 12 ก.ย. 2026 11:10", and reading
- * that as a second, stated period turned an unambiguous July submission
- * into an ambiguous_period rejection. Blanked out rather than removed so
- * every other index this module computes by position into the string
- * stays correct.
+ * A quoted message's own auto-generated date states when THAT message was
+ * sent — never what period a submission is for — but periodsInText has no
+ * way to tell that apart from the sender's own words. Two shapes:
+ *
+ *   • A forward's header block: "Date:" (or Outlook's "Sent:") line. A
+ *     physician mailed herself from Yahoo, then forwarded that mail from
+ *     Gmail minutes later; Gmail's own "---------- Forwarded message
+ *     ---------" block quoted the original headers verbatim, including
+ *     "Date: ส. 12 ก.ย. 2026 11:10", and reading that as a second, stated
+ *     period turned an unambiguous July submission into an ambiguous_period
+ *     rejection.
+ *   • A reply's attribution line: Gmail's "On Thu, Oct 1, 2026 at 5:53 PM
+ *     Name <a@b.c> wrote:" or, on a Thai-locale account, "ในวันที่ อังคาร 29
+ *     ก.ย. 2026 เวลา 11:14 Name <a@b.c> เขียนว่า:". A physician replying to
+ *     his own Aug+Sep send with a July correction ("แก้ไข P4P 7/69", file
+ *     "…ก.ค.69.xlsx") got "Oct" out of that line, which outranks the
+ *     filename, so the July file was filed under October. The line is long
+ *     enough that Gmail wraps it, leaving "wrote:" on the next line, hence
+ *     the bounded multi-line match rather than a single-line one.
+ *
+ * Blanked out rather than removed so every other index this module computes
+ * by position into the string stays correct.
  */
-function blankQuotedDateLines(s: string): string {
-  return s.replace(/^[ \t]*(?:Date|Sent)[ \t]*:.*$/gim, (line) => " ".repeat(line.length));
+function blankQuotedHeaders(s: string): string {
+  const blank = (m: string): string => " ".repeat(m.length);
+  return s
+    .replace(/^[ \t]*(?:Date|Sent)[ \t]*:.*$/gim, blank)
+    .replace(/^[ \t]*On\s[\s\S]{0,300}?\swrote:/gm, blank)
+    .replace(/^[ \t]*ในวันที่\s[\s\S]{0,300}?เขียนว่า[ \t]*:/gm, blank);
 }
 
 /**
@@ -325,7 +340,7 @@ function blankQuotedDateLines(s: string): string {
  * produced January 2568, a period the sender never wrote.
  */
 export function periodsInText(text: unknown): Period[] {
-  const s = blankQuotedDateLines(String(text ?? ""));
+  const s = blankQuotedHeaders(String(text ?? ""));
   const hits: { month: number; at: number }[] = [];
   for (let mo = 1; mo <= 12; mo++) {
     let at = -1;
