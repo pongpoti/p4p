@@ -61,19 +61,19 @@ const SUPABASE_ANON = "sb_publishable_TcCSpznim4fi0Y7E_zuAsg_op19VZQ-"
 const RT_COOKIE = "p4p_rt"
 const COOKIE_BASE = "HttpOnly; Secure; SameSite=Lax; Path=/"
 const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
-// The LIFF app whose registered endpoint is /upload/ (the rich menu's fourth
-// block opens it). Injected into the page the same way the access token is,
-// so the id lives in one place — the env var scripts/setup-richmenu.mts
-// already requires — rather than being hardcoded in two.
+// The LIFF app whose registered endpoint is /upload/. The rich menu no longer
+// links to it, but the page and its LIFF app still exist. Injected into the
+// page the same way the access token is, so the id lives in one place rather
+// than being hardcoded in two.
 const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
 // Hardcoded fallback for the same reason ADMIN_LINE_USER_ID and
 // ADMIN_BASE_URL have one: a LIFF id is not a secret. This exact string is
-// already public in the rich menu's own `uri` action and in every copy of
-// this page's HTML. Making it a required env var bought nothing and cost a
-// silent failure — with it unset, liff.init() never runs, so the chat
-// receipt and the opportunistic LINE bind both quietly do nothing while the
-// page otherwise looks fine. The env var still wins where it is set, which
-// is what a preview deployment pointing at a second LIFF app needs.
+// already public in every copy of this page's HTML. Making it a required env
+// var bought nothing and cost a silent failure — with it unset, liff.init()
+// never runs, so the chat receipt and the opportunistic LINE bind both quietly
+// do nothing while the page otherwise looks fine. The env var still wins where
+// it is set, which is what a preview deployment pointing at a second LIFF app
+// needs.
 const UPLOAD_LIFF_ID = process.env.UPLOAD_LIFF_ID || "2008561527-sj7tuMLL"
 
 // Same-origin <script src> gets a content hash appended at boot, so a deploy
@@ -741,8 +741,9 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req: R
   }
 })
 
-// ── /upload/ — submit a scorecard from the LINE rich menu ───────────────────
-// See UPLOAD_VIA_LINE_DESIGN.md. The page itself is served by servePage()
+// ── /upload/ — submit a scorecard through LIFF ──────────────────────────────
+// The rich menu no longer links here (its upload block was removed); see
+// UPLOAD_VIA_LINE_DESIGN.md. The page itself is served by servePage()
 // like every other gated page (it is in `gatedPages` above); the file bytes
 // never pass through here — the browser PUTs them straight to Supabase
 // Storage and calls enqueue_p4p_upload(). This one route is what makes the
@@ -754,9 +755,9 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req: R
 // hands, reached through the two claim functions. A file this route cannot
 // confidently score is left `pending` for the worker, never guessed at.
 const UPLOAD_BUCKET = "p4p-uploads"
-// Same env var scripts/setup-richmenu.mts requires — the LIFF app whose
-// endpoint is /upload/. Only used to build a "ส่งไฟล์อีกครั้ง" button; a
-// missing value degrades that button to "ติดต่อผู้ดูแล", never a crash.
+// The upload LIFF app, whose endpoint is /upload/. Only used to build a
+// "ส่งไฟล์อีกครั้ง" button; a missing value degrades that button to
+// "ติดต่อผู้ดูแล", never a crash.
 const UPLOAD_LIFF_URL = UPLOAD_LIFF_ID ? "https://liff.line.me/" + UPLOAD_LIFF_ID : ""
 
 interface ReceiptModule {
