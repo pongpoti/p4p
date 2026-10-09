@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert   from "node:assert/strict";
-import { periodsInText, statedPeriods, resolveBeMonth } from "../claude-analyst.js";
+import { periodsInText, statedPeriods, resolveBeMonth, resolveBeYearByPriority } from "../claude-analyst.js";
 
 // What a submission SAYS it is for. The email path refuses to route on
 // anything else, so these cases are mostly about what must NOT be claimed.
@@ -165,6 +165,86 @@ test("a reply's \"On <date> … wrote:\" attribution line is not a stated period
     periodsInText("ส่ง P4P เดือน ก.ค. 2569\n\nOn Thu, Oct 1, 2026 at 5:53 PM A B <a@b.c> wrote:"),
     [{ month: 7, beYear: 2569 }],
   );
+});
+
+test("an attribution line quoted behind \">\" is not a stated period either", () => {
+  // The first reply in a thread carries an unquoted "On … wrote:" line. The
+  // NEXT reply quotes that whole message, attribution included, behind ">" —
+  // so a match anchored at the start of a line cannot see it, and the same
+  // "Oct" came back one reply later. Nested chains stack the prefixes.
+  const chain = [
+    "แก้ไข P4P 7/69 พ.สมชาย",
+    "",
+    "On Fri, Oct 2, 2026 at 9:00 AM Admin <admin@example.com> wrote:",
+    "",
+    "> ขอบคุณค่ะ",
+    ">",
+    "> On Thu, Oct 1, 2026 at 5:53 PM Somchai Jaidee-Example <somchai@example.com>",
+    "> wrote:",
+    ">",
+    ">> On Tue, Sep 29, 2026 at 11:14 AM Admin <admin@example.com> wrote:",
+  ].join("\n");
+  assert.deepEqual(periodsInText(chain), []);
+  assert.deepEqual(
+    statedPeriods("P4P สมชาย อายุรกรรม ก.ค.69.xlsx", "Re: P4P สมชาย", chain),
+    { periods: [{ month: 7, beYear: null }], source: "filename" },
+  );
+
+  // Thai-locale attribution, quoted.
+  assert.deepEqual(
+    periodsInText("ส่งแล้วครับ\n\n> ในวันที่ อังคาร 29 ก.ย. 2026 เวลา 11:14 Admin <admin@example.com> เขียนว่า:\n> ขอบคุณค่ะ"),
+    [],
+  );
+});
+
+test("quoted earlier mail, such as the system's own receipt, states no period", () => {
+  // A reply to the receipt quotes it: "เดือน/ปี: กันยายน 2569" is the system
+  // talking about a different month, not the sender naming one.
+  assert.deepEqual(
+    periodsInText("ส่งไฟล์แก้ไขแล้วครับ\n\n> เดือน/ปี: กันยายน 2569\n> คะแนนรวม: 5475.58"),
+    [],
+  );
+  // What the sender wrote above the quote still counts.
+  assert.deepEqual(
+    periodsInText("ส่ง P4P ก.ค. 2569\n\n> เดือน/ปี: กันยายน 2569"),
+    [{ month: 7, beYear: 2569 }],
+  );
+  // A bare ">" followed by text is not a quote marker — it is what a raw-HTML
+  // line looks like when it wraps — so it is not blanked.
+  assert.deepEqual(periodsInText(">ส่ง P4P ก.ค. 2569"), [{ month: 7, beYear: 2569 }]);
+});
+
+test("the hospital's own abbreviation in the receipt's subject is not August", () => {
+  // The auto-reply's fixed subject is "องค์กรแพทย์ รพ. สค." (สค. = สมุทรสาคร),
+  // and "สค." is also August. A physician answering the receipt with a
+  // corrected file sends "Re: …", and the subject outranks the filename.
+  assert.deepEqual(periodsInText("Re: องค์กรแพทย์ รพ. สค."), []);
+  assert.deepEqual(
+    statedPeriods("P4P สมชาย อายุรกรรม ก.ค.69.xlsx", "Re: องค์กรแพทย์ รพ. สค.", ""),
+    { periods: [{ month: 7, beYear: null }], source: "filename" },
+  );
+  // A real August is untouched, with or without the hospital next to it.
+  assert.deepEqual(periodsInText("P4P ส.ค. 69 รพ. สค."), [{ month: 8, beYear: null }]);
+  assert.deepEqual(periodsInText("P4P สค69"), [{ month: 8, beYear: null }]);
+});
+
+test("the year is not read out of quoted text either", () => {
+  // The month was already protected; the YEAR still came from the raw body.
+  // A December report is sent in January, so a correction replying to that
+  // mail quotes "Jan 5, 2027", and with a two-digit-year filename the quoted
+  // 2027 became 2570 — a roster table that does not exist. (The July
+  // incident came out right only because its quoted 2026 happened to equal
+  // the period's own year, 2569.)
+  const reply = "ส่งแก้ไขแล้วครับ\n\nOn Tue, Jan 5, 2027 at 9:00 AM Admin <admin@example.com> wrote:\n> ขอบคุณค่ะ\n> ส่งเมื่อ 5 ม.ค. 2027";
+  assert.equal(resolveBeYearByPriority("P4P สมชาย ธ.ค.69.xlsx", "Re: P4P สมชาย", reply), 2569);
+
+  // Nor the other direction: a later-year period must not borrow the earlier
+  // year of the mail it replies to.
+  const lateReply = "ส่งแล้วครับ\n\nOn Mon, Dec 28, 2026 at 9:00 AM Admin <admin@example.com> wrote:";
+  assert.equal(resolveBeYearByPriority("P4P สมชาย ก.พ.70.xlsx", "Re: P4P สมชาย", lateReply), 2570);
+
+  // A year the sender wrote still wins over the filename's.
+  assert.equal(resolveBeYearByPriority("P4P สมชาย ก.ค.68.xlsx", "ส่ง ก.ค. 2569", ""), 2569);
 });
 
 test("a conjunction typed flush against a month does not hide that month", () => {
