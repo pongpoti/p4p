@@ -1,5 +1,15 @@
 # Uploading a P4P scorecard through the LINE rich menu
 
+> **Update — the rich-menu entry point has been removed.** The main menu is
+> back to its original `2500×843`, three read-only blocks (status / ranking /
+> person list); `src/richmenu.svg` and `scripts/setup-richmenu.mts` no longer
+> carry the "ส่งไฟล์ P4P" block, and `setup-richmenu.yml` no longer needs
+> `UPLOAD_LIFF_ID`. The live menu only changes once that workflow is re-run.
+> The `/upload/` page, `/upload/score`, `/upload/receipt` and the drain are
+> untouched, so a direct link to the upload LIFF app still works. Sections 1
+> and 4 below, and the rich-menu rows of §16, describe the design as it was
+> built and are kept as history.
+
 **Status:** design proposal, nothing built. Written against the code as it stands
 on `main` (Express `main.js` in production, `web/` not deployed).
 

@@ -1,17 +1,15 @@
-name: Setup Rich Menu (adds the upload block)
+name: Setup Rich Menu (3-block main menu, no upload)
 
-# One-time, manual switch (UPLOAD_VIA_LINE_DESIGN.md §13 Phase 4): creates the
-# 4-block main rich menu — the existing status/ranking/person-list row plus a
-# new full-width "upload" row — and sets it as the default for every LINE OA
-# user immediately. Everything behind it (the /upload/ page, scoring, the
-# admin Telegram alert) has already shipped; this is the step that makes it
-# reachable. Deliberately workflow_dispatch only, never scheduled — the
-# script itself says "run it once".
+# Manual switch: creates the 3-block main rich menu — status / ranking /
+# person list — and sets it as the default for every LINE OA user
+# immediately. There is deliberately no upload block: submitting a file from
+# the rich menu is switched off. Run this once after merging to replace the
+# live menu, which keeps showing whatever was last pushed until then.
+# Deliberately workflow_dispatch only, never scheduled — the script itself
+# says "run it once".
 #
 # Uses the same LINE_TOKEN secret update-month-picker.yml already runs
-# monthly against this channel — nothing new to add. UPLOAD_LIFF_ID is not a
-# secret (it ships in the page's own HTML and in main.js's source as a
-# fallback), so it's a plain literal here rather than a secret lookup.
+# monthly against this channel — nothing new to add.
 on:
   workflow_dispatch:
 
@@ -20,7 +18,7 @@ permissions:
 
 jobs:
   setup-richmenu:
-    name: Create + activate the 4-block rich menu
+    name: Create + activate the 3-block rich menu
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,5 +37,4 @@ jobs:
       - name: Create and activate rich menu
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          UPLOAD_LIFF_ID: '2008561527-sj7tuMLL'
         run: npx tsx scripts/setup-richmenu.mts
