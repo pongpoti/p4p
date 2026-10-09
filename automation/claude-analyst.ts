@@ -216,7 +216,7 @@ export function resolveBeMonth(filename?: string | null, subject?: string | null
  * month it covers.
  */
 export function resolveBeYearByPriority(filename?: string | null, subject?: string | null, body?: string | null): number | null {
-  return resolveBeYear("", subject, body) ?? resolveBeYear(filename ?? "", "", "");
+  return resolveBeYear("", senderWords(subject), senderWords(body)) ?? resolveBeYear(filename ?? "", "", "");
 }
 
 /**
@@ -297,10 +297,20 @@ function monthTokenIndex(s: string, token: string): number {
 }
 
 /**
- * A quoted message's own auto-generated date states when THAT message was
- * sent — never what period a submission is for — but periodsInText has no
- * way to tell that apart from the sender's own words. Two shapes:
+ * Text that is QUOTED, not written by the sender. A quoted message's own
+ * date states when THAT message was sent — never what period a submission is
+ * for — but periodsInText has no way to tell that apart from the sender's own
+ * words. Three shapes:
  *
+ *   • Plain-text quote markers. Every line a mail client quotes starts with
+ *     ">" (">>" or "> >" when nested), so a line that does is somebody
+ *     else's words — the physician's earlier send, the system's receipt
+ *     ("เดือน/ปี: กันยายน 2569"), or an attribution line one reply down.
+ *     That last one matters: the first reply in a thread has an unquoted
+ *     "On … wrote:" line, but the NEXT reply quotes that line behind ">",
+ *     which a line-start-anchored match cannot see. ">" has to be followed by
+ *     whitespace or end of line, so a raw-HTML line that merely wraps to
+ *     start with ">ส่ง P4P ก.ค. 2569" is left alone.
  *   • A forward's header block: "Date:" (or Outlook's "Sent:") line. A
  *     physician mailed herself from Yahoo, then forwarded that mail from
  *     Gmail minutes later; Gmail's own "---------- Forwarded message
@@ -320,12 +330,38 @@ function monthTokenIndex(s: string, token: string): number {
  * Blanked out rather than removed so every other index this module computes
  * by position into the string stays correct.
  */
-function blankQuotedHeaders(s: string): string {
+function blankQuotedText(s: string): string {
   const blank = (m: string): string => " ".repeat(m.length);
   return s
+    .replace(/^[ \t]*>+(?:[ \t].*)?$/gm, blank)
     .replace(/^[ \t]*(?:Date|Sent)[ \t]*:.*$/gim, blank)
     .replace(/^[ \t]*On\s[\s\S]{0,300}?\swrote:/gm, blank)
     .replace(/^[ \t]*ในวันที่\s[\s\S]{0,300}?เขียนว่า[ \t]*:/gm, blank);
+}
+
+/**
+ * The hospital's own abbreviation, "รพ. สค." (โรงพยาบาลสมุทรสาคร). The
+ * auto-reply's fixed subject is "องค์กรแพทย์ รพ. สค.", so a physician who
+ * answers the receipt with a corrected file sends "Re: องค์กรแพทย์ รพ. สค.",
+ * and "สค." is also the abbreviation for August. The subject is the
+ * strongest source there is, so it outranked the filename and the file was
+ * filed as August. Only the รพ-prefixed form is blanked — a real "ส.ค. 69" or
+ * "สค69" is untouched.
+ */
+function blankOwnAbbreviation(s: string): string {
+  return s.replace(/รพ\.?[ \t]*สค\.?/g, (m) => " ".repeat(m.length));
+}
+
+/**
+ * What the sender actually wrote, as far as naming a period goes: quoted
+ * material and the hospital's own abbreviation taken out. Both readers of
+ * the sender's words go through this — the month (periodsInText) and the
+ * year (resolveBeYearByPriority) — because blanking one and not the other is
+ * how a July file came out right in the incident only by coincidence: its
+ * year was still being read from the quoted attribution's "2026".
+ */
+function senderWords(text: unknown): string {
+  return blankOwnAbbreviation(blankQuotedText(String(text ?? "")));
 }
 
 /**
@@ -340,7 +376,7 @@ function blankQuotedHeaders(s: string): string {
  * produced January 2568, a period the sender never wrote.
  */
 export function periodsInText(text: unknown): Period[] {
-  const s = blankQuotedHeaders(String(text ?? ""));
+  const s = senderWords(text);
   const hits: { month: number; at: number }[] = [];
   for (let mo = 1; mo <= 12; mo++) {
     let at = -1;
