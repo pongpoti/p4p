@@ -243,6 +243,10 @@ function fourDigitBeYear(text: unknown): number | null {
   return null;
 }
 
+// Whole words that join two months in running Thai (regex alternation, used by
+// monthTokenIndex): and / with / to / or.
+const MONTH_JOINERS = "และ|กับ|ถึง|หรือ";
+
 /**
  * Where a month is first stated in `s`, or -1.
  *
@@ -268,6 +272,16 @@ function fourDigitBeYear(text: unknown): number | null {
  * name is ever followed by digits, so this can't be the name-collision false
  * positive above (that collision, e.g. "ณัฐกันย์", has no digits after it
  * either) — it is only reachable by an actual compact month+year.
+ *
+ * A third, in the same spirit as "เดือน": the words that join two months —
+ * "และ" (and), "กับ" (with), "ถึง" (to), "หรือ" (or) — on either side of the
+ * token. Thai puts no space between words, so "สิงหาคม และกันยายน 2569" is
+ * how a sender actually types two months, with the conjunction flush against
+ * the second. Without this the boundary check threw "กันยายน" out as a
+ * substring of a longer word, the subject read as August alone, and a
+ * two-workbook August + September send was filed as August twice. Like
+ * "เดือน" this is a short, closed list of whole words, not an open-ended
+ * category, so it cannot reopen the name collision above.
  */
 function monthTokenIndex(s: string, token: string): number {
   if (/^[A-Za-z]+$/.test(token)) {
@@ -275,7 +289,7 @@ function monthTokenIndex(s: string, token: string): number {
     return m ? m.index : -1;
   }
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const boundary = new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))(${escaped})(?![฀-๿])`).exec(s);
+  const boundary = new RegExp(`(?:^|[^฀-๿]|(?<=เดือน|${MONTH_JOINERS}))(${escaped})(?=$|[^฀-๿]|${MONTH_JOINERS})`).exec(s);
   if (boundary) return boundary.index + boundary[0].length - boundary[1]!.length;
 
   const glued = new RegExp(`${escaped}(?=\\d{2}(?!\\d))`).exec(s);
