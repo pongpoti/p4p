@@ -123,6 +123,64 @@ test("a forwarded mail's own \"Date:\" line is not a stated period", () => {
   );
 });
 
+test("a conjunction typed flush against a month does not hide that month", () => {
+  // Real subject from a recurring sender, two workbooks attached (สค and
+  // กันยา): "และ" ("and") is glued straight onto กันยายน with no space, so the
+  // boundary check read it as the tail of a longer word, the subject stated
+  // August alone, and BOTH files were routed as August.
+  assert.deepEqual(periodsInText("ส่ง P4P สิงหาคม และกันยายน 2569 พ.ภัทราวดี ปิ่นสุข"), [
+    { month: 8, beYear: 2569 },
+    { month: 9, beYear: 2569 },
+  ]);
+  // The conjunction can sit on either side of the first month too.
+  assert.deepEqual(periodsInText("ส่ง P4P สิงหาคมและกันยายน 2569"), [
+    { month: 8, beYear: 2569 },
+    { month: 9, beYear: 2569 },
+  ]);
+  assert.deepEqual(periodsInText("ส่ง P4P เดือนสิงหาคมและเดือนกันยายน 2569"), [
+    { month: 8, beYear: 2569 },
+    { month: 9, beYear: 2569 },
+  ]);
+  // Abbreviations take the same joiners.
+  assert.deepEqual(periodsInText("p4p สค.และกย. 69"), [
+    { month: 8, beYear: null },
+    { month: 9, beYear: null },
+  ]);
+  assert.deepEqual(periodsInText("p4p สคและกย 69"), [
+    { month: 8, beYear: null },
+    { month: 9, beYear: null },
+  ]);
+  assert.deepEqual(periodsInText("ส่ง P4P กรกฎาคมถึงสิงหาคม 2569"), [
+    { month: 7, beYear: 2569 },
+    { month: 8, beYear: 2569 },
+  ]);
+  assert.deepEqual(periodsInText("ส่ง P4P กรกฎาคมกับสิงหาคม 2569"), [
+    { month: 7, beYear: 2569 },
+    { month: 8, beYear: 2569 },
+  ]);
+
+  // The mail now names two periods, so each file's own name is what decides
+  // — and each of these filenames already resolves to exactly one.
+  const subject = "ส่ง P4P สิงหาคม และกันยายน 2569 พ.ภัทราวดี ปิ่นสุข";
+  assert.equal(statedPeriods("", subject, "").periods.length, 2);
+  assert.deepEqual(periodsInText("P4P สค 69 ภัทราวดี ปิ่นสุข .xlsx"), [{ month: 8, beYear: null }]);
+  assert.deepEqual(periodsInText("P4P กันยา 69 ภัทราวดี ปิ่นสุข .xlsx"), [{ month: 9, beYear: null }]);
+});
+
+test("allowing joiner words beside a month does not reopen the name collision", () => {
+  // Same guards as the "ณัฐกันย์" tests above, now with the joiners in play:
+  // a month abbreviation buried in a name is still not a stated month, with
+  // or without a conjunction elsewhere in the line.
+  assert.deepEqual(periodsInText("ณัฐกันย์ลิมปวิทยากุล"), []);
+  assert.deepEqual(periodsInText("p4p ณัฐกันย์ ลิมปวิทยากุล และ ส.ค. 69"), [
+    { month: 8, beYear: null },
+  ]);
+  assert.deepEqual(periodsInText("ส่งคะแนนและรวมคะแนน 850 คะแนน"), [], "'มค' inside 'รวมคะแนน' is still not January");
+  // A joiner only counts as the edge of a month word when it is a whole,
+  // adjacent word — a month token in the middle of other Thai text is not.
+  assert.deepEqual(periodsInText("ส่งกันยามเฝ้าระวัง"), [], "'กันยา' as the start of กันยาม is not September");
+});
+
 test("the เดือน<month> compound (no space) still resolves, despite the boundary check above", () => {
   // The fix for the name collision above must not re-break this: "เดือน"
   // ("month") directly against a month name, with no space, is how subjects
