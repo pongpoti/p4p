@@ -71,6 +71,8 @@ export interface DecodedMessage {
   from: string;
   to?: string;
   date: string;
+  /** When Gmail received the message (its own clock, ISO 8601) — the Date header is whatever the sender's client wrote. */
+  receivedAt?: string;
   snippet?: string;
   body: string;
 }
