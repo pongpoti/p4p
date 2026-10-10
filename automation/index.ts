@@ -11,13 +11,16 @@
 
 import { createGmailClient, type GmailClient }             from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, periodsInText, sheetMatchScore, statedPeriods } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { buildHtmlReply }               from "./templates/reply.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
+import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
+import { decideStatedPeriod } from "./period-gate.js";
+import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
 import log                              from "./logger.js";
 import * as path                        from "path";
@@ -57,9 +60,6 @@ const EXCEL_MIMETYPES = new Set([
   "application/wps-office.xlsx",                                         // WPS variant
 ]);
 
-// Matches cloud-storage share links — used to detect "file link instead of real file"
-const CLOUD_LINK_RE = /https?:\/\/(drive\.google\.com|docs\.google\.com|1drv\.ms|dropbox\.com|onedrive\.live\.com|sharepoint\.com)/i;
-
 function isExcelFile(mimeType: string | null | undefined, filename: string | null | undefined): boolean {
   if (mimeType && EXCEL_MIMETYPES.has(mimeType)) return true;
   if (!filename) return false;
@@ -97,6 +97,8 @@ interface FirstSheetResult {
   scores: number[];
   /** The sheets holding anything (3+ non-empty cells) — the only ones a report could be on. */
   filled: string[];
+  /** Per sheet (ExcelJS order): what its name and opening rows say — see sheet-rescue.ts. */
+  tabs: TabInfo[];
 }
 
 /**
@@ -110,8 +112,10 @@ interface FirstSheetResult {
  * @param buffer
  * @param opts.targetMonth  1–12 hints which sheet to use
  *   in multi-sheet workbooks (e.g. physician accumulated all months in one file).
+ * @param opts.onlySheet  read exactly this tab (by name) instead of choosing one. The
+ *   scores/matched/filled/tabs facts are still those of the whole workbook.
  */
-async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear = null }: { targetMonth?: number | null; targetYear?: number | null } = {}): Promise<FirstSheetResult> {
+export async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear = null, onlySheet = null }: { targetMonth?: number | null; targetYear?: number | null; onlySheet?: string | null } = {}): Promise<FirstSheetResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
 
@@ -149,13 +153,22 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
   let matched = false;
   const scores = workbook.worksheets.map(() => 0);
   const filled = workbook.worksheets.filter((ws) => nonNullCount(ws) >= 3).map((ws) => ws.name);
+  const noHit  = { month: null, beYear: null };
+  const tabs: TabInfo[] = workbook.worksheets.map((ws) => ({
+    name: ws.name, filled: nonNullCount(ws) >= 3, score: 0, nameHit: noHit, titleHit: noHit, titleText: "", visible: ws.state === "visible",
+  }));
   if (targetMonth !== null) {
     const defaultIndex = wsIndex;
     let bestScore = 0;
     workbook.worksheets.forEach((ws, i) => {
       if (nonNullCount(ws) < 3) return;
-      const s = sheetMatchScore(ws, rowsOfSheet(ws), targetMonth, targetYear);
+      const rows = rowsOfSheet(ws);
+      const s = sheetMatchScore(ws, rows, targetMonth, targetYear);
       scores[i] = s;
+      tabs[i] = {
+        name: ws.name, filled: true, score: s, nameHit: monthYearFromText(ws.name), titleHit: monthYearFromRows(rows), visible: ws.state === "visible",
+        titleText: titleTextOf(rows),
+      };
       if (s > bestScore) {
         bestScore = s;
         wsIndex = i;
@@ -167,8 +180,14 @@ async function firstSheetToRows(buffer: Buffer, { targetMonth = null, targetYear
     }
   }
 
+  if (onlySheet !== null) {
+    const forced = allSheets.indexOf(onlySheet);
+    if (forced === -1) throw new Error(`Workbook has no sheet named "${onlySheet}".`);
+    wsIndex = forced;
+  }
+
   const worksheet = workbook.worksheets[wsIndex]!;
-  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched, scores, filled };
+  return { rows: rowsOfSheet(worksheet), allSheets, chosenSheet: allSheets[wsIndex]!, matched, scores, filled, tabs };
 }
 
 /** One worksheet -> the col_N row objects the extractor and Claude expect. */
@@ -286,6 +305,30 @@ async function stripFormulasFromBuffer(inputBuffer: Buffer): Promise<Buffer> {
   });
 
   return out;
+}
+
+/**
+ * What the example-tab rescue's permissive veto (sheet-rescue.ts) reads of a tab: the text cells of its first
+ * 120 rows, and numbers that can only be a year (2500–2599, 2020–2035) — plus a small whole number (1–12)
+ * on a row that says "เดือน"/"month" or within two rows below one, which is a month given as a number. Any other number ("3.25",
+ * "85.5", "2040") would read as a date or a year and make the rescue decline for nothing.
+ */
+export function titleTextOf(rows: Row[]): string {
+  const out: string[] = [];
+  const head = rows.slice(0, 120);
+  const rowValues = head.map((r) => Object.values(r).filter((v) => v !== null && v !== undefined));
+  const labelled = rowValues.map((vals) => vals.some((v) => typeof v === "string" && /เดือน|month/i.test(v)));
+  rowValues.forEach((vals, i) => {
+    // a 1–12 counts when a month label is on this row or on one of the two rows above it
+    // ("เดือน | ปี" over "7 | 2569")
+    const nearLabel = labelled[i] || labelled[i - 1] || labelled[i - 2];
+    for (const v of vals) {
+      if (typeof v === "string") out.push(v);
+      else if (typeof v === "number" && Number.isInteger(v)
+        && ((v >= 2500 && v <= 2599) || (v >= 2020 && v <= 2035) || (nearLabel && v >= 1 && v <= 12))) out.push(String(v));
+    }
+  });
+  return out.join("\n");
 }
 
 /**
@@ -410,7 +453,9 @@ interface SendAlertReplyOpts {
 
 /**
  * Send an alert-themed HTML reply to the original sender.
- * Silently no-ops if replyTo or messageId is missing.
+ * Silently no-ops if replyTo or messageId is missing, and — for EVERY errorType —
+ * when replyTo is an automated no-reply address (nobody reads that mailbox).
+ * Resolves false only when a send was attempted and failed.
  *
  * @param opts.errorType
  * @param opts.safeFilename   HTML-escaped filename (may be empty)
@@ -422,12 +467,18 @@ interface SendAlertReplyOpts {
  * @param opts.messageId      Gmail message ID for thread reply
  * @param opts.gmail          Shared Gmail client
  */
-async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", statedDate = "", detail = "", replyTo, messageId, gmail }: SendAlertReplyOpts): Promise<void> {
+async function sendAlertReply({ errorType = "other", safeFilename = "", detectedDate = "", detectedName = "", statedDate = "", detail = "", replyTo, messageId, gmail }: SendAlertReplyOpts): Promise<boolean> {
   if (!SEND_ERROR_REPLIES) {
     console.log(`│        ⏸️   Alert reply [${errorType}] suppressed (SEND_ERROR_REPLIES=false)`);
-    return;
+    return true;
   }
-  if (!replyTo || !messageId) return;
+  if (!replyTo || !messageId) return true;
+  // Nobody reads a reply to a no-reply address (Google's "shared with you" notice, a bounce).
+  // The message is still handled by the caller; this line is the only trace of the skip.
+  if (isAutomatedSender(replyTo)) {
+    console.log(`│        🤖  Alert reply [${errorType}] not sent: ${replyTo} is an automated no-reply address`);
+    return true;
+  }
   const subject  = ALERT_SUBJECTS[errorType] ?? ALERT_SUBJECTS.other!;
   const htmlReply = buildHtmlErrorReply({ safeFilename, errorType, detectedDate, detectedName, statedDate, detail });
   try {
@@ -439,8 +490,10 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
       replyToMessageId: messageId,
     });
     console.log(`│        📧  Alert reply [${errorType}] sent to ${replyTo}`);
+    return true;
   } catch (replyErr) {
     console.error(`│        ❌  Alert reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+    return false;
   }
 }
 
@@ -467,6 +520,14 @@ export interface ProcessBufferContext {
   monthKey?: string | null;
   notify?: NotifyHooks | null;
   workbookCount?: number;
+  /** Every workbook filename of the message this buffer came from (itself included). Email path only. */
+  siblingFilenames?: string[];
+  /** The date of the message whose subject/body are in `subject`/`body`, when that is not `emailDate`'s message (the relay path). The period gate reads the sender's words against it. */
+  textDate?: string | null;
+  /** When Gmail received the message whose words the gate reads (its own clock). A Date header days away from it is not trusted. */
+  receivedDate?: string | null;
+  /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
+  receipt?: { answered: boolean };
 }
 
 /**
@@ -498,7 +559,7 @@ export interface ProcessBufferContext {
  *   when identity is set. The pipeline stops knowing which channel it is.
  */
 export async function processBuffer(buffer: Buffer, {
-  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1,
+  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, receipt = undefined,
 }: ProcessBufferContext): Promise<ProcessOutcome> {
   const isUpload = identity !== null;
 
@@ -549,11 +610,13 @@ export async function processBuffer(buffer: Buffer, {
   // order; resolveBeYear does not — it takes the best match across all three
   // per year-format tier — so the year is asked source by source instead.
   //
-  // emailDate is deliberately NOT part of this: it says when the mail was
-  // sent, not which month it covers, and a December report sent in January
-  // would route a year wrong. It stays a last resort for sheet selection
-  // below, where guessing wrong only costs a fallback rather than a score in
-  // the wrong table.
+  // emailDate never CHOOSES the month: it says when the mail was sent, not
+  // which month it covers. For the YEAR it remains the last resort when no
+  // text writes one anywhere (targetYear below, unchanged — and a December
+  // report sent in January is exactly where that goes wrong). period-gate.ts
+  // adds two narrow jobs: to VETO a year that cannot be what a mail sent on
+  // that date is reporting, and to supply the year for a Latin-letter month in
+  // a file name when no text states one. See SUBMISSION_RULES.md.
   // A submission has to SAY which month it is for. The workbook's own contents
   // are never enough on their own: a physician who keeps every month in one
   // file has no way of telling us which of them this send is about, and
@@ -563,9 +626,14 @@ export async function processBuffer(buffer: Buffer, {
   let routingMonth: number | null = null;
   let routingYear: number | null = null;
   if (!monthKey) {
-    const { periods } = statedPeriods(filename ?? "", subject, body);
+    const stated   = statedPeriods(filename ?? "", subject, body);
+    // Everything the strict rules below (and always) accepted is returned unchanged; only
+    // what they would refuse is looked at again, for two readings of what the sender
+    // ALREADY wrote — the same month stated with and without a year, and a Latin month
+    // word in a file's own name (see period-gate.ts).
+    const decision = decideStatedPeriod({ stated, subject, body, filename: filename ?? "", workbookCount, siblingFilenames, emailDate: textDate ?? emailDate, receivedDate });
 
-    if (periods.length === 0) {
+    if (decision.kind === "none") {
       const detail = "ไม่พบเดือนที่ระบุในอีเมลหรือชื่อไฟล์ กรุณาระบุเดือนที่ต้องการส่ง เช่น \"ส่ง P4P เดือน ก.ค. 2569\"";
       console.error(`│        ❌  no_period: nothing in subject, body or filename names a month`);
       await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "no_period" }) as never))
@@ -574,31 +642,34 @@ export async function processBuffer(buffer: Buffer, {
       return "rejected";
     }
 
-    if (periods.length > 1) {
-      const named = periods.map((p) => `${p.beYear ?? "?"}_${String(p.month).padStart(2, "0")}`).join(", ");
+    const named = stated.periods.map((p) => `${p.beYear ?? "?"}_${String(p.month).padStart(2, "0")}`).join(", ");
+
+    if (decision.kind === "ambiguous") {
       // More than one period named, and one workbook: nothing says which of
       // them this file is. With several workbooks the send can still be
       // honoured, but only if each file names its own period — its filename is
       // the only per-file signal there is, since matching by contents is the
       // very guess these rules exist to avoid.
-      const ownPeriods = workbookCount > 1 ? periodsInText(filename ?? "") : [];
-      if (ownPeriods.length !== 1) {
-        const detail = workbookCount > 1
-          ? `อีเมลระบุหลายเดือน (${named}) กรุณาตั้งชื่อไฟล์ให้ระบุเดือนของแต่ละไฟล์ เช่น "P4P ก.ค. 2569.xlsx"`
-          : `อีเมลระบุหลายเดือน (${named}) แต่แนบไฟล์มาไฟล์เดียว กรุณาส่งแยกอีเมลละหนึ่งเดือน`;
-        console.error(`│        ❌  ambiguous_period: ${named} across ${workbookCount} workbook(s)`);
-        await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "ambiguous_period" }) as never))
-          .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-        await notifyFailure("ambiguous_period", { detail });
-        return "rejected";
-      }
-      console.log(`│        📅  Multi-month mail (${named}) — this file names ${ownPeriods[0]!.beYear}_${String(ownPeriods[0]!.month).padStart(2, "0")}`);
-      routingMonth = ownPeriods[0]!.month;
-      routingYear = ownPeriods[0]!.beYear;
-    } else {
-      routingMonth = periods[0]!.month;
-      routingYear = periods[0]!.beYear;
+      const detail = workbookCount > 1
+        ? `อีเมลระบุหลายเดือน (${named}) กรุณาตั้งชื่อไฟล์ให้ระบุเดือนของแต่ละไฟล์ เช่น "P4P ก.ค. 2569.xlsx"`
+        : `อีเมลระบุหลายเดือน (${named}) แต่แนบไฟล์มาไฟล์เดียว กรุณาส่งแยกอีเมลละหนึ่งเดือน`;
+      console.error(`│        ❌  ambiguous_period: ${named} across ${workbookCount} workbook(s)`);
+      await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "ambiguous_period" }) as never))
+        .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+      await notifyFailure("ambiguous_period", { detail });
+      return "rejected";
     }
+
+    const key = `${decision.beYear}_${String(decision.month).padStart(2, "0")}`;
+    if (decision.via === "own_file") {
+      console.log(`│        📅  Multi-month mail (${named}) — this file names ${key}`);
+    } else if (decision.via === "own_file_latin") {
+      console.log(`│        📅  Multi-month mail (${named}) — this file names ${key} (Latin month word in its file name)`);
+    } else if (decision.via === "collapsed") {
+      console.log(`│        📅  Same month stated with and without a year (${named}) — read as ${key}`);
+    }
+    routingMonth = decision.month;
+    routingYear = decision.beYear;
   }
 
   // Sheet selection still needs a month number even when routing does not:
@@ -621,9 +692,21 @@ export async function processBuffer(buffer: Buffer, {
   const dateKey = `${targetYear}_${String(targetMonth).padStart(2, "0")}`;
 
   // Parse workbook
-  let rows: Row[], allSheets: string[], chosenSheet: string, matchedSheet: boolean, filledSheets: string[];
+  let rows: Row[], allSheets: string[], chosenSheet: string, matchedSheet: boolean, filledSheets: string[], tabs: TabInfo[];
   try {
-    ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
+    ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets, tabs } = await firstSheetToRows(buffer, { targetMonth, targetYear }));
+
+    // A report beside the template's worked-example tab is one report, not two to
+    // choose between — but only when the file's own name confirms the month (see
+    // sheet-rescue.ts). Email path only; the LINE path keeps its own month check.
+    if (!monthKey && targetMonth !== null && guessingBetweenTabs(filledSheets, matchedSheet)) {
+      const report = pickReportBesideExample({ tabs, matched: matchedSheet, targetMonth, targetYear: targetYear ?? null, filename: filename ?? "" });
+      if (report) {
+        console.log(`│        📋  Report tab "${report}" beside a template example tab; the file name confirms ${displayMonthKey(dateKey)} — reading "${report}"`);
+        ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets, tabs } = await firstSheetToRows(buffer, { targetMonth, targetYear, onlySheet: report }));
+        filledSheets = [report];   // the example tab is documentation, not a second candidate
+      }
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`│        ❌  Failed to parse workbook: ${message}`);
@@ -933,6 +1016,9 @@ export async function processBuffer(buffer: Buffer, {
       console.log(`│        💾  Score ${analysis.score.toFixed(2)} saved → table "${workMonth}", row ${match.index}`);
     } catch (dbErr) {
       console.error(`│        ❌  Supabase save error: ${dbErr instanceof Error ? dbErr.message : dbErr}`);
+      // The sender is still sent the receipt below, as before — but nothing was saved, so this workbook must
+      // not count as "answered" when another message's alert is waiting on it (see settleHeldAlerts).
+      if (receipt) receipt.answered = false;
     }
   }
 
@@ -1017,12 +1103,13 @@ export async function processBuffer(buffer: Buffer, {
   // ── Auto-reply to sender (email path) ─────────────────────────────────
   if (replyTo && messageId) {
     if (!match) {
-      await sendAlertReply({
+      const sent = await sendAlertReply({
         errorType   : "physician_not_found",
         safeFilename: filename ?? "",
         detectedName: analysis.name ?? "",
         replyTo, messageId, gmail: gmail!,
       });
+      if (!sent && receipt) receipt.answered = false;
     } else {
       const [beYear, monthNum] = analysis.date.split("_");
       const thaiMonth  = THAI_MONTHS[parseInt(monthNum ?? "", 10)] || monthNum;
@@ -1058,6 +1145,7 @@ export async function processBuffer(buffer: Buffer, {
         console.log(`│        ✅  Auto-reply sent to ${replyTo}`);
       } catch (replyErr) {
         console.error(`│        ❌  Auto-reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+        if (receipt) receipt.answered = false;
       }
     }
   }
@@ -1218,6 +1306,30 @@ async function main(): Promise<void> {
     return da - db;
   });
 
+  // What a no-xlsx message needs to know about its batch-mates (see
+  // inbound-triage.ts): a link-only message is not rejected when the same
+  // sender mailed the real file as another message of this very run — but only
+  // once that file has been processed to completion (not rejected, not failed),
+  // so the decision is settled after the loop, when every outcome is known.
+  const senderOf = (raw: string | undefined) => ((raw ?? "").match(/<(.+?)>/) ?? [null, raw ?? ""])[1]!.trim().toLowerCase();
+  const triageMessages: TriageMessage[] = fetchedMessages.map(({ id, msg, attachments }) => {
+    // Gmail's own receive time when it has one — the Date header is whatever the sender's client wrote.
+    const dateMs = new Date(msg.receivedAt ?? msg.date).getTime();
+    return {
+      id,
+      fromEmail      : senderOf(msg.from),
+      subject        : msg.subject ?? "",
+      body           : msg.body?.trim() ?? "",
+      dateMs         : Number.isNaN(dateMs) ? null : dateMs,
+      attachmentNames: attachments.map((a) => a.filename),
+      xlsxNames      : attachments.filter((a) => isExcelFile(a.mimeType, a.filename) && !isOfficeLockFile(a.filename)).map((a) => a.filename),
+    };
+  });
+  const triageById = new Map(triageMessages.map((t) => [t.id, t]));
+  /** message id -> did at least one workbook of it run to completion (no rejection, no Drive failure)? Set when a message is processed. */
+  const processedOk = new Map<string, boolean>();
+  const heldAlerts: { id: string; kind: "alert_file_link" | "alert_wrong_extension"; fromEmail: string; names: string; sourceLabel: "INBOX" | "SPAM"; peerId: string }[] = [];
+
   for (let i = 0; i < fetchedMessages.length; i++) {
     const { id, _sourceLabel, msg, attachments } = fetchedMessages[i]!;
 
@@ -1254,7 +1366,11 @@ async function main(): Promise<void> {
                 replyTo  : tmEmail,   // reply to the original physician, not the relay
                 messageId: id,        // thread-link to the current (relay) message
                 emailDate: msg.date,
+                // the words come from the original message when it has any, else from the relay
+                textDate    : tm.msg.body ? tm.msg.date : msg.date,
+                receivedDate: tm.msg.body ? tm.msg.receivedAt : msg.receivedAt,
                 threadId : msg.threadId,
+                siblingFilenames: xlsxInMsg.map((a) => a.filename),
               };
               const results = await Promise.allSettled(
                 xlsxInMsg.map((att) => processAttachment(att, tm.msg.id, relayContext, gmail, xlsxInMsg.length))
@@ -1330,7 +1446,9 @@ async function main(): Promise<void> {
           senderDisplayName: fromDisplayName,
           messageId: id,
           emailDate: msg.date,
+          receivedDate: msg.receivedAt,
           threadId : msg.threadId,
+          siblingFilenames: threadXlsx.atts.map((a) => a.filename),
         };
         const results = await Promise.allSettled(
           threadXlsx.atts.map((att) => processAttachment(att, threadXlsx!.messageId, context, gmail, threadXlsx!.atts.length))
@@ -1364,20 +1482,38 @@ async function main(): Promise<void> {
         continue;
       }
 
-      let alertSent = false;
-      if (CLOUD_LINK_RE.test(msgBody)) {
-        // Sender pasted a cloud-storage link instead of attaching the file
-        console.log(`│  ⚠️   No xlsx found — cloud link detected in body → sending file_link alert`);
-        await sendAlertReply({ errorType: "file_link", safeFilename: "", replyTo: fromEmail, messageId: id, gmail });
-        alertSent = true;
-      } else if (otherAtts.length > 0) {
-        // Sender attached a file but in the wrong format (.xls, .ods, …)
-        const names = otherAtts.map((a) => a.filename).join(", ");
-        console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${names} → sending wrong_extension alert`);
-        await sendAlertReply({ errorType: "wrong_extension", safeFilename: names, replyTo: fromEmail, messageId: id, gmail });
-        alertSent = true;
-      } else {
+      const noXlsxAction = decideNoXlsx({ fromEmail, hasCloudLink: CLOUD_LINK_RE.test(msgBody), hasOtherAtts: otherAtts.length > 0 });
+      const otherNames   = otherAtts.map((a) => a.filename).join(", ");
+      let alertSent = isHandled(noXlsxAction);
+      if (noXlsxAction === "skip_automated") {
+        // Google's "spreadsheet shared with you" notice and its kin. Nobody reads a
+        // reply to a no-reply address — but the message may be someone's submission, shared as a
+        // link, so the admin chat is told once (plain text, no file contents).
+        console.log(`│  🤖  No xlsx — automated sender ${fromEmail}, not replying (message ${id})`);
+        // Only marked as handled once the admin has been told: otherwise it is looked at again next run.
+        await sendTelegram(`🤖 ไม่ได้ตอบกลับ (ผู้ส่งเป็นที่อยู่ no-reply): ${fromEmail}\nหัวเรื่อง: ${msg.subject}\nอีเมลนี้มีลิงก์หรือไฟล์ที่ไม่ใช่ .xlsx — โปรดตรวจสอบว่าเป็นการส่งงาน P4P หรือไม่`)
+          .catch((e) => { console.warn(`│  ⚠️   Telegram notify failed: ${e.message} — message left unmarked, to be retried`); alertSent = false; });
+      } else if (noXlsxAction === "skip_nothing") {
         console.log(`│  📎  No attachments and no cloud link — skipping`);
+      } else {
+        // A link-only (or foreign-file) message from someone who, in this very run, also
+        // mailed the real .xlsx under the same subject: don't tell them to attach a file
+        // we already hold. Held until the loop ends so it is only skipped if that file was
+        // processed to completion — if it was not, the alert goes out after all.
+        const peer = findSupersedingPeer(triageById.get(id)!, triageMessages);
+        if (peer) {
+          console.log(`│  🤝  No xlsx here, but the same sender mailed the workbook as message ${peer.id} — alert held until it is processed`);
+          heldAlerts.push({ id, kind: noXlsxAction, fromEmail, names: otherNames, sourceLabel: _sourceLabel, peerId: peer.id });
+          alertSent = false;   // marked at the end, together with the decision
+        } else if (noXlsxAction === "alert_file_link") {
+          // Sender pasted a cloud-storage link instead of attaching the file
+          console.log(`│  ⚠️   No xlsx found — cloud link detected in body → sending file_link alert`);
+          await sendAlertReply({ errorType: "file_link", safeFilename: "", replyTo: fromEmail, messageId: id, gmail });
+        } else {
+          // Sender attached a file but in the wrong format (.xls, .ods, …)
+          console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${otherNames} → sending wrong_extension alert`);
+          await sendAlertReply({ errorType: "wrong_extension", safeFilename: otherNames, replyTo: fromEmail, messageId: id, gmail });
+        }
       }
       if (alertSent) {
         const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
@@ -1399,6 +1535,7 @@ async function main(): Promise<void> {
     // Use fromEmail (plain addr) not msg.from (full header) for replyTo —
     // the full From: header can contain RFC 2047-encoded display names in many
     // formats; using just the address avoids any encoding issue in To: header.
+    const receipt = { answered: true };
     const context: Partial<ProcessBufferContext> = {
       subject  : msg.subject,
       body     : msgBody,
@@ -1406,7 +1543,10 @@ async function main(): Promise<void> {
       senderDisplayName: fromDisplayName,
       messageId: id,
       emailDate: msg.date,
+      receivedDate: msg.receivedAt,
       threadId : msg.threadId,
+      siblingFilenames: attachments.filter((a) => isExcelFile(a.mimeType, a.filename)).map((a) => a.filename),
+      receipt,
     };
     const workbookCount = attachments.filter((a) => isExcelFile(a.mimeType, a.filename)).length;
     const results = await Promise.allSettled(
@@ -1415,6 +1555,16 @@ async function main(): Promise<void> {
     processedAnyAttachment = results.some(
       (r) => r.status === "fulfilled" && r.value === true
     );
+    // "Processed to completion" for the purposes of holding another message's alert: EVERY workbook of the
+    // message ran through (none rejected, replied to with an error, or threw) and every reply owed to the
+    // sender was actually sent.
+    processedOk.set(id, messageRanToCompletion({
+      processedAny: processedAnyAttachment,
+      answered    : receipt.answered,
+      workbooks   : attachments.flatMap((a, i) => isExcelFile(a.mimeType, a.filename) && !isOfficeLockFile(a.filename)
+        ? [{ outcome: results[i]!.status === "fulfilled" ? (results[i] as PromiseFulfilledResult<unknown>).value : "threw" }]
+        : []),
+    }));
     const repliedToAny = results.some(
       (r) => r.status === "fulfilled" && r.value === "replied"
     );
@@ -1446,6 +1596,37 @@ async function main(): Promise<void> {
 
     console.log(`└────────────────────────────────────────────────────────────\n`);
   }
+
+  // ── Settle the alerts held back above ───────────────────────────────────
+  // Every workbook of this run has now been processed, so "the sender already
+  // sent the real file" can be checked against what really happened to it.
+  // Processed to completion → the sender has been answered about that file (a
+  // score saved and confirmed, or an unknown-physician reply), so the link-only
+  // message needs no answer of its own. Anything else (rejected, replied to with
+  // an error, threw, or not in a processable shape) → the sender still has not
+  // been told what to fix, so the held alert goes out as it always did. Either
+  // way the held message is marked handled — unmarked, the next hourly run would
+  // fetch it again, by when its peer is read and nothing would hold the alert.
+  await settleHeldAlerts(heldAlerts, processedOk, {
+    log: (line) => console.log(line),
+    resend: (h) => sendAlertReply(
+      h.kind === "alert_file_link"
+        ? { errorType: "file_link", safeFilename: "", replyTo: h.fromEmail, messageId: h.id, gmail }
+        : { errorType: "wrong_extension", safeFilename: h.names, replyTo: h.fromEmail, messageId: h.id, gmail },
+    ),
+    report: async (line) => { await sendTelegram(line); },
+    mark: async (h) => {
+      const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+      const removeLabels = ["UNREAD", h.sourceLabel];
+      const ok = await withRetry(
+        () => gmail.modifyMessage(h.id, addLabels, removeLabels).then(() => undefined),
+        2, 1500,
+        (attempt, err) => console.error(`❌  Failed to update message labels (attempt ${attempt}/2): ${err instanceof Error ? err.message : err}`),
+      );
+      if (ok) console.log(`🏷️   Marked ${h.id}: read · starred · archived · "${P4P_LABEL_NAME}"`);
+      return ok;
+    },
+  });
 
   console.log(`\n✅  Done.`);
 }

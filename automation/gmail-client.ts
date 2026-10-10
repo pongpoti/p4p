@@ -65,6 +65,12 @@ export interface GmailClient {
 }
 
 // ── Exported factory ───────────────────────────────────────────────────────
+/** Gmail's internalDate (epoch ms as a string) as ISO 8601, or undefined when absent. */
+function receivedAtOf(internalDate: string | null | undefined): string | undefined {
+  const ms = Number(internalDate);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : undefined;
+}
+
 export function createGmailClient(): GmailClient {
   const auth = createAuthClient();
   const gmail = google.gmail({ version: "v1", auth });
@@ -114,6 +120,7 @@ export function createGmailClient(): GmailClient {
       from:     headers["from"]    ?? "",
       to:       headers["to"]      ?? "",
       date:     headers["date"]    ?? "",
+      receivedAt: receivedAtOf(raw.internalDate),
       snippet:  raw.snippet        ?? "",
       body:     extractBody(raw.payload),
     };
@@ -402,6 +409,7 @@ export function createGmailClient(): GmailClient {
         subject:  headers["subject"] ?? "(no subject)",
         from:     headers["from"]    ?? "",
         date:     headers["date"]    ?? "",
+        receivedAt: receivedAtOf(raw.internalDate),
         body:     extractBody(raw.payload),
       };
       const attachments: GmailAttachment[] = [];
