@@ -23,6 +23,13 @@ function decide(o: { subject?: string; body?: string; filename?: string; workboo
   });
 }
 const ok = (month: number, beYear: number | null, via: string) => ({ kind: "ok", month, beYear, via });
+/**
+ * Quoted history must never decide. Depending on how much of the quote the strict reader itself blanks out,
+ * the answer is a refusal (the quote's month leaked into the pool) or the sender's OWN month routed as an
+ * ordinary single period — but never the quote's month, nor a year taken from the quote.
+ */
+const neverTheQuote = (r: ReturnType<typeof decide>, own: { month: number; beYear: number | null }) =>
+  r.kind === "ambiguous" || (r.kind === "ok" && r.via === "single" && r.month === own.month && r.beYear === own.beYear);
 
 // ── send date ────────────────────────────────────────────────────────────
 
@@ -130,7 +137,7 @@ test("quoted history, reply headers and forwarded blocks are not the sender's ow
   ];
   for (const [name, body] of cases) {
     // 2569 is the plausible year here, so ONLY the quote handling can keep these refused.
-    assert.equal(decide({ subject: "Re: P4P เดือนกันยายน", body }).kind, "ambiguous", name);
+    assert.ok(neverTheQuote(decide({ subject: "Re: P4P เดือนกันยายน", body }), { month: 9, beYear: null }), name);
   }
   assert.equal(senderOwnText("a\n> quoted\nb"), "a\nb");
   assert.equal(senderOwnText("hi\n-----Original Message-----\nold 2568"), "hi");
@@ -256,7 +263,7 @@ test("a month or year that only quoted history states does not unlock a Latin fi
   const siblings = ["P4P-Intern_sep_X.xlsx", "P4P-Intern_aug_X.xlsx"];
   // Today's pooled reading sees Aug + Sep (so the strict rules refuse); the September ONLY appears in the quote.
   const quoted = decide({ subject: "Re: P4P เดือนสิงหาคม", body: "แนบไฟล์ครับ\n\nOn Monday, X <x@example.com> wrote:\n> ส่ง P4P กันยายน 2568", workbookCount: 2, filename: siblings[0], siblings });
-  assert.equal(quoted.kind, "ambiguous", "September lives only in the quote");
+  assert.ok(neverTheQuote(quoted, { month: 8, beYear: null }), "September lives only in the quote");
   // A year that only the quote gives is never borrowed for a month the sender did name — and its presence
   // makes the year unreadable, so the answer is a refusal rather than a silent fall-back to the send year.
   const yearQuoted = decide({ subject: "Re: P4P เดือนสิงหาคม กันยายน", body: "แนบไฟล์ครับ\n\nOn Monday, X <x@example.com> wrote:\n> ส่ง P4P กันยายน 2568", workbookCount: 2, filename: siblings[0], siblings });
@@ -495,7 +502,7 @@ test("two files claiming the same month refuse each other, with years stated or 
 test("a month that only a quote names, with no year in it, does not unlock a file", () => {
   const sib = ["P4P_sep_X.xlsx", "P4P_aug_X.xlsx"];
   const r = decide({ subject: "Re: P4P เดือนสิงหาคม", body: "แนบไฟล์ครับ\n\nOn Monday, X <x@example.com> wrote:\n> ส่ง P4P กันยายน", workbookCount: 2, filename: sib[0], siblings: sib });
-  assert.equal(r.kind, "ambiguous");
+  assert.ok(neverTheQuote(r, { month: 8, beYear: null }));
 });
 
 test("the word reader's edges", () => {
@@ -701,7 +708,7 @@ test("senderOwnText: each HTML quote container works alone", () => {
 
 test("collapse: two different dated years, or a yearless mention only in a quote, are not merged", () => {
   assert.equal(decide({ subject: "P4P กันยายน", body: "ส่ง กันยายน 2568 และ กันยายน 2569" }).kind, "ambiguous", "two dated years for the month");
-  assert.equal(decide({ subject: "P4P กันยายน 2569", body: "ส่งแล้วครับ\n\nOn Mon, A <a@example.com> wrote:\n> กันยายน" }).kind, "ambiguous", "the year-less side exists only in the quote");
+  assert.ok(neverTheQuote(decide({ subject: "P4P กันยายน 2569", body: "ส่งแล้วครับ\n\nOn Mon, A <a@example.com> wrote:\n> กันยายน" }), { month: 9, beYear: 2569 }), "the year-less side exists only in the quote");
 });
 
 test("collapse with several workbooks: a '~$' owner file and 'P4P' in names are not reasons to refuse", () => {
