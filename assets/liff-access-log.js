@@ -36,7 +36,7 @@
 ;
 (function (global) {
     "use strict";
-    var PAGES = ["/status/", "/list/", "/ranking/", "/upload/"];
+    var PAGES = ["/upload/"];
     var path = global.location.pathname;
     if (PAGES.indexOf(path) === -1 || !global.P4P || !global.P4P.db)
         return;
