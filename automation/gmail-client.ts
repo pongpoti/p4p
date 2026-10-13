@@ -61,7 +61,25 @@ export interface GmailClient {
   getProfile(): Promise<gmail_v1.Schema$Profile>;
   downloadAttachment(messageId: string, attachmentId: string): Promise<Buffer>;
   listLabels(nameFilter?: string): Promise<gmail_v1.Schema$Label[]>;
+  ensureLabel(name: string): Promise<string>;
   getThreadMessages(threadId: string): Promise<MessageWithAttachments[]>;
+}
+
+/** Gmail label applied to report mails sent to department heads. */
+export const DEPT_HEAD_LABEL_NAME = "email หน กลุ่มงาน";
+
+/**
+ * File a just-sent department-head mail under DEPT_HEAD_LABEL_NAME and take
+ * it out of the inbox. Best-effort: a Gmail failure here must never fail the send.
+ */
+export async function archiveSentToLabel(gmail: GmailClient, sent: { id?: string | null }): Promise<void> {
+  if (!sent.id) return;
+  try {
+    const labelId = await gmail.ensureLabel(DEPT_HEAD_LABEL_NAME);
+    await gmail.modifyMessage(sent.id, [labelId], ["INBOX"]);
+  } catch (err) {
+    console.warn(`    ⚠️  Could not label/archive sent mail: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 // ── Exported factory ───────────────────────────────────────────────────────
@@ -389,6 +407,20 @@ export function createGmailClient(): GmailClient {
   }
 
   /**
+   * Return the id of the label with this exact name, creating it if missing.
+   */
+  async function ensureLabel(name: string): Promise<string> {
+    const existing = (await listLabels(name)).find((l) => l.name === name);
+    if (existing?.id) return existing.id;
+    const res = await gmail.users.labels.create({
+      userId: "me",
+      requestBody: { name, labelListVisibility: "labelShow", messageListVisibility: "show" },
+    });
+    if (!res.data.id) throw new Error(`Failed to create label "${name}"`);
+    return res.data.id;
+  }
+
+  /**
    * Fetch all messages in a thread and return them with decoded fields and
    * attachments — same shape as getMessageWithAttachments, one entry per message.
    * Messages are returned in chronological order (oldest first).
@@ -422,7 +454,7 @@ export function createGmailClient(): GmailClient {
     listMessages, getMessage, getMessageWithAttachments,
     readMessage, listAttachments,
     sendMessage, modifyMessage, markAsRead, archive,
-    getProfile, downloadAttachment, listLabels, getThreadMessages,
+    getProfile, downloadAttachment, listLabels, ensureLabel, getThreadMessages,
   };
 }
 
