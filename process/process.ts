@@ -1188,6 +1188,26 @@ async function buildDeptSheets(
   }
 }
 
+/**
+ * Put one font family on every cell of every sheet in the SK03 spreadsheet.
+ * Google renames the template's "TH SarabunPSK" to "TH Sarabun PSK" on import,
+ * while the formatting above writes "TH SarabunPSK", so without this the file
+ * mixes both spellings. Only fontFamily is touched (not size, bold or colour).
+ */
+async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promise<void> {
+  const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties.sheetId' }));
+  const requests: sheets_v4.Schema$Request[] = (meta.data.sheets ?? []).map(sh => ({
+    repeatCell: {
+      range: { sheetId: sh.properties!.sheetId! },
+      cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK' } } },
+      fields: 'userEnteredFormat.textFormat.fontFamily',
+    },
+  }));
+  if (requests.length === 0) return;
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests } }));
+  log(`  [SK03] Font normalised on ${requests.length} sheets`);
+}
+
 // ─── Master orchestrator ──────────────────────────────────────────
 
 /**
@@ -1424,6 +1444,8 @@ async function createSK03(
   internArray.forEach((p, i) => addToRowNumMap(p, S + i));
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
+
+  await normaliseSK03Fonts(sheets, ssId);
 
   log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
   return ssId;
