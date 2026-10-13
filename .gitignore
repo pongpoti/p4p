@@ -21,5 +21,5 @@ node_modules/
 
 # Opt-ins go here, e.g.:
 #   !test/fixtures/synthetic-roster.csv
-# .github/workflows/pii-guard.yml also fails any PR that adds a file whose
+# .github/workflows/check-no-personal-data.yml also fails any PR that adds a file whose
 # header looks like personal data, so an opt-in still has to be a real one.

@@ -1,4 +1,4 @@
-name: web tests
+name: "Check: web tests"
 
 # The Next.js rewrite (see REACT_REWRITE_PLAN.md). Nothing here is deployed
 # yet; this workflow keeps the rewrite honest while it is built alongside the
@@ -12,13 +12,13 @@ on:
       # this workflow, or the copies can silently drift apart.
       - "src/constants.cjs"
       - "assets/shared.js"
-      - ".github/workflows/web-tests.yml"
+      - ".github/workflows/check-web-tests.yml"
   pull_request:
     paths:
       - "web/**"
       - "src/constants.cjs"
       - "assets/shared.js"
-      - ".github/workflows/web-tests.yml"
+      - ".github/workflows/check-web-tests.yml"
 
 permissions:
   contents: read

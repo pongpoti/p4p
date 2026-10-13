@@ -1,4 +1,4 @@
-name: Supabase Keep-Alive
+name: "Daily: keep database awake"
 
 on:
   schedule:

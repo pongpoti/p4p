@@ -1,4 +1,4 @@
-name: P4P Resend Month(s)
+name: "Manual: resend a month's emails"
 
 # Manual one-off: report on specific past month(s) outside the normal
 # 3-month tracker window, regardless of completeness — see

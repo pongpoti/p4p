@@ -1,22 +1,17 @@
-name: Repair Drive copies (blank text / no formatting)
+name: "Manual: verify Drive copies against emails"
 
-# Restores the workbook links an earlier extractFirstSheetBuffer() stripped
-# from the archived copies (see automation/scripts/repair-drive-rels.ts).
-# Run it first with "apply" unticked: that is a dry run which only reports
-# what it would change.
+# READ-ONLY. Pairs every archived .xlsx in the P4P Drive tree with the
+# attachment it came from in the Gmail inbox and checks that the copy shows
+# exactly what was sent (see automation/scripts/verify-drive-vs-email.ts).
+# Nothing in Drive or Gmail is changed. The result is the run's summary.
 
 on:
   workflow_dispatch:
     inputs:
-      apply:
-        description: 'Write the repairs (unticked = dry run, nothing is changed)'
-        required: true
-        default: false
-        type: boolean
       year:
         description: 'BE year folder, e.g. 2569 (blank = every year)'
         required: false
-        default: ''
+        default: '2569'
         type: string
       month:
         description: 'Month number (all = every month)'
@@ -42,14 +37,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: repair-drive-rels
+  group: verify-drive-vs-email
   cancel-in-progress: false
 
 jobs:
-  repair:
-    name: ${{ inputs.apply && 'Repair' || 'Dry run' }} ${{ inputs.year || 'all years' }} / ${{ inputs.month }}
+  verify:
+    name: Verify ${{ inputs.year || 'all years' }} / ${{ inputs.month }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: automation
@@ -68,13 +63,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Repair
+      - name: Verify
         env:
           GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           P4P_FOLDER_ID:        ${{ secrets.P4P_FOLDER_ID }}
-          APPLY:                ${{ inputs.apply }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:         ${{ secrets.SUPABASE_KEY }}
           TARGET_YEAR:          ${{ inputs.year }}
           TARGET_MONTH:         ${{ inputs.month != 'all' && inputs.month || '' }}
-        run: npx tsx scripts/repair-drive-rels.ts
+        run: npx tsx scripts/verify-drive-vs-email.ts

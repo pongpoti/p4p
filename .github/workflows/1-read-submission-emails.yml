@@ -1,8 +1,8 @@
-name: "! extract email"
+name: "1. Read submission emails (hourly)"
 
 on:
   schedule:
-    # :17 avoids queuing behind everyone else's top-of-hour crons (mirrors process-pipeline.yml)
+    # :17 avoids queuing behind everyone else's top-of-hour crons (mirrors 2-build-files-and-notify-heads.yml)
     - cron: "17 * * * *"   # hourly, offset to :17
   workflow_dispatch:          # also allow manual trigger from GitHub UI
 

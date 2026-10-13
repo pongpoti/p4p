@@ -1,4 +1,4 @@
-name: "! drain LINE uploads"
+name: "LINE uploads: process queue (3x/hour)"
 
 on:
   schedule:
@@ -67,7 +67,7 @@ jobs:
           TELEGRAM_BOT_TOKEN    : ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID      : ${{ secrets.TELEGRAM_CHAT_ID }}
           # Push transport for terminal failures only (§7.2). No new secret:
-          # send-carousel.yml already resolves this same pair.
+          # manual-send-line-carousel.yml already resolves this same pair.
           LINE_ACCESS_TOKEN     : ${{ secrets.LINE_ACCESS_TOKEN }}
           LINE_TOKEN            : ${{ secrets.LINE_TOKEN }}
           # Turns the failure bubble's button into a real retry link.

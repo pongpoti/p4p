@@ -1,4 +1,4 @@
-name: PII guard
+name: "Check: no personal data committed"
 
 # Fails a pull request that adds personal data to this PUBLIC repository.
 #
@@ -43,7 +43,7 @@ jobs:
             # Skip this workflow and the docs that necessarily discuss the
             # leak, or the guard would flag its own explanation.
             case "$f" in
-              .github/workflows/pii-guard.yml|.gitignore) continue ;;
+              .github/workflows/check-no-personal-data.yml|.gitignore) continue ;;
               DATA_EXPOSURE_ANALYSIS.md|SECURITY_ANALYSIS.md) continue ;;
             esac
 

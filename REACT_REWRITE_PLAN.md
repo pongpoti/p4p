@@ -371,7 +371,7 @@ Sources: [Next.js CSP guide](https://nextjs.org/docs/app/guides/content-security
 ## 7. Phasing
 
 **Phase 0 — foundations.** Next scaffold, TypeScript, Tailwind theme from `design.md`, shared
-`lib/` ported with unit tests, Vitest in CI alongside the existing `automation-tests.yml`,
+`lib/` ported with unit tests, Vitest in CI alongside the existing `check-automation-tests.yml`,
 `@line/liff` npm compatibility check, **four staging LIFF apps + stable preview alias**.
 *Exit: a placeholder page opens inside LINE from a staging LIFF app.*
 

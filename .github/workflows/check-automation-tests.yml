@@ -1,14 +1,14 @@
-name: automation tests
+name: "Check: automation tests"
 
 on:
   push:
     paths:
       - "automation/**"
-      - ".github/workflows/automation-tests.yml"
+      - ".github/workflows/check-automation-tests.yml"
   pull_request:
     paths:
       - "automation/**"
-      - ".github/workflows/automation-tests.yml"
+      - ".github/workflows/check-automation-tests.yml"
 
 permissions:
   contents: read

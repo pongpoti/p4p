@@ -134,9 +134,9 @@ Three workflows upload run logs with 30-day retention:
 
 | Workflow | Line | Path |
 |---|---|---|
-| `p4p-cron.yml` | 61 | `automation/run.log` |
-| `process-pipeline.yml` | 73 | `process/*.log` |
-| `process-report.yml` | 48 | `process/*.log` |
+| `1-read-submission-emails.yml` | 61 | `automation/run.log` |
+| `2-build-files-and-notify-heads.yml` | 73 | `process/*.log` |
+| `3-missing-submission-report.yml` | 48 | `process/*.log` |
 
 Those logs are not sanitised. `automation/index.js:526` writes
 `✅ Physician : ${analysis.name}` for every submission processed, and the

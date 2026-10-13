@@ -1,4 +1,4 @@
-name: Provision Monthly Roster Table
+name: "Monthly: create next month's roster table"
 
 # ── Triggers ────────────────────────────────────────────────────────────────
 on:
@@ -9,7 +9,7 @@ on:
   # the 1st is 18:00 UTC on the LAST day of the PREVIOUS month (28th–31st).
   # So this fires at 18:00 UTC on days 28–31, and the "Skip unless tomorrow is
   # the 1st" guard below drops every day except the actual last day of the
-  # month. (Same trick as update-month-picker.yml.)
+  # month. (Same trick as monthly-line-menu-month-update.yml.)
   schedule:
     - cron: '0 18 28-31 * *'
 
