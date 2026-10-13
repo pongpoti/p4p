@@ -1,0 +1,52 @@
+name: Unstar old P4P document emails
+
+# One-off cleanup. Removes the star from every message labelled
+# "เอกสาร P4P" (see automation/scripts/unstar-p4p-emails.ts). Nothing else
+# is changed. Dry run is ON by default: it only reports the count.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: only report how many messages would be unstarred'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unstar-p4p-emails
+  cancel-in-progress: false
+
+jobs:
+  unstar:
+    name: Unstar (dry run = ${{ inputs.dry_run }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: automation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: automation/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unstar
+        env:
+          GOOGLE_CLIENT_ID:     ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRY_RUN:              ${{ inputs.dry_run && 'true' || 'false' }}
+        run: npx tsx scripts/unstar-p4p-emails.ts
