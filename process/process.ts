@@ -888,7 +888,7 @@ async function formatOverallSheet(
   const R8    = S - 1;          // 0-based row 8
   const RLast = lastRow - 1;    // 0-based last data row
   const GRAY  = { red: 0.831, green: 0.831, blue: 0.831 };
-  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
+  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 16 }, horizontalAlignment: 'CENTER' } };
   const GRAY_FIELDS = 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)';
 
   const fmtReqs: sheets_v4.Schema$Request[] = [];
