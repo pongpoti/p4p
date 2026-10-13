@@ -1,11 +1,11 @@
-name: Monthly Eligible Physician List (PDF)
+name: "Monthly: eligible physician list (PDF)"
 
 # Publishes a Thai-language PDF of every physician on the new month's roster
 # (grouped by department, one section each) to a fixed Google Drive folder.
 on:
   schedule:
     # 09:00 Bangkok time (02:00 UTC) on the 1st of every month — a few hours
-    # after provision-month.yml creates that month's roster table (which
+    # after monthly-new-roster-table.yml creates that month's roster table (which
     # fires at 01:00 Bangkok on the 1st), so the table is guaranteed to exist.
     - cron: '0 2 1 * *'
   workflow_dispatch: # allow manual trigger from GitHub UI

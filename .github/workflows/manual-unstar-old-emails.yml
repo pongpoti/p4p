@@ -1,4 +1,4 @@
-name: Unstar old P4P document emails
+name: "Manual: unstar old P4P document emails"
 
 # One-off cleanup. Removes the star from every message labelled
 # "เอกสาร P4P" (see automation/scripts/unstar-p4p-emails.ts). Nothing else

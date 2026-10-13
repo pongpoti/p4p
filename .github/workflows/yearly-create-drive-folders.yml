@@ -1,4 +1,4 @@
-name: Populate Year Folders
+name: "Yearly: create Drive year folders"
 
 on:
   schedule:

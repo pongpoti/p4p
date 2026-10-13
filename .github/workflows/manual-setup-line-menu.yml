@@ -1,4 +1,4 @@
-name: Setup Rich Menu (3-block main menu, no upload)
+name: "Manual: set up LINE menu"
 
 # Manual switch: creates the 3-block main rich menu — status / ranking /
 # person list — and sets it as the default for every LINE OA user
@@ -8,7 +8,7 @@ name: Setup Rich Menu (3-block main menu, no upload)
 # Deliberately workflow_dispatch only, never scheduled — the script itself
 # says "run it once".
 #
-# Uses the same LINE_TOKEN secret update-month-picker.yml already runs
+# Uses the same LINE_TOKEN secret monthly-line-menu-month-update.yml already runs
 # monthly against this channel — nothing new to add.
 on:
   workflow_dispatch:
