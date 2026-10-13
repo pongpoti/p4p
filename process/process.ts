@@ -1190,9 +1190,10 @@ async function buildDeptSheets(
 
 /**
  * Put one font family on every cell of every sheet in the SK03 spreadsheet.
- * Google renames the template's "TH SarabunPSK" to "TH Sarabun PSK" on import,
- * while the formatting above writes "TH SarabunPSK", so without this the file
- * mixes both spellings. Only fontFamily is touched (not size, bold or colour).
+ * The template carries "TH Sarabun PSK" (with a space, most likely from the
+ * xlsx import) while the formatting above writes "TH SarabunPSK", so without
+ * this the file mixes both spellings. Only fontFamily is touched (not size,
+ * bold or colour).
  */
 async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promise<void> {
   const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties.sheetId' }));
@@ -1445,7 +1446,13 @@ async function createSK03(
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
-  await normaliseSK03Fonts(sheets, ssId);
+  // Cosmetic and all-or-nothing: keep the finished SK03 if it fails. Must stay the
+  // last write, because it re-applies one font family over everything written above.
+  try {
+    await normaliseSK03Fonts(sheets, ssId);
+  } catch (err: any) {
+    log(`  [SK03] ⚠ Font normalisation failed — SK03 kept as built: ${err.message}`, 'warn');
+  }
 
   log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
   return ssId;
