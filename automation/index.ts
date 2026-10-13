@@ -1241,8 +1241,8 @@ async function main(): Promise<void> {
 
   // ── Fetch messages from INBOX, SPAM, and JUNK ────────────────────────
   // in:inbox / in:spam  → scope to folder
-  // -is:starred         → not already processed
-  // -has:userlabels     → not tagged with any user-created label
+  // -is:starred         → legacy: mail handled before we stopped starring
+  // -has:userlabels     → not already processed (handled mail gets the P4P label)
   // is:unread           → only new, unread messages
   const INBOX_QUERY = "in:inbox -is:starred -has:userlabels is:unread";
   const SPAM_QUERY  = "-is:starred -has:userlabels is:unread";
@@ -1382,11 +1382,11 @@ async function main(): Promise<void> {
                 }
               });
               if (relayProcessed) {
-                const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+                const addLabels    = p4pLabelId ? [p4pLabelId] : [];
                 const removeLabels = ["UNREAD", _sourceLabel];
                 try {
                   await gmail.modifyMessage(id, addLabels, removeLabels);
-                  console.log(`│  🏷️   Marked: read · starred · archived · "${P4P_LABEL_NAME}"`);
+                  console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
                 } catch (err) {
                   console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
                 }
@@ -1469,11 +1469,11 @@ async function main(): Promise<void> {
           }
         });
         if (processedAnyAttachment || handledOtherwise) {
-          const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+          const addLabels    = p4pLabelId ? [p4pLabelId] : [];
           const removeLabels = ["UNREAD", _sourceLabel];
           try {
             await gmail.modifyMessage(id, addLabels, removeLabels);
-            console.log(`│  🏷️   Marked: read · starred · archived · "${P4P_LABEL_NAME}"`);
+            console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
           } catch (err) {
             console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
           }
@@ -1516,11 +1516,11 @@ async function main(): Promise<void> {
         }
       }
       if (alertSent) {
-        const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+        const addLabels    = p4pLabelId ? [p4pLabelId] : [];
         const removeLabels = ["UNREAD", _sourceLabel];
         try {
           await gmail.modifyMessage(id, addLabels, removeLabels);
-          console.log(`│  🏷️   Marked: read · starred · archived · "${P4P_LABEL_NAME}"`);
+          console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
         } catch (err) {
           console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
         }
@@ -1584,11 +1584,11 @@ async function main(): Promise<void> {
     // ── Mark message: read + starred + labeled ────────────────────────
     // Applied after a successful processing OR after an alert reply was sent.
     if (processedAnyAttachment || repliedToAny || rejectedAny) {
-      const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+      const addLabels    = p4pLabelId ? [p4pLabelId] : [];
       const removeLabels = ["UNREAD", _sourceLabel];
       try {
         await gmail.modifyMessage(id, addLabels, removeLabels);
-        console.log(`│  🏷️   Marked: read · starred · archived · "${P4P_LABEL_NAME}"`);
+        console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
       } catch (err) {
         console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
       }
@@ -1616,14 +1616,14 @@ async function main(): Promise<void> {
     ),
     report: async (line) => { await sendTelegram(line); },
     mark: async (h) => {
-      const addLabels    = ["STARRED", ...(p4pLabelId ? [p4pLabelId] : [])];
+      const addLabels    = p4pLabelId ? [p4pLabelId] : [];
       const removeLabels = ["UNREAD", h.sourceLabel];
       const ok = await withRetry(
         () => gmail.modifyMessage(h.id, addLabels, removeLabels).then(() => undefined),
         2, 1500,
         (attempt, err) => console.error(`❌  Failed to update message labels (attempt ${attempt}/2): ${err instanceof Error ? err.message : err}`),
       );
-      if (ok) console.log(`🏷️   Marked ${h.id}: read · starred · archived · "${P4P_LABEL_NAME}"`);
+      if (ok) console.log(`🏷️   Marked ${h.id}: read · archived · "${P4P_LABEL_NAME}"`);
       return ok;
     },
   });

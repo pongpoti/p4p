@@ -28,7 +28,7 @@
 import { config as dotenvConfig } from "dotenv";
 import { appendFileSync }        from "fs";
 import type { SupabaseClient }   from "@supabase/supabase-js";
-import { createGmailClient }     from "../gmail-client.js";
+import { createGmailClient, archiveSentToLabel } from "../gmail-client.js";
 import { createDriveClient }     from "../drive-client.js";
 import { buildScoreReportEmail } from "../templates/score-report-email.js";
 import { getDeptHeads }          from "../supabase-client.js";
@@ -197,7 +197,8 @@ async function main() {
     const subject   = `${subjectPrefix}รายงานคะแนน P4P ของกลุ่มงาน ${deptNames} ประจำเดือน ${monthLabel}`;
     const plainBody = `รายงานคะแนน P4P ประจำเดือน ${monthsDisplay}\nกลุ่มงาน: ${deptNames}`;
 
-    await gmail.sendMessage({ to: email, subject, body: plainBody, html });
+    const sent = await gmail.sendMessage({ to: email, subject, body: plainBody, html });
+    await archiveSentToLabel(gmail, sent);
     console.log(`    ✉️  ส่งแล้ว`);
 
     for (const { dept } of deptList) summaryRows.push({ dept, emailed: true, note: `ส่งแล้ว${TEST_EMAIL_OVERRIDE ? " [TEST]" : ""}` });
