@@ -23,6 +23,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write   # lets the last step start the next run (see "Hand over")
 
 jobs:
   drain:
@@ -77,3 +78,17 @@ jobs:
           # 1-read-submission-emails.yml used to do hourly). "0" turns it off.
           EMAIL_POLL_MS         : "60000"
         run: npx tsx scripts/drain-uploads.ts
+
+      # Hand over to the next run ourselves instead of trusting the cron.
+      # GitHub silently dropped most scheduled ticks: on 2026-10-16 this job
+      # ran only at 01:30, 06:22 and 11:41 UTC despite three ticks an hour,
+      # leaving Gmail and the LINE queue unattended for hours. A run started
+      # with GITHUB_TOKEN via workflow_dispatch is the one kind GitHub does
+      # not suppress, and the concurrency group above makes it wait its turn.
+      # The cron stays as the restarter if this chain ever breaks. To stop the
+      # relay, disable this workflow in the Actions tab.
+      - name: Hand over to the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run line-upload-processing.yml --repo "$GITHUB_REPOSITORY" --ref main
