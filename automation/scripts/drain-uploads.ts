@@ -22,10 +22,19 @@
  * one hour-long run makes the deferred tier's latency the processing time
  * (~20-40 s) rather than the cron period, using one scheduled run per hour.
  *
+ *   3. SUBMISSION EMAILS. The same relay also reads the Gmail inbox every
+ *      EMAIL_POLL_MS (default 60 s) by calling readSubmissionEmails() — the
+ *      pass 1-read-submission-emails.yml used to run on an hourly cron, which
+ *      GitHub delayed by 4-6 hours under load. Riding this always-on job puts
+ *      an emailed file in front of the pipeline within about a minute, with no
+ *      second always-on runner. Only this job polls Gmail on a schedule now;
+ *      the email workflow is manual-only so the two never read the inbox at
+ *      once and double-process a message.
+ *
  *   node scripts/drain-uploads.mjs
  */
 
-import { processBuffer, extractFirstSheetBuffer, monthSheet } from "../index.js";
+import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
   markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
@@ -37,6 +46,7 @@ import { sendTelegram, formatErrorMessage } from "../telegram.js";
 import { pushLine } from "../line-push.js";
 import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
 import { config as dotenvConfig } from "dotenv";
+import { pathToFileURL } from "node:url";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -48,6 +58,12 @@ const RUN_MINUTES   = parseInt(process.env.DRAIN_MINUTES ?? "60", 10);
 // purely because a CI secret was never added.
 const UPLOAD_LIFF   = `https://liff.line.me/${process.env.UPLOAD_LIFF_ID || "2008561527-sj7tuMLL"}`;
 const STUCK_HOURS   = parseInt(process.env.DRAIN_STUCK_HOURS ?? "1", 10);
+// 0 turns email polling off, e.g. to run the drain alone while debugging.
+const EMAIL_POLL_MS = parseInt(process.env.EMAIL_POLL_MS ?? "60000", 10);
+// No new inbox pass this close to the end of the run: a burst of submissions
+// can take minutes, and the job's timeout must never cut one off mid-message.
+// The next relay run is already queued and picks the inbox up straight away.
+const EMAIL_CUTOFF_MS = 5 * 60_000;
 
 let _drive: DriveClient | null = null;
 function getDrive(): DriveClient | null {
@@ -214,15 +230,49 @@ async function alertStuckArchives() {
   }
 }
 
+// ── 3. Submission emails ──────────────────────────────────────────────────
+/** Is an inbox pass due? Pure, so the timing rules are testable. */
+export function emailPollDue(now: number, lastPollAt: number | null, until: number, intervalMs: number = EMAIL_POLL_MS): boolean {
+  if (!(intervalMs > 0)) return false;
+  if (until - now < EMAIL_CUTOFF_MS) return false;
+  return lastPollAt === null || now - lastPollAt >= intervalMs;
+}
+
+let emailFailureReported = false;
+async function pollEmails(): Promise<void> {
+  try {
+    await readSubmissionEmails();
+  } catch (err) {
+    // The hourly workflow used to fail its job on this and GitHub emailed the
+    // owner. Here the loop must keep going (the next pass a minute later
+    // usually succeeds), so the alert is one Telegram per run, not per minute.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`│  ❌  Email pass failed (retrying next poll): ${message}`);
+    if (!emailFailureReported) {
+      emailFailureReported = true;
+      await sendTelegram(`⚠️ P4P email reader failed in the drain relay: ${message}`).catch(() => {});
+    }
+  }
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────
 async function main() {
   const until = Date.now() + RUN_MINUTES * 60_000;
-  console.log(`┌─ P4P upload drain — polling every ${POLL_MS}ms for ${RUN_MINUTES} min`);
+  console.log(`┌─ P4P upload drain — polling every ${POLL_MS}ms for ${RUN_MINUTES} min` +
+    (EMAIL_POLL_MS > 0 ? `, Gmail every ${EMAIL_POLL_MS}ms` : ", Gmail polling off"));
 
   let handled = 0;
   let alerted = false;
+  let lastEmailPoll: number | null = null;
   while (Date.now() < until) {
     let didWork = false;
+
+    // Email first: submissions arrive here far more often than LINE uploads,
+    // and one pass is a couple of Gmail calls when the inbox is empty.
+    if (emailPollDue(Date.now(), lastEmailPoll, until)) {
+      lastEmailPoll = Date.now();
+      await pollEmails();
+    }
 
     // Archive first: it is the common case and the cheap one (no Claude, no
     // API cost), so a backlog of archives never sits behind one slow scoring
@@ -297,7 +347,10 @@ async function main() {
   console.log(`└─ drain finished — ${handled} row(s) handled`);
 }
 
-main().catch((err) => {
-  console.error("drain-uploads failed:", err);
-  process.exit(1);
-});
+// Only when run as the program, so the test can import emailPollDue().
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("drain-uploads failed:", err);
+    process.exit(1);
+  });
+}

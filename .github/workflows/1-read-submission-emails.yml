@@ -1,17 +1,15 @@
-name: "1. Read submission emails (hourly)"
+name: "1. Read submission emails (manual backup)"
 
+# The inbox is now read every minute by the always-on relay in
+# line-upload-processing.yml (automation/scripts/drain-uploads.ts). This used
+# to run on an hourly cron, which GitHub delayed by 4-6 hours under load.
+#
+# Manual only, and only for when the relay is down: run while the relay is
+# alive and both can read the same unread message at once and process it
+# twice (two replies, two score writes).
 on:
-  schedule:
-    # :17 avoids queuing behind everyone else's top-of-hour crons (mirrors 2-build-files-and-notify-heads.yml)
-    - cron: "17 * * * *"   # hourly, offset to :17
-  workflow_dispatch:          # also allow manual trigger from GitHub UI
+  workflow_dispatch:
 
-# Runs are normally seconds long, but the 30-minute timeout below leaves
-# room for a slow one (a burst of submissions, a slow Claude API call).
-# Without this, an overrun run and the next hourly trigger would both hit
-# the same Gmail inbox at once. Queue instead of cancelling — the job
-# emails senders and writes to Supabase, so killing one mid-run could leave
-# a submission half-processed.
 concurrency:
   group: extract-email
   cancel-in-progress: false
