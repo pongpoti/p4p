@@ -1212,7 +1212,14 @@ async function processAttachment(att: GmailAttachment, messageId: string, contex
   return processBuffer(buffer, { ...context, filename: att.filename, gmail, workbookCount } as ProcessBufferContext);
 }
 
-async function main(): Promise<void> {
+/**
+ * One pass over the inbox: read every new submission email, score it, reply,
+ * and label it handled. Run on its own by `npx tsx index.ts` (manual
+ * workflow), and once a minute by the drain relay (scripts/drain-uploads.ts),
+ * which is what makes submissions land within a minute or two instead of
+ * waiting on an hourly cron that GitHub can delay by hours.
+ */
+export async function readSubmissionEmails(): Promise<void> {
   // Fail fast if any required env var is missing
   const { absentOptional } = checkEnv();
   if (absentOptional.length > 0) {
@@ -1636,7 +1643,7 @@ async function main(): Promise<void> {
 // (scripts/drain-uploads.mjs), and importing those must not start polling
 // Gmail — the ESM equivalent of `require.main === module`.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
+  readSubmissionEmails().catch((err) => {
     console.error("\n❌  Fatal error:", err instanceof Error ? err.message : err);
     process.exit(1);
   });

@@ -1,4 +1,4 @@
-name: "LINE uploads: process queue (3x/hour)"
+name: "Process LINE uploads and submission emails (always on)"
 
 on:
   schedule:
@@ -73,4 +73,7 @@ jobs:
           # Turns the failure bubble's button into a real retry link.
           UPLOAD_LIFF_ID        : ${{ secrets.UPLOAD_LIFF_ID }}
           DRAIN_MINUTES         : "60"
+          # Read the Gmail inbox for submission emails every minute (the job
+          # 1-read-submission-emails.yml used to do hourly). "0" turns it off.
+          EMAIL_POLL_MS         : "60000"
         run: npx tsx scripts/drain-uploads.ts
