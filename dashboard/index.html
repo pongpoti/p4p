@@ -7,41 +7,45 @@
     <title>SAKHONMSO P4P — Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <style>
-        /* Same palette as the LIFF pages and /admin/ (see design.md). The
-           layout follows the OPD Ortho SKH app shell: frosted sticky header
-           with the app name and module nav, a breadcrumb bar under it, and
-           one centred content column. */
+        /* shadcn/ui's design language (its Card, Badge, Progress and Button
+           components, token names and spacing) rebuilt in plain CSS, since
+           the live site is not a React app. Colours keep the app's brown and
+           tan (design.md); surfaces are frosted glass over a light, warm
+           gradient. The layout follows the OPD Ortho SKH app shell: sticky
+           header with the app name and module nav, then one centred column. */
         :root {
-            --primary: #A68966;
-            --primary-dark: #8f7255;
-            --primary-soft: rgba(166, 137, 102, .24);
-            --secondary: #3F2F24;
-            --tertiary: #F5F5F0;
-            --neutral: #FAF9F6;
-            --text: #241C16;
-            /* Darkened from the LIFF pages' #6b6b6b / #9A8A7A so body
-               text clears WCAG AA (4.5:1) on the tan glass. */
-            --text-muted: #5A4A3D;
-            --muted: #76675A;
-            --border: #e4ddd3;
-            --glass-bg: rgba(255, 251, 245, .8);
-            --glass-border: rgba(166, 137, 102, .32);
-            --radius: 16px;
-            --radius-sm: 10px;
-            --content-w: 64rem;
+            --background: #FAF5EE;
+            --foreground: #241C16;
+            --card: rgba(255, 255, 255, .58);
+            --card-border: rgba(255, 255, 255, .75);
+            --primary: #3F2F24;
+            --primary-foreground: #FFFFFF;
+            --accent: rgba(166, 137, 102, .14);
+            --muted-foreground: #5F5045;
+            --border: rgba(63, 47, 36, .11);
+            --ring: #2F6FDB;
+            --success: #157F3D;
+            --success-bg: rgba(21, 127, 61, .1);
+            --warning: #965800;
+            --warning-bg: rgba(217, 140, 0, .13);
+            --radius: 14px;
+            --content-w: 72rem;
+            --shadow: 0 1px 2px rgba(41, 29, 20, .05), 0 8px 24px -6px rgba(41, 29, 20, .1);
+            --shadow-hover: 0 2px 4px rgba(41, 29, 20, .06), 0 16px 36px -8px rgba(41, 29, 20, .16);
+            --highlight: inset 0 1px 0 rgba(255, 255, 255, .85);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: "Work Sans", "Noto Sans Thai Looped", sans-serif;
-            background: var(--neutral);
-            color: var(--text);
+            font-family: "Inter", "Noto Sans Thai", system-ui, sans-serif;
+            background: var(--background);
+            color: var(--foreground);
             min-height: 100vh;
-            font-size: 1.0625rem;
+            font-size: 1rem;
             line-height: 1.6;
             -webkit-font-smoothing: antialiased;
         }
@@ -50,7 +54,7 @@
            skip link / screen-reader-only text, and no motion for people who
            asked their OS for less. */
         :focus-visible {
-            outline: 3px solid #2F6FDB;
+            outline: 2px solid var(--ring);
             outline-offset: 2px;
         }
         .sr-only {
@@ -71,23 +75,26 @@
             left: 16px; top: -100px;
             z-index: 100;
             padding: 10px 16px;
-            border-radius: var(--radius-sm);
-            background: var(--secondary);
-            color: #fff;
+            border-radius: 10px;
+            background: var(--primary);
+            color: var(--primary-foreground);
             font-weight: 600;
             text-decoration: none;
         }
         #skip-link:focus { top: 12px; }
 
+        /* Soft colour fields behind the glass, so the blur has something
+           to pick up. Same background as login.html. */
         #bg {
             position: fixed;
             inset: 0;
             z-index: -1;
             background:
-                radial-gradient(circle at 15% 10%, #E4CBA6 0%, transparent 45%),
-                radial-gradient(circle at 85% 15%, #EBD5B6 0%, transparent 50%),
-                radial-gradient(circle at 50% 90%, #E7D1B3 0%, transparent 55%),
-                linear-gradient(160deg, #F6EDE0 0%, #F1E5D5 50%, #F7F0E5 100%);
+                radial-gradient(40rem 28rem at 8% 0%, rgba(222, 190, 145, .42), transparent 70%),
+                radial-gradient(36rem 26rem at 95% 8%, rgba(196, 170, 220, .2), transparent 70%),
+                radial-gradient(40rem 30rem at 85% 95%, rgba(150, 208, 216, .2), transparent 70%),
+                radial-gradient(34rem 26rem at 10% 95%, rgba(240, 180, 160, .2), transparent 70%),
+                linear-gradient(160deg, #FBF6EF 0%, #F8F1E7 50%, #FBF7F1 100%);
         }
 
         .hidden { display: none !important; }
@@ -96,59 +103,58 @@
             width: 100%;
             max-width: var(--content-w);
             margin: 0 auto;
-            padding-left: 24px;
-            padding-right: 24px;
+            padding-left: 32px;
+            padding-right: 32px;
         }
 
         .glass {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            box-shadow: var(--shadow), var(--highlight);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
         }
 
-        .ico { width: 20px; height: 20px; flex-shrink: 0; }
+        .ico { width: 18px; height: 18px; flex-shrink: 0; }
 
         /* ── Mobile block (inverse of the LIFF pages' desktop block) ───── */
         #mobile-block {
             display: none;
             position: fixed; inset: 0;
-            background: var(--neutral);
+            background: var(--background);
             flex-direction: column;
             align-items: center; justify-content: center;
             text-align: center; padding: 32px; z-index: 999;
         }
-        #mobile-block h2 {
-            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.5rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
-        }
-        #mobile-block p { color: var(--muted); font-size: 1.0625rem; }
+        #mobile-block h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; }
+        #mobile-block p { color: var(--muted-foreground); }
 
-        /* ── Sticky header + breadcrumb bar ───────────────────────────── */
-        #topbar { position: sticky; top: 0; z-index: 15; }
-
+        /* ── Sticky header ────────────────────────────────────────────── */
         #header {
-            border-width: 0 0 1px;
-            box-shadow: 0 1px 3px rgba(75, 61, 51, .08);
+            position: sticky;
+            top: 0;
+            z-index: 15;
+            background: rgba(255, 255, 255, .55);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
         }
         #header .container {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding-top: 12px;
-            padding-bottom: 12px;
+            gap: 24px;
+            height: 68px;
         }
         #brand {
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-right: 8px;
-            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.25rem;
+            gap: 10px;
+            font-size: 1.125rem;
             font-weight: 700;
-            color: var(--secondary);
+            letter-spacing: -.01em;
+            color: var(--foreground);
             text-decoration: none;
-            border-radius: var(--radius-sm);
+            border-radius: 10px;
         }
 
         /* P4P text mark: brown tile, the "4" picked out in a light tan. */
@@ -156,108 +162,233 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-family: "Manrope", sans-serif;
             font-weight: 800;
             letter-spacing: -.02em;
             line-height: 1;
             color: #fff;
-            background: var(--secondary);
-            box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .15);
+            background: linear-gradient(180deg, #54402F, #3F2F24);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 1px 2px rgba(0, 0, 0, .2);
         }
         .logo-mark b { color: #DDBF94; font-weight: 800; }
-        #brand .logo-mark { height: 34px; padding: 0 9px; border-radius: 9px; font-size: 1.05rem; }
+        #brand .logo-mark { height: 34px; padding: 0 9px; border-radius: 9px; font-size: 1rem; }
 
         #nav { display: flex; gap: 4px; }
+        /* shadcn "ghost" button; the current page gets a raised white fill. */
         .nav-btn {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            height: 48px;
-            padding: 0 18px;
-            border-radius: var(--radius-sm);
-            font-size: 1.0625rem;
+            height: 40px;
+            padding: 0 14px;
+            border-radius: 10px;
+            font-size: 1rem;
             font-weight: 500;
-            color: var(--secondary);
+            color: var(--muted-foreground);
             text-decoration: none;
-            transition: background .15s;
+            transition: background .15s, color .15s;
         }
-        .nav-btn:hover { background: rgba(166, 137, 102, .14); }
-        .nav-btn.active { background: var(--primary-soft); font-weight: 600; }
+        .nav-btn:hover { background: var(--accent); color: var(--foreground); }
+        .nav-btn.active {
+            background: rgba(255, 255, 255, .8);
+            color: var(--foreground);
+            font-weight: 600;
+            box-shadow: 0 1px 2px rgba(41, 29, 20, .08), var(--highlight);
+        }
 
         #header-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-        #logout-btn {
+        #user {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: .95rem;
+            font-weight: 500;
+            color: var(--muted-foreground);
+        }
+        #user-avatar {
+            width: 34px; height: 34px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--accent);
+            border: 1px solid var(--border);
+            color: var(--foreground);
+            font-weight: 600;
+            font-size: .9rem;
+        }
+        #user-avatar:empty { display: none; }
+        .sep { width: 1px; height: 24px; background: var(--border); }
+        /* shadcn "outline" button */
+        .btn-outline {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            height: 44px;
-            padding: 0 18px;
+            height: 40px;
+            padding: 0 14px;
             border: 1px solid var(--border);
-            border-radius: 999px;
-            background: #fff;
-            color: var(--secondary);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, .65);
+            color: var(--foreground);
             font-family: inherit;
             font-size: .95rem;
-            font-weight: 600;
+            font-weight: 500;
             cursor: pointer;
+            box-shadow: 0 1px 2px rgba(41, 29, 20, .05);
             transition: background .15s;
         }
-        #logout-btn .ico { width: 18px; height: 18px; }
-        #logout-btn:hover { background: var(--tertiary); }
+        .btn-outline:hover { background: rgba(255, 255, 255, .95); }
 
-        #crumbs { border-width: 0 0 1px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-        #crumbs .container {
+        /* ── Page heading ─────────────────────────────────────────────── */
+        main { padding-top: 36px; padding-bottom: 48px; }
+        .page-head {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .page-head h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.3; }
+        .page-head p { margin-top: 4px; color: var(--muted-foreground); }
+        #updated { font-size: .875rem; color: var(--muted-foreground); white-space: nowrap; }
+
+        /* ── Month cards (shadcn Card) ────────────────────────────────── */
+        #months {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 20px;
+        }
+        @media (max-width: 960px) { #months { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+        .month-card {
+            position: relative;
+            overflow: hidden;
+            border-radius: var(--radius);
+            transition: box-shadow .2s, transform .2s;
+        }
+        .month-card:not(.skeleton):hover { box-shadow: var(--shadow-hover), var(--highlight); transform: translateY(-2px); }
+        /* The month's colour from the LINE status menu, as a wash across the
+           top of the card plus the label chip. */
+        .month-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 96px;
+            background: linear-gradient(180deg, var(--month, transparent), transparent);
+            opacity: .4;
+            pointer-events: none;
+        }
+        .card-header, .card-content, .card-footer { position: relative; padding-left: 22px; padding-right: 22px; }
+        .card-header {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding-top: 18px;
-            padding-bottom: 18px;
+            justify-content: space-between;
+            gap: 8px;
+            padding-top: 20px;
         }
-        .crumb-icon {
-            width: 36px; height: 36px;
-            border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            background: var(--primary-soft);
-            color: var(--secondary);
-        }
-        .crumb-icon .ico { width: 18px; height: 18px; }
-        #crumbs h1 {
-            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.4rem;
+        .month-chip {
+            display: inline-flex;
+            align-items: center;
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 999px;
+            background: var(--month);
+            color: #2d2d2d;
             font-weight: 700;
-            line-height: 1.3;
-            color: var(--secondary);
+            font-size: 1rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 1px 2px rgba(41, 29, 20, .12);
         }
-
-        /* ── Content ──────────────────────────────────────────────────── */
-        main { padding-top: 32px; padding-bottom: 32px; }
-
-        .card {
-            border-radius: var(--radius);
-            box-shadow: 0 10px 36px rgba(75, 61, 51, .12);
-            padding: 48px 32px;
-            text-align: center;
-        }
-        .card .crumb-icon { width: 52px; height: 52px; margin: 0 auto 16px; }
-        .card .crumb-icon .ico { width: 26px; height: 26px; }
-        .card h2 {
-            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: var(--secondary);
-            margin-bottom: 8px;
-        }
-        .card p { color: var(--text-muted); font-size: 1.0625rem; line-height: 1.7; }
-        .card code {
-            font-family: inherit;
+        /* shadcn Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 26px;
+            padding: 0 10px;
+            border-radius: 999px;
+            font-size: .8125rem;
             font-weight: 600;
-            color: var(--secondary);
-            background: var(--primary-soft);
-            padding: 1px 6px;
-            border-radius: 6px;
+            white-space: nowrap;
+            border: 1px solid transparent;
         }
+        .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+        .badge.done { color: var(--success); background: var(--success-bg); border-color: rgba(21, 127, 61, .18); }
+        .badge.open { color: var(--warning); background: var(--warning-bg); border-color: rgba(217, 140, 0, .22); }
+        .badge.idle { color: var(--muted-foreground); background: rgba(255, 255, 255, .65); border-color: var(--border); }
 
-        #user-name { font-size: 1rem; font-weight: 500; color: var(--text-muted); }
+        .card-content { padding-top: 22px; }
+        .stat { display: flex; align-items: baseline; gap: 10px; }
+        .stat .pct { font-size: 2.5rem; font-weight: 700; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+        .stat .of { color: var(--muted-foreground); font-size: .95rem; }
+        .stat .of b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+        /* shadcn Progress */
+        .progress {
+            margin-top: 16px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(63, 47, 36, .09);
+            overflow: hidden;
+        }
+        .progress > span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--primary);
+            transition: width .6s ease;
+        }
+        .month-card.complete .progress > span { background: var(--success); }
+
+        .split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 18px;
+        }
+        .split div {
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, .55);
+            border: 1px solid var(--border);
+        }
+        .split dt { font-size: .8125rem; color: var(--muted-foreground); }
+        .split dd { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .split .pending dd { color: var(--warning); }
+        .split .pending.zero dd { color: var(--muted-foreground); }
+
+        .card-footer {
+            margin-top: 18px;
+            padding-top: 14px;
+            padding-bottom: 18px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: .875rem;
+            color: var(--muted-foreground);
+        }
+        .card-footer .ico { width: 16px; height: 16px; }
+
+        .no-roster .card-content p { color: var(--muted-foreground); padding-bottom: 22px; }
+
+        /* Loading placeholders (shadcn Skeleton) */
+        .skeleton { min-height: 262px; }
+        .skeleton .bar {
+            margin: 22px;
+            border-radius: 8px;
+            background: linear-gradient(90deg, rgba(63, 47, 36, .05), rgba(63, 47, 36, .1), rgba(63, 47, 36, .05));
+            background-size: 200% 100%;
+            animation: shimmer 1.4s infinite linear;
+        }
+        .skeleton .bar.chip { height: 34px; width: 45%; }
+        .skeleton .bar.body { height: 120px; }
+        @keyframes shimmer { to { background-position: -200% 0; } }
+
+        .alert {
+            margin-bottom: 20px;
+            padding: 16px 20px;
+            border-radius: var(--radius);
+            color: #8A1C12;
+            background: rgba(253, 236, 234, .85);
+            border: 1px solid rgba(192, 57, 43, .25);
+        }
     </style>
 </head>
 
@@ -270,43 +401,14 @@
         <p>กรุณาเปิดหน้านี้บนคอมพิวเตอร์</p>
     </div>
 
-    <div id="topbar">
-        <header id="header" class="glass">
-            <div class="container">
-                <a id="brand" href="/dashboard/" aria-label="SAKHONMSO P4P — หน้าแรก">
-                    <span class="logo-mark" aria-hidden="true">P<b>4</b>P</span>
-                    <span>SAKHONMSO</span>
-                </a>
-                <nav id="nav" aria-label="เมนูหลัก">
-                    <a class="nav-btn active" href="/dashboard/" aria-current="page">
-                        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <rect x="3" y="3" width="7" height="9" rx="1" />
-                            <rect x="14" y="3" width="7" height="5" rx="1" />
-                            <rect x="14" y="12" width="7" height="9" rx="1" />
-                            <rect x="3" y="16" width="7" height="5" rx="1" />
-                        </svg>
-                        ภาพรวม
-                    </a>
-                </nav>
-                <div id="header-actions">
-                    <span id="user-name" aria-label="ผู้ใช้ที่เข้าสู่ระบบ"></span>
-                    <button type="button" id="logout-btn">
-                        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                            <path d="m16 17 5-5-5-5" />
-                            <path d="M21 12H9" />
-                        </svg>
-                        ออกจากระบบ
-                    </button>
-                </div>
-            </div>
-        </header>
-
-        <div id="crumbs" class="glass" aria-label="ตำแหน่งปัจจุบัน">
-            <div class="container">
-                <span class="crumb-icon" aria-hidden="true">
+    <header id="header">
+        <div class="container">
+            <a id="brand" href="/dashboard/" aria-label="SAKHONMSO P4P — หน้าแรก">
+                <span class="logo-mark" aria-hidden="true">P<b>4</b>P</span>
+                <span>SAKHONMSO</span>
+            </a>
+            <nav id="nav" aria-label="เมนูหลัก">
+                <a class="nav-btn active" href="/dashboard/" aria-current="page">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <rect x="3" y="3" width="7" height="9" rx="1" />
@@ -314,25 +416,46 @@
                         <rect x="14" y="12" width="7" height="9" rx="1" />
                         <rect x="3" y="16" width="7" height="5" rx="1" />
                     </svg>
+                    ภาพรวม
+                </a>
+            </nav>
+            <div id="header-actions">
+                <span id="user" aria-label="ผู้ใช้ที่เข้าสู่ระบบ">
+                    <span id="user-avatar" aria-hidden="true"></span>
+                    <span id="user-name"></span>
                 </span>
-                <h1>ภาพรวม</h1>
+                <span class="sep" aria-hidden="true"></span>
+                <button type="button" id="logout-btn" class="btn-outline">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                        <path d="m16 17 5-5-5-5" />
+                        <path d="M21 12H9" />
+                    </svg>
+                    ออกจากระบบ
+                </button>
             </div>
         </div>
-    </div>
+    </header>
 
     <main id="main" class="container" tabindex="-1">
-        <section id="empty" class="card glass" aria-labelledby="empty-title">
-            <span class="crumb-icon" aria-hidden="true">
-                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <rect x="3" y="3" width="7" height="9" rx="1" />
-                    <rect x="14" y="3" width="7" height="5" rx="1" />
-                    <rect x="14" y="12" width="7" height="9" rx="1" />
-                    <rect x="3" y="16" width="7" height="5" rx="1" />
-                </svg>
-            </span>
-            <h2 id="empty-title">ยังไม่มีข้อมูล</h2>
-            <p>แดชบอร์ดผู้ดูแลระบบ เนื้อหาจะถูกเพิ่มในขั้นถัดไป</p>
+        <div class="page-head">
+            <div>
+                <h1>ภาพรวม</h1>
+                <p>สถานะการส่งไฟล์ Excel 6 เดือนล่าสุด</p>
+            </div>
+            <span id="updated" aria-live="polite"></span>
+        </div>
+
+        <div id="error" class="alert hidden" role="alert">โหลดข้อมูลไม่สำเร็จ กรุณารีเฟรชหน้านี้</div>
+
+        <section id="months" aria-label="สถานะการส่งไฟล์รายเดือน" aria-busy="true">
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+            <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
         </section>
     </main>
 
