@@ -17,8 +17,9 @@
             --secondary: #4B3D33;
             --neutral: #FAF9F6;
             --text: #2d2d2d;
-            --text-muted: #6b6b6b;
-            --muted: #9A8A7A;
+            /* Darkened for WCAG AA contrast, as in dashboard/index.html. */
+            --text-muted: #5c5c5c;
+            --muted: #76675A;
             --border: #e4ddd3;
             --danger: #c0392b;
             --danger-soft: #fdecea;
@@ -39,7 +40,29 @@
             align-items: center;
             justify-content: center;
             padding: 24px;
+            font-size: 1.0625rem;
+            line-height: 1.6;
             -webkit-font-smoothing: antialiased;
+        }
+
+        /* Shared accessibility basics: a visible keyboard focus ring, a
+           skip link / screen-reader-only text, and no motion for people who
+           asked their OS for less. */
+        :focus-visible {
+            outline: 3px solid #2F6FDB;
+            outline-offset: 2px;
+        }
+        .sr-only {
+            position: absolute;
+            width: 1px; height: 1px;
+            padding: 0; margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
         }
 
         #bg {
@@ -63,14 +86,14 @@
         }
         #mobile-block h2 {
             font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.35rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
+            font-size: 1.5rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
         }
-        #mobile-block p { color: var(--muted); font-size: .95rem; }
+        #mobile-block p { color: var(--muted); font-size: 1.0625rem; }
 
         .card {
             width: 100%;
-            max-width: 400px;
-            padding: 40px 32px 32px;
+            max-width: 440px;
+            padding: 44px 36px 36px;
             text-align: center;
             background: var(--glass-bg);
             border: 1px solid var(--glass-border);
@@ -96,27 +119,28 @@
         .logo {
             display: flex;
             width: fit-content;
-            height: 64px;
-            padding: 0 18px;
-            margin: 0 auto 18px;
-            border-radius: 16px;
-            font-size: 1.9rem;
+            height: 72px;
+            padding: 0 20px;
+            margin: 0 auto 20px;
+            border-radius: 18px;
+            font-size: 2.1rem;
         }
         h1 {
             font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
-            font-size: 1.4rem;
+            font-size: 1.6rem;
             font-weight: 800;
+            line-height: 1.3;
             color: var(--secondary);
         }
-        .subtitle { margin-top: 4px; color: var(--text-muted); font-size: .95rem; }
+        .subtitle { margin-top: 6px; color: var(--text-muted); font-size: 1.0625rem; }
 
         .error {
             margin-top: 20px;
-            padding: 10px 12px;
+            padding: 12px 14px;
             border-radius: var(--radius-sm);
             background: var(--danger-soft);
             color: var(--danger);
-            font-size: .88rem;
+            font-size: 1rem;
         }
 
         #line-login {
@@ -124,33 +148,35 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            margin-top: 24px;
-            height: 48px;
+            margin-top: 28px;
+            height: 52px;
             border-radius: var(--radius-sm);
-            background: #06C755;
+            /* A darker LINE green: white on the stock #06C755 is only 2.3:1. */
+            background: #00843A;
             color: #fff;
+            font-size: 1.125rem;
             font-weight: 600;
             text-decoration: none;
-            transition: opacity .15s;
+            transition: background .15s;
         }
-        #line-login:hover { opacity: .9; }
-        #line-login svg { width: 22px; height: 22px; }
+        #line-login:hover { background: #00722F; }
+        #line-login svg { width: 24px; height: 24px; }
 
-        .note { margin-top: 16px; color: var(--muted); font-size: .8rem; }
+        .note { margin-top: 18px; color: var(--muted); font-size: .9375rem; }
     </style>
 </head>
 
 <body>
-    <div id="bg"></div>
+    <div id="bg" aria-hidden="true"></div>
 
-    <div id="mobile-block">
+    <div id="mobile-block" role="alert">
         <h2>ใช้งานได้บนคอมพิวเตอร์เท่านั้น</h2>
         <p>กรุณาเปิดหน้านี้บนคอมพิวเตอร์</p>
     </div>
 
-    <main class="card">
+    <main class="card" aria-labelledby="login-title">
         <div class="logo-mark logo" aria-hidden="true">P<b>4</b>P</div>
-        <h1>SAKHONMSO</h1>
+        <h1 id="login-title">SAKHONMSO <span class="sr-only">P4P</span></h1>
         <p class="subtitle">แดชบอร์ดผู้ดูแลระบบ</p>
         __LOGIN_ERROR__
         <a id="line-login" href="/dashboard/auth/line">

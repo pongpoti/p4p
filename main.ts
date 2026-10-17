@@ -618,7 +618,7 @@ app.get("/dashboard/login", (req: Request, res: Response) => {
   const msg = DASH_LOGIN_ERRORS[String(req.query.error || "")]
   res.setHeader("Content-Type", "text/html; charset=utf-8")
   res.setHeader("Cache-Control", "no-store")
-  res.send(dashboardLoginTemplate.replace("__LOGIN_ERROR__", msg ? '<p class="error">' + msg + "</p>" : ""))
+  res.send(dashboardLoginTemplate.replace("__LOGIN_ERROR__", msg ? '<p class="error" role="alert">' + msg + "</p>" : ""))
 })
 
 // Starts LINE Login; LINE sends the browser back to /dashboard/auth/callback.
