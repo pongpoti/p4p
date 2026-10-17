@@ -140,10 +140,11 @@ test("a reply's \"On <date> … wrote:\" attribution line is not a stated period
     ">",
     ">",
   ].join("\n");
-  assert.deepEqual(periodsInText(body), []);
+  // The sender's own "7/69" is read; the attribution's "Oct" is not.
+  assert.deepEqual(periodsInText(body), [{ month: 7, beYear: 2569 }]);
   assert.deepEqual(
     statedPeriods("P4P สมชาย อายุรกรรม ก.ค.69.xlsx", "Re: P4P สมชาย 8-9/69", body),
-    { periods: [{ month: 7, beYear: null }], source: "filename" },
+    { periods: [{ month: 7, beYear: 2569 }], source: "email" },
   );
 
   // Same line, unwrapped (a shorter name keeps it on one line).
@@ -184,10 +185,11 @@ test("an attribution line quoted behind \">\" is not a stated period either", ()
     ">",
     ">> On Tue, Sep 29, 2026 at 11:14 AM Admin <admin@example.com> wrote:",
   ].join("\n");
-  assert.deepEqual(periodsInText(chain), []);
+  // Only the sender's own "7/69" is read; no attribution month leaks in.
+  assert.deepEqual(periodsInText(chain), [{ month: 7, beYear: 2569 }]);
   assert.deepEqual(
     statedPeriods("P4P สมชาย อายุรกรรม ก.ค.69.xlsx", "Re: P4P สมชาย", chain),
-    { periods: [{ month: 7, beYear: null }], source: "filename" },
+    { periods: [{ month: 7, beYear: 2569 }], source: "email" },
   );
 
   // Thai-locale attribution, quoted.
@@ -313,4 +315,27 @@ test("the เดือน<month> compound (no space) still resolves, despite the
     { month: 1, beYear: 2569 },
   ]);
   assert.equal(resolveBeMonth("P4P ศุภศรัณย์ เดือนมกราคม 2569.xlsx", "", ""), 1);
+});
+
+test("a month written only as digits, M/YY or M-YY, is a stated month", () => {
+  // Real subject (2026-10-17): "P4P พ.ภวินทร์ พานิชยานนท์ 9/69.xlsx" was
+  // rejected as no_period because only month NAMES were read.
+  assert.deepEqual(periodsInText("P4P พ.ภวินทร์ พานิชยานนท์ 9/69.xlsx"), [{ month: 9, beYear: 2569 }]);
+  assert.deepEqual(periodsInText("P4P พ.ภวินทร์ พานิชยานนท์ 9-69.xlsx"), [{ month: 9, beYear: 2569 }]);
+  assert.deepEqual(periodsInText("P4P 09 / 69"), [{ month: 9, beYear: 2569 }]);
+  assert.deepEqual(statedPeriods("P4P.xlsx", "P4P สมชาย 9/69.xlsx", ""), {
+    periods: [{ month: 9, beYear: 2569 }],
+    source: "email",
+  });
+});
+
+test("numeric months never guess: ranges, full dates, scores and named months", () => {
+  assert.deepEqual(periodsInText("P4P สมชาย 8-9/69"), [], "a range states no single period");
+  assert.deepEqual(periodsInText("ส่งเมื่อ 12/10/69"), [], "a full date is not a period");
+  assert.deepEqual(periodsInText("คะแนน 85-90"), [], "month 85 is not a month");
+  assert.deepEqual(periodsInText("P4P 13/69"), [], "month 13 is not a month");
+  assert.deepEqual(periodsInText("P4P 9/2569"), [], "four-digit year form is left to month names");
+  assert.deepEqual(periodsInText("P4P 9/69 และ 8/69"), [], "two numeric periods are not guessed between");
+  // A named month wins outright, so "(9/69)" cannot add a second period.
+  assert.deepEqual(periodsInText("P4P ก.ย. 69 (9/69)"), [{ month: 9, beYear: null }]);
 });

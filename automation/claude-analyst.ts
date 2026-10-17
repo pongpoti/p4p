@@ -365,6 +365,24 @@ function senderWords(text: unknown): string {
 }
 
 /**
+ * A month written only as digits, "9/69" or "9-69" (month, then two-digit BE
+ * year). Consulted only when no month NAME is stated, so it can never add a
+ * second period beside a named one. Deliberately narrow: exactly one such
+ * token, month 1-12, year 60-99, and not part of a longer digit chain — so
+ * "8-9/69" (a range), "12/10/69" (a full date) and "85-90" (a score) state no
+ * period rather than a guessed one.
+ */
+function numericPeriod(s: string): Period | null {
+  const found: Period[] = [];
+  for (const m of s.matchAll(/(?<![\d/.\-])(\d{1,2})[ \t]*[/\-][ \t]*(\d{2})(?!\d|\.\d|[ \t]*[/\-][ \t]*\d)/g)) {
+    const month = parseInt(m[1]!, 10);
+    const yy = parseInt(m[2]!, 10);
+    if (month >= 1 && month <= 12 && yy >= 60 && yy <= 99) found.push({ month, beYear: 2500 + yy });
+  }
+  return found.length === 1 ? found[0]! : null;
+}
+
+/**
  * EVERY period a piece of text states, in the order they appear —
  * "ส่ง ธ.ค. 2568 และ ม.ค. 2569" is two periods, not one.
  *
@@ -388,6 +406,11 @@ export function periodsInText(text: unknown): Period[] {
     if (at >= 0) hits.push({ month: mo, at });
   }
   hits.sort((a, b) => a.at - b.at);
+
+  if (hits.length === 0) {
+    const numeric = numericPeriod(s);
+    return numeric ? [numeric] : [];
+  }
 
   const docYear = fourDigitBeYear(s);
   const seen = new Set<string>();
