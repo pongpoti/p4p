@@ -531,9 +531,58 @@ app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
 })
 
 // ── /dashboard/ — desktop-only admin dashboard ──────────────────────────────
-// Same admin cookie and the same client-side gating as /admin/ (it calls
-// GET /admin/api/session), served as a template for the same stampAssets
-// reason. /admin/ stays the phone page; this is its desktop counterpart.
+// Signed in with LINE Login (web OAuth on the LIFF apps' Login channel), not
+// the /admin/ cookie: /admin/ is the phone page and stays as it is. Only the
+// LINE userIds in DASHBOARD_LINE_USER_IDS get a session. That list lives in
+// the environment rather than here because this repository is public; the
+// fallback is the single admin id that is already hardcoded above.
+//
+// The channel secret is env-only (LINE_LOGIN_CHANNEL_SECRET). Without it the
+// login route refuses to start rather than signing sessions with a
+// predictable key.
+const LINE_LOGIN_CHANNEL_ID = process.env.LINE_LOGIN_CHANNEL_ID || "2008561527"
+const LINE_LOGIN_CHANNEL_SECRET = process.env.LINE_LOGIN_CHANNEL_SECRET || ""
+const DASHBOARD_LINE_USER_IDS = new Set(
+  (process.env.DASHBOARD_LINE_USER_IDS || ADMIN_LINE_USER_ID).split(",").map((s) => s.trim()).filter(Boolean),
+)
+if (!LINE_LOGIN_CHANNEL_SECRET) {
+  console.error("[dashboard] LINE_LOGIN_CHANNEL_SECRET is not set — dashboard login is DISABLED")
+}
+const DASH_COOKIE = "p4p_dash"
+const DASH_STATE_COOKIE = "p4p_dash_state"
+const DASH_SESSION_SECONDS = 12 * 3600
+
+// HMAC-signed "payload.sig" values: the session cookie carries
+// {sub, name, exp}, the state cookie {state, nonce, exp}.
+function signDash(obj: Record<string, unknown>): string {
+  const body = Buffer.from(JSON.stringify(obj)).toString("base64url")
+  const sig = crypto.createHmac("sha256", "dash:" + LINE_LOGIN_CHANNEL_SECRET).update(body).digest("base64url")
+  return body + "." + sig
+}
+function readDash(token: string | undefined): Record<string, any> | null {
+  if (!LINE_LOGIN_CHANNEL_SECRET || !token) return null
+  const i = token.indexOf(".")
+  if (i === -1) return null
+  const body = token.slice(0, i)
+  const expected = crypto.createHmac("sha256", "dash:" + LINE_LOGIN_CHANNEL_SECRET).update(body).digest("base64url")
+  const a = Buffer.from(token.slice(i + 1))
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+  try {
+    const o = JSON.parse(Buffer.from(body, "base64url").toString("utf8"))
+    return o && typeof o.exp === "number" && o.exp > Date.now() / 1000 ? o : null
+  } catch (e) { return null }
+}
+function dashSession(req: Request): { sub: string; name: string } | null {
+  const o = readDash(parseCookies(req)[DASH_COOKIE])
+  // Re-checked on every request, so removing an id from the env var locks
+  // that person out on the next deploy rather than when the cookie expires.
+  return o && DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: String(o.name || "") } : null
+}
+// The callback URL must be registered on the LINE Login channel exactly, so
+// it is built from ADMIN_BASE_URL (the production origin), not the Host header.
+const DASH_CALLBACK_URL = ADMIN_BASE_URL.replace(/\/$/, "") + "/dashboard/auth/callback"
+
 const dashboardTemplate = stampAssets(
   fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8"),
   "dashboard",
@@ -543,31 +592,87 @@ app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
     return res.redirect(302, "/dashboard/" + req.originalUrl.slice(req.path.length))
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8")
+  // No token in this HTML, but a cached copy would keep requesting the app.js
+  // URL that was current when it was stored, which defeats stampAssets.
   res.setHeader("Cache-Control", "no-store")
   res.send(dashboardTemplate)
 })
 
-// Same UA test the pages' own mobile/desktop gates use.
-function isMobileUA(req: Request): boolean {
-  return /Mobi|Android|iPhone|iPad|iPod/i.test(String(req.headers["user-agent"] || ""))
-}
-
-// One-time login link from the LINE bot. Invalid/expired -> bounce to the
-// page itself, which shows the "message the bot" instructions. A link opened
-// on a computer lands on /dashboard/, since /admin/ blocks desktop browsers.
-app.get("/admin/login", (req: Request, res: Response) => {
-  const home = isMobileUA(req) ? "/admin/" : "/dashboard/"
-  const token = String(req.query.token || "")
-  if (!verifyAdminToken("login", token)) return res.redirect(302, home + "?error=bad_token")
-  setAdminCookie(res)
-  res.redirect(302, home)
+app.get("/dashboard/login", (req: Request, res: Response) => {
+  if (!LINE_LOGIN_CHANNEL_SECRET) return res.redirect(302, "/dashboard/?error=login_disabled")
+  const state = crypto.randomBytes(16).toString("hex")
+  const nonce = crypto.randomBytes(16).toString("hex")
+  const exp = Math.floor(Date.now() / 1000) + 600
+  res.append("Set-Cookie", DASH_STATE_COOKIE + "=" + signDash({ state, nonce, exp }) + "; " + COOKIE_BASE + "; Max-Age=600")
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: LINE_LOGIN_CHANNEL_ID,
+    redirect_uri: DASH_CALLBACK_URL,
+    state,
+    scope: "profile openid",
+    nonce,
+  })
+  res.redirect(302, "https://access.line.me/oauth2/v2.1/authorize?" + q.toString())
 })
 
-// Cheap auth probe for pages that only need to know whether the admin cookie
-// is valid (the dashboard shell).
-app.get("/admin/api/session", requireAdmin, (req: Request, res: Response) => {
-  res.setHeader("Cache-Control", "no-store")
+app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
+  const saved = readDash(parseCookies(req)[DASH_STATE_COOKIE])
+  res.append("Set-Cookie", DASH_STATE_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
+  const code = String(req.query.code || "")
+  if (!saved || !code || String(req.query.state || "") !== saved.state) {
+    return res.redirect(302, "/dashboard/?error=bad_state")
+  }
+  try {
+    const tok = await axios.post(
+      "https://api.line.me/oauth2/v2.1/token",
+      new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: DASH_CALLBACK_URL,
+        client_id: LINE_LOGIN_CHANNEL_ID,
+        client_secret: LINE_LOGIN_CHANNEL_SECRET,
+      }).toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 8000 },
+    )
+    // LINE verifies the ID token's signature, audience, expiry and nonce.
+    const v = await axios.post(
+      "https://api.line.me/oauth2/v2.1/verify",
+      new URLSearchParams({ id_token: tok.data.id_token, client_id: LINE_LOGIN_CHANNEL_ID, nonce: saved.nonce }).toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 8000 },
+    )
+    const sub = String(v.data.sub || "")
+    if (!DASHBOARD_LINE_USER_IDS.has(sub)) {
+      console.warn("[dashboard] LINE login refused for " + sub)
+      return res.redirect(302, "/dashboard/?error=not_allowed")
+    }
+    const exp = Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS
+    res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name: v.data.name || "", exp }) + "; " + COOKIE_BASE + "; Max-Age=" + DASH_SESSION_SECONDS)
+    res.redirect(302, "/dashboard/")
+  } catch (e: any) {
+    console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.redirect(302, "/dashboard/?error=login_failed")
+  }
+})
+
+app.post("/dashboard/logout", (req: Request, res: Response) => {
+  res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
   res.json({ ok: true })
+})
+
+app.get("/dashboard/api/session", (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  res.json({ ok: true, name: s.name })
+})
+
+// One-time login link from the LINE bot. Invalid/expired -> bounce to the
+// page itself, which shows the "message the bot" instructions.
+app.get("/admin/login", (req: Request, res: Response) => {
+  const token = String(req.query.token || "")
+  if (!verifyAdminToken("login", token)) return res.redirect(302, "/admin/?error=bad_token")
+  setAdminCookie(res)
+  res.redirect(302, "/admin/")
 })
 
 app.post("/admin/logout", (req: Request, res: Response) => { clearAdminCookie(res); res.json({ ok: true }) })

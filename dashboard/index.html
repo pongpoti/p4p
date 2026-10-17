@@ -202,6 +202,25 @@
             border-radius: 6px;
         }
 
+        .card .error { color: #c0392b; margin-top: 8px; }
+        #line-login {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 20px;
+            height: 44px;
+            padding: 0 20px;
+            border-radius: var(--radius-sm);
+            background: #06C755;
+            color: #fff;
+            font-weight: 600;
+            text-decoration: none;
+            transition: opacity .15s;
+        }
+        #line-login:hover { opacity: .9; }
+
+        #user-name { font-size: .9rem; font-weight: 500; color: var(--text-muted); }
+
         #load {
             width: 32px; height: 32px;
             border: 3px solid var(--border);
@@ -245,6 +264,7 @@
                     </a>
                 </nav>
                 <div id="header-actions">
+                    <span id="user-name" class="hidden"></span>
                     <button type="button" id="logout-btn" class="hidden">
                         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -278,12 +298,15 @@
         <div id="load"></div>
 
         <section id="unauthorized" class="card glass hidden">
-            <h2>เข้าถึงไม่ได้</h2>
-            <p>
-                หน้านี้สำหรับผู้ดูแลระบบเท่านั้น<br>
-                กรุณาส่งข้อความ <code>admin</code> ให้บอท LINE ของระบบ<br>
-                แล้วเปิดลิงก์ที่ได้รับบนคอมพิวเตอร์เครื่องนี้
-            </p>
+            <h2>เข้าสู่ระบบ</h2>
+            <p>หน้านี้สำหรับผู้ดูแลระบบเท่านั้น</p>
+            <p id="login-error" class="error hidden"></p>
+            <a id="line-login" href="/dashboard/login">
+                <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 3C6.48 3 2 6.6 2 11.04c0 3.98 3.55 7.31 8.35 7.94.33.07.77.22.88.5.1.25.07.65.03.9l-.14.85c-.04.25-.2.98.86.53 1.06-.44 5.72-3.37 7.8-5.77C21.21 14.42 22 12.82 22 11.04 22 6.6 17.52 3 12 3z" />
+                </svg>
+                เข้าสู่ระบบด้วย LINE
+            </a>
         </section>
 
         <section id="empty" class="card glass hidden">
