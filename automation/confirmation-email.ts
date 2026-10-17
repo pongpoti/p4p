@@ -26,6 +26,10 @@ const THAI_MONTHS = [
 
 export const CONFIRMATION_SUBJECT = "องค์กรแพทย์ รพ. สค.";
 
+/** How the physician sent the file; shown in the email as ช่องทางการส่ง. */
+export type SubmissionRoute = "email" | "line";
+const ROUTE_LABELS: Record<SubmissionRoute, string> = { email: "อีเมล", line: "LINE" };
+
 export interface ConfirmationData {
   prefix: string | null | undefined;
   matchedName: string;
@@ -33,6 +37,7 @@ export interface ConfirmationData {
   /** "YYYY_MM", BE year. */
   monthKey: string;
   score: number;
+  route: SubmissionRoute;
 }
 
 export interface ConfirmationEmail {
@@ -42,7 +47,7 @@ export interface ConfirmationEmail {
 }
 
 /** The email's subject, HTML and plain-text parts. Pure, so it is testable. */
-export function buildConfirmationEmail({ prefix, matchedName, department, monthKey, score }: ConfirmationData): ConfirmationEmail {
+export function buildConfirmationEmail({ prefix, matchedName, department, monthKey, score, route }: ConfirmationData): ConfirmationEmail {
   const [beYear, monthNum] = monthKey.split("_");
   const thaiMonth   = THAI_MONTHS[parseInt(monthNum ?? "", 10)] || monthNum;
   const displayDate = `${thaiMonth} ${beYear}`;
@@ -55,6 +60,7 @@ export function buildConfirmationEmail({ prefix, matchedName, department, monthK
     : matchedName;
   const displayName = `${prefixPart}${spacedName}`;
   const scoreText   = score.toFixed(2);
+  const routeText   = ROUTE_LABELS[route];
 
   // buildHtmlReply escapes every value itself before interpolating into
   // HTML (defense-in-depth against XSS) — pass raw values here, not
@@ -64,12 +70,13 @@ export function buildConfirmationEmail({ prefix, matchedName, department, monthK
     safeDepartment : department ?? "",
     safeDisplayDate: displayDate,
     safeScore      : scoreText,
+    safeRoute      : routeText,
   });
 
   return {
     subject: CONFIRMATION_SUBJECT,
     html,
-    body: `เรียน ${displayName}\n\nองค์กรแพทย์ โรงพยาบาลสมุทรสาคร ได้จัดเก็บไฟล์ P4P ของท่านแล้ว\n\nชื่อแพทย์: ${displayName}\nเดือน/ปี: ${displayDate}\nคะแนนรวม: ${scoreText}\n\nขอบคุณที่ให้ความร่วมมือเป็นอย่างดี`,  // plain text — no escaping needed
+    body: `เรียน ${displayName}\n\nองค์กรแพทย์ โรงพยาบาลสมุทรสาคร ได้จัดเก็บไฟล์ P4P ของท่านแล้ว\n\nชื่อแพทย์: ${displayName}\nเดือน/ปี: ${displayDate}\nคะแนนรวม: ${scoreText}\nช่องทางการส่ง: ${routeText}\n\nขอบคุณที่ให้ความร่วมมือเป็นอย่างดี`,  // plain text — no escaping needed
   };
 }
 

@@ -131,6 +131,7 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
       department : roster?.department ?? row.department,
       monthKey   : row.month_key,
       score      : Number(row.score),
+      route      : "line",
     });
   }
 }
@@ -203,6 +204,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
         department : state.success.department,
         monthKey   : state.success.monthKey,
         score      : state.success.score,
+        route      : "line",
       });
     }
     // PULL ON SUCCESS: the physician already has a "ดูผลคะแนน" button in

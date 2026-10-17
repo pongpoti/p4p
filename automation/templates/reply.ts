@@ -9,6 +9,7 @@
  * @param data.safeDepartment Department string — pass RAW (may be empty)
  * @param data.safeDisplayDate "เดือน ปี" string — pass RAW
  * @param data.safeScore      Formatted score string — pass RAW
+ * @param data.safeRoute      How the file was sent ("อีเมล" or "LINE") — pass RAW (may be empty)
  */
 // This function is the single place these values are escaped before hitting
 // HTML — callers must pass raw values, not pre-escaped ones (escaping twice
@@ -30,13 +31,15 @@ export interface HtmlReplyData {
   safeDepartment: string;
   safeDisplayDate: string;
   safeScore: string;
+  safeRoute?: string;
 }
 
-export function buildHtmlReply({ displayName, safeDepartment, safeDisplayDate, safeScore }: HtmlReplyData): string {
+export function buildHtmlReply({ displayName, safeDepartment, safeDisplayDate, safeScore, safeRoute }: HtmlReplyData): string {
   displayName     = escHtml(displayName);
   safeDepartment  = escHtml(safeDepartment);
   safeDisplayDate = escHtml(safeDisplayDate);
   safeScore       = escHtml(safeScore);
+  safeRoute       = escHtml(safeRoute);
   return `<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -119,6 +122,10 @@ export function buildHtmlReply({ displayName, safeDepartment, safeDisplayDate, s
           <td>คะแนนรวม</td>
           <td class="score-val">${safeScore}</td>
         </tr>
+        ${safeRoute ? `<tr>
+          <td>ช่องทางการส่ง</td>
+          <td>${safeRoute}</td>
+        </tr>` : ""}
       </table>
     </div>
     <p class="thanks">ขอบคุณที่ให้ความร่วมมือเป็นอย่างดี</p>
