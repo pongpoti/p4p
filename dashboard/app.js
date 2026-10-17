@@ -18,6 +18,9 @@
     const userAvatar = document.getElementById("user-avatar");
     const monthsEl = document.getElementById("months");
     const errorEl = document.getElementById("error");
+    const emptyEl = document.getElementById("empty");
+    const titleEl = document.getElementById("page-title");
+    const navBtns = Array.from(document.querySelectorAll(".nav-btn[data-view]"));
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
     const signOut = async (to) => {
         await fetch("/dashboard/logout", { method: "POST", credentials: "same-origin" }).catch(() => { });
@@ -147,6 +150,37 @@
         card.appendChild(footer);
         return card;
     };
+    // ── Tabs ─────────────────────────────────────────────────────────────
+    // ภาพรวม shows all six months; ตามส่ง shows only the months not yet
+    // complete. Both come from the one overview response; the URL hash
+    // (#overview / #followup) picks the tab so it survives a refresh.
+    const TITLES = {
+        overview: "ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนที่ผ่านมา",
+        followup: "ตามส่ง — เดือนที่ยังส่งไฟล์ Excel ไม่ครบ",
+    };
+    const isComplete = (m) => m.exists && m.total > 0 && m.sent === m.total;
+    let months = null;
+    const currentView = () => (location.hash === "#followup" ? "followup" : "overview");
+    const render = () => {
+        const view = currentView();
+        for (const a of navBtns) {
+            const on = a.dataset.view === view;
+            a.classList.toggle("active", on);
+            if (on)
+                a.setAttribute("aria-current", "page");
+            else
+                a.removeAttribute("aria-current");
+        }
+        titleEl.textContent = TITLES[view];
+        if (!months)
+            return;
+        const shown = view === "followup" ? months.filter((m) => !isComplete(m)) : months;
+        monthsEl.replaceChildren(...shown.map(renderMonth));
+        emptyEl.classList.toggle("hidden", shown.length > 0);
+        monthsEl.classList.toggle("hidden", shown.length === 0);
+    };
+    window.addEventListener("hashchange", render);
+    render();
     (async function main() {
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" });
@@ -173,7 +207,8 @@
             if (!r.ok)
                 throw new Error("HTTP " + r.status);
             const data = await r.json();
-            monthsEl.replaceChildren(...data.months.map(renderMonth));
+            months = data.months;
+            render();
         }
         catch (e) {
             console.error("overview failed:", e);

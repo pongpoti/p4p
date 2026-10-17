@@ -706,21 +706,22 @@ app.get("/dashboard/api/session", (req: Request, res: Response) => {
   res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS })
 })
 
-// Excel submission status for the six months the LINE status menu offers
-// (this month and the five before it, Bangkok time), one entry per month,
-// newest first. A month with no roster table yet comes back with
-// exists: false rather than being left out, so the grid always has six cards.
+// Excel submission status for the six months before the current one
+// (Bangkok time; the current month is still open, so it is left out), one
+// entry per month, newest first. A month with no roster table yet comes back
+// with exists: false rather than being left out, so the grid always has six
+// cards. The ตามส่ง tab filters this same list on the client.
 app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
   try {
     const bkk = new Date(Date.now() + 7 * 3600 * 1000)
-    const month = bkk.getUTCMonth()
-    const year = bkk.getUTCFullYear() + 543
+    const now = bkk.getUTCFullYear() * 12 + bkk.getUTCMonth()
+    const recent = [1, 2, 3, 4, 5, 6].map((back) => [(now - back) % 12, Math.floor((now - back) / 12) + 543])
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
-    const months = await Promise.all(month_iterator[month].map(async ([m, yOff]) => {
-      const key = (year + yOff) + "_" + String(m + 1).padStart(2, "0")
-      const base = { key, name: month_array[m] + " " + (year + yOff), color: color_array[m][1] }
+    const months = await Promise.all(recent.map(async ([m, year]) => {
+      const key = year + "_" + String(m + 1).padStart(2, "0")
+      const base = { key, name: month_array[m] + " " + year, color: color_array[m][1] }
       if (!tables.includes(key)) return { ...base, exists: false, total: 0, sent: 0, lastSubmittedAt: null }
       const r = await axios.get(
         SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=submitted_at",
