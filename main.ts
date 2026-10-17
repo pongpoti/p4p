@@ -690,6 +690,42 @@ app.get("/dashboard/api/session", (req: Request, res: Response) => {
   res.json({ ok: true, name: s.name })
 })
 
+// Excel submission status for the six months the LINE status menu offers
+// (this month and the five before it, Bangkok time), one entry per month,
+// newest first. A month with no roster table yet comes back with
+// exists: false rather than being left out, so the grid always has six cards.
+app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  try {
+    const bkk = new Date(Date.now() + 7 * 3600 * 1000)
+    const month = bkk.getUTCMonth()
+    const year = bkk.getUTCFullYear() + 543
+    const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
+    const months = await Promise.all(month_iterator[month].map(async ([m, yOff]) => {
+      const key = (year + yOff) + "_" + String(m + 1).padStart(2, "0")
+      const base = { key, name: month_array[m] + " " + (year + yOff), color: color_array[m][1] }
+      if (!tables.includes(key)) return { ...base, exists: false, total: 0, sent: 0, lastSubmittedAt: null }
+      const r = await axios.get(
+        SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=submitted_at",
+        { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 },
+      )
+      const stamps = (r.data as { submitted_at: string | null }[]).map((row) => row.submitted_at).filter(Boolean) as string[]
+      return {
+        ...base,
+        exists: true,
+        total: r.data.length,
+        sent: stamps.length,
+        lastSubmittedAt: stamps.length ? stamps.reduce((a, b) => (Date.parse(a) > Date.parse(b) ? a : b)) : null,
+      }
+    }))
+    res.json({ months })
+  } catch (e: any) {
+    console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load overview" })
+  }
+})
+
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
 // page itself, which shows the "message the bot" instructions.
 app.get("/admin/login", (req: Request, res: Response) => {
