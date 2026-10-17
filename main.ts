@@ -551,9 +551,13 @@ if (!LINE_LOGIN_CHANNEL_SECRET) {
 const DASH_COOKIE = "p4p_dash"
 const DASH_STATE_COOKIE = "p4p_dash_state"
 const DASH_SESSION_SECONDS = 12 * 3600
+// Signed out after this long without activity. The page pings
+// /dashboard/api/session while the user is active, which slides the idle
+// deadline forward; a closed or untouched tab simply lets it lapse.
+const DASH_IDLE_SECONDS = 15 * 60
 
 // HMAC-signed "payload.sig" values: the session cookie carries
-// {sub, name, exp}, the state cookie {state, nonce, exp}.
+// {sub, name, exp, idle}, the state cookie {state, nonce, exp}.
 function signDash(obj: Record<string, unknown>): string {
   const body = Buffer.from(JSON.stringify(obj)).toString("base64url")
   const sig = crypto.createHmac("sha256", "dash:" + LINE_LOGIN_CHANNEL_SECRET).update(body).digest("base64url")
@@ -573,11 +577,19 @@ function readDash(token: string | undefined): Record<string, any> | null {
     return o && typeof o.exp === "number" && o.exp > Date.now() / 1000 ? o : null
   } catch (e) { return null }
 }
-function dashSession(req: Request): { sub: string; name: string } | null {
+function dashSession(req: Request): { sub: string; name: string; exp: number } | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
+  if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000) return null
   // Re-checked on every request, so removing an id from the env var locks
   // that person out on the next deploy rather than when the cookie expires.
-  return o && DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: String(o.name || "") } : null
+  return DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: String(o.name || ""), exp: o.exp } : null
+}
+// (Re)issues the session cookie with a fresh idle deadline, keeping the
+// absolute 12h expiry from sign-in.
+function setDashCookie(res: Response, sub: string, name: string, exp: number): void {
+  const now = Math.floor(Date.now() / 1000)
+  const idle = Math.min(exp, now + DASH_IDLE_SECONDS)
+  res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name, exp, idle }) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
 }
 // The callback URL must be registered on the LINE Login channel exactly, so
 // it is built from ADMIN_BASE_URL (the production origin), not the Host header.
@@ -597,6 +609,7 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
   login_failed: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
   bad_state: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
   login_disabled: "ระบบเข้าสู่ระบบยังไม่ได้ตั้งค่า",
+  idle: "ออกจากระบบอัตโนมัติ เนื่องจากไม่มีการใช้งาน 15 นาที",
 }
 
 // The dashboard is only ever served to a signed-in, allowlisted user;
@@ -618,7 +631,9 @@ app.get("/dashboard/login", (req: Request, res: Response) => {
   const msg = DASH_LOGIN_ERRORS[String(req.query.error || "")]
   res.setHeader("Content-Type", "text/html; charset=utf-8")
   res.setHeader("Cache-Control", "no-store")
-  res.send(dashboardLoginTemplate.replace("__LOGIN_ERROR__", msg ? '<p class="error" role="alert">' + msg + "</p>" : ""))
+  // The idle sign-out is a notice, not a failure, so it gets a calmer style.
+  const cls = req.query.error === "idle" ? "error notice" : "error"
+  res.send(dashboardLoginTemplate.replace("__LOGIN_ERROR__", msg ? '<p class="' + cls + '" role="alert">' + msg + "</p>" : ""))
 })
 
 // Starts LINE Login; LINE sends the browser back to /dashboard/auth/callback.
@@ -669,8 +684,7 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
       console.warn("[dashboard] LINE login refused for " + sub)
       return res.redirect(302, "/dashboard/login?error=not_allowed")
     }
-    const exp = Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS
-    res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name: v.data.name || "", exp }) + "; " + COOKIE_BASE + "; Max-Age=" + DASH_SESSION_SECONDS)
+    setDashCookie(res, sub, v.data.name || "", Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
     console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -683,11 +697,13 @@ app.post("/dashboard/logout", (req: Request, res: Response) => {
   res.json({ ok: true })
 })
 
+// Also the page's keep-alive: each call slides the idle deadline forward.
 app.get("/dashboard/api/session", (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  res.json({ ok: true, name: s.name })
+  setDashCookie(res, s.sub, s.name, s.exp)
+  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS })
 })
 
 // Excel submission status for the six months the LINE status menu offers
