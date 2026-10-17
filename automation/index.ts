@@ -9,12 +9,12 @@
  *   npm start
  */
 
-import { createGmailClient, type GmailClient }             from "./gmail-client.js";
+import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient }             from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
-import { buildHtmlReply }               from "./templates/reply.js";
+import { sendConfirmationEmail }        from "./confirmation-email.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
@@ -1111,37 +1111,15 @@ export async function processBuffer(buffer: Buffer, {
       });
       if (!sent && receipt) receipt.answered = false;
     } else {
-      const [beYear, monthNum] = analysis.date.split("_");
-      const thaiMonth  = THAI_MONTHS[parseInt(monthNum ?? "", 10)] || monthNum;
-      const displayDate = `${thaiMonth} ${beYear}`;
-
-      // Build display name: "prefix firstname  lastname" (1 space after prefix, 2 between names)
-      const prefix = match.prefix ? `${match.prefix.trim()} ` : "";
-      const nameParts = match.matchedName.trim().split(/\s+/);
-      const spacedName = nameParts.length >= 2
-        ? `${nameParts[0]}  ${nameParts.slice(1).join("  ")}`
-        : match.matchedName;
-      const displayName    = `${prefix}${spacedName}`;
-      const department     = match.department ?? "";
-      // buildHtmlReply escapes every value itself before interpolating into
-      // HTML (defense-in-depth against XSS) — pass raw values here, not
-      // pre-escaped ones, or they'd be double-escaped ("&" -> "&amp;amp;").
-      const htmlReply = buildHtmlReply({
-        displayName,
-        safeDepartment : department,
-        safeDisplayDate: displayDate,
-        safeScore      : analysis.score.toFixed(2),
-      });
-
       console.log(`│        📧  Sending auto-reply to ${replyTo}…`);
       try {
-        await gmail!.sendMessage({
-          to              : replyTo,
-          subject         : `องค์กรแพทย์ รพ. สค.`,
-          html            : htmlReply,
-          body            : `เรียน ${displayName}\n\nองค์กรแพทย์ โรงพยาบาลสมุทรสาคร ได้จัดเก็บไฟล์ P4P ของท่านแล้ว\n\nชื่อแพทย์: ${displayName}\nเดือน/ปี: ${displayDate}\nคะแนนรวม: ${analysis.score.toFixed(2)}\n\nขอบคุณที่ให้ความร่วมมือเป็นอย่างดี`,  // plain text — no escaping needed
-          replyToMessageId: messageId,
-        });
+        await sendConfirmationEmail(gmail!, replyTo, {
+          prefix     : match.prefix,
+          matchedName: match.matchedName,
+          department : match.department,
+          monthKey   : analysis.date,
+          score      : analysis.score,
+        }, messageId);
         console.log(`│        ✅  Auto-reply sent to ${replyTo}`);
       } catch (replyErr) {
         console.error(`│        ❌  Auto-reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
@@ -1231,7 +1209,6 @@ export async function readSubmissionEmails(): Promise<void> {
   // ── Resolve "เอกสาร P4P" label ID once ───────────────────────────────
   // Used to tag processed messages. If the label doesn't exist yet,
   // create it in Gmail first (Settings → Labels → Create new label).
-  const P4P_LABEL_NAME = "เอกสาร P4P";
   let p4pLabelId: string | null = null;
   try {
     const matched = await gmail.listLabels(P4P_LABEL_NAME);

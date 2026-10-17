@@ -49,6 +49,10 @@ export interface ArchiveQueueRow {
   object_path: string;
   received_at: string;
   archive_attempts: number;
+  /** 'done' once a score is saved — by /upload/score or the score fallback. */
+  status: string;
+  /** The saved score; numeric in Postgres, so it may arrive as a string. */
+  score: number | string | null;
 }
 
 export interface ScoreFallbackQueueRow extends ArchiveQueueRow {

@@ -10,6 +10,8 @@
  *      invisible to the physician by design: no LINE message is ever sent on
  *      this branch, on success or failure. A failure just leaves the row
  *      archive_pending for the next backoff-eligible attempt (§7.7 rec 2).
+ *      Once the Drive copy exists, the physician is sent the same
+ *      confirmation email an emailed submission gets, filed under เอกสาร P4P.
  *
  *   2. SCORE FALLBACK (the uncommon case). The confidence gate deferred this
  *      file, so it needs the full pipeline — Claude included — which means it
@@ -44,6 +46,8 @@ import { createDriveClient, type DriveClient } from "../drive-client.js";
 import { getRosterRowByIndex, matchName } from "../supabase-client.js";
 import { sendTelegram, formatErrorMessage } from "../telegram.js";
 import { pushLine } from "../line-push.js";
+import { createGmailClient, type GmailClient } from "../gmail-client.js";
+import { sendUploadConfirmation } from "../confirmation-email.js";
 import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
@@ -70,6 +74,12 @@ function getDrive(): DriveClient | null {
   if (!process.env.P4P_FOLDER_ID) return null;
   if (!_drive) _drive = createDriveClient();
   return _drive;
+}
+
+let _gmail: GmailClient | null = null;
+function getGmail(): GmailClient {
+  if (!_gmail) _gmail = createGmailClient();
+  return _gmail;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -108,6 +118,21 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
   // The bucket is a drop box, not storage — the object goes as soon as the
   // Drive copy exists (§11).
   await deleteObject(row.object_path);
+
+  // The upload is now complete on every count — score saved, file in Drive —
+  // so the physician gets the same confirmation email an emailed submission
+  // gets. Sent here, after markArchived, so a Drive retry never sends twice.
+  // Rows the score fallback already archived never reach this branch; it
+  // sends its own (see handleScoreFallback).
+  if (row.status === "done" && row.score !== null && row.score !== undefined) {
+    await sendUploadConfirmation(getGmail(), row.email, {
+      prefix     : roster?.prefix,
+      matchedName: name,
+      department : roster?.department ?? row.department,
+      monthKey   : row.month_key,
+      score      : Number(row.score),
+    });
+  }
 }
 
 // ── 2. Score fallback ─────────────────────────────────────────────────────
@@ -167,7 +192,19 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
       scoreMethod: "claude (deferred tier)",
       archived,
     });
-    if (archived) await deleteObject(row.object_path);
+    if (archived) {
+      await deleteObject(row.object_path);
+      // Not archived means handleArchive() finishes this row later and sends
+      // the confirmation email then — never both. No email when the score
+      // write failed: it would tell the physician something that is not true.
+      if (state.success.scoreSaved) await sendUploadConfirmation(getGmail(), row.email, {
+        prefix     : state.success.prefix,
+        matchedName: state.success.matchedName,
+        department : state.success.department,
+        monthKey   : state.success.monthKey,
+        score      : state.success.score,
+      });
+    }
     // PULL ON SUCCESS: the physician already has a "ดูผลคะแนน" button in
     // their chat from the ACK reply (§7.5 step ②), and tapping it costs the
     // OA nothing. Pushing here would spend quota to tell them something they
