@@ -16,6 +16,7 @@
     "list/app.ts",
     "ranking/app.ts",
     "admin/app.ts",
+    "dashboard/app.ts",
     "upload/app.ts",
     "lib/line-receipt-flex.ts",
     "lib/isomorphic-globals.d.ts"

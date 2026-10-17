@@ -530,13 +530,44 @@ app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
   res.send(adminTemplate)
 })
 
+// ── /dashboard/ — desktop-only admin dashboard ──────────────────────────────
+// Same admin cookie and the same client-side gating as /admin/ (it calls
+// GET /admin/api/session), served as a template for the same stampAssets
+// reason. /admin/ stays the phone page; this is its desktop counterpart.
+const dashboardTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8"),
+  "dashboard",
+)
+app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
+  if (!req.path.endsWith("/")) {
+    return res.redirect(302, "/dashboard/" + req.originalUrl.slice(req.path.length))
+  }
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  res.setHeader("Cache-Control", "no-store")
+  res.send(dashboardTemplate)
+})
+
+// Same UA test the pages' own mobile/desktop gates use.
+function isMobileUA(req: Request): boolean {
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(String(req.headers["user-agent"] || ""))
+}
+
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
-// page itself, which shows the "message the bot" instructions.
+// page itself, which shows the "message the bot" instructions. A link opened
+// on a computer lands on /dashboard/, since /admin/ blocks desktop browsers.
 app.get("/admin/login", (req: Request, res: Response) => {
+  const home = isMobileUA(req) ? "/admin/" : "/dashboard/"
   const token = String(req.query.token || "")
-  if (!verifyAdminToken("login", token)) return res.redirect(302, "/admin/?error=bad_token")
+  if (!verifyAdminToken("login", token)) return res.redirect(302, home + "?error=bad_token")
   setAdminCookie(res)
-  res.redirect(302, "/admin/")
+  res.redirect(302, home)
+})
+
+// Cheap auth probe for pages that only need to know whether the admin cookie
+// is valid (the dashboard shell).
+app.get("/admin/api/session", requireAdmin, (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  res.json({ ok: true })
 })
 
 app.post("/admin/logout", (req: Request, res: Response) => { clearAdminCookie(res); res.json({ ok: true }) })
@@ -1248,6 +1279,7 @@ app.use("/list", express.static("list"))
 app.use("/ranking", express.static("ranking"))
 app.use("/verify", express.static("verify"))
 app.use("/admin", express.static("admin"))
+app.use("/dashboard", express.static("dashboard"))
 app.use("/assets", express.static("assets"))
 app.use("/upload", express.static("upload"))
 // /lib holds the one browser-loadable module that main.js also require()s

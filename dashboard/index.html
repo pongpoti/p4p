@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAKHONMSO P4P — Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
+        rel="stylesheet">
+    <style>
+        /* Same palette as the LIFF pages and /admin/ (see design.md). The
+           layout follows the OPD Ortho SKH app shell: frosted sticky header
+           with the app name and module nav, a breadcrumb bar under it, and
+           one centred content column. */
+        :root {
+            --primary: #A68966;
+            --primary-dark: #8f7255;
+            --primary-soft: rgba(166, 137, 102, .16);
+            --secondary: #4B3D33;
+            --tertiary: #F5F5F0;
+            --neutral: #FAF9F6;
+            --text: #2d2d2d;
+            --text-muted: #6b6b6b;
+            --muted: #9A8A7A;
+            --border: #e4ddd3;
+            --glass-bg: rgba(250, 249, 246, .72);
+            --glass-border: rgba(166, 137, 102, .22);
+            --radius: 16px;
+            --radius-sm: 10px;
+            --content-w: 64rem;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Work Sans", "Noto Sans Thai Looped", sans-serif;
+            background: var(--neutral);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        #bg {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 15% 10%, #eadbc6 0%, transparent 45%),
+                radial-gradient(circle at 85% 15%, #efe4d6 0%, transparent 50%),
+                radial-gradient(circle at 50% 90%, #e8ddd0 0%, transparent 55%),
+                linear-gradient(160deg, #faf6f0 0%, #f7f3ec 50%, #faf9f6 100%);
+        }
+
+        .hidden { display: none !important; }
+
+        .container {
+            width: 100%;
+            max-width: var(--content-w);
+            margin: 0 auto;
+            padding-left: 24px;
+            padding-right: 24px;
+        }
+
+        .glass {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+        }
+
+        .ico { width: 20px; height: 20px; flex-shrink: 0; }
+
+        /* ── Mobile block (inverse of the LIFF pages' desktop block) ───── */
+        #mobile-block {
+            display: none;
+            position: fixed; inset: 0;
+            background: var(--neutral);
+            flex-direction: column;
+            align-items: center; justify-content: center;
+            text-align: center; padding: 32px; z-index: 999;
+        }
+        #mobile-block h2 {
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.35rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
+        }
+        #mobile-block p { color: var(--muted); font-size: .95rem; }
+
+        /* ── Sticky header + breadcrumb bar ───────────────────────────── */
+        #topbar { position: sticky; top: 0; z-index: 15; }
+
+        #header {
+            border-width: 0 0 1px;
+            box-shadow: 0 1px 3px rgba(75, 61, 51, .08);
+        }
+        #header .container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+        }
+        #brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 8px;
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.125rem;
+            font-weight: 700;
+            color: var(--secondary);
+            text-decoration: none;
+        }
+        #brand .ico { color: var(--primary); }
+
+        #nav { display: flex; gap: 4px; }
+        .nav-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 44px;
+            padding: 0 16px;
+            border-radius: var(--radius-sm);
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--secondary);
+            text-decoration: none;
+            transition: background .15s;
+        }
+        .nav-btn:hover { background: rgba(166, 137, 102, .10); }
+        .nav-btn.active { background: var(--primary-soft); font-weight: 600; }
+
+        #header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+        #logout-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 36px;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: #fff;
+            color: var(--secondary);
+            font-family: inherit;
+            font-size: .85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        #logout-btn .ico { width: 16px; height: 16px; }
+        #logout-btn:hover { background: var(--tertiary); }
+
+        #crumbs { border-width: 0 0 1px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+        #crumbs .container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+        }
+        .crumb-icon {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--primary-soft);
+            color: var(--secondary);
+        }
+        .crumb-icon .ico { width: 16px; height: 16px; }
+        #crumbs h1 {
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--secondary);
+        }
+
+        /* ── Content ──────────────────────────────────────────────────── */
+        main { padding-top: 32px; padding-bottom: 32px; }
+
+        .card {
+            border-radius: var(--radius);
+            box-shadow: 0 8px 32px rgba(75, 61, 51, .08);
+            padding: 48px 32px;
+            text-align: center;
+        }
+        .card .crumb-icon { width: 48px; height: 48px; margin: 0 auto 16px; }
+        .card .crumb-icon .ico { width: 24px; height: 24px; }
+        .card h2 {
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--secondary);
+            margin-bottom: 6px;
+        }
+        .card p { color: var(--text-muted); font-size: .95rem; line-height: 1.6; }
+        .card code {
+            font-family: inherit;
+            font-weight: 600;
+            color: var(--secondary);
+            background: var(--primary-soft);
+            padding: 1px 6px;
+            border-radius: 6px;
+        }
+
+        #load {
+            width: 32px; height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+            margin: 40px auto;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+
+<body>
+    <div id="bg"></div>
+
+    <div id="mobile-block">
+        <h2>ใช้งานได้บนคอมพิวเตอร์เท่านั้น</h2>
+        <p>กรุณาเปิดหน้านี้บนคอมพิวเตอร์</p>
+    </div>
+
+    <div id="topbar">
+        <header id="header" class="glass">
+            <div class="container">
+                <a id="brand" href="/dashboard/">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+                    </svg>
+                    <span>SAKHONMSO P4P</span>
+                </a>
+                <nav id="nav">
+                    <a class="nav-btn active" href="/dashboard/">
+                        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="7" height="9" rx="1" />
+                            <rect x="14" y="3" width="7" height="5" rx="1" />
+                            <rect x="14" y="12" width="7" height="9" rx="1" />
+                            <rect x="3" y="16" width="7" height="5" rx="1" />
+                        </svg>
+                        ภาพรวม
+                    </a>
+                </nav>
+                <div id="header-actions">
+                    <button type="button" id="logout-btn" class="hidden">
+                        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                            <path d="m16 17 5-5-5-5" />
+                            <path d="M21 12H9" />
+                        </svg>
+                        ออกจากระบบ
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <div id="crumbs" class="glass">
+            <div class="container">
+                <span class="crumb-icon">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="3" width="7" height="9" rx="1" />
+                        <rect x="14" y="3" width="7" height="5" rx="1" />
+                        <rect x="14" y="12" width="7" height="9" rx="1" />
+                        <rect x="3" y="16" width="7" height="5" rx="1" />
+                    </svg>
+                </span>
+                <h1>ภาพรวม</h1>
+            </div>
+        </div>
+    </div>
+
+    <main class="container">
+        <div id="load"></div>
+
+        <section id="unauthorized" class="card glass hidden">
+            <h2>เข้าถึงไม่ได้</h2>
+            <p>
+                หน้านี้สำหรับผู้ดูแลระบบเท่านั้น<br>
+                กรุณาส่งข้อความ <code>admin</code> ให้บอท LINE ของระบบ<br>
+                แล้วเปิดลิงก์ที่ได้รับบนคอมพิวเตอร์เครื่องนี้
+            </p>
+        </section>
+
+        <section id="empty" class="card glass hidden">
+            <span class="crumb-icon">
+                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="9" rx="1" />
+                    <rect x="14" y="3" width="7" height="5" rx="1" />
+                    <rect x="14" y="12" width="7" height="9" rx="1" />
+                    <rect x="3" y="16" width="7" height="5" rx="1" />
+                </svg>
+            </span>
+            <h2>ยังไม่มีข้อมูล</h2>
+            <p>แดชบอร์ดผู้ดูแลระบบ เนื้อหาจะถูกเพิ่มในขั้นถัดไป</p>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
