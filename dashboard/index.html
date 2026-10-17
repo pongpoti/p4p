@@ -457,36 +457,47 @@
         .icon-btn svg { width: 20px; height: 20px; }
 
         .sheet {
-            margin: 0 0 0 auto;
-            width: min(560px, 92vw); max-width: none;
-            height: 100vh; height: 100dvh; max-height: none;
-            padding: 0; border: 0;
-            border-left: 1px solid var(--border);
+            margin: auto;
+            width: min(760px, 94vw); max-width: none;
+            height: min(820px, 86vh); max-height: none;
+            padding: 0; border: 1px solid var(--border); border-radius: 20px;
             background: #FDFAF5;
-            box-shadow: -12px 0 40px rgba(41, 29, 20, .18);
-            display: none; flex-direction: column;
+            box-shadow: 0 24px 60px rgba(41, 29, 20, .28);
+            display: none; flex-direction: column; overflow: hidden;
         }
-        .sheet[open] { display: flex; animation: sheet-in .2s ease-out; }
-        @keyframes sheet-in { from { transform: translateX(24px); opacity: 0; } }
+        .sheet[open] { display: flex; animation: sheet-in .18s ease-out; }
+        @keyframes sheet-in { from { transform: scale(.97); opacity: 0; } }
         .sheet-header {
-            display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px 12px;
             padding: 22px 24px 16px;
             border-bottom: 1px solid var(--border);
             background: linear-gradient(180deg, color-mix(in srgb, var(--month) 35%, #fff), #FDFAF5);
         }
         .sheet-header .month-chip { height: 40px; font-size: 1.25rem; padding: 0 20px; background: color-mix(in srgb, var(--month) 45%, #fff); }
+        .search {
+            grid-column: 1 / -1;
+            display: flex; align-items: center; gap: 10px;
+            height: 46px; padding: 0 14px; border-radius: 12px;
+            border: 1px solid rgba(63, 47, 36, .22); background: #fff;
+        }
+        .search:focus-within { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .search svg { width: 20px; height: 20px; color: var(--muted-foreground); flex-shrink: 0; }
+        .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; color: var(--foreground); }
         .sheet-count { margin-top: 10px; font-size: 1.125rem; font-weight: 600; color: var(--warning); }
         .pending-list { list-style: none; margin: 0; padding: 8px 12px 24px; overflow-y: auto; flex: 1; }
         .pending-row {
-            display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+            display: grid; grid-template-columns: 32px minmax(0, 1fr) 230px auto; align-items: center; gap: 14px;
             padding: 12px; border-radius: 12px;
         }
-        .pending-row:nth-child(odd) { background: rgba(166, 137, 102, .07); }
+        .pending-row { border-bottom: 1px solid var(--border); border-radius: 0; }
+        .pending-row:hover { background: rgba(166, 137, 102, .08); }
+        .pending-row[hidden] { display: none; }
         .pending-row .num { color: var(--muted-foreground); font-size: .875rem; text-align: right; font-variant-numeric: tabular-nums; }
         .pending-row .who { display: flex; flex-direction: column; min-width: 0; }
         .pending-row .name { font-weight: 600; font-size: 1.0625rem; }
         .pending-row .meta { color: var(--muted-foreground); font-size: .875rem; }
-        .pending-row .meta.last { color: var(--success); }
+        .pending-row .last { color: var(--success); font-size: .875rem; }
+        .pending-row .last.none { color: var(--muted-foreground); }
         .pending-row .actions { display: flex; gap: 8px; }
         .skeleton-row { height: 64px; background: linear-gradient(90deg, rgba(63,47,36,.05), rgba(63,47,36,.1), rgba(63,47,36,.05)) !important; background-size: 200% 100% !important; animation: shimmer 1.4s infinite; margin-bottom: 6px; }
         .sheet-empty { padding: 32px 12px; text-align: center; color: var(--muted-foreground); }
@@ -645,10 +656,10 @@
         </section>
     </main>
 
-    <!-- ตามส่ง: who has not sent this month (side sheet) -->
+    <!-- ตามส่ง: who has not sent this month (centred window) -->
     <dialog id="pending-sheet" class="sheet" aria-labelledby="pending-chip">
         <div class="sheet-header">
-            <div>
+            <div class="sheet-title">
                 <h2 id="pending-chip" class="month-chip"></h2>
                 <p id="pending-count" class="sheet-count"></p>
             </div>
@@ -656,6 +667,11 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                     stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
             </button>
+            <label class="search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
+                <input id="pending-search" type="search" placeholder="ค้นหาชื่อหรือกลุ่มงาน" aria-label="ค้นหาชื่อหรือกลุ่มงาน" autocomplete="off">
+            </label>
         </div>
         <ol id="pending-list" class="pending-list"></ol>
     </dialog>

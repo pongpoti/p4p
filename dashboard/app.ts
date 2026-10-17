@@ -233,6 +233,7 @@
     const sheetChip  = document.getElementById("pending-chip") as HTMLElement
     const sheetCount = document.getElementById("pending-count") as HTMLElement
     const sheetList  = document.getElementById("pending-list") as HTMLElement
+    const searchBox  = document.getElementById("pending-search") as HTMLInputElement
     const logDlg     = document.getElementById("log-dialog") as HTMLDialogElement
     const logTitle   = document.getElementById("log-title") as HTMLElement
     const logSub     = document.getElementById("log-sub") as HTMLElement
@@ -286,25 +287,45 @@
             row.appendChild(el("span", "num", String(i + 1)))
             const who = el("div", "who")
             who.appendChild(el("span", "name", p.name))
-            const meta = el("span", "meta", p.department)
-            who.appendChild(meta)
-            if (p.lastContactAt) who.appendChild(el("span", "meta last", "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt)))
+            who.appendChild(el("span", "meta", p.department))
             row.appendChild(who)
+            row.appendChild(el("span", "last" + (p.lastContactAt ? "" : " none"),
+                p.lastContactAt ? "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt) : "ยังไม่ได้ติดต่อ"))
+            row.dataset.search = (p.name + " " + p.department).toLowerCase()
             const actions = el("div", "actions")
             actions.appendChild(contactBtn(p, "phone"))
             actions.appendChild(contactBtn(p, "line"))
             row.appendChild(actions)
             return row
         }))
+        applySearch()
     }
+
+    // Typing filters the rows already on screen by name or department.
+    const applySearch = (): void => {
+        const q = searchBox.value.trim().toLowerCase()
+        let shown = 0
+        for (const row of Array.from(sheetList.querySelectorAll<HTMLElement>(".pending-row"))) {
+            const hit = !q || (row.dataset.search || "").includes(q)
+            row.hidden = !hit
+            if (hit) shown++
+        }
+        let none = sheetList.querySelector(".no-match")
+        if (q && !shown) {
+            if (!none) none = sheetList.appendChild(el("p", "sheet-empty no-match", "ไม่พบรายชื่อที่ค้นหา"))
+        } else if (none) none.remove()
+    }
+    searchBox.addEventListener("input", applySearch)
 
     const openPending = async (m: MonthStatus): Promise<void> => {
         openMonth = m
         sheet.style.setProperty("--month", m.color)
         sheetChip.textContent = m.name
         sheetCount.textContent = ""
+        searchBox.value = ""
         sheetList.replaceChildren(...[0, 1, 2, 3, 4].map(() => el("li", "pending-row skeleton-row")))
         if (!sheet.open) sheet.showModal()
+        searchBox.focus()
         try {
             const data: { physicians: Pending[] } = await api("/dashboard/api/pending?month=" + encodeURIComponent(m.key))
             if (openMonth === m) renderPending(data.physicians)
@@ -372,9 +393,9 @@
             p[channel] = data.entries.length
             p.lastContactAt = data.entries.length ? data.entries[data.entries.length - 1].created_at : p.lastContactAt
             ;(btn as any).refresh()
-            const who = btn.closest(".pending-row")?.querySelector(".who")
-            if (who && p.lastContactAt) {
-                const last = who.querySelector(".last") || who.appendChild(el("span", "meta last"))
+            const last = btn.closest(".pending-row")?.querySelector(".last")
+            if (last && p.lastContactAt) {
+                last.className = "last"
                 last.textContent = "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt)
             }
             renderLog(data.entries)

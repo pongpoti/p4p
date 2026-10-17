@@ -758,6 +758,10 @@ async function rosterMonthExists(key: unknown): Promise<boolean> {
   return tables.includes(key)
 }
 
+// Thai dictionary order: Intl's "th" collation skips leading vowels
+// (เ แ โ ใ ไ), so ไก่ sorts under ก and before ขวัญ.
+const thaiCollator = new Intl.Collator("th")
+
 const rosterName = (r: { prefix?: string | null; firstname?: string | null; lastname?: string | null }): string =>
   [(r.prefix || "") + (r.firstname || ""), r.lastname || ""].join(" ").trim()
 
@@ -782,10 +786,13 @@ app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
       c.last = l.created_at
       counts.set(l.roster_index, c)
     }
-    const physicians = (roster.data as any[]).map((r) => {
+    // Sorted by first name, then last name; the prefix (นพ./พญ.) is ignored.
+    const rows = (roster.data as any[]).slice().sort((a, b) =>
+      thaiCollator.compare(a.firstname || "", b.firstname || "") || thaiCollator.compare(a.lastname || "", b.lastname || ""))
+    const physicians = rows.map((r) => {
       const c = counts.get(r.index) || { phone: 0, line: 0, last: null }
       return { index: r.index, name: rosterName(r), department: r.department || "", phone: c.phone, line: c.line, lastContactAt: c.last }
-    }).sort((a, b) => a.department.localeCompare(b.department, "th") || a.name.localeCompare(b.name, "th"))
+    })
     res.json({ physicians })
   } catch (e: any) {
     console.error("[dashboard] pending failed:", e.response ? JSON.stringify(e.response.data) : e.message)
