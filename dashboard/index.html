@@ -172,7 +172,7 @@
         .logo-mark b { color: #DDBF94; font-weight: 800; }
         #brand .logo-mark { height: 38px; padding: 0 10px; border-radius: 10px; font-size: 1.1rem; }
 
-        #nav { display: flex; gap: 4px; }
+        #nav { display: flex; gap: 12px; }
         /* shadcn "ghost" button; the current page gets the solid brown
            "default" fill so it stands out from the white header. */
         .nav-btn {
@@ -315,10 +315,6 @@
             -webkit-backdrop-filter: none;
         }
         #months.followup .month-card::before { display: none; }
-        /* Usually 1-3 months are pending: one row, the cards share the full
-           width (app.ts sets --cols) at the same height as a ภาพรวม card;
-           4 or more fall back to the 3x2 grid. */
-        #months.followup.one-row { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); }
         #months.followup .card-header { justify-content: center; padding-top: clamp(16px, 3vh, 28px); }
         #months.followup .badge { display: none; }
         #months.followup .month-chip {
