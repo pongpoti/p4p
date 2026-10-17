@@ -164,6 +164,22 @@ function resolveBeMonth(filename?: string | null, subject?: string | null, body?
 }
 
 /**
+ * The month a filename states, for the LINE upload path only (not mirrored in
+ * automation/). resolveBeMonth() first, for month names; failing that, a bare
+ * month number written right next to a 4-digit year, e.g. "P4P_9_2026",
+ * "2569-09" or "09.2569". A number with no year beside it says nothing (it
+ * could be a day or a version), so it is not read as a month.
+ */
+function resolveFilenameMonth(filename?: string | null): number | null {
+  const named = resolveBeMonth(filename ?? "", "", "")
+  if (named) return named
+  const s = String(filename ?? "")
+  const m = s.match(/(?<!\d)(0?[1-9]|1[0-2])[\s._-](?:20|25)\d{2}(?!\d)/) ||
+            s.match(/(?<!\d)(?:20|25)\d{2}[\s._-](0?[1-9]|1[0-2])(?!\d)/)
+  return m ? parseInt(m[1]!, 10) : null
+}
+
+/**
  * Mirrors automation/claude-analyst.ts's monthFromCellText exactly — see
  * there for why cell text needs a stricter matcher than resolveBeMonth.
  */
@@ -734,7 +750,7 @@ async function parseWorkbookRows(buffer: Buffer, opts: { targetMonth?: number | 
   if (singleSheet) {
     idx = nonEmptyIdx[0]
     if (targetMonth) {
-      const fileMonth = resolveBeMonth(opts.filename || "", "", "")
+      const fileMonth = resolveFilenameMonth(opts.filename)
       const fileYear = resolveBeYear(opts.filename || "", "", "")
       matched = fileMonth === targetMonth && (!targetYear || !fileYear || fileYear === targetYear)
     }
@@ -793,6 +809,7 @@ async function parseWorkbookRowsSafely(buffer: Buffer, opts: { targetMonth?: num
   resolveBeYearFromRows,
   resolveBeMonth,
   resolveBeMonthFromRows,
+  resolveFilenameMonth,
   monthFromCellText,
   monthYearFromText,
   monthYearFromRows,

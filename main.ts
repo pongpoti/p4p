@@ -786,6 +786,7 @@ interface ScoreModule {
   resolveBeMonth(filename?: string | null, subject?: string | null, body?: string | null): number | null
   resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null): number | null
   resolveBeMonthFromRows(rows: Record<string, unknown>[]): number | null
+  resolveFilenameMonth(filename?: string | null): number | null
   resolveBeYearFromRows(rows: Record<string, unknown>[]): number | null
   resolveScore(rows: Record<string, unknown>[]): ScoreExtractResult
   isHighConfidence(method: string): boolean
@@ -1017,7 +1018,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   // check either, for the same reason parseWorkbookRowsSafely ignores it for
   // `matched` — a lone sheet's tab/title text is routinely a leftover from
   // whatever month the physician last reused this file for.
-  const inferredMonth = score.resolveBeMonth(row.filename || "", "", "") ||
+  const inferredMonth = score.resolveFilenameMonth(row.filename) ||
     (singleSheet ? null : score.resolveBeMonthFromRows(rows))
   const inferredYear = score.resolveBeYear(row.filename || "", "", "") ||
     (singleSheet ? null : score.resolveBeYearFromRows(rows))
