@@ -240,6 +240,7 @@
     const logList    = document.getElementById("log-list") as HTMLElement
     const logForm    = document.getElementById("log-form") as HTMLFormElement
     const logNote    = document.getElementById("log-note") as HTMLTextAreaElement
+    const logPresets = document.getElementById("log-presets") as HTMLDivElement
     const logSubmit  = document.getElementById("log-submit") as HTMLButtonElement
     const logError   = document.getElementById("log-error") as HTMLElement
     for (const b of Array.from(document.querySelectorAll<HTMLElement>("[data-close]"))) {
@@ -353,6 +354,44 @@
         logList.scrollTop = logList.scrollHeight
     }
 
+    // One-tap notes; a tap replaces an earlier preset but keeps anything typed after it
+    const PRESETS: Record<Channel, string[]> = {
+        phone: ["รับทราบ", "ไม่รับสาย", "เบอร์ติดต่อไม่ได้", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
+        line:  ["รับทราบ", "ยังไม่อ่านข้อความ", "อ่านแล้วไม่ตอบ", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
+    }
+    let presetList: string[] = []
+    const SEP = " · "
+
+    const currentPreset = (): string | undefined =>
+        presetList.find(t => logNote.value === t || logNote.value.startsWith(t + SEP))
+
+    const syncPresets = (): void => {
+        const cur = currentPreset()
+        logPresets.querySelectorAll<HTMLButtonElement>(".preset").forEach(b => {
+            b.setAttribute("aria-pressed", String(b.dataset.text === cur))
+        })
+    }
+
+    const renderPresets = (channel: Channel): void => {
+        presetList = PRESETS[channel]
+        logPresets.replaceChildren(...presetList.map(t => {
+            const b = el("button", "preset", t) as HTMLButtonElement
+            b.type = "button"
+            b.dataset.text = t
+            b.setAttribute("aria-pressed", "false")
+            b.addEventListener("click", () => {
+                const cur = currentPreset()
+                const rest = cur ? logNote.value.slice(cur.length).replace(SEP, "") : logNote.value.trim()
+                logNote.value = cur === t ? rest : (rest ? t + SEP + rest : t)
+                syncPresets()
+                logNote.focus()
+            })
+            return b
+        }))
+    }
+
+    logNote.addEventListener("input", syncPresets)
+
     const openLog = async (p: Pending, channel: Channel, btn: HTMLElement): Promise<void> => {
         if (!openMonth) return
         logTarget = { p, channel, btn }
@@ -361,6 +400,7 @@
         logSub.textContent = openMonth.name + (p.department ? " · " + p.department : "")
         logList.replaceChildren(el("li", "log-empty", "กำลังโหลด…"))
         logNote.value = ""
+        renderPresets(channel)
         logError.classList.add("hidden")
         logSubmit.disabled = true
         logDlg.showModal()
@@ -400,6 +440,7 @@
             }
             renderLog(data.entries)
             logNote.value = ""
+            syncPresets()
         } catch (e) {
             console.error("save follow-up failed:", e)
             logError.classList.remove("hidden")

@@ -271,6 +271,8 @@
             flex-direction: column;
             position: relative;
             overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
             border-radius: var(--radius);
             transition: box-shadow .2s, transform .2s;
         }
@@ -554,6 +556,14 @@
         .log-empty { padding: 18px 0; text-align: center; color: var(--muted-foreground); }
         .log-form { display: flex; flex-direction: column; gap: 8px; padding: 14px 22px 20px; border-top: 1px solid var(--border); }
         .log-form label { font-weight: 600; font-size: .9375rem; }
+        .log-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .preset {
+            font: inherit; font-size: .9375rem; min-height: 40px; padding: 6px 14px; border-radius: 999px;
+            border: 1px solid rgba(63, 47, 36, .22); background: #fff; color: var(--foreground); cursor: pointer;
+        }
+        .preset:hover { background: #F6EFE6; }
+        .preset:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        .preset[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
         .log-form textarea {
             font: inherit; resize: vertical; min-height: 72px;
             padding: 10px 12px; border-radius: 10px;
@@ -690,9 +700,10 @@
         </div>
         <ol id="log-list" class="log-list" aria-label="ประวัติการติดต่อ"></ol>
         <form id="log-form" class="log-form">
-            <label for="log-note">บันทึกเพิ่มเติม</label>
+            <label for="log-note">บันทึก</label>
+            <div id="log-presets" class="log-presets" role="group" aria-label="ข้อความสำเร็จรูป"></div>
             <textarea id="log-note" rows="3" maxlength="500"
-                placeholder="เช่น โทรไม่ติด, ฝากข้อความไว้, รับปากจะส่งพรุ่งนี้"></textarea>
+                placeholder="เลือกข้อความด้านบน หรือพิมพ์เอง"></textarea>
             <p id="log-error" class="error-text hidden" role="alert">บันทึกไม่สำเร็จ กรุณาลองใหม่</p>
             <div class="log-actions">
                 <button type="button" class="btn-ghost" data-close>ปิด</button>
