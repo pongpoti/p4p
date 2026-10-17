@@ -14,6 +14,7 @@ const DATA = {
   department: "อายุรกรรม",
   monthKey: "2569_06",
   score: 1842.5,
+  route: "line" as const,
 };
 
 test("subject and plain text match the email path's reply", () => {
@@ -22,10 +23,17 @@ test("subject and plain text match the email path's reply", () => {
   assert.equal(
     mail.body,
     "เรียน นพ. สมชาย  ใจดี\n\nองค์กรแพทย์ โรงพยาบาลสมุทรสาคร ได้จัดเก็บไฟล์ P4P ของท่านแล้ว\n\n" +
-      "ชื่อแพทย์: นพ. สมชาย  ใจดี\nเดือน/ปี: มิถุนายน 2569\nคะแนนรวม: 1842.50\n\nขอบคุณที่ให้ความร่วมมือเป็นอย่างดี"
+      "ชื่อแพทย์: นพ. สมชาย  ใจดี\nเดือน/ปี: มิถุนายน 2569\nคะแนนรวม: 1842.50\nช่องทางการส่ง: LINE\n\nขอบคุณที่ให้ความร่วมมือเป็นอย่างดี"
   );
   assert.match(mail.html, /อายุรกรรม/);
   assert.match(mail.html, /มิถุนายน 2569/);
+  assert.match(mail.html, /ช่องทางการส่ง<\/td>\s*<td>LINE<\/td>/);
+});
+
+test("an emailed submission's confirmation says it came by email", () => {
+  const mail = buildConfirmationEmail({ ...DATA, route: "email" });
+  assert.match(mail.body, /ช่องทางการส่ง: อีเมล\n/);
+  assert.match(mail.html, /ช่องทางการส่ง<\/td>\s*<td>อีเมล<\/td>/);
 });
 
 test("the HTML part escapes the name", () => {

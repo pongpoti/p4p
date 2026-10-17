@@ -1119,6 +1119,7 @@ export async function processBuffer(buffer: Buffer, {
           department : match.department,
           monthKey   : analysis.date,
           score      : analysis.score,
+          route      : "email",
         }, messageId);
         console.log(`│        ✅  Auto-reply sent to ${replyTo}`);
       } catch (replyErr) {
