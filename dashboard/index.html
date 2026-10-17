@@ -236,28 +236,33 @@
         }
         .btn-outline:hover { background: rgba(255, 255, 255, .95); }
 
-        /* ── Page heading ─────────────────────────────────────────────── */
-        main { padding-top: 36px; padding-bottom: 48px; }
-        .page-head {
+        /* ── Content: the six cards fill the space under the 69px header
+           (68px plus its border), so
+           all of them fit on one screen without scrolling. Sizes below scale
+           with the window height (vh); very short windows scroll instead. */
+        main {
             display: flex;
-            align-items: flex-end;
-            justify-content: space-between;
-            gap: 16px;
-            margin-bottom: 24px;
+            flex-direction: column;
+            height: calc(100vh - 69px);
+            height: calc(100dvh - 69px);
+            min-height: 560px;
+            padding-top: clamp(16px, 3vh, 32px);
+            padding-bottom: clamp(16px, 3vh, 32px);
         }
-        .page-head h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.3; }
-        .page-head p { margin-top: 4px; color: var(--muted-foreground); }
-        #updated { font-size: .875rem; color: var(--muted-foreground); white-space: nowrap; }
 
         /* ── Month cards (shadcn Card) ────────────────────────────────── */
         #months {
+            flex: 1;
+            min-height: 0;
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 20px;
+            grid-template-rows: repeat(2, minmax(0, 1fr));
+            gap: clamp(12px, 2.2vh, 20px);
         }
-        @media (max-width: 960px) { #months { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
         .month-card {
+            display: flex;
+            flex-direction: column;
             position: relative;
             overflow: hidden;
             border-radius: var(--radius);
@@ -281,7 +286,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 8px;
-            padding-top: 20px;
+            padding-top: clamp(12px, 2.2vh, 20px);
         }
         .month-chip {
             display: inline-flex;
@@ -313,15 +318,24 @@
         .badge.open { color: var(--warning); background: var(--warning-bg); border-color: rgba(217, 140, 0, .22); }
         .badge.idle { color: var(--muted-foreground); background: rgba(255, 255, 255, .65); border-color: var(--border); }
 
-        .card-content { padding-top: 22px; }
+        /* Centred between the header and footer, so taller windows spread
+           the card out rather than leaving a gap at the bottom. */
+        .card-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding-top: clamp(10px, 2.4vh, 22px);
+            padding-bottom: clamp(10px, 2vh, 18px);
+        }
         .stat { display: flex; align-items: baseline; gap: 10px; }
-        .stat .pct { font-size: 2.5rem; font-weight: 700; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+        .stat .pct { font-size: clamp(1.75rem, 5vh, 3.25rem); font-weight: 700; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
         .stat .of { color: var(--muted-foreground); font-size: .95rem; }
         .stat .of b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
 
         /* shadcn Progress */
         .progress {
-            margin-top: 16px;
+            margin-top: clamp(8px, 2.2vh, 24px);
             height: 8px;
             border-radius: 999px;
             background: rgba(63, 47, 36, .09);
@@ -340,23 +354,23 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
-            margin-top: 18px;
+            margin-top: clamp(8px, 2.4vh, 28px);
         }
         .split div {
-            padding: 10px 12px;
+            padding: clamp(4px, 1.2vh, 14px) 14px;
             border-radius: 10px;
             background: rgba(255, 255, 255, .55);
             border: 1px solid var(--border);
         }
         .split dt { font-size: .8125rem; color: var(--muted-foreground); }
-        .split dd { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .split dd { font-size: clamp(1.0625rem, 2.6vh, 1.625rem); font-weight: 600; font-variant-numeric: tabular-nums; }
         .split .pending dd { color: var(--warning); }
         .split .pending.zero dd { color: var(--muted-foreground); }
 
         .card-footer {
-            margin-top: 18px;
-            padding-top: 14px;
-            padding-bottom: 18px;
+            margin-top: auto;
+            padding-top: clamp(8px, 1.5vh, 14px);
+            padding-bottom: clamp(10px, 1.8vh, 18px);
             border-top: 1px solid var(--border);
             display: flex;
             align-items: center;
@@ -369,7 +383,7 @@
         .no-roster .card-content p { color: var(--muted-foreground); padding-bottom: 22px; }
 
         /* Loading placeholders (shadcn Skeleton) */
-        .skeleton { min-height: 262px; }
+        
         .skeleton .bar {
             margin: 22px;
             border-radius: 8px;
@@ -439,13 +453,7 @@
     </header>
 
     <main id="main" class="container" tabindex="-1">
-        <div class="page-head">
-            <div>
-                <h1>ภาพรวม</h1>
-                <p>สถานะการส่งไฟล์ Excel 6 เดือนล่าสุด</p>
-            </div>
-            <span id="updated" aria-live="polite"></span>
-        </div>
+        <h1 class="sr-only">ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนล่าสุด</h1>
 
         <div id="error" class="alert hidden" role="alert">โหลดข้อมูลไม่สำเร็จ กรุณารีเฟรชหน้านี้</div>
 

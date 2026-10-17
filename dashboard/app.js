@@ -18,7 +18,6 @@
     const userAvatar = document.getElementById("user-avatar");
     const monthsEl = document.getElementById("months");
     const errorEl = document.getElementById("error");
-    const updatedEl = document.getElementById("updated");
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
     logoutBtn.addEventListener("click", async () => {
         await fetch("/dashboard/logout", { method: "POST", credentials: "same-origin" }).catch(() => { });
@@ -134,7 +133,6 @@
                 throw new Error("HTTP " + r.status);
             const data = await r.json();
             monthsEl.replaceChildren(...data.months.map(renderMonth));
-            updatedEl.textContent = "อัปเดต " + fmtWhen(new Date().toISOString());
         }
         catch (e) {
             console.error("overview failed:", e);

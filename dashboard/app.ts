@@ -29,7 +29,6 @@
     const userAvatar = document.getElementById("user-avatar") as HTMLElement
     const monthsEl   = document.getElementById("months") as HTMLElement
     const errorEl    = document.getElementById("error") as HTMLElement
-    const updatedEl  = document.getElementById("updated") as HTMLElement
 
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
 
@@ -153,7 +152,6 @@
             if (!r.ok) throw new Error("HTTP " + r.status)
             const data: { months: MonthStatus[] } = await r.json()
             monthsEl.replaceChildren(...data.months.map(renderMonth))
-            updatedEl.textContent = "อัปเดต " + fmtWhen(new Date().toISOString())
         } catch (e) {
             console.error("overview failed:", e)
             monthsEl.replaceChildren()
