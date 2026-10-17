@@ -5,7 +5,7 @@
       "src": "main.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["list/**", "status/**", "ranking/**", "verify/**", "admin/**", "assets/**", "upload/**", "lib/**"]
+        "includeFiles": ["list/**", "status/**", "ranking/**", "verify/**", "admin/**", "dashboard/**", "assets/**", "upload/**", "lib/**"]
       }
     }
   ],
