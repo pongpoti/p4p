@@ -68,14 +68,17 @@ export interface GmailClient {
 /** Gmail label applied to report mails sent to department heads. */
 export const DEPT_HEAD_LABEL_NAME = "email หน กลุ่มงาน";
 
+/** Gmail label on every handled P4P submission, and on the confirmation sent for a LINE upload. */
+export const P4P_LABEL_NAME = "เอกสาร P4P";
+
 /**
- * File a just-sent department-head mail under DEPT_HEAD_LABEL_NAME and take
- * it out of the inbox. Best-effort: a Gmail failure here must never fail the send.
+ * File a just-sent mail under a label (department-head mails by default) and
+ * take it out of the inbox. Best-effort: a Gmail failure here must never fail the send.
  */
-export async function archiveSentToLabel(gmail: GmailClient, sent: { id?: string | null }): Promise<void> {
+export async function archiveSentToLabel(gmail: GmailClient, sent: { id?: string | null }, labelName: string = DEPT_HEAD_LABEL_NAME): Promise<void> {
   if (!sent.id) return;
   try {
-    const labelId = await gmail.ensureLabel(DEPT_HEAD_LABEL_NAME);
+    const labelId = await gmail.ensureLabel(labelName);
     await gmail.modifyMessage(sent.id, [labelId], ["INBOX"]);
   } catch (err) {
     console.warn(`    ⚠️  Could not label/archive sent mail: ${err instanceof Error ? err.message : err}`);
