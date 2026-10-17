@@ -143,13 +143,13 @@
             display: flex;
             align-items: center;
             gap: 24px;
-            height: 68px;
+            height: 76px;
         }
         #brand {
             display: flex;
             align-items: center;
             gap: 10px;
-            font-size: 1.125rem;
+            font-size: 1.25rem;
             font-weight: 700;
             letter-spacing: -.01em;
             color: var(--foreground);
@@ -170,7 +170,7 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 1px 2px rgba(0, 0, 0, .2);
         }
         .logo-mark b { color: #DDBF94; font-weight: 800; }
-        #brand .logo-mark { height: 34px; padding: 0 9px; border-radius: 9px; font-size: 1rem; }
+        #brand .logo-mark { height: 38px; padding: 0 10px; border-radius: 10px; font-size: 1.1rem; }
 
         #nav { display: flex; gap: 4px; }
         /* shadcn "ghost" button; the current page gets the solid brown
@@ -178,16 +178,17 @@
         .nav-btn {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            height: 40px;
-            padding: 0 14px;
-            border-radius: 10px;
-            font-size: 1rem;
+            gap: 10px;
+            height: 48px;
+            padding: 0 20px;
+            border-radius: 12px;
+            font-size: 1.125rem;
             font-weight: 500;
             color: var(--muted-foreground);
             text-decoration: none;
             transition: background .15s, color .15s;
         }
+        .nav-btn .ico { width: 20px; height: 20px; }
         .nav-btn:hover { background: var(--accent); color: var(--foreground); }
         .nav-btn.active {
             background: linear-gradient(180deg, #54402F, var(--primary));
@@ -223,7 +224,7 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            height: 40px;
+            height: 44px;
             padding: 0 14px;
             border: 1px solid rgba(124, 96, 66, .35);
             border-radius: 10px;
@@ -238,15 +239,15 @@
         }
         .btn-secondary:hover { background: #E0CDB3; }
 
-        /* ── Content: the six cards fill the space under the 69px header
-           (68px plus its border), so
+        /* ── Content: the six cards fill the space under the 77px header
+           (76px plus its border), so
            all of them fit on one screen without scrolling. Sizes below scale
            with the window height (vh); very short windows scroll instead. */
         main {
             display: flex;
             flex-direction: column;
-            height: calc(100vh - 69px);
-            height: calc(100dvh - 69px);
+            height: calc(100vh - 77px);
+            height: calc(100dvh - 77px);
             min-height: 560px;
             padding-top: clamp(16px, 3vh, 32px);
             padding-bottom: clamp(16px, 3vh, 32px);
