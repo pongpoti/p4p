@@ -172,7 +172,7 @@
         .logo-mark b { color: #DDBF94; font-weight: 800; }
         #brand .logo-mark { height: 38px; padding: 0 10px; border-radius: 10px; font-size: 1.1rem; }
 
-        #nav { display: flex; gap: 4px; }
+        #nav { display: flex; gap: 12px; }
         /* shadcn "ghost" button; the current page gets the solid brown
            "default" fill so it stands out from the white header. */
         .nav-btn {
@@ -186,7 +186,9 @@
             font-weight: 500;
             color: var(--muted-foreground);
             text-decoration: none;
-            transition: background .15s, color .15s;
+            border: 1px solid rgba(63, 47, 36, .2);
+            background: rgba(255, 255, 255, .5);
+            transition: background .15s, color .15s, border-color .15s;
         }
         .nav-btn .ico { width: 20px; height: 20px; }
         .nav-btn:hover { background: var(--accent); color: var(--foreground); }
@@ -194,6 +196,7 @@
             background: linear-gradient(180deg, #54402F, var(--primary));
             color: var(--primary-foreground);
             font-weight: 600;
+            border-color: transparent;
             box-shadow: 0 1px 2px rgba(41, 29, 20, .2), inset 0 1px 0 rgba(255, 255, 255, .15);
         }
 
@@ -303,6 +306,34 @@
             font-size: 1rem;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 1px 2px rgba(41, 29, 20, .12);
         }
+        /* ตามส่ง tab: the whole card in its month colour, a lighter chip, the
+           ส่งแล้ว / ค้างส่ง boxes as on ภาพรวม, and no footer. */
+        #months.followup .month-card {
+            background: var(--month);
+            border-color: rgba(41, 29, 20, .12);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        #months.followup .month-card::before { display: none; }
+        #months.followup .card-header { justify-content: center; padding-top: clamp(16px, 3vh, 28px); }
+        #months.followup .badge { display: none; }
+        #months.followup .month-chip {
+            height: 48px;
+            padding: 0 26px;
+            font-size: 1.375rem;
+            background: color-mix(in srgb, var(--month) 18%, #fff);
+            box-shadow: 0 1px 3px rgba(41, 29, 20, .15);
+        }
+        #months.followup .stat { justify-content: center; }
+        #months.followup .stat .pct { color: #241a12; }
+        #months.followup .stat .of { color: #241a12; }
+        #months.followup .stat .of b { color: #241a12; }
+        #months.followup .progress { height: 10px; background: rgba(255, 255, 255, .75); box-shadow: inset 0 0 0 1px rgba(41, 29, 20, .12); }
+        #months.followup .progress > span { background: #2E2219; }
+        #months.followup .split div { background: #FDFAF5; }
+        #months.followup .card-footer { display: none; }
+        #months.followup .card-content { padding-bottom: clamp(14px, 2.6vh, 24px); }
+
         /* shadcn Badge */
         .badge {
             display: inline-flex;
@@ -398,6 +429,18 @@
         .skeleton .bar.body { height: 120px; }
         @keyframes shimmer { to { background-position: -200% 0; } }
 
+        .empty {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            color: var(--muted-foreground);
+            font-size: 1.25rem;
+        }
+        .empty svg { width: 56px; height: 56px; color: var(--success); }
+
         .alert {
             margin-bottom: 20px;
             padding: 16px 20px;
@@ -425,7 +468,7 @@
                 <span>SAKHONMSO</span>
             </a>
             <nav id="nav" aria-label="เมนูหลัก">
-                <a class="nav-btn active" href="/dashboard/" aria-current="page">
+                <a class="nav-btn active" href="/dashboard/#overview" data-view="overview" aria-current="page">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <rect x="3" y="3" width="7" height="9" rx="1" />
@@ -434,6 +477,14 @@
                         <rect x="3" y="16" width="7" height="5" rx="1" />
                     </svg>
                     ภาพรวม
+                </a>
+                <a class="nav-btn" href="/dashboard/#followup" data-view="followup">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+                        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                    </svg>
+                    ตามส่ง
                 </a>
             </nav>
             <div id="header-actions">
@@ -456,9 +507,15 @@
     </header>
 
     <main id="main" class="container" tabindex="-1">
-        <h1 class="sr-only">ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนล่าสุด</h1>
+        <h1 id="page-title" class="sr-only">ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนที่ผ่านมา</h1>
 
         <div id="error" class="alert hidden" role="alert">โหลดข้อมูลไม่สำเร็จ กรุณารีเฟรชหน้านี้</div>
+
+        <div id="empty" class="empty hidden" role="status">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></svg>
+            <p>ทุกเดือนส่งครบแล้ว ไม่มีรายการที่ต้องตามส่ง</p>
+        </div>
 
         <section id="months" aria-label="สถานะการส่งไฟล์รายเดือน" aria-busy="true">
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
