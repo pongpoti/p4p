@@ -13,50 +13,26 @@
         return;
     }
     // ── DOM refs ─────────────────────────────────────────────────────────
-    const load = document.getElementById("load");
-    const unauthorized = document.getElementById("unauthorized");
-    const empty = document.getElementById("empty");
     const logoutBtn = document.getElementById("logout-btn");
     const userName = document.getElementById("user-name");
-    const loginError = document.getElementById("login-error");
-    // Set by the /dashboard/login -> LINE -> /dashboard/auth/callback round trip.
-    const ERRORS = {
-        not_allowed: "บัญชี LINE นี้ไม่มีสิทธิ์เข้าใช้งานแดชบอร์ด",
-        login_failed: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
-        bad_state: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
-        login_disabled: "ระบบเข้าสู่ระบบยังไม่ได้ตั้งค่า",
-    };
-    const errorCode = new URLSearchParams(location.search).get("error");
-    if (errorCode)
-        history.replaceState(null, "", location.pathname);
     logoutBtn.addEventListener("click", async () => {
         await fetch("/dashboard/logout", { method: "POST", credentials: "same-origin" }).catch(() => { });
-        location.reload();
+        location.href = "/dashboard/login";
     });
     (async function main() {
-        let session = null;
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" });
-            if (r.ok)
-                session = await r.json();
+            if (r.status === 401) {
+                location.href = "/dashboard/login";
+                return;
+            }
+            if (r.ok) {
+                const session = await r.json();
+                userName.textContent = session.name || "";
+            }
         }
         catch (e) {
-            session = null;
+            // Name stays blank; the page itself is already authorised.
         }
-        load.style.display = "none";
-        if (!session) {
-            if (errorCode) {
-                loginError.textContent = ERRORS[errorCode] || ERRORS.login_failed;
-                loginError.classList.remove("hidden");
-            }
-            unauthorized.classList.remove("hidden");
-            return;
-        }
-        if (session.name) {
-            userName.textContent = session.name;
-            userName.classList.remove("hidden");
-        }
-        logoutBtn.classList.remove("hidden");
-        empty.classList.remove("hidden");
     })();
 })();

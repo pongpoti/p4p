@@ -587,19 +587,43 @@ const dashboardTemplate = stampAssets(
   fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8"),
   "dashboard",
 )
+const dashboardLoginTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, "dashboard", "login.html"), "utf8"),
+  "dashboard",
+)
+// Fixed strings only: the ?error code picks one, it is never echoed.
+const DASH_LOGIN_ERRORS: Record<string, string> = {
+  not_allowed: "บัญชี LINE นี้ไม่มีสิทธิ์เข้าใช้งานแดชบอร์ด",
+  login_failed: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
+  bad_state: "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่",
+  login_disabled: "ระบบเข้าสู่ระบบยังไม่ได้ตั้งค่า",
+}
+
+// The dashboard is only ever served to a signed-in, allowlisted user;
+// everyone else lands on /dashboard/login first.
 app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
+  if (!dashSession(req)) return res.redirect(302, "/dashboard/login")
   if (!req.path.endsWith("/")) {
     return res.redirect(302, "/dashboard/" + req.originalUrl.slice(req.path.length))
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8")
-  // No token in this HTML, but a cached copy would keep requesting the app.js
-  // URL that was current when it was stored, which defeats stampAssets.
+  // A cached copy would keep requesting the app.js URL that was current when
+  // it was stored, which defeats stampAssets — and it must not outlive logout.
   res.setHeader("Cache-Control", "no-store")
   res.send(dashboardTemplate)
 })
 
 app.get("/dashboard/login", (req: Request, res: Response) => {
-  if (!LINE_LOGIN_CHANNEL_SECRET) return res.redirect(302, "/dashboard/?error=login_disabled")
+  if (dashSession(req)) return res.redirect(302, "/dashboard/")
+  const msg = DASH_LOGIN_ERRORS[String(req.query.error || "")]
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  res.setHeader("Cache-Control", "no-store")
+  res.send(dashboardLoginTemplate.replace("__LOGIN_ERROR__", msg ? '<p class="error">' + msg + "</p>" : ""))
+})
+
+// Starts LINE Login; LINE sends the browser back to /dashboard/auth/callback.
+app.get("/dashboard/auth/line", (req: Request, res: Response) => {
+  if (!LINE_LOGIN_CHANNEL_SECRET) return res.redirect(302, "/dashboard/login?error=login_disabled")
   const state = crypto.randomBytes(16).toString("hex")
   const nonce = crypto.randomBytes(16).toString("hex")
   const exp = Math.floor(Date.now() / 1000) + 600
@@ -620,7 +644,7 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
   res.append("Set-Cookie", DASH_STATE_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
   const code = String(req.query.code || "")
   if (!saved || !code || String(req.query.state || "") !== saved.state) {
-    return res.redirect(302, "/dashboard/?error=bad_state")
+    return res.redirect(302, "/dashboard/login?error=bad_state")
   }
   try {
     const tok = await axios.post(
@@ -643,14 +667,14 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
     const sub = String(v.data.sub || "")
     if (!DASHBOARD_LINE_USER_IDS.has(sub)) {
       console.warn("[dashboard] LINE login refused for " + sub)
-      return res.redirect(302, "/dashboard/?error=not_allowed")
+      return res.redirect(302, "/dashboard/login?error=not_allowed")
     }
     const exp = Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS
     res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name: v.data.name || "", exp }) + "; " + COOKIE_BASE + "; Max-Age=" + DASH_SESSION_SECONDS)
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
     console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
-    res.redirect(302, "/dashboard/?error=login_failed")
+    res.redirect(302, "/dashboard/login?error=login_failed")
   }
 })
 
@@ -1384,7 +1408,12 @@ app.use("/list", express.static("list"))
 app.use("/ranking", express.static("ranking"))
 app.use("/verify", express.static("verify"))
 app.use("/admin", express.static("admin"))
-app.use("/dashboard", express.static("dashboard"))
+// Scripts only: the two pages are served by the routes above, which gate
+// /dashboard/ on a session; the raw .html files must not bypass that.
+app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
+  if (req.path.endsWith(".html")) return res.status(404).end()
+  next()
+}, express.static("dashboard", { index: false }))
 app.use("/assets", express.static("assets"))
 app.use("/upload", express.static("upload"))
 // /lib holds the one browser-loadable module that main.js also require()s

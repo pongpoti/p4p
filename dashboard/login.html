@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAKHONMSO P4P — เข้าสู่ระบบ</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Work+Sans:wght@400;500;600&family=Noto+Sans+Thai+Looped:wght@100..900&display=swap"
+        rel="stylesheet">
+    <style>
+        /* Same tokens and background as dashboard/index.html. */
+        :root {
+            --primary: #A68966;
+            --primary-soft: rgba(166, 137, 102, .16);
+            --secondary: #4B3D33;
+            --neutral: #FAF9F6;
+            --text: #2d2d2d;
+            --text-muted: #6b6b6b;
+            --muted: #9A8A7A;
+            --border: #e4ddd3;
+            --danger: #c0392b;
+            --danger-soft: #fdecea;
+            --glass-bg: rgba(250, 249, 246, .72);
+            --glass-border: rgba(166, 137, 102, .22);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Work Sans", "Noto Sans Thai Looped", sans-serif;
+            background: var(--neutral);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        #bg {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 15% 10%, #eadbc6 0%, transparent 45%),
+                radial-gradient(circle at 85% 15%, #efe4d6 0%, transparent 50%),
+                radial-gradient(circle at 50% 90%, #e8ddd0 0%, transparent 55%),
+                linear-gradient(160deg, #faf6f0 0%, #f7f3ec 50%, #faf9f6 100%);
+        }
+
+        #mobile-block {
+            display: none;
+            position: fixed; inset: 0;
+            background: var(--neutral);
+            flex-direction: column;
+            align-items: center; justify-content: center;
+            text-align: center; padding: 32px; z-index: 999;
+        }
+        #mobile-block h2 {
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.35rem; font-weight: 700; color: var(--secondary); margin-bottom: 8px;
+        }
+        #mobile-block p { color: var(--muted); font-size: .95rem; }
+
+        .card {
+            width: 100%;
+            max-width: 400px;
+            padding: 40px 32px 32px;
+            text-align: center;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow: 0 8px 32px rgba(75, 61, 51, .10);
+        }
+        .logo {
+            width: 56px; height: 56px;
+            margin: 0 auto 16px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--primary-soft);
+            color: var(--primary);
+        }
+        .logo svg { width: 28px; height: 28px; }
+        h1 {
+            font-family: "Manrope", "Noto Sans Thai Looped", sans-serif;
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: var(--secondary);
+        }
+        .subtitle { margin-top: 4px; color: var(--text-muted); font-size: .95rem; }
+
+        .error {
+            margin-top: 20px;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: var(--danger-soft);
+            color: var(--danger);
+            font-size: .88rem;
+        }
+
+        #line-login {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 24px;
+            height: 48px;
+            border-radius: var(--radius-sm);
+            background: #06C755;
+            color: #fff;
+            font-weight: 600;
+            text-decoration: none;
+            transition: opacity .15s;
+        }
+        #line-login:hover { opacity: .9; }
+        #line-login svg { width: 22px; height: 22px; }
+
+        .note { margin-top: 16px; color: var(--muted); font-size: .8rem; }
+    </style>
+</head>
+
+<body>
+    <div id="bg"></div>
+
+    <div id="mobile-block">
+        <h2>ใช้งานได้บนคอมพิวเตอร์เท่านั้น</h2>
+        <p>กรุณาเปิดหน้านี้บนคอมพิวเตอร์</p>
+    </div>
+
+    <main class="card">
+        <div class="logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+            </svg>
+        </div>
+        <h1>SAKHONMSO P4P</h1>
+        <p class="subtitle">แดชบอร์ดผู้ดูแลระบบ</p>
+        __LOGIN_ERROR__
+        <a id="line-login" href="/dashboard/auth/line">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 3C6.48 3 2 6.6 2 11.04c0 3.98 3.55 7.31 8.35 7.94.33.07.77.22.88.5.1.25.07.65.03.9l-.14.85c-.04.25-.2.98.86.53 1.06-.44 5.72-3.37 7.8-5.77C21.21 14.42 22 12.82 22 11.04 22 6.6 17.52 3 12 3z" />
+            </svg>
+            เข้าสู่ระบบด้วย LINE
+        </a>
+        <p class="note">สำหรับผู้ดูแลระบบที่ได้รับอนุญาตเท่านั้น</p>
+    </main>
+
+    <script src="login.js"></script>
+</body>
+
+</html>
