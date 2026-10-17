@@ -112,7 +112,22 @@
             color: var(--secondary);
             text-decoration: none;
         }
-        #brand .ico { color: var(--primary); }
+
+        /* P4P text mark: brown tile, the "4" picked out in a light tan. */
+        .logo-mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: "Manrope", sans-serif;
+            font-weight: 800;
+            letter-spacing: -.02em;
+            line-height: 1;
+            color: #fff;
+            background: var(--secondary);
+            box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .15);
+        }
+        .logo-mark b { color: #DDBF94; font-weight: 800; }
+        #brand .logo-mark { height: 30px; padding: 0 8px; border-radius: 8px; font-size: .95rem; }
 
         #nav { display: flex; gap: 4px; }
         .nav-btn {
@@ -219,11 +234,8 @@
         <header id="header" class="glass">
             <div class="container">
                 <a id="brand" href="/dashboard/">
-                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
-                    </svg>
-                    <span>SAKHONMSO P4P</span>
+                    <span class="logo-mark" aria-hidden="true">P<b>4</b>P</span>
+                    <span>SAKHONMSO</span>
                 </a>
                 <nav id="nav">
                     <a class="nav-btn active" href="/dashboard/">
