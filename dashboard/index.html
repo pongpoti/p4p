@@ -441,6 +441,124 @@
         }
         .empty svg { width: 56px; height: 56px; color: var(--success); }
 
+        /* ── ตามส่ง: clickable cards, side sheet, call/LINE log ─────────── */
+        .month-card.clickable { cursor: pointer; }
+        .month-card.clickable:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+
+        dialog { color: var(--foreground); font: inherit; }
+        dialog::backdrop { background: rgba(36, 28, 22, .35); backdrop-filter: blur(2px); }
+        .icon-btn {
+            display: inline-grid; place-items: center;
+            width: 40px; height: 40px; border-radius: 10px;
+            border: 1px solid var(--border); background: #fff; color: var(--muted-foreground);
+            cursor: pointer;
+        }
+        .icon-btn:hover { background: var(--accent); color: var(--foreground); }
+        .icon-btn svg { width: 20px; height: 20px; }
+
+        .sheet {
+            margin: 0 0 0 auto;
+            width: min(560px, 92vw); max-width: none;
+            height: 100vh; height: 100dvh; max-height: none;
+            padding: 0; border: 0;
+            border-left: 1px solid var(--border);
+            background: #FDFAF5;
+            box-shadow: -12px 0 40px rgba(41, 29, 20, .18);
+            display: none; flex-direction: column;
+        }
+        .sheet[open] { display: flex; animation: sheet-in .2s ease-out; }
+        @keyframes sheet-in { from { transform: translateX(24px); opacity: 0; } }
+        .sheet-header {
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+            padding: 22px 24px 16px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--month) 35%, #fff), #FDFAF5);
+        }
+        .sheet-header .month-chip { height: 40px; font-size: 1.25rem; padding: 0 20px; background: color-mix(in srgb, var(--month) 45%, #fff); }
+        .sheet-count { margin-top: 10px; font-size: 1.125rem; font-weight: 600; color: var(--warning); }
+        .pending-list { list-style: none; margin: 0; padding: 8px 12px 24px; overflow-y: auto; flex: 1; }
+        .pending-row {
+            display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+            padding: 12px; border-radius: 12px;
+        }
+        .pending-row:nth-child(odd) { background: rgba(166, 137, 102, .07); }
+        .pending-row .num { color: var(--muted-foreground); font-size: .875rem; text-align: right; font-variant-numeric: tabular-nums; }
+        .pending-row .who { display: flex; flex-direction: column; min-width: 0; }
+        .pending-row .name { font-weight: 600; font-size: 1.0625rem; }
+        .pending-row .meta { color: var(--muted-foreground); font-size: .875rem; }
+        .pending-row .meta.last { color: var(--success); }
+        .pending-row .actions { display: flex; gap: 8px; }
+        .skeleton-row { height: 64px; background: linear-gradient(90deg, rgba(63,47,36,.05), rgba(63,47,36,.1), rgba(63,47,36,.05)) !important; background-size: 200% 100% !important; animation: shimmer 1.4s infinite; margin-bottom: 6px; }
+        .sheet-empty { padding: 32px 12px; text-align: center; color: var(--muted-foreground); }
+
+        .contact-btn {
+            position: relative;
+            display: inline-grid; place-items: center;
+            width: 46px; height: 46px; border-radius: 12px;
+            border: 1px solid var(--border); background: #fff;
+            cursor: pointer; transition: background .15s, border-color .15s, transform .15s;
+        }
+        .contact-btn svg { width: 24px; height: 24px; }
+        .contact-btn.phone { color: #2563EB; }
+        .contact-btn:hover { transform: translateY(-1px); border-color: rgba(63, 47, 36, .3); }
+        .contact-btn.phone:hover { background: #EFF5FF; }
+        .contact-btn.line:hover { background: #ECFBF2; }
+        .contact-btn .count {
+            position: absolute; top: -7px; right: -7px;
+            min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+            display: inline-grid; place-items: center;
+            font-size: .75rem; font-weight: 700; color: #fff; background: var(--primary);
+            border: 2px solid #FDFAF5;
+        }
+        .contact-btn .count.zero { display: none; }
+
+        .log-dialog {
+            margin: auto;
+            width: min(520px, 92vw); max-height: min(720px, 90vh);
+            padding: 0; border: 1px solid var(--border); border-radius: 18px;
+            background: #FDFAF5; box-shadow: 0 24px 60px rgba(41, 29, 20, .3);
+            display: none; flex-direction: column;
+        }
+        .log-dialog[open] { display: flex; }
+        .log-header {
+            display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+            padding: 20px 22px 14px; border-bottom: 1px solid var(--border);
+        }
+        .log-header h2 { font-size: 1.25rem; font-weight: 700; }
+        .log-header p { color: var(--muted-foreground); font-size: .9375rem; margin-top: 2px; }
+        .log-dialog[data-channel="phone"] .log-header { background: linear-gradient(180deg, #EFF5FF, #FDFAF5); }
+        .log-dialog[data-channel="line"] .log-header { background: linear-gradient(180deg, #E6F9EE, #FDFAF5); }
+        .log-list { list-style: none; margin: 0; padding: 14px 22px; overflow-y: auto; flex: 1; min-height: 80px; }
+        .log-entry { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px dashed var(--border); }
+        .log-entry:last-child { border-bottom: 0; }
+        .log-entry .time-no {
+            align-self: start; justify-self: start;
+            padding: 3px 10px; border-radius: 999px;
+            font-size: .8125rem; font-weight: 700; color: var(--primary); background: var(--accent);
+        }
+        .log-dialog[data-channel="phone"] .time-no { color: #1D4ED8; background: #E3EDFF; }
+        .log-dialog[data-channel="line"] .time-no { color: #047A34; background: #DDF6E7; }
+        .log-entry .when { font-size: .875rem; color: var(--muted-foreground); }
+        .log-entry .note { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .log-empty { padding: 18px 0; text-align: center; color: var(--muted-foreground); }
+        .log-form { display: flex; flex-direction: column; gap: 8px; padding: 14px 22px 20px; border-top: 1px solid var(--border); }
+        .log-form label { font-weight: 600; font-size: .9375rem; }
+        .log-form textarea {
+            font: inherit; resize: vertical; min-height: 72px;
+            padding: 10px 12px; border-radius: 10px;
+            border: 1px solid rgba(63, 47, 36, .22); background: #fff; color: var(--foreground);
+        }
+        .log-form textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .log-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+        .btn-primary, .btn-ghost {
+            height: 44px; padding: 0 18px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
+        }
+        .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
+        .btn-primary:disabled { opacity: .55; cursor: default; }
+        .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
+        .btn-ghost:hover { background: var(--accent); }
+        .error-text { color: #B42318; }
+
         .alert {
             margin-bottom: 20px;
             padding: 16px 20px;
@@ -526,6 +644,46 @@
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
         </section>
     </main>
+
+    <!-- ตามส่ง: who has not sent this month (side sheet) -->
+    <dialog id="pending-sheet" class="sheet" aria-labelledby="pending-chip">
+        <div class="sheet-header">
+            <div>
+                <h2 id="pending-chip" class="month-chip"></h2>
+                <p id="pending-count" class="sheet-count"></p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <ol id="pending-list" class="pending-list"></ol>
+    </dialog>
+
+    <!-- One physician's call or LINE history, and a form to log the next one -->
+    <dialog id="log-dialog" class="log-dialog" aria-labelledby="log-title">
+        <div class="log-header">
+            <div>
+                <h2 id="log-title"></h2>
+                <p id="log-sub"></p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <ol id="log-list" class="log-list" aria-label="ประวัติการติดต่อ"></ol>
+        <form id="log-form" class="log-form">
+            <label for="log-note">บันทึกเพิ่มเติม</label>
+            <textarea id="log-note" rows="3" maxlength="500"
+                placeholder="เช่น โทรไม่ติด, ฝากข้อความไว้, รับปากจะส่งพรุ่งนี้"></textarea>
+            <p id="log-error" class="error-text hidden" role="alert">บันทึกไม่สำเร็จ กรุณาลองใหม่</p>
+            <div class="log-actions">
+                <button type="button" class="btn-ghost" data-close>ปิด</button>
+                <button type="submit" id="log-submit" class="btn-primary">บันทึก</button>
+            </div>
+        </form>
+    </dialog>
 
     <script src="app.js"></script>
 </body>

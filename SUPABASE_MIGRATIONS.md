@@ -140,6 +140,10 @@ already-applied file is safe.
     automatically — that gate is `if p_page = 'verify'`, so every other page
     including this new one was already unthrottled. Confirmed live the same
     way as steps 17/19.
+21. `scripts/dashboard-followups-2026-10.sql` — **applied live
+    2026-10-17**: `dashboard_followups`, the /dashboard/ ตามส่ง tab's log
+    of phone calls and LINE messages to physicians who have not sent the
+    month's file. service_role only (RLS on, no policies).
 
 ## Superseded — do NOT run
 

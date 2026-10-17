@@ -743,6 +743,101 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
   }
 })
 
+// ── ตามส่ง (follow-up) log ────────────────────────────────────────────────
+// Physicians who have not sent a month's file, and the phone calls / LINE
+// messages the admins have logged for each (table dashboard_followups,
+// scripts/dashboard-followups-2026-10.sql). Service key only, behind the
+// dashboard session; the month must be an existing roster table.
+const SERVICE_HEADERS = () => ({ apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY })
+const FOLLOWUP_CHANNELS = ["phone", "line"]
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function rosterMonthExists(key: unknown): Promise<boolean> {
+  if (typeof key !== "string" || !/^\d{4}_\d{2}$/.test(key)) return false
+  const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
+  return tables.includes(key)
+}
+
+const rosterName = (r: { prefix?: string | null; firstname?: string | null; lastname?: string | null }): string =>
+  [(r.prefix || "") + (r.firstname || ""), r.lastname || ""].join(" ").trim()
+
+app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const month = req.query.month
+  try {
+    if (!(await rosterMonthExists(month))) return res.status(404).json({ error: "unknown month" })
+    const [roster, logs] = await Promise.all([
+      axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(month as string) +
+        "?select=index,prefix,firstname,lastname,department&submitted_at=is.null",
+        { headers: SERVICE_HEADERS(), timeout: 8000 }),
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_followups?select=roster_index,channel,created_at&month_key=eq." +
+        encodeURIComponent(month as string) + "&order=created_at.asc",
+        { headers: SERVICE_HEADERS(), timeout: 8000 }),
+    ])
+    const counts = new Map<string, { phone: number; line: number; last: string | null }>()
+    for (const l of logs.data as { roster_index: string; channel: "phone" | "line"; created_at: string }[]) {
+      const c = counts.get(l.roster_index) || { phone: 0, line: 0, last: null }
+      c[l.channel]++
+      c.last = l.created_at
+      counts.set(l.roster_index, c)
+    }
+    const physicians = (roster.data as any[]).map((r) => {
+      const c = counts.get(r.index) || { phone: 0, line: 0, last: null }
+      return { index: r.index, name: rosterName(r), department: r.department || "", phone: c.phone, line: c.line, lastContactAt: c.last }
+    }).sort((a, b) => a.department.localeCompare(b.department, "th") || a.name.localeCompare(b.name, "th"))
+    res.json({ physicians })
+  } catch (e: any) {
+    console.error("[dashboard] pending failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load pending list" })
+  }
+})
+
+app.get("/dashboard/api/followups", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const { month, index, channel } = req.query
+  if (typeof month !== "string" || !/^\d{4}_\d{2}$/.test(month) || typeof index !== "string" || !UUID_RE.test(index) ||
+      typeof channel !== "string" || !FOLLOWUP_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: "bad request" })
+  }
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/dashboard_followups?select=id,note,logged_by,created_at" +
+      "&month_key=eq." + month + "&roster_index=eq." + index + "&channel=eq." + channel + "&order=created_at.asc",
+      { headers: SERVICE_HEADERS(), timeout: 8000 })
+    res.json({ entries: r.data })
+  } catch (e: any) {
+    console.error("[dashboard] followups failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load follow-ups" })
+  }
+})
+
+app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const { month, index, channel } = req.body || {}
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : ""
+  if (typeof index !== "string" || !UUID_RE.test(index) || typeof channel !== "string" || !FOLLOWUP_CHANNELS.includes(channel)) {
+    return res.status(400).json({ error: "bad request" })
+  }
+  try {
+    if (!(await rosterMonthExists(month))) return res.status(404).json({ error: "unknown month" })
+    // The physician must be on that month's roster; the name is snapshotted from it.
+    const row = await axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(month) +
+      "?select=prefix,firstname,lastname&index=eq." + index, { headers: SERVICE_HEADERS(), timeout: 8000 })
+    if (!row.data.length) return res.status(404).json({ error: "unknown physician" })
+    const ins = await axios.post(SUPABASE_URL + "/rest/v1/dashboard_followups",
+      { month_key: month, roster_index: index, physician_name: rosterName(row.data[0]), channel, note, logged_by: s.name },
+      { headers: { ...SERVICE_HEADERS(), "Content-Type": "application/json", Prefer: "return=representation" }, timeout: 8000 })
+    const e = ins.data[0]
+    res.json({ entry: { id: e.id, note: e.note, logged_by: e.logged_by, created_at: e.created_at } })
+  } catch (e: any) {
+    console.error("[dashboard] followup insert failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to save follow-up" })
+  }
+})
+
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
 // page itself, which shows the "message the bot" instructions.
 app.get("/admin/login", (req: Request, res: Response) => {
