@@ -173,7 +173,8 @@
         #brand .logo-mark { height: 34px; padding: 0 9px; border-radius: 9px; font-size: 1rem; }
 
         #nav { display: flex; gap: 4px; }
-        /* shadcn "ghost" button; the current page gets a raised white fill. */
+        /* shadcn "ghost" button; the current page gets the solid brown
+           "default" fill so it stands out from the white header. */
         .nav-btn {
             display: inline-flex;
             align-items: center;
@@ -189,10 +190,10 @@
         }
         .nav-btn:hover { background: var(--accent); color: var(--foreground); }
         .nav-btn.active {
-            background: rgba(255, 255, 255, .8);
-            color: var(--foreground);
+            background: linear-gradient(180deg, #54402F, var(--primary));
+            color: var(--primary-foreground);
             font-weight: 600;
-            box-shadow: 0 1px 2px rgba(41, 29, 20, .08), var(--highlight);
+            box-shadow: 0 1px 2px rgba(41, 29, 20, .2), inset 0 1px 0 rgba(255, 255, 255, .15);
         }
 
         #header-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
@@ -216,25 +217,26 @@
         }
         #user-avatar:empty { display: none; }
         .sep { width: 1px; height: 24px; background: var(--border); }
-        /* shadcn "outline" button */
-        .btn-outline {
+        /* shadcn "secondary" button: a tan fill and border, so it reads as a
+           button against the white header. */
+        .btn-secondary {
             display: inline-flex;
             align-items: center;
             gap: 8px;
             height: 40px;
             padding: 0 14px;
-            border: 1px solid var(--border);
+            border: 1px solid rgba(124, 96, 66, .35);
             border-radius: 10px;
-            background: rgba(255, 255, 255, .65);
-            color: var(--foreground);
+            background: #EADCC8;
+            color: var(--primary);
             font-family: inherit;
             font-size: .95rem;
-            font-weight: 500;
+            font-weight: 600;
             cursor: pointer;
-            box-shadow: 0 1px 2px rgba(41, 29, 20, .05);
+            box-shadow: 0 1px 2px rgba(41, 29, 20, .08), inset 0 1px 0 rgba(255, 255, 255, .5);
             transition: background .15s;
         }
-        .btn-outline:hover { background: rgba(255, 255, 255, .95); }
+        .btn-secondary:hover { background: #E0CDB3; }
 
         /* ── Content: the six cards fill the space under the 69px header
            (68px plus its border), so
@@ -439,7 +441,7 @@
                     <span id="user-name"></span>
                 </span>
                 <span class="sep" aria-hidden="true"></span>
-                <button type="button" id="logout-btn" class="btn-outline">
+                <button type="button" id="logout-btn" class="btn-secondary">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

@@ -32,10 +32,46 @@
 
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
 
-    logoutBtn.addEventListener("click", async () => {
+    const signOut = async (to: string): Promise<void> => {
         await fetch("/dashboard/logout", { method: "POST", credentials: "same-origin" }).catch(() => {})
-        location.href = "/dashboard/login"
-    })
+        location.href = to
+    }
+    logoutBtn.addEventListener("click", () => { void signOut("/dashboard/login") })
+
+    // ── Idle sign-out ────────────────────────────────────────────────────
+    // 15 minutes without a mouse, key, scroll or touch event signs the user
+    // out. The server holds the same deadline in the session cookie, and
+    // the keep-alive below (at most once a minute while active) slides it
+    // forward, so a sleeping laptop or closed tab is signed out too.
+    const IDLE_MS = 15 * 60 * 1000
+    const KEEPALIVE_MS = 60 * 1000
+    let lastActivity = Date.now()
+    let lastKeepAlive = Date.now()
+    const keepAlive = async (): Promise<void> => {
+        lastKeepAlive = Date.now()
+        try {
+            const r = await fetch("/dashboard/api/session", { credentials: "same-origin" })
+            if (r.status === 401) location.href = "/dashboard/login?error=idle"
+        } catch (e) {
+            // Offline for a moment; the next activity retries.
+        }
+    }
+    const checkIdle = (): boolean => {
+        if (Date.now() - lastActivity < IDLE_MS) return false
+        void signOut("/dashboard/login?error=idle")
+        return true
+    }
+    const onActivity = (): void => {
+        if (checkIdle()) return
+        lastActivity = Date.now()
+        if (lastActivity - lastKeepAlive >= KEEPALIVE_MS) void keepAlive()
+    }
+    for (const ev of ["mousemove", "mousedown", "keydown", "wheel", "scroll", "touchstart"]) {
+        window.addEventListener(ev, onActivity, { passive: true })
+    }
+    // Timers are throttled in background tabs, so also check on return.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) checkIdle() })
+    setInterval(checkIdle, 15 * 1000)
 
     // ── Helpers ──────────────────────────────────────────────────────────
     const el = (tag: string, cls?: string, text?: string): HTMLElement => {
@@ -80,7 +116,7 @@
             card.classList.add("complete")
             badge = el("span", "badge done", "ส่งครบแล้ว")
         } else if (m.sent > 0) {
-            badge = el("span", "badge open", "กำลังรับไฟล์")
+            badge = el("span", "badge open", "ดำเนินการส่ง")
         } else {
             badge = el("span", "badge idle", "ยังไม่มีผู้ส่ง")
         }
