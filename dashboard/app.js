@@ -176,12 +176,233 @@
             return;
         const shown = view === "followup" ? months.filter((m) => !isComplete(m)) : months;
         monthsEl.classList.toggle("followup", view === "followup");
-        monthsEl.replaceChildren(...shown.map(renderMonth));
+        monthsEl.replaceChildren(...shown.map((m) => {
+            const card = renderMonth(m);
+            if (view === "followup" && m.exists) {
+                card.classList.add("clickable");
+                card.tabIndex = 0;
+                card.setAttribute("role", "button");
+                card.setAttribute("aria-label", m.name + " — ดูรายชื่อผู้ที่ยังไม่ส่ง");
+                card.addEventListener("click", () => { void openPending(m); });
+                card.addEventListener("keydown", (ev) => {
+                    if (ev.key === "Enter" || ev.key === " ") {
+                        ev.preventDefault();
+                        void openPending(m);
+                    }
+                });
+            }
+            return card;
+        }));
         emptyEl.classList.toggle("hidden", shown.length > 0);
         monthsEl.classList.toggle("hidden", shown.length === 0);
     };
-    window.addEventListener("hashchange", render);
+    // ตามส่ง always shows fresh numbers: every visit to the tab reloads.
+    window.addEventListener("hashchange", () => {
+        if (currentView() === "followup")
+            void loadOverview();
+        else
+            render();
+    });
     render();
+    const CHANNEL_LABEL = { phone: "โทรศัพท์", line: "LINE" };
+    const PHONE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>';
+    const LINE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="6" fill="#06C755"/><path fill="#fff" d="M12 5.2c-4.1 0-7.4 2.7-7.4 6 0 3 2.6 5.5 6.2 5.9.2 0 .6.2.7.4.1.2 0 .6 0 .8l-.1.6c0 .2-.2.7.6.4.8-.3 4.3-2.5 5.8-4.3 1-1.1 1.6-2.3 1.6-3.7 0-3.4-3.3-6.1-7.4-6.1z"/><path fill="#06C755" d="M8.2 9.5h-.6c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h2c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2H8.4V9.7c0-.1-.1-.2-.2-.2zm2.3 0h-.5c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h.5c.1 0 .2-.1.2-.2V9.7c0-.1-.1-.2-.2-.2zm3.5 0h-.5c-.1 0-.2.1-.2.2v2.1l-1.6-2.2-.2-.1h-.5c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h.5c.1 0 .2-.1.2-.2v-2.1l1.6 2.2.2.1h.5c.1 0 .2-.1.2-.2V9.7c0-.1-.1-.2-.2-.2zm2.6 0h-2c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h2c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2h-1.3v-.6h1.3c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2h-1.3v-.6h1.3c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2z"/></svg>';
+    const sheet = document.getElementById("pending-sheet");
+    const sheetChip = document.getElementById("pending-chip");
+    const sheetCount = document.getElementById("pending-count");
+    const sheetList = document.getElementById("pending-list");
+    const logDlg = document.getElementById("log-dialog");
+    const logTitle = document.getElementById("log-title");
+    const logSub = document.getElementById("log-sub");
+    const logList = document.getElementById("log-list");
+    const logForm = document.getElementById("log-form");
+    const logNote = document.getElementById("log-note");
+    const logSubmit = document.getElementById("log-submit");
+    const logError = document.getElementById("log-error");
+    for (const b of Array.from(document.querySelectorAll("[data-close]"))) {
+        b.addEventListener("click", () => b.closest("dialog").close());
+    }
+    // A click on the dimmed backdrop (the dialog element itself) closes it.
+    for (const d of [sheet, logDlg])
+        d.addEventListener("click", (ev) => { if (ev.target === d)
+            d.close(); });
+    // Closing the list may mean calls were logged: refresh the cards.
+    sheet.addEventListener("close", () => { void loadOverview(); });
+    let openMonth = null;
+    let logTarget = null;
+    const api = async (url, init) => {
+        const r = await fetch(url, { credentials: "same-origin", ...init });
+        if (r.status === 401) {
+            location.href = "/dashboard/login?error=idle";
+            throw new Error("signed out");
+        }
+        if (!r.ok)
+            throw new Error("HTTP " + r.status);
+        return r.json();
+    };
+    const contactBtn = (p, channel) => {
+        const b = el("button", "contact-btn " + channel);
+        b.setAttribute("type", "button");
+        const setLabel = () => {
+            b.innerHTML = channel === "phone" ? PHONE_SVG : LINE_SVG;
+            const n = p[channel];
+            b.appendChild(el("span", "count" + (n ? "" : " zero"), String(n)));
+            b.setAttribute("aria-label", CHANNEL_LABEL[channel] + " " + p.name + " — ติดต่อแล้ว " + n + " ครั้ง");
+            b.title = CHANNEL_LABEL[channel] + " · ติดต่อแล้ว " + n + " ครั้ง";
+        };
+        setLabel();
+        b.refresh = setLabel;
+        b.addEventListener("click", () => { void openLog(p, channel, b); });
+        return b;
+    };
+    const renderPending = (list) => {
+        sheetCount.textContent = "ยังไม่ส่ง " + fmtNum(list.length) + " คน";
+        if (!list.length) {
+            sheetList.replaceChildren(el("p", "sheet-empty", "ทุกคนส่งไฟล์แล้ว"));
+            return;
+        }
+        sheetList.replaceChildren(...list.map((p, i) => {
+            const row = el("li", "pending-row");
+            row.appendChild(el("span", "num", String(i + 1)));
+            const who = el("div", "who");
+            who.appendChild(el("span", "name", p.name));
+            const meta = el("span", "meta", p.department);
+            who.appendChild(meta);
+            if (p.lastContactAt)
+                who.appendChild(el("span", "meta last", "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt)));
+            row.appendChild(who);
+            const actions = el("div", "actions");
+            actions.appendChild(contactBtn(p, "phone"));
+            actions.appendChild(contactBtn(p, "line"));
+            row.appendChild(actions);
+            return row;
+        }));
+    };
+    const openPending = async (m) => {
+        openMonth = m;
+        sheet.style.setProperty("--month", m.color);
+        sheetChip.textContent = m.name;
+        sheetCount.textContent = "";
+        sheetList.replaceChildren(...[0, 1, 2, 3, 4].map(() => el("li", "pending-row skeleton-row")));
+        if (!sheet.open)
+            sheet.showModal();
+        try {
+            const data = await api("/dashboard/api/pending?month=" + encodeURIComponent(m.key));
+            if (openMonth === m)
+                renderPending(data.physicians);
+        }
+        catch (e) {
+            console.error("pending failed:", e);
+            sheetList.replaceChildren(el("p", "sheet-empty error-text", "โหลดรายชื่อไม่สำเร็จ กรุณาลองใหม่"));
+        }
+    };
+    const renderLog = (entries) => {
+        if (!entries.length) {
+            logList.replaceChildren(el("li", "log-empty", "ยังไม่มีบันทึกการติดต่อ"));
+        }
+        else {
+            logList.replaceChildren(...entries.map((e, i) => {
+                const li = el("li", "log-entry");
+                li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)));
+                const body = el("div", "log-body");
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? " · " + e.logged_by : "")));
+                if (e.note)
+                    body.appendChild(el("p", "note", e.note));
+                li.appendChild(body);
+                return li;
+            }));
+        }
+        logSubmit.textContent = "บันทึกครั้งที่ " + (entries.length + 1);
+        logList.scrollTop = logList.scrollHeight;
+    };
+    const openLog = async (p, channel, btn) => {
+        if (!openMonth)
+            return;
+        logTarget = { p, channel, btn };
+        logDlg.dataset.channel = channel;
+        logTitle.textContent = CHANNEL_LABEL[channel] + " · " + p.name;
+        logSub.textContent = openMonth.name + (p.department ? " · " + p.department : "");
+        logList.replaceChildren(el("li", "log-empty", "กำลังโหลด…"));
+        logNote.value = "";
+        logError.classList.add("hidden");
+        logSubmit.disabled = true;
+        logDlg.showModal();
+        try {
+            const q = "month=" + encodeURIComponent(openMonth.key) + "&index=" + encodeURIComponent(p.index) + "&channel=" + channel;
+            const data = await api("/dashboard/api/followups?" + q);
+            renderLog(data.entries);
+            logSubmit.disabled = false;
+            logNote.focus();
+        }
+        catch (e) {
+            console.error("follow-ups failed:", e);
+            logList.replaceChildren(el("li", "log-empty error-text", "โหลดประวัติไม่สำเร็จ"));
+        }
+    };
+    logForm.addEventListener("submit", async (ev) => {
+        var _a;
+        ev.preventDefault();
+        if (!logTarget || !openMonth || logSubmit.disabled)
+            return;
+        const { p, channel, btn } = logTarget;
+        logSubmit.disabled = true;
+        logError.classList.add("hidden");
+        try {
+            await api("/dashboard/api/followups", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ month: openMonth.key, index: p.index, channel, note: logNote.value }),
+            });
+            const q = "month=" + encodeURIComponent(openMonth.key) + "&index=" + encodeURIComponent(p.index) + "&channel=" + channel;
+            const data = await api("/dashboard/api/followups?" + q);
+            p[channel] = data.entries.length;
+            p.lastContactAt = data.entries.length ? data.entries[data.entries.length - 1].created_at : p.lastContactAt;
+            btn.refresh();
+            const who = (_a = btn.closest(".pending-row")) === null || _a === void 0 ? void 0 : _a.querySelector(".who");
+            if (who && p.lastContactAt) {
+                const last = who.querySelector(".last") || who.appendChild(el("span", "meta last"));
+                last.textContent = "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt);
+            }
+            renderLog(data.entries);
+            logNote.value = "";
+        }
+        catch (e) {
+            console.error("save follow-up failed:", e);
+            logError.classList.remove("hidden");
+        }
+        finally {
+            logSubmit.disabled = false;
+        }
+    });
+    async function loadOverview() {
+        monthsEl.setAttribute("aria-busy", "true");
+        try {
+            const r = await fetch("/dashboard/api/overview", { credentials: "same-origin" });
+            if (r.status === 401) {
+                location.href = "/dashboard/login";
+                return;
+            }
+            if (!r.ok)
+                throw new Error("HTTP " + r.status);
+            const data = await r.json();
+            months = data.months;
+            errorEl.classList.add("hidden");
+            render();
+        }
+        catch (e) {
+            console.error("overview failed:", e);
+            monthsEl.replaceChildren();
+            errorEl.classList.remove("hidden");
+        }
+        finally {
+            monthsEl.setAttribute("aria-busy", "false");
+        }
+    }
+    // ── Boot ─────────────────────────────────────────────────────────────
+    // main.ts only serves this page to a signed-in, allowlisted LINE user.
+    // A 401 from either call means the session ended since the page
+    // loaded: back to the login page.
+    ;
     (async function main() {
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" });
@@ -199,25 +420,6 @@
         catch (e) {
             // Name stays blank; the page itself is already authorised.
         }
-        try {
-            const r = await fetch("/dashboard/api/overview", { credentials: "same-origin" });
-            if (r.status === 401) {
-                location.href = "/dashboard/login";
-                return;
-            }
-            if (!r.ok)
-                throw new Error("HTTP " + r.status);
-            const data = await r.json();
-            months = data.months;
-            render();
-        }
-        catch (e) {
-            console.error("overview failed:", e);
-            monthsEl.replaceChildren();
-            errorEl.classList.remove("hidden");
-        }
-        finally {
-            monthsEl.setAttribute("aria-busy", "false");
-        }
+        await loadOverview();
     })();
 })();
