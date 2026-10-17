@@ -175,6 +175,7 @@
         if (!months)
             return;
         const shown = view === "followup" ? months.filter((m) => !isComplete(m)) : months;
+        monthsEl.classList.toggle("followup", view === "followup");
         monthsEl.replaceChildren(...shown.map(renderMonth));
         emptyEl.classList.toggle("hidden", shown.length > 0);
         monthsEl.classList.toggle("hidden", shown.length === 0);
