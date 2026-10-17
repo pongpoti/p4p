@@ -758,8 +758,13 @@ async function rosterMonthExists(key: unknown): Promise<boolean> {
   return tables.includes(key)
 }
 
-const rosterName = (r: { prefix?: string | null; firstname?: string | null; lastname?: string | null }): string =>
-  [(r.prefix || "") + (r.firstname || ""), r.lastname || ""].join(" ").trim()
+// Thai dictionary order: Intl's "th" collation skips leading vowels
+// (เ แ โ ใ ไ), so ไก่ sorts under ก and before ขวัญ.
+const thaiCollator = new Intl.Collator("th")
+
+// First and last name only; the dashboard leaves out the นพ./พญ. prefix.
+const rosterName = (r: { firstname?: string | null; lastname?: string | null }): string =>
+  [r.firstname || "", r.lastname || ""].join(" ").trim()
 
 app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
@@ -769,7 +774,7 @@ app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
     if (!(await rosterMonthExists(month))) return res.status(404).json({ error: "unknown month" })
     const [roster, logs] = await Promise.all([
       axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(month as string) +
-        "?select=index,prefix,firstname,lastname,department&submitted_at=is.null",
+        "?select=index,firstname,lastname,department&submitted_at=is.null",
         { headers: SERVICE_HEADERS(), timeout: 8000 }),
       axios.get(SUPABASE_URL + "/rest/v1/dashboard_followups?select=roster_index,channel,created_at&month_key=eq." +
         encodeURIComponent(month as string) + "&order=created_at.asc",
@@ -782,10 +787,13 @@ app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
       c.last = l.created_at
       counts.set(l.roster_index, c)
     }
-    const physicians = (roster.data as any[]).map((r) => {
+    // Sorted by first name, then last name; the prefix (นพ./พญ.) is ignored.
+    const rows = (roster.data as any[]).slice().sort((a, b) =>
+      thaiCollator.compare(a.firstname || "", b.firstname || "") || thaiCollator.compare(a.lastname || "", b.lastname || ""))
+    const physicians = rows.map((r) => {
       const c = counts.get(r.index) || { phone: 0, line: 0, last: null }
       return { index: r.index, name: rosterName(r), department: r.department || "", phone: c.phone, line: c.line, lastContactAt: c.last }
-    }).sort((a, b) => a.department.localeCompare(b.department, "th") || a.name.localeCompare(b.name, "th"))
+    })
     res.json({ physicians })
   } catch (e: any) {
     console.error("[dashboard] pending failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -825,7 +833,7 @@ app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req:
     if (!(await rosterMonthExists(month))) return res.status(404).json({ error: "unknown month" })
     // The physician must be on that month's roster; the name is snapshotted from it.
     const row = await axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(month) +
-      "?select=prefix,firstname,lastname&index=eq." + index, { headers: SERVICE_HEADERS(), timeout: 8000 })
+      "?select=firstname,lastname&index=eq." + index, { headers: SERVICE_HEADERS(), timeout: 8000 })
     if (!row.data.length) return res.status(404).json({ error: "unknown physician" })
     const ins = await axios.post(SUPABASE_URL + "/rest/v1/dashboard_followups",
       { month_key: month, roster_index: index, physician_name: rosterName(row.data[0]), channel, note, logged_by: s.name },
