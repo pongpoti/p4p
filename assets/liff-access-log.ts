@@ -35,7 +35,9 @@
 ;(function (global: Window) {
   "use strict"
 
-  var PAGES = ["/upload/"]
+  // Empty: the Telegram access alert is off on every page (status/list/ranking
+  // since #209, /upload/ since 2026-10-17). Add a path back here to re-enable it.
+  var PAGES: string[] = []
   var path = global.location.pathname
   if (PAGES.indexOf(path) === -1 || !global.P4P || !global.P4P.db) return
   var page = path.replace(/\//g, "")
