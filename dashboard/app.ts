@@ -35,8 +35,9 @@
 
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
 
-    const signOut = async (to: string): Promise<void> => {
-        await fetch("/dashboard/logout", { method: "POST", credentials: "same-origin" }).catch(() => {})
+    // reason "idle" is recorded as an automatic sign-out in the audit log.
+    const signOut = async (to: string, reason?: string): Promise<void> => {
+        await fetch("/dashboard/logout" + (reason ? "?reason=" + reason : ""), { method: "POST", credentials: "same-origin" }).catch(() => {})
         location.href = to
     }
     logoutBtn.addEventListener("click", () => { void signOut("/dashboard/login") })
@@ -61,7 +62,7 @@
     }
     const checkIdle = (): boolean => {
         if (Date.now() - lastActivity < IDLE_MS) return false
-        void signOut("/dashboard/login?error=idle")
+        void signOut("/dashboard/login?error=idle", "idle")
         return true
     }
     const onActivity = (): void => {
@@ -174,12 +175,19 @@
     const TITLES: Record<string, string> = {
         overview: "ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนที่ผ่านมา",
         followup: "ตามส่ง — เดือนที่ยังส่งไฟล์ Excel ไม่ครบ",
+        audit: "ประวัติการใช้งาน — การเข้าใช้และการแก้ไขแดชบอร์ด",
     }
     const isComplete = (m: MonthStatus): boolean => m.exists && m.total > 0 && m.sent === m.total
     let months: MonthStatus[] | null = null
-    const currentView = (): string => (location.hash === "#followup" ? "followup" : "overview")
+    // Set from /dashboard/api/session; only the owner gets the audit tab.
+    let isOwner = false
+    const auditView = document.getElementById("audit-view") as HTMLElement
+    const currentView = (): string =>
+        location.hash === "#followup" ? "followup" : location.hash === "#audit" && isOwner ? "audit" : "overview"
     const render = (): void => {
         const view = currentView()
+        const audit = view === "audit"
+        auditView.classList.toggle("hidden", !audit)
         for (const a of navBtns) {
             const on = a.dataset.view === view
             a.classList.toggle("active", on)
@@ -187,6 +195,13 @@
             else a.removeAttribute("aria-current")
         }
         titleEl.textContent = TITLES[view]
+        if (audit) {
+            monthsEl.classList.add("hidden")
+            emptyEl.classList.add("hidden")
+            errorEl.classList.add("hidden")
+            return
+        }
+        monthsEl.classList.remove("hidden")
         if (!months) return
         const shown = view === "followup" ? months.filter((m) => !isComplete(m)) : months
         monthsEl.classList.toggle("followup", view === "followup")
@@ -210,9 +225,12 @@
     // ตามส่ง always shows fresh numbers: every visit to the tab reloads.
     // Switch at once with the counts already loaded; ตามส่ง then refreshes
     // them in the background (the server is a slow round trip away).
+    // Each tab visit is logged for the owner (?view=), so ภาพรวม reloads too.
     window.addEventListener("hashchange", () => {
         render()
-        if (currentView() === "followup") void loadOverview()
+        const view = currentView()
+        if (view === "audit") void loadAudit(false)
+        else void loadOverview(view)
     })
     render()
 
@@ -431,11 +449,12 @@
     const refreshAfterChange = async (p: Pending, channel: Channel, btn: HTMLElement): Promise<void> => {
         if (!openMonth) return
         const q = "month=" + encodeURIComponent(openMonth.key) + "&index=" + encodeURIComponent(p.index) + "&channel=" + channel
-        const data: { entries: Entry[] } = await api("/dashboard/api/followups?" + q)
+        // refresh=1: the page's own reload, not a fresh look (left out of the audit log)
+        const data: { entries: Entry[] } = await api("/dashboard/api/followups?" + q + "&refresh=1")
         renderLog(data.entries)
         p[channel] = data.entries.length
         try {
-            const list: { physicians: Pending[] } = await api("/dashboard/api/pending?month=" + encodeURIComponent(openMonth.key))
+            const list: { physicians: Pending[] } = await api("/dashboard/api/pending?month=" + encodeURIComponent(openMonth.key) + "&refresh=1")
             const fresh = list.physicians.find(x => x.index === p.index)
             if (fresh) { p.phone = fresh.phone; p.line = fresh.line; p.lastContactAt = fresh.lastContactAt }
         } catch (e) {
@@ -518,10 +537,11 @@
         }
     })
 
-    async function loadOverview(): Promise<void> {
+    // view: the tab the user just opened (logged); none for a background refresh.
+    async function loadOverview(view?: string): Promise<void> {
         monthsEl.setAttribute("aria-busy", "true")
         try {
-            const r = await fetch("/dashboard/api/overview", { credentials: "same-origin" })
+            const r = await fetch("/dashboard/api/overview" + (view ? "?view=" + view : ""), { credentials: "same-origin" })
             if (r.status === 401) { location.href = "/dashboard/login"; return }
             if (!r.ok) throw new Error("HTTP " + r.status)
             const data: { months: MonthStatus[] } = await r.json()
@@ -537,6 +557,155 @@
         }
     }
 
+
+    // ── ประวัติการใช้งาน (owner only) ────────────────────────────────────
+    interface AuditEntry {
+        id: number
+        created_at: string
+        actor_line_id: string
+        actor_name: string
+        action: string
+        target: Record<string, any>
+        ip: string
+        user_agent: string
+    }
+    const auditRows   = document.getElementById("audit-rows") as HTMLElement
+    const auditMore   = document.getElementById("audit-more") as HTMLButtonElement
+    const auditActor  = document.getElementById("audit-actor") as HTMLSelectElement
+    const auditGroup  = document.getElementById("audit-group") as HTMLSelectElement
+    const auditFrom   = document.getElementById("audit-from") as HTMLInputElement
+    const auditTo     = document.getElementById("audit-to") as HTMLInputElement
+    const auditReset  = document.getElementById("audit-reset") as HTMLButtonElement
+    const auditNav    = document.getElementById("audit-nav") as HTMLElement
+
+    const ACTION_LABEL: Record<string, string> = {
+        "login.success": "เข้าสู่ระบบ",
+        "login.refused": "ถูกปฏิเสธการเข้าสู่ระบบ",
+        "session.logout": "ออกจากระบบ",
+        "session.idle": "ออกจากระบบอัตโนมัติ",
+        "view.overview": "เปิดแท็บภาพรวม",
+        "view.followup": "เปิดแท็บตามส่ง",
+        "pending.open": "เปิดรายชื่อผู้ที่ยังไม่ส่ง",
+        "followup.history": "เปิดประวัติการติดต่อ",
+        "followup.add": "เพิ่มบันทึก",
+        "followup.delete": "ลบบันทึก",
+        "audit.view": "เปิดประวัติการใช้งาน",
+    }
+    const GROUP_LABEL: Record<string, string> = {
+        change: "เพิ่ม / ลบบันทึก", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
+    }
+    const THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+    // "2569_09" → "ก.ย. 2569"
+    const monthLabel = (key: unknown): string => {
+        const m = /^(\d{4})_(\d{2})$/.exec(String(key || ""))
+        return m ? THAI_MONTHS[Number(m[2]) - 1] + " " + m[1] : ""
+    }
+
+    // One readable line of what the action touched; the note is quoted.
+    const auditDetail = (a: AuditEntry): HTMLElement => {
+        const t = a.target || {}
+        const td = el("td", "detail")
+        const parts: string[] = []
+        const add = (s: unknown): void => { if (s !== undefined && s !== null && s !== "") parts.push(String(s)) }
+        switch (a.action) {
+            case "pending.open":
+                add(monthLabel(t.month)); add("ยังไม่ส่ง " + fmtNum(Number(t.unsent) || 0) + " คน")
+                break
+            case "followup.history":
+                add(monthLabel(t.month)); add(t.physician); add(CHANNEL_LABEL[t.channel as Channel]); add("มี " + fmtNum(Number(t.entries) || 0) + " ครั้ง")
+                break
+            case "followup.add":
+            case "followup.delete":
+                add(monthLabel(t.month)); add(t.physician); add(CHANNEL_LABEL[t.channel as Channel])
+                if (a.action === "followup.delete" && t.logged_by) add("บันทึกโดย " + t.logged_by + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""))
+                break
+            case "login.refused":
+                add("LINE " + a.actor_line_id)
+                break
+            case "audit.view":
+                if (t.group) add(GROUP_LABEL[t.group] || t.group)
+                if (t.from || t.to) add((t.from || "…") + " ถึง " + (t.to || "…"))
+                break
+        }
+        td.textContent = parts.join(" · ")
+        if ((a.action === "followup.add" || a.action === "followup.delete") && t.note) {
+            td.appendChild(document.createTextNode(parts.length ? " · " : ""))
+            td.appendChild(el("q", undefined, String(t.note)))
+        }
+        return td
+    }
+
+    const auditRow = (a: AuditEntry): HTMLElement => {
+        const tr = el("tr", a.action === "followup.delete" || a.action === "login.refused" ? "warn"
+            : a.action === "followup.add" ? "change" : "")
+        tr.appendChild(el("td", "when", fmtWhen(a.created_at)))
+        tr.appendChild(el("td", "who", a.actor_name || "—"))
+        tr.appendChild(el("td", "what", ACTION_LABEL[a.action] || a.action))
+        tr.appendChild(auditDetail(a))
+        const ip = el("td", "ip", a.ip || "—")
+        if (a.user_agent) ip.title = a.user_agent
+        tr.appendChild(ip)
+        return tr
+    }
+
+    let auditOldest: number | null = null
+    let auditSeq = 0
+    const auditQuery = (): string => {
+        const q = new URLSearchParams()
+        if (auditActor.value) q.set("actor", auditActor.value)
+        if (auditGroup.value) q.set("group", auditGroup.value)
+        if (auditFrom.value) q.set("from", auditFrom.value)
+        if (auditTo.value) q.set("to", auditTo.value)
+        return q.toString()
+    }
+    const emptyRow = (text: string, cls?: string): HTMLElement => {
+        const tr = el("tr")
+        const td = el("td", "audit-empty" + (cls ? " " + cls : ""), text)
+        td.setAttribute("colspan", "5")
+        tr.appendChild(td)
+        return tr
+    }
+
+    // more = false loads the newest page; true appends the next older one.
+    async function loadAudit(more: boolean): Promise<void> {
+        const seq = ++auditSeq
+        if (!more) { auditOldest = null; auditRows.replaceChildren(emptyRow("กำลังโหลด…")) }
+        auditMore.disabled = true
+        try {
+            let q = auditQuery()
+            if (more && auditOldest !== null) q += (q ? "&" : "") + "before=" + auditOldest
+            const data: { entries: AuditEntry[]; more: boolean; actors: { id: string; name: string }[] } =
+                await api("/dashboard/api/audit" + (q ? "?" + q : ""))
+            if (seq !== auditSeq) return
+            // Keep the chosen person while refreshing the list of names.
+            const chosen = auditActor.value
+            auditActor.replaceChildren(el("option", undefined, "ทุกคน"), ...data.actors.map((p) => {
+                const o = el("option", undefined, p.name || p.id) as HTMLOptionElement
+                o.value = p.id
+                return o
+            }))
+            ;(auditActor.options[0] as HTMLOptionElement).value = ""
+            auditActor.value = chosen
+            const rows = data.entries.map(auditRow)
+            if (more) auditRows.append(...rows)
+            else auditRows.replaceChildren(...(rows.length ? rows : [emptyRow("ไม่มีรายการ")]))
+            if (data.entries.length) auditOldest = data.entries[data.entries.length - 1].id
+            auditMore.classList.toggle("hidden", !data.more)
+        } catch (e) {
+            if (seq !== auditSeq) return
+            console.error("audit failed:", e)
+            if (!more) auditRows.replaceChildren(emptyRow("โหลดประวัติการใช้งานไม่สำเร็จ กรุณาลองใหม่", "error-text"))
+        } finally {
+            auditMore.disabled = false
+        }
+    }
+    for (const f of [auditActor, auditGroup, auditFrom, auditTo]) f.addEventListener("change", () => { void loadAudit(false) })
+    auditMore.addEventListener("click", () => { void loadAudit(true) })
+    auditReset.addEventListener("click", () => {
+        auditActor.value = ""; auditGroup.value = ""; auditFrom.value = ""; auditTo.value = ""
+        void loadAudit(false)
+    })
+
     // ── Boot ─────────────────────────────────────────────────────────────
     // main.ts only serves this page to a signed-in, allowlisted LINE user.
     // A 401 from either call means the session ended since the page
@@ -546,15 +715,20 @@
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" })
             if (r.status === 401) { location.href = "/dashboard/login"; return }
             if (r.ok) {
-                const session: { name?: string } = await r.json()
+                const session: { name?: string; isOwner?: boolean } = await r.json()
                 const name = session.name || ""
                 userName.textContent = name
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : ""
+                isOwner = session.isOwner === true
+                auditNav.classList.toggle("hidden", !isOwner)
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
         }
 
-        await loadOverview()
+        render()
+        const view = currentView()
+        if (view === "audit") await loadAudit(false)
+        else await loadOverview(view)
     })()
 })()
