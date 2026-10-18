@@ -4,8 +4,8 @@
 --  One row per sign-in, refused sign-in, sign-out, page view, list opened,
 --  follow-up note added or deleted, and audit-log view. main.ts writes every
 --  row on the server (never the browser), so an admin cannot skip or forge
---  one. Only the dashboard owner (DASHBOARD_OWNER_LINE_USER_IDS, default
---  ADMIN_LINE_USER_ID) can read it, through /dashboard/api/audit.
+--  one. Only the dashboard owner (ADMIN_LINE_USER_ID in main.ts) can read
+--  it, through /dashboard/api/audit.
 --
 --  service_role only, like dashboard_followups: RLS on with no policies.
 --  Append-only: a trigger refuses UPDATE and DELETE for every role, the

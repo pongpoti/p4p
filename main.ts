@@ -617,12 +617,10 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 // views, lists opened, follow-up notes added or deleted, and audit-log views.
 // Written here on the server with the service key (table
 // dashboard_audit_log, scripts/dashboard-audit-log-2026-10.sql, which is
-// append-only), so an admin cannot skip or alter an entry. Only the owners in
-// DASHBOARD_OWNER_LINE_USER_IDS (default: the /admin/ user) can read it.
-const DASHBOARD_OWNER_LINE_USER_IDS = new Set(
-  (process.env.DASHBOARD_OWNER_LINE_USER_IDS || ADMIN_LINE_USER_ID).split(",").map((s) => s.trim()).filter(Boolean),
-)
-const isDashOwner = (sub: string): boolean => DASHBOARD_OWNER_LINE_USER_IDS.has(sub)
+// append-only), so an admin cannot skip or alter an entry. Only the owner
+// (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
+// dashboard admins never see the tab and get 404 from its API.
+const isDashOwner = (sub: string): boolean => sub === ADMIN_LINE_USER_ID
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
