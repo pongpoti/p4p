@@ -208,9 +208,11 @@
         monthsEl.classList.toggle("hidden", shown.length === 0)
     }
     // ตามส่ง always shows fresh numbers: every visit to the tab reloads.
+    // Switch at once with the counts already loaded; ตามส่ง then refreshes
+    // them in the background (the server is a slow round trip away).
     window.addEventListener("hashchange", () => {
+        render()
         if (currentView() === "followup") void loadOverview()
-        else render()
     })
     render()
 
