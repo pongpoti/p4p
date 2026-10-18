@@ -576,6 +576,14 @@
         }
         .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
         .btn-primary:disabled { opacity: .55; cursor: default; }
+        .btn-primary[aria-busy="true"] { opacity: .8; cursor: progress; display: inline-flex; align-items: center; gap: 8px; }
+        .spinner {
+            width: 16px; height: 16px; border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
         .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
         .btn-ghost:hover { background: var(--accent); }
         .error-text { color: #B42318; }

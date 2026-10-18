@@ -77,12 +77,12 @@
         return e;
     };
     const fmtNum = (n) => n.toLocaleString("th-TH");
-    // Thai short date and time in Bangkok, e.g. "17 ต.ค. 2569 11:18 น."
+    // Thai short date and time in Bangkok, e.g. "17 ต.ค. 2569  11:18 น." (em space between)
     const fmtWhen = (iso) => {
         const d = new Date(iso);
         const date = d.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric" });
         const time = d.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
-        return date + " " + time + " น.";
+        return date + "\u2003" + time + " น.";
     };
     const renderMonth = (m) => {
         const card = el("article", "month-card glass");
@@ -328,7 +328,7 @@
                 const li = el("li", "log-entry");
                 li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)));
                 const body = el("div", "log-body");
-                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? " · " + e.logged_by : "")));
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? " (บันทึกโดย " + e.logged_by + ")" : "")));
                 if (e.note)
                     body.appendChild(el("p", "note", e.note));
                 li.appendChild(body);
@@ -340,8 +340,8 @@
     };
     // One-tap notes; a tap replaces an earlier preset but keeps anything typed after it
     const PRESETS = {
-        phone: ["รับทราบ", "ไม่รับสาย", "เบอร์ติดต่อไม่ได้", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
-        line: ["รับทราบ", "ยังไม่อ่านข้อความ", "อ่านแล้วไม่ตอบ", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
+        phone: ["รับทราบ", "ไม่รับสาย", "เบอร์ติดต่อไม่ได้", "ส่งไปแล้ว (มีข้อผิดพลาด)"],
+        line: ["รับทราบ", "ยังไม่อ่านข้อความ", "อ่านแล้วไม่ตอบ", "ส่งไปแล้ว (มีข้อผิดพลาด)"],
     };
     let presetList = [];
     const SEP = " · ";
@@ -401,7 +401,10 @@
         if (!logTarget || !openMonth || logSubmit.disabled)
             return;
         const { p, channel, btn } = logTarget;
+        const label = logSubmit.textContent;
         logSubmit.disabled = true;
+        logSubmit.setAttribute("aria-busy", "true");
+        logSubmit.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"));
         logError.classList.add("hidden");
         try {
             await api("/dashboard/api/followups", {
@@ -426,8 +429,10 @@
         catch (e) {
             console.error("save follow-up failed:", e);
             logError.classList.remove("hidden");
+            logSubmit.textContent = label;
         }
         finally {
+            logSubmit.removeAttribute("aria-busy");
             logSubmit.disabled = false;
         }
     });
