@@ -846,6 +846,24 @@ app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req:
   }
 })
 
+app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const id = String(req.params.id)
+  if (!/^[1-9][0-9]{0,17}$/.test(id)) return res.status(400).json({ error: "bad request" })
+  try {
+    const del = await axios.delete(SUPABASE_URL + "/rest/v1/dashboard_followups?id=eq." + id,
+      { headers: { ...SERVICE_HEADERS(), Prefer: "return=representation" }, timeout: 8000 })
+    if (!del.data.length) return res.status(404).json({ error: "not found" })
+    console.log("[dashboard] followup", id, "deleted by", s.name)
+    res.json({ ok: true })
+  } catch (e: any) {
+    console.error("[dashboard] followup delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to delete follow-up" })
+  }
+})
+
 // One-time login link from the LINE bot. Invalid/expired -> bounce to the
 // page itself, which shows the "message the bot" instructions.
 app.get("/admin/login", (req: Request, res: Response) => {
