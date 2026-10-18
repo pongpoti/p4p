@@ -612,6 +612,13 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
   idle: "ออกจากระบบอัตโนมัติ เนื่องจากไม่มีการใช้งาน 15 นาที",
 }
 
+// Unlike the LIFF pages, the dashboard never runs inside a frame, so it
+// refuses to be framed by anyone (clickjacking on the delete buttons).
+app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Content-Security-Policy", CSP + "; frame-ancestors 'none'")
+  next()
+})
+
 // The dashboard is only ever served to a signed-in, allowlisted user;
 // everyone else lands on /dashboard/login first.
 app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
@@ -843,6 +850,24 @@ app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req:
   } catch (e: any) {
     console.error("[dashboard] followup insert failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to save follow-up" })
+  }
+})
+
+app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const id = String(req.params.id)
+  if (!/^[1-9][0-9]{0,17}$/.test(id)) return res.status(400).json({ error: "bad request" })
+  try {
+    const del = await axios.delete(SUPABASE_URL + "/rest/v1/dashboard_followups?id=eq." + id,
+      { headers: { ...SERVICE_HEADERS(), Prefer: "return=representation" }, timeout: 8000 })
+    if (!del.data.length) return res.status(404).json({ error: "not found" })
+    console.log("[dashboard] followup", id, "deleted by", s.name)
+    res.json({ ok: true })
+  } catch (e: any) {
+    console.error("[dashboard] followup delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to delete follow-up" })
   }
 })
 

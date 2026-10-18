@@ -542,8 +542,12 @@
         .log-dialog[data-channel="phone"] .log-header { background: linear-gradient(180deg, #EFF5FF, #FDFAF5); }
         .log-dialog[data-channel="line"] .log-header { background: linear-gradient(180deg, #E6F9EE, #FDFAF5); }
         .log-list { list-style: none; margin: 0; padding: 14px 22px; overflow-y: auto; flex: 1; min-height: 80px; }
-        .log-entry { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px dashed var(--border); }
+        .log-entry { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px dashed var(--border); }
         .log-entry:last-child { border-bottom: 0; }
+        .log-delete { width: 36px; height: 36px; color: var(--muted-foreground); }
+        .log-delete svg { width: 18px; height: 18px; }
+        .log-delete:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
+        .log-delete:disabled { opacity: .5; cursor: progress; }
         .log-entry .time-no {
             align-self: start; justify-self: start;
             padding: 3px 10px; border-radius: 999px;
@@ -576,6 +580,14 @@
         }
         .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
         .btn-primary:disabled { opacity: .55; cursor: default; }
+        .btn-primary[aria-busy="true"] { opacity: .8; cursor: progress; display: inline-flex; align-items: center; gap: 8px; }
+        .spinner {
+            width: 16px; height: 16px; border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
         .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
         .btn-ghost:hover { background: var(--accent); }
         .error-text { color: #B42318; }

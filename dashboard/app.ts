@@ -86,12 +86,12 @@
 
     const fmtNum = (n: number): string => n.toLocaleString("th-TH")
 
-    // Thai short date and time in Bangkok, e.g. "17 ต.ค. 2569 11:18 น."
+    // Thai short date and time in Bangkok, e.g. "17 ต.ค. 2569  11:18 น." (em space between)
     const fmtWhen = (iso: string): string => {
         const d = new Date(iso)
         const date = d.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric" })
         const time = d.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" })
-        return date + " " + time + " น."
+        return date + "\u2003" + time + " น."
     }
 
     const renderMonth = (m: MonthStatus): HTMLElement => {
@@ -208,9 +208,11 @@
         monthsEl.classList.toggle("hidden", shown.length === 0)
     }
     // ตามส่ง always shows fresh numbers: every visit to the tab reloads.
+    // Switch at once with the counts already loaded; ตามส่ง then refreshes
+    // them in the background (the server is a slow round trip away).
     window.addEventListener("hashchange", () => {
+        render()
         if (currentView() === "followup") void loadOverview()
-        else render()
     })
     render()
 
@@ -225,6 +227,7 @@
     }
     interface Entry { id: number; note: string; logged_by: string; created_at: string }
     type Channel = "phone" | "line"
+    const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'
     const CHANNEL_LABEL: Record<Channel, string> = { phone: "โทรศัพท์", line: "LINE" }
     const PHONE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>'
     const LINE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="6" fill="#06C755"/><path fill="#fff" d="M12 5.2c-4.1 0-7.4 2.7-7.4 6 0 3 2.6 5.5 6.2 5.9.2 0 .6.2.7.4.1.2 0 .6 0 .8l-.1.6c0 .2-.2.7.6.4.8-.3 4.3-2.5 5.8-4.3 1-1.1 1.6-2.3 1.6-3.7 0-3.4-3.3-6.1-7.4-6.1z"/><path fill="#06C755" d="M8.2 9.5h-.6c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h2c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2H8.4V9.7c0-.1-.1-.2-.2-.2zm2.3 0h-.5c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h.5c.1 0 .2-.1.2-.2V9.7c0-.1-.1-.2-.2-.2zm3.5 0h-.5c-.1 0-.2.1-.2.2v2.1l-1.6-2.2-.2-.1h-.5c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h.5c.1 0 .2-.1.2-.2v-2.1l1.6 2.2.2.1h.5c.1 0 .2-.1.2-.2V9.7c0-.1-.1-.2-.2-.2zm2.6 0h-2c-.1 0-.2.1-.2.2v3.6c0 .1.1.2.2.2h2c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2h-1.3v-.6h1.3c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2h-1.3v-.6h1.3c.1 0 .2-.1.2-.2v-.5c0-.1-.1-.2-.2-.2z"/></svg>'
@@ -344,9 +347,16 @@
                 const li = el("li", "log-entry")
                 li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)))
                 const body = el("div", "log-body")
-                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? " · " + e.logged_by : "")))
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + e.logged_by + ")" : "")))
                 if (e.note) body.appendChild(el("p", "note", e.note))
                 li.appendChild(body)
+                const del = el("button", "icon-btn log-delete") as HTMLButtonElement
+                del.type = "button"
+                del.innerHTML = TRASH_SVG
+                del.setAttribute("aria-label", "ลบครั้งที่ " + (i + 1))
+                del.title = "ลบ"
+                del.addEventListener("click", () => { void deleteEntry(e, i + 1, del) })
+                li.appendChild(del)
                 return li
             }))
         }
@@ -356,8 +366,8 @@
 
     // One-tap notes; a tap replaces an earlier preset but keeps anything typed after it
     const PRESETS: Record<Channel, string[]> = {
-        phone: ["รับทราบ", "ไม่รับสาย", "เบอร์ติดต่อไม่ได้", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
-        line:  ["รับทราบ", "ยังไม่อ่านข้อความ", "อ่านแล้วไม่ตอบ", "ส่งไปแล้ว (มีข้อผิดพลาด?)"],
+        phone: ["รับทราบ", "ไม่รับสาย", "เบอร์ติดต่อไม่ได้", "ส่งไปแล้ว (มีข้อผิดพลาด)"],
+        line:  ["รับทราบ", "ยังไม่อ่านข้อความ", "อ่านแล้วไม่ตอบ", "ส่งไปแล้ว (มีข้อผิดพลาด)"],
     }
     let presetList: string[] = []
     const SEP = " · "
@@ -416,11 +426,68 @@
         }
     }
 
+    // Reload this channel's history, then the row's counts and last contact
+    // (which spans both channels, so it comes from the server).
+    const refreshAfterChange = async (p: Pending, channel: Channel, btn: HTMLElement): Promise<void> => {
+        if (!openMonth) return
+        const q = "month=" + encodeURIComponent(openMonth.key) + "&index=" + encodeURIComponent(p.index) + "&channel=" + channel
+        const data: { entries: Entry[] } = await api("/dashboard/api/followups?" + q)
+        renderLog(data.entries)
+        p[channel] = data.entries.length
+        try {
+            const list: { physicians: Pending[] } = await api("/dashboard/api/pending?month=" + encodeURIComponent(openMonth.key))
+            const fresh = list.physicians.find(x => x.index === p.index)
+            if (fresh) { p.phone = fresh.phone; p.line = fresh.line; p.lastContactAt = fresh.lastContactAt }
+        } catch (e) {
+            console.error("pending refresh failed:", e)
+        }
+        ;(btn as any).refresh()
+        const last = btn.closest(".pending-row")?.querySelector(".last")
+        if (last) {
+            last.className = "last" + (p.lastContactAt ? "" : " none")
+            last.textContent = p.lastContactAt ? "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt) : "ยังไม่ได้ติดต่อ"
+        }
+    }
+
+    const showLogError = (msg: string): void => {
+        logError.textContent = msg
+        logError.classList.remove("hidden")
+    }
+
+    const deleteEntry = async (e: Entry, no: number, del: HTMLButtonElement): Promise<void> => {
+        if (!logTarget) return
+        if (!confirm("ลบบันทึกครั้งที่ " + no + "?\n" + (e.note || "(ไม่มีข้อความ)"))) return
+        const { p, channel, btn } = logTarget
+        del.disabled = true
+        logError.classList.add("hidden")
+        try {
+            await api("/dashboard/api/followups/" + e.id, { method: "DELETE" })
+        } catch (err) {
+            // 404: someone else already deleted it, so just refresh below.
+            if (!(err instanceof Error && err.message === "HTTP 404")) {
+                console.error("delete follow-up failed:", err)
+                showLogError("ลบไม่สำเร็จ กรุณาลองใหม่")
+                del.disabled = false
+                return
+            }
+        }
+        // The delete went through; a failed reload must not read as a failed delete.
+        try {
+            await refreshAfterChange(p, channel, btn)
+        } catch (err) {
+            console.error("refresh after delete failed:", err)
+            showLogError("ลบแล้ว แต่โหลดประวัติใหม่ไม่สำเร็จ กรุณาเปิดใหม่")
+        }
+    }
+
     logForm.addEventListener("submit", async (ev) => {
         ev.preventDefault()
         if (!logTarget || !openMonth || logSubmit.disabled) return
         const { p, channel, btn } = logTarget
+        const label = logSubmit.textContent
         logSubmit.disabled = true
+        logSubmit.setAttribute("aria-busy", "true")
+        logSubmit.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"))
         logError.classList.add("hidden")
         try {
             await api("/dashboard/api/followups", {
@@ -428,23 +495,25 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ month: openMonth.key, index: p.index, channel, note: logNote.value }),
             })
-            const q = "month=" + encodeURIComponent(openMonth.key) + "&index=" + encodeURIComponent(p.index) + "&channel=" + channel
-            const data: { entries: Entry[] } = await api("/dashboard/api/followups?" + q)
-            p[channel] = data.entries.length
-            p.lastContactAt = data.entries.length ? data.entries[data.entries.length - 1].created_at : p.lastContactAt
-            ;(btn as any).refresh()
-            const last = btn.closest(".pending-row")?.querySelector(".last")
-            if (last && p.lastContactAt) {
-                last.className = "last"
-                last.textContent = "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt)
-            }
-            renderLog(data.entries)
-            logNote.value = ""
-            syncPresets()
         } catch (e) {
             console.error("save follow-up failed:", e)
-            logError.classList.remove("hidden")
+            showLogError("บันทึกไม่สำเร็จ กรุณาลองใหม่")
+            logSubmit.textContent = label
+            logSubmit.removeAttribute("aria-busy")
+            logSubmit.disabled = false
+            return
+        }
+        // Saved: clear the note now so a failed reload can't lead to a duplicate entry.
+        logNote.value = ""
+        syncPresets()
+        try {
+            await refreshAfterChange(p, channel, btn)
+        } catch (e) {
+            console.error("refresh after save failed:", e)
+            showLogError("บันทึกแล้ว แต่โหลดประวัติใหม่ไม่สำเร็จ กรุณาเปิดใหม่")
+            logSubmit.textContent = label
         } finally {
+            logSubmit.removeAttribute("aria-busy")
             logSubmit.disabled = false
         }
     })
