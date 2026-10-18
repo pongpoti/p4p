@@ -600,6 +600,39 @@
             background: rgba(253, 236, 234, .85);
             border: 1px solid rgba(192, 57, 43, .25);
         }
+
+        /* ── ประวัติการใช้งาน (owner only) ─────────────────────────────── */
+        #audit-view { padding: 24px 0 40px; }
+        .audit-filters {
+            display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+            padding: 16px 18px; border-radius: var(--radius); margin-bottom: 16px;
+        }
+        .audit-filters label { display: flex; flex-direction: column; gap: 4px; font-size: .8125rem; font-weight: 600; color: var(--muted-foreground); }
+        .audit-filters select, .audit-filters input {
+            height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px;
+            background: #fff; font: inherit; font-size: .9375rem; color: var(--foreground);
+        }
+        .audit-filters select { min-width: 170px; }
+        .audit-filters .btn-ghost { height: 40px; }
+        .audit-table-wrap { border-radius: var(--radius); overflow: hidden; }
+        .audit-table { width: 100%; border-collapse: collapse; font-size: .9375rem; }
+        .audit-table th {
+            text-align: left; font-size: .8125rem; font-weight: 600; color: var(--muted-foreground);
+            padding: 12px 14px; background: rgba(255, 255, 255, .6); border-bottom: 1px solid var(--border);
+        }
+        .audit-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .audit-table tr:last-child td { border-bottom: 0; }
+        .audit-table .when { white-space: nowrap; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+        .audit-table .who { white-space: nowrap; font-weight: 600; }
+        .audit-table .what { white-space: nowrap; }
+        .audit-table .detail { overflow-wrap: anywhere; }
+        .audit-table .detail q { quotes: "“" "”"; }
+        .audit-table .ip { white-space: nowrap; color: var(--muted-foreground); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+        .audit-table tr.warn td { background: rgba(253, 236, 234, .7); }
+        .audit-table tr.warn .what { color: #8A1C12; font-weight: 600; }
+        .audit-table tr.change td { background: rgba(255, 248, 230, .6); }
+        .audit-empty { padding: 28px; text-align: center; color: var(--muted-foreground); }
+        .audit-more { display: flex; justify-content: center; margin-top: 16px; }
     </style>
 </head>
 
@@ -636,6 +669,15 @@
                         <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
                     </svg>
                     ตามส่ง
+                </a>
+                <a class="nav-btn hidden" href="/dashboard/#audit" data-view="audit" id="audit-nav">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M12 7v5l4 2" />
+                    </svg>
+                    ประวัติการใช้งาน
                 </a>
             </nav>
             <div id="header-actions">
@@ -675,6 +717,41 @@
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
+        </section>
+
+        <!-- ประวัติการใช้งาน: shown to the owner only (main.ts returns 404 to anyone else) -->
+        <section id="audit-view" class="hidden" aria-label="ประวัติการใช้งานแดชบอร์ด">
+            <form id="audit-filters" class="audit-filters glass">
+                <label>ผู้ใช้
+                    <select id="audit-actor"><option value="">ทุกคน</option></select>
+                </label>
+                <label>ประเภท
+                    <select id="audit-group">
+                        <option value="">ทั้งหมด</option>
+                        <option value="change">เพิ่ม / ลบบันทึก</option>
+                        <option value="view">การเปิดดู</option>
+                        <option value="login">เข้าสู่ระบบ</option>
+                        <option value="refused">ถูกปฏิเสธการเข้าสู่ระบบ</option>
+                        <option value="session">ออกจากระบบ</option>
+                    </select>
+                </label>
+                <label>ตั้งแต่วันที่
+                    <input id="audit-from" type="date">
+                </label>
+                <label>ถึงวันที่
+                    <input id="audit-to" type="date">
+                </label>
+                <button type="button" id="audit-reset" class="btn-ghost">ล้างตัวกรอง</button>
+            </form>
+            <div class="audit-table-wrap glass">
+                <table class="audit-table">
+                    <thead>
+                        <tr><th scope="col">เวลา</th><th scope="col">ผู้ใช้</th><th scope="col">การใช้งาน</th><th scope="col">รายละเอียด</th><th scope="col">IP</th></tr>
+                    </thead>
+                    <tbody id="audit-rows"></tbody>
+                </table>
+            </div>
+            <div class="audit-more"><button type="button" id="audit-more" class="btn-ghost hidden">โหลดเพิ่ม</button></div>
         </section>
     </main>
 

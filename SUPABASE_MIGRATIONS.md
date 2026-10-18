@@ -144,6 +144,12 @@ already-applied file is safe.
     2026-10-17**: `dashboard_followups`, the /dashboard/ ตามส่ง tab's log
     of phone calls and LINE messages to physicians who have not sent the
     month's file. service_role only (RLS on, no policies).
+22. `scripts/dashboard-audit-log-2026-10.sql` — **applied live
+    2026-10-18**: `dashboard_audit_log`, who did what on /dashboard/
+    (sign-ins, refused sign-ins, sign-outs, views, follow-up notes added
+    or deleted). service_role only (RLS on, no policies) and append-only:
+    triggers refuse UPDATE, DELETE and TRUNCATE for every role, checked
+    live in a rolled-back transaction.
 
 ## Superseded — do NOT run
 

@@ -612,6 +612,34 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
   idle: "ออกจากระบบอัตโนมัติ เนื่องจากไม่มีการใช้งาน 15 นาที",
 }
 
+// ── Audit log ─────────────────────────────────────────────────────────────
+// Who did what on /dashboard/: sign-ins (and refused ones), sign-outs, tab
+// views, lists opened, follow-up notes added or deleted, and audit-log views.
+// Written here on the server with the service key (table
+// dashboard_audit_log, scripts/dashboard-audit-log-2026-10.sql, which is
+// append-only), so an admin cannot skip or alter an entry. Only the owner
+// (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
+// dashboard admins never see the tab and get 404 from its API.
+const isDashOwner = (sub: string): boolean => sub === ADMIN_LINE_USER_ID
+
+// Never throws: a failed log write is reported in the server log, and the
+// action it describes still goes ahead.
+async function audit(req: Request, actor: { sub: string; name: string }, action: string, target: Record<string, unknown> = {}): Promise<void> {
+  const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
+  try {
+    await axios.post(SUPABASE_URL + "/rest/v1/dashboard_audit_log", {
+      actor_line_id: actor.sub,
+      actor_name: actor.name,
+      action,
+      target,
+      ip: (fwd || req.socket.remoteAddress || "").slice(0, 64),
+      user_agent: String(req.headers["user-agent"] || "").slice(0, 300),
+    }, { headers: { ...SERVICE_HEADERS(), "Content-Type": "application/json" }, timeout: 8000 })
+  } catch (e: any) {
+    console.error("[dashboard] audit write failed (" + action + "):", e.response ? JSON.stringify(e.response.data) : e.message)
+  }
+}
+
 // Unlike the LIFF pages, the dashboard never runs inside a frame, so it
 // refuses to be framed by anyone (clickjacking on the delete buttons).
 app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
@@ -633,8 +661,15 @@ app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
   res.send(dashboardTemplate)
 })
 
-app.get("/dashboard/login", (req: Request, res: Response) => {
+app.get("/dashboard/login", async (req: Request, res: Response) => {
   if (dashSession(req)) return res.redirect(302, "/dashboard/")
+  // A session that lapsed on the server (laptop asleep, tab closed) still has
+  // its signed cookie: log the idle sign-out once, then clear it.
+  const lapsed = readDash(parseCookies(req)[DASH_COOKIE])
+  if (lapsed && DASHBOARD_LINE_USER_IDS.has(lapsed.sub)) {
+    res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
+    await audit(req, { sub: lapsed.sub, name: String(lapsed.name || "") }, "session.idle")
+  }
   const msg = DASH_LOGIN_ERRORS[String(req.query.error || "")]
   res.setHeader("Content-Type", "text/html; charset=utf-8")
   res.setHeader("Cache-Control", "no-store")
@@ -689,9 +724,11 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
     const sub = String(v.data.sub || "")
     if (!DASHBOARD_LINE_USER_IDS.has(sub)) {
       console.warn("[dashboard] LINE login refused for " + sub)
+      await audit(req, { sub, name: String(v.data.name || "") }, "login.refused")
       return res.redirect(302, "/dashboard/login?error=not_allowed")
     }
     setDashCookie(res, sub, v.data.name || "", Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
+    await audit(req, { sub, name: String(v.data.name || "") }, "login.success")
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
     console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -699,8 +736,15 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
   }
 })
 
-app.post("/dashboard/logout", (req: Request, res: Response) => {
+// ?reason=idle when the page signs itself out after 15 idle minutes. By then
+// the server's idle deadline has usually passed too, so the cookie is read
+// for its signature and 12h expiry only.
+app.post("/dashboard/logout", async (req: Request, res: Response) => {
+  const o = readDash(parseCookies(req)[DASH_COOKIE])
   res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
+  if (o && DASHBOARD_LINE_USER_IDS.has(o.sub)) {
+    await audit(req, { sub: o.sub, name: String(o.name || "") }, req.query.reason === "idle" ? "session.idle" : "session.logout")
+  }
   res.json({ ok: true })
 })
 
@@ -710,7 +754,7 @@ app.get("/dashboard/api/session", (req: Request, res: Response) => {
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
   setDashCookie(res, s.sub, s.name, s.exp)
-  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS })
+  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: isDashOwner(s.sub) })
 })
 
 // Excel submission status for the six months before the current one
@@ -718,9 +762,14 @@ app.get("/dashboard/api/session", (req: Request, res: Response) => {
 // entry per month, newest first. A month with no roster table yet comes back
 // with exists: false rather than being left out, so the grid always has six
 // cards. The ตามส่ง tab filters this same list on the client.
+// ?view=overview|followup marks a tab the user opened (logged); without it
+// the call is a background refresh (not logged).
 app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
-  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const view = req.query.view
+  const logged = view === "overview" || view === "followup" ? audit(req, s, "view." + view) : Promise.resolve()
   try {
     const bkk = new Date(Date.now() + 7 * 3600 * 1000)
     const now = bkk.getUTCFullYear() * 12 + bkk.getUTCMonth()
@@ -743,6 +792,7 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
         lastSubmittedAt: stamps.length ? stamps.reduce((a, b) => (Date.parse(a) > Date.parse(b) ? a : b)) : null,
       }
     }))
+    await logged
     res.json({ months })
   } catch (e: any) {
     console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -773,9 +823,11 @@ const thaiCollator = new Intl.Collator("th")
 const rosterName = (r: { firstname?: string | null; lastname?: string | null }): string =>
   [r.firstname || "", r.lastname || ""].join(" ").trim()
 
+// &refresh=1 marks the page's own reload after a change (not logged).
 app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
-  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
   const month = req.query.month
   try {
     if (!(await rosterMonthExists(month))) return res.status(404).json({ error: "unknown month" })
@@ -801,6 +853,7 @@ app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
       const c = counts.get(r.index) || { phone: 0, line: 0, last: null }
       return { index: r.index, name: rosterName(r), department: r.department || "", phone: c.phone, line: c.line, lastContactAt: c.last }
     })
+    if (req.query.refresh !== "1") await audit(req, s, "pending.open", { month, unsent: physicians.length })
     res.json({ physicians })
   } catch (e: any) {
     console.error("[dashboard] pending failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -810,16 +863,26 @@ app.get("/dashboard/api/pending", async (req: Request, res: Response) => {
 
 app.get("/dashboard/api/followups", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
-  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
   const { month, index, channel } = req.query
   if (typeof month !== "string" || !/^\d{4}_\d{2}$/.test(month) || typeof index !== "string" || !UUID_RE.test(index) ||
       typeof channel !== "string" || !FOLLOWUP_CHANNELS.includes(channel)) {
     return res.status(400).json({ error: "bad request" })
   }
   try {
-    const r = await axios.get(SUPABASE_URL + "/rest/v1/dashboard_followups?select=id,note,logged_by,created_at" +
-      "&month_key=eq." + month + "&roster_index=eq." + index + "&channel=eq." + channel + "&order=created_at.asc",
-      { headers: SERVICE_HEADERS(), timeout: 8000 })
+    const [r, who] = await Promise.all([
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_followups?select=id,note,logged_by,created_at" +
+        "&month_key=eq." + month + "&roster_index=eq." + index + "&channel=eq." + channel + "&order=created_at.asc",
+        { headers: SERVICE_HEADERS(), timeout: 8000 }),
+      // Only for the log entry's name; not needed for the page's own reloads.
+      req.query.refresh === "1" ? null : axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(month) +
+        "?select=firstname,lastname&index=eq." + index, { headers: SERVICE_HEADERS(), timeout: 8000 }).catch(() => null),
+    ])
+    if (req.query.refresh !== "1") {
+      await audit(req, s, "followup.history",
+        { month, index, physician: who?.data?.[0] ? rosterName(who.data[0]) : "", channel, entries: r.data.length })
+    }
     res.json({ entries: r.data })
   } catch (e: any) {
     console.error("[dashboard] followups failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -846,6 +909,7 @@ app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req:
       { month_key: month, roster_index: index, physician_name: rosterName(row.data[0]), channel, note, logged_by: s.name },
       { headers: { ...SERVICE_HEADERS(), "Content-Type": "application/json", Prefer: "return=representation" }, timeout: 8000 })
     const e = ins.data[0]
+    await audit(req, s, "followup.add", { id: e.id, month, index, physician: e.physician_name, channel, note: e.note })
     res.json({ entry: { id: e.id, note: e.note, logged_by: e.logged_by, created_at: e.created_at } })
   } catch (e: any) {
     console.error("[dashboard] followup insert failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -864,10 +928,72 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
       { headers: { ...SERVICE_HEADERS(), Prefer: "return=representation" }, timeout: 8000 })
     if (!del.data.length) return res.status(404).json({ error: "not found" })
     console.log("[dashboard] followup", id, "deleted by", s.name)
+    const d = del.data[0]
+    // The whole row, so the log still shows what was removed.
+    await audit(req, s, "followup.delete", {
+      id: d.id, month: d.month_key, index: d.roster_index, physician: d.physician_name, channel: d.channel,
+      note: d.note, logged_by: d.logged_by, logged_at: d.created_at,
+    })
     res.json({ ok: true })
   } catch (e: any) {
     console.error("[dashboard] followup delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to delete follow-up" })
+  }
+})
+
+// The audit log itself, owners only (404 for everyone else, so the route
+// does not advertise itself). Newest first, 50 a page; ?before=<id> pages
+// back. Filters: actor (LINE userId), group (one of AUDIT_GROUPS), from/to
+// (YYYY-MM-DD, Bangkok days, inclusive).
+const AUDIT_GROUPS: Record<string, string> = {
+  login: "action=like.login.*",
+  session: "action=like.session.*",
+  view: "action=in.(view.overview,view.followup,pending.open,followup.history,audit.view)",
+  change: "action=in.(followup.add,followup.delete)",
+  refused: "action=eq.login.refused",
+}
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
+  const { before, actor, group, from, to } = req.query
+  const filters: string[] = []
+  if (typeof before === "string" && /^[1-9][0-9]{0,17}$/.test(before)) filters.push("id=lt." + before)
+  if (typeof actor === "string" && /^U[0-9a-f]{32}$/.test(actor)) filters.push("actor_line_id=eq." + actor)
+  if (typeof group === "string" && AUDIT_GROUPS[group]) filters.push(AUDIT_GROUPS[group])
+  if (typeof from === "string" && DATE_RE.test(from)) filters.push("created_at=gte." + from + "T00:00:00%2B07:00")
+  if (typeof to === "string" && DATE_RE.test(to)) {
+    const next = new Date(Date.parse(to + "T00:00:00Z") + 86400000).toISOString().slice(0, 10)
+    filters.push("created_at=lt." + next + "T00:00:00%2B07:00")
+  }
+  // Paging back is part of the same look, so only the first page is logged.
+  const logged = typeof before === "string" ? Promise.resolve()
+    : audit(req, s, "audit.view", { actor: actor || "", group: group || "", from: from || "", to: to || "" })
+  try {
+    const [r, people] = await Promise.all([
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_audit_log?select=id,created_at,actor_line_id,actor_name,action,target,ip,user_agent" +
+        (filters.length ? "&" + filters.join("&") : "") + "&order=id.desc&limit=51",
+        { headers: SERVICE_HEADERS(), timeout: 8000 }),
+      // Everyone who has signed in or tried to, for the person filter.
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_audit_log?select=actor_line_id,actor_name" +
+        "&action=in.(login.success,login.refused)&order=id.desc&limit=500",
+        { headers: SERVICE_HEADERS(), timeout: 8000 }),
+    ])
+    await logged
+    const actors = new Map<string, string>()
+    for (const p of people.data as { actor_line_id: string; actor_name: string }[]) {
+      if (p.actor_line_id && !actors.has(p.actor_line_id)) actors.set(p.actor_line_id, p.actor_name)
+    }
+    res.json({
+      entries: r.data.slice(0, 50),
+      more: r.data.length > 50,
+      actors: Array.from(actors, ([id, name]) => ({ id, name })),
+    })
+  } catch (e: any) {
+    console.error("[dashboard] audit read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load audit log" })
   }
 })
 
