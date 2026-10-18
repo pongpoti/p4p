@@ -433,6 +433,10 @@
             last.textContent = p.lastContactAt ? "ติดต่อล่าสุด " + fmtWhen(p.lastContactAt) : "ยังไม่ได้ติดต่อ";
         }
     };
+    const showLogError = (msg) => {
+        logError.textContent = msg;
+        logError.classList.remove("hidden");
+    };
     const deleteEntry = async (e, no, del) => {
         if (!logTarget)
             return;
@@ -443,13 +447,23 @@
         logError.classList.add("hidden");
         try {
             await api("/dashboard/api/followups/" + e.id, { method: "DELETE" });
+        }
+        catch (err) {
+            // 404: someone else already deleted it, so just refresh below.
+            if (!(err instanceof Error && err.message === "HTTP 404")) {
+                console.error("delete follow-up failed:", err);
+                showLogError("ลบไม่สำเร็จ กรุณาลองใหม่");
+                del.disabled = false;
+                return;
+            }
+        }
+        // The delete went through; a failed reload must not read as a failed delete.
+        try {
             await refreshAfterChange(p, channel, btn);
         }
         catch (err) {
-            console.error("delete follow-up failed:", err);
-            logError.textContent = "ลบไม่สำเร็จ กรุณาลองใหม่";
-            logError.classList.remove("hidden");
-            del.disabled = false;
+            console.error("refresh after delete failed:", err);
+            showLogError("ลบแล้ว แต่โหลดประวัติใหม่ไม่สำเร็จ กรุณาเปิดใหม่");
         }
     };
     logForm.addEventListener("submit", async (ev) => {
@@ -461,7 +475,6 @@
         logSubmit.disabled = true;
         logSubmit.setAttribute("aria-busy", "true");
         logSubmit.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"));
-        logError.textContent = "บันทึกไม่สำเร็จ กรุณาลองใหม่";
         logError.classList.add("hidden");
         try {
             await api("/dashboard/api/followups", {
@@ -469,13 +482,24 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ month: openMonth.key, index: p.index, channel, note: logNote.value }),
             });
-            await refreshAfterChange(p, channel, btn);
-            logNote.value = "";
-            syncPresets();
         }
         catch (e) {
             console.error("save follow-up failed:", e);
-            logError.classList.remove("hidden");
+            showLogError("บันทึกไม่สำเร็จ กรุณาลองใหม่");
+            logSubmit.textContent = label;
+            logSubmit.removeAttribute("aria-busy");
+            logSubmit.disabled = false;
+            return;
+        }
+        // Saved: clear the note now so a failed reload can't lead to a duplicate entry.
+        logNote.value = "";
+        syncPresets();
+        try {
+            await refreshAfterChange(p, channel, btn);
+        }
+        catch (e) {
+            console.error("refresh after save failed:", e);
+            showLogError("บันทึกแล้ว แต่โหลดประวัติใหม่ไม่สำเร็จ กรุณาเปิดใหม่");
             logSubmit.textContent = label;
         }
         finally {

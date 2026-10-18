@@ -612,6 +612,13 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
   idle: "ออกจากระบบอัตโนมัติ เนื่องจากไม่มีการใช้งาน 15 นาที",
 }
 
+// Unlike the LIFF pages, the dashboard never runs inside a frame, so it
+// refuses to be framed by anyone (clickjacking on the delete buttons).
+app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Content-Security-Policy", CSP + "; frame-ancestors 'none'")
+  next()
+})
+
 // The dashboard is only ever served to a signed-in, allowlisted user;
 // everyone else lands on /dashboard/login first.
 app.get(["/dashboard", "/dashboard/"], (req: Request, res: Response) => {
