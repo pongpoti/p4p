@@ -16,7 +16,7 @@ and the checks list their own file in their path filters.
 
 | Name | File | When (Bangkok time) |
 |---|---|---|
-| 2.1 Every 2 hours: missing submission report | `2-1-every-2-hours-missing-submission-report.yml` | Every 2 h from 07:17 |
+| 2.1 Every minute: missing submission report | `2-1-every-minute-missing-submission-report.yml` | Every minute, in ~58-minute runs that start the next one themselves (cron :10/:30/:50 restarts the chain if it breaks). Updates the Excel and PNGs in the report Drive folder; sends nothing. |
 | 2.2 Nightly: build SK03 files and notify department heads | `2-2-nightly-build-sk03-and-notify-heads.yml` | Daily ~00:37 |
 | 2.3 Daily: keep database awake | `2-3-daily-keep-database-awake.yml` | Daily 07:00 |
 | 2.4 Monthly: create next month's roster table | `2-4-monthly-create-roster-table.yml` | 1st of month 01:00 |

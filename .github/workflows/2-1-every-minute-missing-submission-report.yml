@@ -1,18 +1,28 @@
-name: "2.1 Every 2 hours: missing submission report"
+name: "2.1 Every minute: missing submission report"
 
 on:
   schedule:
-    # Every 2 hours, starting at 00:17 UTC (07:17 Bangkok time)
-    - cron: '17 */2 * * *'
+    # RELAY, like 1-always-on-process-line-uploads-and-emails.yml: GitHub's
+    # cron can't go below 5 minutes and drops ticks under load, so each run
+    # loops the report once a minute for ~58 minutes and then starts the next
+    # run itself. These ticks only restart the chain if it ever breaks; a tick
+    # that lands while a run is alive waits as the one pending run.
+    - cron: '10,30,50 * * * *'
   workflow_dispatch: # allow manual trigger from GitHub UI
+
+# Never two report loops at once (both would rewrite the same Drive files).
+concurrency:
+  group: missing-submission-report
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: write   # lets the last step start the next run (see "Hand over")
 
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
 
     steps:
       - name: Checkout repository
@@ -45,8 +55,26 @@ jobs:
           # report.js while this repo was public; the job now refuses to run
           # without it rather than defaulting somewhere wrong.
           P4P_REPORT_FOLDER_ID:  ${{ secrets.P4P_REPORT_FOLDER_ID }}
-        run: npx tsx report.ts
+        # One report a minute for ~58 minutes. A failed report is logged and
+        # retried on the next minute instead of ending the loop.
+        run: |
+          end=$(( $(date +%s) + 58*60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            start=$(date +%s)
+            npx tsx report.ts || echo "::warning::report failed at $(date -u +%H:%M:%S); retrying next minute"
+            wait=$(( 60 - ($(date +%s) - start) ))
+            if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+          done
 
       # Report-log artifact upload REMOVED — see .github/workflows/3-1-manual-email-read-submission-emails.yml
       # for the reasoning. These logs carry physician names and this repo is
       # public, so the retained artifact was readable by anyone.
+
+      # Start the next run ourselves rather than waiting on the cron (see the
+      # relay workflow for why). To stop the loop, disable this workflow in
+      # the Actions tab.
+      - name: Hand over to the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run 2-1-every-minute-missing-submission-report.yml --repo "$GITHUB_REPOSITORY" --ref main

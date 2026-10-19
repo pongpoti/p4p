@@ -136,7 +136,7 @@ Three workflows upload run logs with 30-day retention:
 |---|---|---|
 | `3-1-manual-email-read-submission-emails.yml` | 61 | `automation/run.log` |
 | `2-2-nightly-build-sk03-and-notify-heads.yml` | 73 | `process/*.log` |
-| `2-1-every-2-hours-missing-submission-report.yml` | 48 | `process/*.log` |
+| `2-1-every-minute-missing-submission-report.yml` | 48 | `process/*.log` |
 
 Those logs are not sanitised. `automation/index.js:526` writes
 `✅ Physician : ${analysis.name}` for every submission processed, and the
