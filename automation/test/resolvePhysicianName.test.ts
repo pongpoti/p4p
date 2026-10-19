@@ -271,3 +271,40 @@ test("a heading with no title, or a titled line far down the sheet, is not a can
   const got = resolvePhysicianNameFromSheet(rows, "Sheet1");
   assert.deepEqual(got, []);
 });
+
+// ── Email body: greeting vs signature ────────────────────────────────────────
+
+const POLITE_BODY = [
+  "เรียน เจ้าหน้าที่ที่เกี่ยวข้อง",
+  "",
+  "ขออนุญาตแนบไฟล์ P4P ของเดือนสิงหาคมและกันยายน 2569 ค่ะ",
+  "หากได้รับอีเมล์แล้ว รบกวนช่วยตอบกลับด้วยนะคะ ขอบคุณค่ะ",
+  "",
+  "ขอแสดงความนับถือ",
+  "Int.1 สมศรี รักดี",
+].join("\n");
+
+test("body: the signature name wins over the greeting line", () => {
+  // Filename and subject carry no name; the greeting used to be taken as one.
+  const got = resolvePhysicianNameCandidates(
+    "P4P เดือนสิงหาคม.xlsx",
+    "P4P เดือนสิงหาคมและกันยายน 2569",
+    POLITE_BODY
+  );
+  assert.equal(got[0], "สมศรี รักดี");
+  assert.ok(!got.some((n) => n.includes("เจ้าหน้าที่")), `greeting leaked: ${JSON.stringify(got)}`);
+});
+
+test("months joined by และ are not read as a name", () => {
+  assert.equal(resolvePhysicianName("", "P4P เดือนสิงหาคมและกันยายน 2569", ""), null);
+  assert.equal(resolvePhysicianName("", "P4P สิงหาคมถึงกันยายน 2569", ""), null);
+});
+
+test("body: a name on a middle line is still found without a closing phrase", () => {
+  const body = "เรียน องค์กรแพทย์\nส่งไฟล์ของ พญ.สมศรี รักดี เดือนสิงหาคม\n";
+  assert.equal(resolvePhysicianName("", "", body), "สมศรี รักดี");
+});
+
+test("body: a greeting alone yields no name", () => {
+  assert.deepEqual(resolvePhysicianNameCandidates("", "", "เรียน เจ้าหน้าที่ที่เกี่ยวข้อง\nขอบคุณค่ะ"), []);
+});
