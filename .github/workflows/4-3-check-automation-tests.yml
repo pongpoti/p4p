@@ -4,11 +4,11 @@ on:
   push:
     paths:
       - "automation/**"
-      - ".github/workflows/check-automation-tests.yml"
+      - ".github/workflows/4-3-check-automation-tests.yml"
   pull_request:
     paths:
       - "automation/**"
-      - ".github/workflows/check-automation-tests.yml"
+      - ".github/workflows/4-3-check-automation-tests.yml"
 
 permissions:
   contents: read

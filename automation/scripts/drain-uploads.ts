@@ -26,7 +26,7 @@
  *
  *   3. SUBMISSION EMAILS. The same relay also reads the Gmail inbox every
  *      EMAIL_POLL_MS (default 60 s) by calling readSubmissionEmails() — the
- *      pass 1-read-submission-emails.yml used to run on an hourly cron, which
+ *      pass 3-1-manual-email-read-submission-emails.yml used to run on an hourly cron, which
  *      GitHub delayed by 4-6 hours under load. Riding this always-on job puts
  *      an emailed file in front of the pipeline within about a minute, with no
  *      second always-on runner. Only this job polls Gmail on a schedule now;

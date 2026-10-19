@@ -102,7 +102,7 @@ interface DeptGroup {
 
 // ═══════════════════════════════════════════════════════════════════
 //  Step 1 — target month key: the Bangkok "current" month (the one just
-//  provisioned by monthly-new-roster-table.yml the day before this runs).
+//  provisioned by 2-4-monthly-create-roster-table.yml the day before this runs).
 // ═══════════════════════════════════════════════════════════════════
 function getTargetMonth(): TargetMonth {
   // Manual override (workflow_dispatch "target_month" input) — force a

@@ -3,7 +3,7 @@
 > **Update (2026-10-17):** the rich-menu entry point was removed on
 > 2026-10-09 and has been restored. The main menu is again `2500×1686` with
 > the "ส่งไฟล์ P4P" row; the live menu only changes once
-> `manual-setup-line-menu.yml` is re-run.
+> `3-4-manual-line-setup-menu.yml` is re-run.
 
 **Status:** design proposal, nothing built. Written against the code as it stands
 on `main` (Express `main.js` in production, `web/` not deployed).
@@ -256,7 +256,7 @@ re-checking after any future edit, since the cap is on the PNG, not the SVG.
 
 - `setup-richmenu.mjs` **recreates both menus and re-sets the default for all
   users**. It is the only script that touches the main menu — the monthly
-  `monthly-line-menu-month-update.yml` job regenerates the picker only, so the new block
+  `2-5-monthly-update-line-menu-month.yml` job regenerates the picker only, so the new block
   survives every month-boundary run untouched.
 - Run it *last* (§13, Phase 4). The button is a global, all-users switch; it
   should not appear until everything behind it works.
@@ -784,7 +784,7 @@ at ten times the size.
 automation/upload-queue.js          claim / complete / fail / delete-object
 automation/line-push.js             LINE push messages (mirrors telegram.js)
 automation/scripts/drain-uploads.mjs  the drain loop
-.github/workflows/line-upload-processing.yml    schedule + workflow_dispatch
+.github/workflows/1-always-on-process-line-uploads-and-emails.yml    schedule + workflow_dispatch
 ```
 
 `drain-uploads.mjs`, per iteration (§6.5 has the two claim queries this
@@ -831,13 +831,13 @@ law of physics:
 So 95% of the wait was the trigger, and the trigger is the thing to fix.
 
 For scale: an emailing physician waits up to **two hours** today
-(`1-read-submission-emails.yml` is `17 */2 * * *`) for that same sub-minute job. Anything here
+(`3-1-manual-email-read-submission-emails.yml` is `17 */2 * * *`) for that same sub-minute job. Anything here
 is an improvement; that is not a reason to settle for one.
 
 #### Recommended: a long-polling drain, not a cron
 
 ```yaml
-# .github/workflows/line-upload-processing.yml
+# .github/workflows/1-always-on-process-line-uploads-and-emails.yml
 on:
   schedule:    [ { cron: "5,25,45 * * * *" } ] # relay, not the trigger
   workflow_dispatch:
@@ -1020,7 +1020,7 @@ had a LINE ID token captured (the `openid`-scope problem in
 `SUPABASE_TABLES.md`) — fall back to the **email** reply the pipeline can
 already send. We know their address; it is the PK of `physicians`.
 
-**No new secret.** `.github/workflows/manual-send-line-carousel.yml` already resolves
+**No new secret.** `.github/workflows/3-5-manual-line-send-carousel.yml` already resolves
 `secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN` for exactly this API, and
 `LINE_TOKEN` is what the rich-menu workflows use. `automation/line-push.js`
 reads the same pair.
@@ -1755,7 +1755,7 @@ don't already know the two tracks are separate.
 **Phase −1 — the one thing to know before writing any code: the log audit.**
 §7.7's whole fast path stands or falls on how often `resolveScore()`'s
 labelled-total tier disagrees with Claude. This costs nothing to check —
-`1-read-submission-emails.yml`'s existing Actions logs already print both numbers side by
+`3-1-manual-email-read-submission-emails.yml`'s existing Actions logs already print both numbers side by
 side — and it should happen before Phase 0, not during Phase 1, because the
 answer decides whether §7.7 ships as designed, ships with Claude still in the
 synchronous call, or doesn't ship at all.
@@ -1949,7 +1949,7 @@ repo-scoped token in the browser. Never.
 | `supabase/functions/line-verify` | **unchanged** — `/upload/` reuses its existing `mode:"bind"` for the §5.5 opportunistic binding. Listed only so nobody re-implements binding; the precondition is that the new LIFF app sits under the same LINE Login channel, per §13 Phase 0 |
 | `automation/telegram.js` | **done** — optional `source`/`account` block on `formatResultMessage` / `formatErrorMessage` (§7.6); email-path output unchanged |
 | `automation/scripts/drain-uploads.mjs` | **done** — long-polling drain (archive first, then score fallback) (§7.3), plus the `archive_pending` age alert (§7.7 rec 2) |
-| `.github/workflows/line-upload-processing.yml` | **done** — 20-minute relay ticks + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
+| `.github/workflows/1-always-on-process-line-uploads-and-emails.yml` | **done** — 20-minute relay ticks + `workflow_dispatch`; the loop, not the schedule, is the trigger (§7.3) |
 | `automation/test/*`, root-level test suite | **done** — `lib/__tests__/` (parity, confidence gate, zip guard + parse timeout, deadline/month-window/picker checks; `npm test` at the root) and `automation/test/` (Telegram layouts on both paths, the failure bubble). The parity guard was verified to actually fail on a one-digit drift, not just to pass. |
 | `/admin/` (`AdminClient.tsx` or `admin/app.js`, `web/app/admin/api/…`) | new panel for `archive_pending` age and re-upload counts (§7.7 rec 2 and the policy question) — Phase 5, built only if usage shows it's needed |
 | `SUPABASE_TABLES.md`, `DATA_EXPOSURE_ANALYSIS.md`, `SECURITY_ANALYSIS.md` | document the queue table and the bucket |

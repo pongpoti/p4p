@@ -14,7 +14,7 @@ on:
       - "src/**"
       - "automation/claude-analyst.ts"
       - "package.json"
-      - ".github/workflows/check-root-tests.yml"
+      - ".github/workflows/4-2-check-root-tests.yml"
   pull_request:
     paths:
       - "lib/**"
@@ -24,7 +24,7 @@ on:
       - "src/**"
       - "automation/claude-analyst.ts"
       - "package.json"
-      - ".github/workflows/check-root-tests.yml"
+      - ".github/workflows/4-2-check-root-tests.yml"
 
 permissions:
   contents: read

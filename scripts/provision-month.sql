@@ -5,7 +5,7 @@
 --  This is now a thin wrapper around public.provision_month(p_new, p_old),
 --  defined in scripts/provision-month-function.sql — the single source of
 --  truth shared with the automated monthly workflow
---  (.github/workflows/monthly-new-roster-table.yml). Keeping both paths on the same
+--  (.github/workflows/2-4-monthly-create-roster-table.yml). Keeping both paths on the same
 --  function guarantees a manual provision and an automated provision behave
 --  identically (this is what prevents the kind of drift that caused the
 --  missing-anon-grant outage).

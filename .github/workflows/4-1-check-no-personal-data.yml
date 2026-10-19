@@ -43,7 +43,7 @@ jobs:
             # Skip this workflow and the docs that necessarily discuss the
             # leak, or the guard would flag its own explanation.
             case "$f" in
-              .github/workflows/check-no-personal-data.yml|.gitignore) continue ;;
+              .github/workflows/4-1-check-no-personal-data.yml|.gitignore) continue ;;
               DATA_EXPOSURE_ANALYSIS.md|SECURITY_ANALYSIS.md) continue ;;
             esac
 

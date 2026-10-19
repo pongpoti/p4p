@@ -8,7 +8,7 @@ name: "3.4 Manual · LINE: set up LINE menu"
 # reachable. Deliberately workflow_dispatch only, never scheduled — the
 # script itself says "run it once".
 #
-# Uses the same LINE_TOKEN secret monthly-line-menu-month-update.yml already runs
+# Uses the same LINE_TOKEN secret 2-5-monthly-update-line-menu-month.yml already runs
 # monthly against this channel — nothing new to add. UPLOAD_LIFF_ID is not a
 # secret (it ships in the page's own HTML and in main.js's source as a
 # fallback), so it's a plain literal here rather than a secret lookup.
