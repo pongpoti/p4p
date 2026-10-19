@@ -68,14 +68,14 @@ jobs:
           TELEGRAM_BOT_TOKEN    : ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID      : ${{ secrets.TELEGRAM_CHAT_ID }}
           # Push transport for terminal failures only (§7.2). No new secret:
-          # manual-send-line-carousel.yml already resolves this same pair.
+          # 3-5-manual-line-send-carousel.yml already resolves this same pair.
           LINE_ACCESS_TOKEN     : ${{ secrets.LINE_ACCESS_TOKEN }}
           LINE_TOKEN            : ${{ secrets.LINE_TOKEN }}
           # Turns the failure bubble's button into a real retry link.
           UPLOAD_LIFF_ID        : ${{ secrets.UPLOAD_LIFF_ID }}
           DRAIN_MINUTES         : "60"
           # Read the Gmail inbox for submission emails every minute (the job
-          # 1-read-submission-emails.yml used to do hourly). "0" turns it off.
+          # 3-1-manual-email-read-submission-emails.yml used to do hourly). "0" turns it off.
           EMAIL_POLL_MS         : "60000"
         run: npx tsx scripts/drain-uploads.ts
 
@@ -91,4 +91,4 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run line-upload-processing.yml --repo "$GITHUB_REPOSITORY" --ref main
+        run: gh workflow run 1-always-on-process-line-uploads-and-emails.yml --repo "$GITHUB_REPOSITORY" --ref main

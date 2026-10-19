@@ -1,7 +1,7 @@
 name: "3.1 Manual · Email: read submission emails (backup)"
 
 # The inbox is now read every minute by the always-on relay in
-# line-upload-processing.yml (automation/scripts/drain-uploads.ts). This used
+# 1-always-on-process-line-uploads-and-emails.yml (automation/scripts/drain-uploads.ts). This used
 # to run on an hourly cron, which GitHub delayed by 4-6 hours under load.
 #
 # Manual only, and only for when the relay is down: run while the relay is

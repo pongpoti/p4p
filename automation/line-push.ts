@@ -13,7 +13,7 @@
  * thing worth a push is a terminal failure — rare, and the one case where the
  * physician has something to do about it.
  *
- * No new secret: .github/workflows/manual-send-line-carousel.yml already resolves
+ * No new secret: .github/workflows/3-5-manual-line-send-carousel.yml already resolves
  * LINE_ACCESS_TOKEN || LINE_TOKEN for exactly this API.
  */
 

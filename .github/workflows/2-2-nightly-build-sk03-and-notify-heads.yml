@@ -72,7 +72,7 @@ jobs:
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
         run: npx tsx process.ts
 
-      # Run-log artifact upload REMOVED — see .github/workflows/1-read-submission-emails.yml
+      # Run-log artifact upload REMOVED — see .github/workflows/3-1-manual-email-read-submission-emails.yml
       # for the reasoning. These logs carry physician names and this repo is
       # public, so the retained artifact was readable by anyone.
 

@@ -12,13 +12,13 @@ on:
       # this workflow, or the copies can silently drift apart.
       - "src/constants.cjs"
       - "assets/shared.js"
-      - ".github/workflows/check-web-tests.yml"
+      - ".github/workflows/4-4-check-web-tests.yml"
   pull_request:
     paths:
       - "web/**"
       - "src/constants.cjs"
       - "assets/shared.js"
-      - ".github/workflows/check-web-tests.yml"
+      - ".github/workflows/4-4-check-web-tests.yml"
 
 permissions:
   contents: read

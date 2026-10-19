@@ -2,7 +2,7 @@
  * scripts/score-tracker.mjs
  *
  * Monthly P4P score-completion tracker.
- * Runs as a job in .github/workflows/2-build-files-and-notify-heads.yml, on that
+ * Runs as a job in .github/workflows/2-2-nightly-build-sk03-and-notify-heads.yml, on that
  * workflow's daily schedule (no schedule of its own).
  *
  * Logic (whole-month gate — month is the outer loop):
@@ -71,7 +71,7 @@ const CATCHUP_START_MONTH = "2569_05";
 // because those are the primary function and must not fail over this.
 const OVERSIGHT_EMAIL = (process.env.OVERSIGHT_EMAIL ?? "").trim();
 
-// ── Test-mode overrides (manual workflow_dispatch only, see 2-build-files-and-notify-heads.yml) ──
+// ── Test-mode overrides (manual workflow_dispatch only, see 2-2-nightly-build-sk03-and-notify-heads.yml) ──
 // Restrict to specific department(s) and/or redirect the email to a test
 // address instead of the real dept head — lets you verify a real send
 // end-to-end without touching a real department head's inbox. When
