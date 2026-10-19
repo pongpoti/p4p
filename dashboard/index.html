@@ -647,7 +647,70 @@
         .audit-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: clamp(12px, 2.2vh, 20px); flex-shrink: 0; }
         .audit-pager .btn-ghost { height: 40px; min-width: 104px; }
         .audit-pager .btn-ghost:disabled { opacity: .45; cursor: default; background: #fff; }
-        #audit-page { min-width: 72px; text-align: center; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+        #audit-page, .pager-page { min-width: 72px; text-align: center; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+        /* ── รายชื่อ: the LINE /admin/ roster editor, as a desktop table ──── */
+        /* Same frame as ประวัติการใช้งาน: toolbar, one screenful of one-line
+           rows, pager. */
+        #roster-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+        .roster-toolbar { align-items: center; flex-wrap: nowrap; }
+        .roster-toolbar select { min-width: 0; flex-shrink: 0; }
+        .roster-toolbar #roster-month { width: 130px; }
+        .roster-toolbar #roster-dept { width: 210px; }
+        .roster-toolbar .search {
+            flex: 1 1 200px; min-width: 150px; max-width: 300px; height: 40px; padding: 0 12px; border-radius: 10px; border-color: var(--border);
+            flex-direction: row; font-size: .9375rem; font-weight: 400; color: var(--foreground);
+        }
+        .roster-toolbar .search svg { width: 18px; height: 18px; }
+        .roster-toolbar .search input { height: auto; padding: 0; border: 0; }
+        #roster-count { color: var(--muted-foreground); font-size: .9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .roster-toolbar .spacer { flex: 1; }
+        .roster-toolbar button { flex-shrink: 0; white-space: nowrap; }
+        .roster-toolbar .btn-ghost, .roster-toolbar .btn-primary { height: 40px; display: inline-flex; align-items: center; gap: 8px; }
+        .roster-toolbar .btn-ghost svg, .roster-toolbar .btn-primary svg { width: 18px; height: 18px; }
+        .req-badge {
+            min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px;
+            display: inline-grid; place-items: center; font-size: .75rem; font-weight: 700; color: #fff; background: #C2410C;
+        }
+        .audit-table col.c-no { width: 60px; }
+        .audit-table col.c-dept { width: 20%; }
+        .audit-table col.c-type { width: 19%; }
+        .audit-table col.c-score { width: 84px; }
+        .audit-table col.c-sent { width: 178px; }
+        .audit-table col.c-act { width: 104px; }
+        .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+        .roster-table th.num, .roster-table th.score { text-align: right; }
+        .roster-table .score { color: var(--foreground); }
+        .roster-table .name { font-weight: 600; }
+        .roster-table .muted { color: var(--muted-foreground); }
+        .roster-table .sent { color: var(--success); font-size: .875rem; font-variant-numeric: tabular-nums; }
+        .roster-table .sent.none { color: var(--muted-foreground); }
+        .roster-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
+        .roster-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
+        .roster-table .acts .icon-btn + .icon-btn { margin-left: 8px; }
+        .roster-table .acts .icon-btn svg { width: 18px; height: 18px; }
+        .roster-table .acts .del:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
+        .roster-table tr.flash td { background: rgba(21, 127, 61, .09); }
+
+        /* Add / edit one roster row, and the access-request list */
+        .form-dialog { width: min(640px, 94vw); }
+        .form-dialog .roster-form { padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
+        .roster-form .contents { display: contents; }
+        .roster-form label { display: flex; flex-direction: column; gap: 4px; font-size: .875rem; font-weight: 600; color: var(--muted-foreground); }
+        .roster-form label.wide { grid-column: 1 / -1; }
+        .roster-form input, .roster-form select {
+            height: 42px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px;
+            background: #fff; font: inherit; font-size: 1rem; font-weight: 400; color: var(--foreground);
+        }
+        .roster-form input:focus-visible, .roster-form select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .roster-form .log-actions, .roster-form .error-text { grid-column: 1 / -1; }
+        .req-list { list-style: none; margin: 0; padding: 8px 22px 20px; overflow-y: auto; flex: 1; min-height: 80px; }
+        .req-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+        .req-row:last-child { border-bottom: 0; }
+        .req-row .name { font-weight: 600; }
+        .req-row .meta { color: var(--muted-foreground); font-size: .875rem; overflow-wrap: anywhere; }
+        .req-row .actions { display: flex; gap: 8px; }
+        .req-row .btn-primary, .req-row .btn-ghost { height: 38px; padding: 0 14px; }
+        .req-row .reject:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
     </style>
 </head>
 
@@ -684,6 +747,16 @@
                         <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
                     </svg>
                     ตามส่ง
+                </a>
+                <a class="nav-btn" href="/dashboard/#roster" data-view="roster">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    รายชื่อ
                 </a>
                 <a class="nav-btn hidden" href="/dashboard/#audit" data-view="audit" id="audit-nav">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -734,6 +807,46 @@
             <div class="month-card glass skeleton" aria-hidden="true"><div class="bar chip"></div><div class="bar body"></div></div>
         </section>
 
+        <!-- รายชื่อ: every admin can add, edit and delete roster rows, and answer access requests -->
+        <section id="roster-view" class="hidden" aria-label="รายชื่อแพทย์รายเดือน">
+            <div class="audit-filters roster-toolbar glass" role="search">
+                <select id="roster-month" aria-label="เดือน"></select>
+                <label class="search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
+                    <input id="roster-search" type="search" placeholder="ค้นหาชื่อหรือกลุ่มงาน" aria-label="ค้นหาชื่อหรือกลุ่มงาน" autocomplete="off">
+                </label>
+                <select id="roster-dept" aria-label="กลุ่มงาน"><option value="">ทุกกลุ่มงาน</option></select>
+                <span id="roster-count" aria-live="polite"></span>
+                <span class="spacer"></span>
+                <button type="button" id="req-btn" class="btn-ghost">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6" /><path d="M22 11h-6" /></svg>
+                    คำขอเข้าใช้งาน
+                    <span id="req-badge" class="req-badge hidden"></span>
+                </button>
+                <button type="button" id="roster-add" class="btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+                    เพิ่มรายชื่อ
+                </button>
+            </div>
+            <div class="audit-table-wrap glass">
+                <table class="audit-table roster-table">
+                    <colgroup><col class="c-no"><col><col class="c-dept"><col class="c-type"><col class="c-score"><col class="c-sent"><col class="c-act"></colgroup>
+                    <thead>
+                        <tr><th scope="col" class="num">ลำดับ</th><th scope="col">ชื่อ-นามสกุล</th><th scope="col">กลุ่มงาน</th><th scope="col">ประเภท · ระดับ</th><th scope="col" class="score">คะแนน</th><th scope="col">ส่งไฟล์</th><th scope="col"><span class="sr-only">แก้ไข / ลบ</span></th></tr>
+                    </thead>
+                    <tbody id="roster-rows"></tbody>
+                </table>
+            </div>
+            <nav class="audit-pager" aria-label="เปลี่ยนหน้า">
+                <button type="button" id="roster-prev" class="btn-ghost" disabled>ก่อนหน้า</button>
+                <span id="roster-page" class="pager-page" aria-live="polite"></span>
+                <button type="button" id="roster-next" class="btn-ghost" disabled>ถัดไป</button>
+            </nav>
+        </section>
+
         <!-- ประวัติการใช้งาน: shown to the owner only (main.ts returns 404 to anyone else) -->
         <section id="audit-view" class="hidden" aria-label="ประวัติการใช้งานแดชบอร์ด">
             <form id="audit-filters" class="audit-filters glass">
@@ -743,7 +856,7 @@
                 <label>ประเภท
                     <select id="audit-group">
                         <option value="">ทั้งหมด</option>
-                        <option value="change">เพิ่ม / ลบบันทึก</option>
+                        <option value="change">การแก้ไข</option>
                         <option value="view">การเปิดดู</option>
                         <option value="login">เข้าสู่ระบบ</option>
                         <option value="refused">ถูกปฏิเสธการเข้าสู่ระบบ</option>
@@ -819,6 +932,43 @@
                 <button type="submit" id="log-submit" class="btn-primary">บันทึก</button>
             </div>
         </form>
+    </dialog>
+
+    <!-- รายชื่อ: add or edit one row (fields follow the month table's columns) -->
+    <dialog id="roster-dialog" class="log-dialog form-dialog" aria-labelledby="roster-dialog-title">
+        <div class="log-header">
+            <div>
+                <h2 id="roster-dialog-title"></h2>
+                <p id="roster-dialog-sub"></p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <form id="roster-form" class="roster-form" novalidate>
+            <div id="roster-fields" class="contents"></div>
+            <p id="roster-error" class="error-text hidden" role="alert"></p>
+            <div class="log-actions">
+                <button type="button" class="btn-ghost" data-close>ยกเลิก</button>
+                <button type="submit" id="roster-save" class="btn-primary">บันทึก</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- รายชื่อ: people waiting for access to the LINE upload page -->
+    <dialog id="req-dialog" class="log-dialog" aria-labelledby="req-title">
+        <div class="log-header">
+            <div>
+                <h2 id="req-title">คำขอเข้าใช้งาน</h2>
+                <p id="req-sub"></p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <ul id="req-list" class="req-list"></ul>
     </dialog>
 
     <script src="app.js"></script>
