@@ -185,7 +185,7 @@
     const auditView = document.getElementById("audit-view") as HTMLElement
     const rosterView = document.getElementById("roster-view") as HTMLElement
     const currentView = (): string =>
-        location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
+        location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
             : location.hash === "#audit" && isOwner ? "audit" : "overview"
     const render = (): void => {
         const view = currentView()
@@ -582,6 +582,8 @@
     const auditTo     = document.getElementById("audit-to") as HTMLInputElement
     const auditReset  = document.getElementById("audit-reset") as HTMLButtonElement
     const auditNav    = document.getElementById("audit-nav") as HTMLElement
+    // รายชื่อ is owner-only too (main.ts returns 404 to anyone else).
+    const rosterNav   = document.getElementById("roster-nav") as HTMLElement
 
     const ACTION_LABEL: Record<string, string> = {
         "login.success": "เข้าสู่ระบบ",
@@ -781,7 +783,7 @@
         void loadAudit()
     })
 
-    // ── รายชื่อ: the LINE /admin/ roster editor, for every admin ────────
+    // ── รายชื่อ: the LINE /admin/ roster editor (owner only) ─────────────
     // Same data and rules as admin/app.ts: one month table at a time
     // (newest first, this month by default), search by name or department,
     // a department filter, add / edit / delete a row, and the access
@@ -1243,6 +1245,7 @@
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : ""
                 isOwner = session.isOwner === true
                 auditNav.classList.toggle("hidden", !isOwner)
+                rosterNav.classList.toggle("hidden", !isOwner)
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
