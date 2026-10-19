@@ -167,7 +167,7 @@
     let isOwner = false;
     const auditView = document.getElementById("audit-view");
     const rosterView = document.getElementById("roster-view");
-    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
+    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
         : location.hash === "#audit" && isOwner ? "audit" : "overview";
     const render = () => {
         const view = currentView();
@@ -566,6 +566,8 @@
     const auditTo = document.getElementById("audit-to");
     const auditReset = document.getElementById("audit-reset");
     const auditNav = document.getElementById("audit-nav");
+    // รายชื่อ is owner-only too (main.ts returns 404 to anyone else).
+    const rosterNav = document.getElementById("roster-nav");
     const ACTION_LABEL = {
         "login.success": "เข้าสู่ระบบ",
         "login.refused": "ถูกปฏิเสธการเข้าสู่ระบบ",
@@ -1274,6 +1276,7 @@
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : "";
                 isOwner = session.isOwner === true;
                 auditNav.classList.toggle("hidden", !isOwner);
+                rosterNav.classList.toggle("hidden", !isOwner);
             }
         }
         catch (e) {

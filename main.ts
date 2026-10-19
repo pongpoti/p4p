@@ -997,7 +997,8 @@ app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
   }
 })
 
-// ── รายชื่อ tab: the /admin/ roster editor for every dashboard admin ──────
+// ── รายชื่อ tab: the /admin/ roster editor, owner only ─────────────────────
+// Like ประวัติการใช้งาน, only the owner (Pong) may use it; anyone else gets 404.
 // Same reads and writes as the /admin/ routes below (service key, the month
 // must be a live roster table, the body is filtered to real non-PK columns),
 // behind the dashboard session instead of the /admin/ cookie. Every write is
@@ -1019,7 +1020,9 @@ const rosterFullName = (r: Record<string, any>): string =>
 
 app.get("/dashboard/api/roster", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
-  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
     res.json({ tables: tables.slice().sort().reverse() })
@@ -1034,6 +1037,7 @@ app.get("/dashboard/api/roster/:table", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const table = await dashRosterTable(req, res)
     if (!table) return
@@ -1053,6 +1057,7 @@ app.post("/dashboard/api/roster/:table", express.json({ limit: "32kb" }), async 
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const table = await dashRosterTable(req, res)
     if (!table) return
@@ -1071,6 +1076,7 @@ app.patch("/dashboard/api/roster/:table/:index", express.json({ limit: "32kb" })
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   const index = String(req.params.index)
   if (!UUID_RE.test(index)) return res.status(400).json({ error: "bad request" })
   try {
@@ -1104,6 +1110,7 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   const index = String(req.params.index)
   if (!UUID_RE.test(index)) return res.status(400).json({ error: "bad request" })
   try {
@@ -1123,7 +1130,9 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
 
 app.get("/dashboard/api/access-requests", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
-  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const r = await axios.get(SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=email,name,department,requested_at&order=requested_at.desc",
       { headers: SERVICE_HEADERS(), timeout: 8000 })
@@ -1138,6 +1147,7 @@ app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request,
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   const email = String(req.params.email || "").trim().toLowerCase()
   const decision = String(req.params.decision)
   if (!email || (decision !== "approve" && decision !== "reject")) return res.status(400).json({ error: "bad request" })
