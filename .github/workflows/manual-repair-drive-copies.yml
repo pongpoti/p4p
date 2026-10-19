@@ -1,4 +1,4 @@
-name: "Manual: repair blank Drive copies"
+name: "3.7 Manual · Drive: repair blank copies"
 
 # Restores the workbook links an earlier extractFirstSheetBuffer() stripped
 # from the archived copies (see automation/scripts/repair-drive-rels.ts).

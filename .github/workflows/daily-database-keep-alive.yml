@@ -1,4 +1,4 @@
-name: "Daily: keep database awake"
+name: "2.3 Daily: keep database awake"
 
 on:
   schedule:

@@ -1,4 +1,4 @@
-name: "Check: root tests"
+name: "4.2 Check: root tests"
 
 # The parity guard between lib/p4p-score.ts and automation/claude-analyst.ts
 # only guards anything if it actually runs: a vendored copy that nothing

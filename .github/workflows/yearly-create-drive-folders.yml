@@ -1,4 +1,4 @@
-name: "Yearly: create Drive year folders"
+name: "2.7 Yearly: create Drive year folders"
 
 on:
   schedule:

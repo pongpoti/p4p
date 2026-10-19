@@ -1,4 +1,4 @@
-name: "Manual: verify Drive copies against emails"
+name: "3.6 Manual · Drive: verify copies against emails"
 
 # READ-ONLY. Pairs every archived .xlsx in the P4P Drive tree with the
 # attachment it came from in the Gmail inbox and checks that the copy shows

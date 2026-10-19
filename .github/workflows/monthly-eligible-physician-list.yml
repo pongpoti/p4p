@@ -1,4 +1,4 @@
-name: "Monthly: eligible physician list (PDF)"
+name: "2.6 Monthly: eligible physician list (PDF)"
 
 # Publishes a Thai-language PDF of every physician on the new month's roster
 # (grouped by department, one section each) to a fixed Google Drive folder.

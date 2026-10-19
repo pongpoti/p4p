@@ -1,4 +1,4 @@
-name: "Check: no personal data committed"
+name: "4.1 Check: no personal data committed"
 
 # Fails a pull request that adds personal data to this PUBLIC repository.
 #

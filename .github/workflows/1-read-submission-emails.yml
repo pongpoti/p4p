@@ -1,4 +1,4 @@
-name: "1. Read submission emails (manual backup)"
+name: "3.1 Manual · Email: read submission emails (backup)"
 
 # The inbox is now read every minute by the always-on relay in
 # line-upload-processing.yml (automation/scripts/drain-uploads.ts). This used

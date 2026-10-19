@@ -1,4 +1,4 @@
-name: "2. Build SK03 files and notify department heads (nightly)"
+name: "2.2 Nightly: build SK03 files and notify department heads"
 
 on:
   schedule:
