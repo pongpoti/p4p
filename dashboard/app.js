@@ -20,7 +20,7 @@
     const errorEl = document.getElementById("error");
     const emptyEl = document.getElementById("empty");
     const titleEl = document.getElementById("page-title");
-    const navBtns = Array.from(document.querySelectorAll(".nav-btn[data-view]"));
+    const navBtns = Array.from(document.querySelectorAll("a[data-view]"));
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
     // reason "idle" is recorded as an automatic sign-out in the audit log.
     const signOut = async (to, reason) => {
@@ -560,9 +560,6 @@
     }
     const auditRows = document.getElementById("audit-rows");
     const auditWrap = auditRows.closest(".audit-table-wrap");
-    const auditPrev = document.getElementById("audit-prev");
-    const auditNext = document.getElementById("audit-next");
-    const auditPage = document.getElementById("audit-page");
     const auditActor = document.getElementById("audit-actor");
     const auditGroup = document.getElementById("audit-group");
     const auditFrom = document.getElementById("audit-from");
@@ -696,11 +693,10 @@
         return tr;
     };
     // Entries arrive 50 at a time, newest first (?before= pages back); the
-    // table shows one screenful of them and ก่อนหน้า / ถัดไป move between
-    // screenfuls, fetching the next 50 only when the page needs them.
+    // table scrolls inside its box and the next 50 load as the bottom nears.
     let auditAll = [];
     let auditHasMore = false;
-    let auditPageNo = 0;
+    let auditLoadingMore = false;
     let auditSeq = 0;
     const auditQuery = () => {
         const q = new URLSearchParams();
@@ -721,23 +717,8 @@
         tr.appendChild(td);
         return tr;
     };
-    // Rows that fit below the table header (each row is a fixed 44px + border).
-    const auditPageSize = () => {
-        const head = auditWrap.querySelector("thead").offsetHeight;
-        return Math.max(1, Math.floor((auditWrap.clientHeight - head) / 45));
-    };
-    let auditPageSizeAtLastShow = 1;
-    const showAuditPage = () => {
-        const size = auditPageSize();
-        auditPageSizeAtLastShow = size;
-        const from = auditPageNo * size;
-        const rows = auditAll.slice(from, from + size);
-        auditRows.replaceChildren(...(rows.length ? rows.map(auditRow) : [emptyRow("ไม่มีรายการ")]));
-        const lastLoaded = from + size >= auditAll.length;
-        auditPrev.disabled = auditPageNo === 0;
-        auditNext.disabled = lastLoaded && !auditHasMore;
-        const known = auditHasMore ? "" : " / " + Math.max(1, Math.ceil(auditAll.length / size));
-        auditPage.textContent = "หน้า " + (auditPageNo + 1) + known;
+    const showAudit = () => {
+        auditRows.replaceChildren(...(auditAll.length ? auditAll.map(auditRow) : [emptyRow("ไม่มีรายการ")]));
     };
     const fetchAudit = async (before) => {
         let q = auditQuery();
@@ -750,9 +731,8 @@
         const seq = ++auditSeq;
         auditAll = [];
         auditHasMore = false;
-        auditPageNo = 0;
-        auditPrev.disabled = auditNext.disabled = true;
-        auditPage.textContent = "";
+        auditLoadingMore = false;
+        auditWrap.scrollTop = 0;
         auditRows.replaceChildren(emptyRow("กำลังโหลด…"));
         try {
             const data = await fetchAudit(null);
@@ -769,7 +749,8 @@
             auditActor.value = chosen;
             auditAll = data.entries;
             auditHasMore = data.more;
-            showAuditPage();
+            showAudit();
+            void auditMore();
         }
         catch (e) {
             if (seq !== auditSeq)
@@ -778,50 +759,33 @@
             auditRows.replaceChildren(emptyRow("โหลดประวัติการใช้งานไม่สำเร็จ กรุณาลองใหม่", "error-text"));
         }
     }
-    auditPrev.addEventListener("click", () => {
-        if (auditPageNo === 0)
-            return;
-        auditPageNo--;
-        showAuditPage();
-    });
-    auditNext.addEventListener("click", async () => {
+    // Load the next 50 while the bottom is within a screenful (or the box isn't full yet).
+    async function auditMore() {
         const seq = auditSeq;
-        const need = (auditPageNo + 2) * auditPageSize();
-        auditNext.disabled = auditPrev.disabled = true;
-        try {
-            while (auditAll.length < need && auditHasMore) {
+        while (auditHasMore && !auditLoadingMore && seq === auditSeq &&
+            auditWrap.scrollHeight - auditWrap.scrollTop - auditWrap.clientHeight < auditWrap.clientHeight) {
+            auditLoadingMore = true;
+            try {
                 const data = await fetchAudit(auditAll[auditAll.length - 1].id);
                 if (seq !== auditSeq)
                     return;
                 auditAll = auditAll.concat(data.entries);
                 auditHasMore = data.more;
+                auditRows.append(...data.entries.map(auditRow));
             }
-            if (auditAll.length > (auditPageNo + 1) * auditPageSize())
-                auditPageNo++;
-        }
-        catch (e) {
-            console.error("audit page failed:", e);
-        }
-        if (seq === auditSeq)
-            showAuditPage();
-    });
-    // A different window height fits a different number of rows: keep the
-    // first entry on screen and re-cut the pages around it.
-    let auditResizeTimer = 0;
-    window.addEventListener("resize", () => {
-        clearTimeout(auditResizeTimer);
-        auditResizeTimer = window.setTimeout(() => {
-            if (currentView() === "roster") {
-                refitRoster();
+            catch (e) {
+                console.error("audit more failed:", e);
                 return;
             }
-            if (currentView() !== "audit" || !auditAll.length)
-                return;
-            const first = auditPageNo * auditPageSizeAtLastShow;
-            auditPageNo = Math.floor(first / auditPageSize());
-            showAuditPage();
-        }, 150);
-    });
+            finally {
+                if (seq === auditSeq)
+                    auditLoadingMore = false;
+            }
+        }
+    }
+    auditWrap.addEventListener("scroll", () => { void auditMore(); }, { passive: true });
+    window.addEventListener("resize", () => { if (currentView() === "audit")
+        void auditMore(); });
     for (const f of [auditActor, auditGroup, auditFrom, auditTo])
         f.addEventListener("change", () => { void loadAudit(); });
     auditReset.addEventListener("click", () => {
@@ -856,9 +820,6 @@
     const rosterCount = document.getElementById("roster-count");
     const rosterRows = document.getElementById("roster-rows");
     const rosterWrap = rosterRows.closest(".audit-table-wrap");
-    const rosterPrev = document.getElementById("roster-prev");
-    const rosterNext = document.getElementById("roster-next");
-    const rosterPage = document.getElementById("roster-page");
     const rosterAdd = document.getElementById("roster-add");
     const rosterDlg = document.getElementById("roster-dialog");
     const rosterDlgT = document.getElementById("roster-dialog-title");
@@ -879,7 +840,6 @@
     let rosterAll = [];
     let rosterShown = [];
     let rosterTable = "";
-    let rosterPageNo = 0;
     let rosterSeq = 0;
     let rosterTables = null;
     // Errors from the roster API carry the database's reason (e.g. a bad number).
@@ -925,10 +885,6 @@
         tr.firstElementChild.setAttribute("colspan", "7");
         return tr;
     };
-    const rosterPageSize = () => {
-        const head = rosterWrap.querySelector("thead").offsetHeight;
-        return Math.max(1, Math.floor((rosterWrap.clientHeight - head) / 45));
-    };
     const rosterRow = (r, no) => {
         const tr = el("tr");
         tr.dataset.index = r.index;
@@ -964,24 +920,9 @@
         tr.appendChild(acts);
         return tr;
     };
-    const showRosterPage = () => {
-        const size = rosterPageSize();
-        const pages = Math.max(1, Math.ceil(rosterShown.length / size));
-        rosterPageNo = Math.min(rosterPageNo, pages - 1);
-        const from = rosterPageNo * size;
-        const rows = rosterShown.slice(from, from + size);
-        rosterRows.replaceChildren(...(rows.length ? rows.map((r, i) => rosterRow(r, from + i + 1))
+    const showRoster = () => {
+        rosterRows.replaceChildren(...(rosterShown.length ? rosterShown.map((r, i) => rosterRow(r, i + 1))
             : [rosterEmpty(rosterAll.length ? "ไม่พบรายชื่อที่ค้นหา" : "ยังไม่มีรายชื่อในเดือนนี้")]));
-        rosterPrev.disabled = rosterPageNo === 0;
-        rosterNext.disabled = rosterPageNo >= pages - 1;
-        rosterPage.textContent = "หน้า " + (rosterPageNo + 1) + " / " + pages;
-    };
-    let rosterFirstShown = 0;
-    const refitRoster = () => {
-        if (!rosterTable)
-            return;
-        rosterPageNo = Math.floor(rosterFirstShown / rosterPageSize());
-        showRosterPage();
     };
     const populateDept = () => {
         const present = sortDeps([...new Set(rosterAll.map((r) => r.department).filter(Boolean))]);
@@ -1003,9 +944,9 @@
             return !q || (fullName(r) + " " + (r.department || "")).toLowerCase().includes(q);
         }).sort((a, b) => sortName(a).localeCompare(sortName(b), "th"));
         rosterCount.textContent = fmtNum(rosterShown.length) + " จาก " + fmtNum(rosterAll.length) + " คน";
-        showRosterPage();
+        showRoster();
     };
-    // Reload the month; the page stays where it was, or moves to `focus`.
+    // Reload the month; the list stays where it was scrolled, or scrolls to `focus`.
     const reloadRoster = async (focus) => {
         const seq = ++rosterSeq;
         const data = await rosterApi("/dashboard/api/roster/" + encodeURIComponent(rosterTable) + "?refresh=1");
@@ -1026,23 +967,20 @@
                 at = rosterShown.findIndex((r) => r.index === focus);
             }
             if (at !== -1) {
-                rosterPageNo = Math.floor(at / rosterPageSize());
-                showRosterPage();
                 const tr = rosterRows.querySelector('tr[data-index="' + focus + '"]');
                 if (tr) {
+                    tr.scrollIntoView({ block: "nearest" });
                     tr.classList.add("flash");
                     setTimeout(() => tr.classList.remove("flash"), 2400);
                 }
             }
         }
-        rosterFirstShown = rosterPageNo * rosterPageSize();
     };
     // logged: the user opened the tab or picked a month (written to the audit log).
     async function loadRoster(logged) {
         const seq = ++rosterSeq;
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"));
-        rosterPrev.disabled = rosterNext.disabled = true;
-        rosterPage.textContent = "";
+        rosterWrap.scrollTop = 0;
         void loadRequests();
         try {
             if (!rosterTables) {
@@ -1066,10 +1004,8 @@
                 return;
             rosterCols = data.columns;
             rosterAll = data.rows;
-            rosterPageNo = 0;
             populateDept();
             applyRosterFilter();
-            rosterFirstShown = 0;
         }
         catch (e) {
             if (seq !== rosterSeq)
@@ -1079,20 +1015,8 @@
         }
     }
     rosterMonth.addEventListener("change", () => { rosterDept.value = ""; void loadRoster(true); });
-    rosterSearch.addEventListener("input", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0; });
-    rosterDept.addEventListener("change", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0; });
-    rosterPrev.addEventListener("click", () => {
-        if (rosterPageNo === 0)
-            return;
-        rosterPageNo--;
-        showRosterPage();
-        rosterFirstShown = rosterPageNo * rosterPageSize();
-    });
-    rosterNext.addEventListener("click", () => {
-        rosterPageNo++;
-        showRosterPage();
-        rosterFirstShown = rosterPageNo * rosterPageSize();
-    });
+    rosterSearch.addEventListener("input", () => { applyRosterFilter(); rosterWrap.scrollTop = 0; });
+    rosterDept.addEventListener("change", () => { applyRosterFilter(); rosterWrap.scrollTop = 0; });
     // ── Add / edit one row ──
     let rosterEditing = null;
     const fieldFor = (c, value) => {

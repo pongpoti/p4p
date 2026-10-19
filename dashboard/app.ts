@@ -31,7 +31,7 @@
     const errorEl    = document.getElementById("error") as HTMLElement
     const emptyEl    = document.getElementById("empty") as HTMLElement
     const titleEl    = document.getElementById("page-title") as HTMLElement
-    const navBtns    = Array.from(document.querySelectorAll<HTMLAnchorElement>(".nav-btn[data-view]"))
+    const navBtns    = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[data-view]"))
 
     const CLOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
 
@@ -576,9 +576,6 @@
     }
     const auditRows   = document.getElementById("audit-rows") as HTMLElement
     const auditWrap   = auditRows.closest(".audit-table-wrap") as HTMLElement
-    const auditPrev   = document.getElementById("audit-prev") as HTMLButtonElement
-    const auditNext   = document.getElementById("audit-next") as HTMLButtonElement
-    const auditPage   = document.getElementById("audit-page") as HTMLElement
     const auditActor  = document.getElementById("audit-actor") as HTMLSelectElement
     const auditGroup  = document.getElementById("audit-group") as HTMLSelectElement
     const auditFrom   = document.getElementById("audit-from") as HTMLInputElement
@@ -696,11 +693,10 @@
     }
 
     // Entries arrive 50 at a time, newest first (?before= pages back); the
-    // table shows one screenful of them and ก่อนหน้า / ถัดไป move between
-    // screenfuls, fetching the next 50 only when the page needs them.
+    // table scrolls inside its box and the next 50 load as the bottom nears.
     let auditAll: AuditEntry[] = []
     let auditHasMore = false
-    let auditPageNo = 0
+    let auditLoadingMore = false
     let auditSeq = 0
     const auditQuery = (): string => {
         const q = new URLSearchParams()
@@ -717,23 +713,8 @@
         tr.appendChild(td)
         return tr
     }
-    // Rows that fit below the table header (each row is a fixed 44px + border).
-    const auditPageSize = (): number => {
-        const head = (auditWrap.querySelector("thead") as HTMLElement).offsetHeight
-        return Math.max(1, Math.floor((auditWrap.clientHeight - head) / 45))
-    }
-    let auditPageSizeAtLastShow = 1
-    const showAuditPage = (): void => {
-        const size = auditPageSize()
-        auditPageSizeAtLastShow = size
-        const from = auditPageNo * size
-        const rows = auditAll.slice(from, from + size)
-        auditRows.replaceChildren(...(rows.length ? rows.map(auditRow) : [emptyRow("ไม่มีรายการ")]))
-        const lastLoaded = from + size >= auditAll.length
-        auditPrev.disabled = auditPageNo === 0
-        auditNext.disabled = lastLoaded && !auditHasMore
-        const known = auditHasMore ? "" : " / " + Math.max(1, Math.ceil(auditAll.length / size))
-        auditPage.textContent = "หน้า " + (auditPageNo + 1) + known
+    const showAudit = (): void => {
+        auditRows.replaceChildren(...(auditAll.length ? auditAll.map(auditRow) : [emptyRow("ไม่มีรายการ")]))
     }
     const fetchAudit = async (before: number | null): Promise<{ entries: AuditEntry[]; more: boolean; actors: { id: string; name: string }[] }> => {
         let q = auditQuery()
@@ -746,9 +727,8 @@
         const seq = ++auditSeq
         auditAll = []
         auditHasMore = false
-        auditPageNo = 0
-        auditPrev.disabled = auditNext.disabled = true
-        auditPage.textContent = ""
+        auditLoadingMore = false
+        auditWrap.scrollTop = 0
         auditRows.replaceChildren(emptyRow("กำลังโหลด…"))
         try {
             const data = await fetchAudit(null)
@@ -764,7 +744,8 @@
             auditActor.value = chosen
             auditAll = data.entries
             auditHasMore = data.more
-            showAuditPage()
+            showAudit()
+            void auditMore()
         } catch (e) {
             if (seq !== auditSeq) return
             console.error("audit failed:", e)
@@ -772,41 +753,28 @@
         }
     }
 
-    auditPrev.addEventListener("click", () => {
-        if (auditPageNo === 0) return
-        auditPageNo--
-        showAuditPage()
-    })
-    auditNext.addEventListener("click", async () => {
+    // Load the next 50 while the bottom is within a screenful (or the box isn't full yet).
+    async function auditMore(): Promise<void> {
         const seq = auditSeq
-        const need = (auditPageNo + 2) * auditPageSize()
-        auditNext.disabled = auditPrev.disabled = true
-        try {
-            while (auditAll.length < need && auditHasMore) {
+        while (auditHasMore && !auditLoadingMore && seq === auditSeq &&
+            auditWrap.scrollHeight - auditWrap.scrollTop - auditWrap.clientHeight < auditWrap.clientHeight) {
+            auditLoadingMore = true
+            try {
                 const data = await fetchAudit(auditAll[auditAll.length - 1].id)
                 if (seq !== auditSeq) return
                 auditAll = auditAll.concat(data.entries)
                 auditHasMore = data.more
+                auditRows.append(...data.entries.map(auditRow))
+            } catch (e) {
+                console.error("audit more failed:", e)
+                return
+            } finally {
+                if (seq === auditSeq) auditLoadingMore = false
             }
-            if (auditAll.length > (auditPageNo + 1) * auditPageSize()) auditPageNo++
-        } catch (e) {
-            console.error("audit page failed:", e)
         }
-        if (seq === auditSeq) showAuditPage()
-    })
-    // A different window height fits a different number of rows: keep the
-    // first entry on screen and re-cut the pages around it.
-    let auditResizeTimer = 0
-    window.addEventListener("resize", () => {
-        clearTimeout(auditResizeTimer)
-        auditResizeTimer = window.setTimeout(() => {
-            if (currentView() === "roster") { refitRoster(); return }
-            if (currentView() !== "audit" || !auditAll.length) return
-            const first = auditPageNo * auditPageSizeAtLastShow
-            auditPageNo = Math.floor(first / auditPageSize())
-            showAuditPage()
-        }, 150)
-    })
+    }
+    auditWrap.addEventListener("scroll", () => { void auditMore() }, { passive: true })
+    window.addEventListener("resize", () => { if (currentView() === "audit") void auditMore() })
     for (const f of [auditActor, auditGroup, auditFrom, auditTo]) f.addEventListener("change", () => { void loadAudit() })
     auditReset.addEventListener("click", () => {
         auditActor.value = ""; auditGroup.value = ""; auditFrom.value = ""; auditTo.value = ""
@@ -845,9 +813,6 @@
     const rosterCount   = document.getElementById("roster-count") as HTMLElement
     const rosterRows    = document.getElementById("roster-rows") as HTMLElement
     const rosterWrap    = rosterRows.closest(".audit-table-wrap") as HTMLElement
-    const rosterPrev    = document.getElementById("roster-prev") as HTMLButtonElement
-    const rosterNext    = document.getElementById("roster-next") as HTMLButtonElement
-    const rosterPage    = document.getElementById("roster-page") as HTMLElement
     const rosterAdd     = document.getElementById("roster-add") as HTMLButtonElement
     const rosterDlg     = document.getElementById("roster-dialog") as HTMLDialogElement
     const rosterDlgT    = document.getElementById("roster-dialog-title") as HTMLElement
@@ -867,7 +832,6 @@
     let rosterAll: RowRecord[] = []
     let rosterShown: RowRecord[] = []
     let rosterTable = ""
-    let rosterPageNo = 0
     let rosterSeq = 0
     let rosterTables: string[] | null = null
 
@@ -913,11 +877,6 @@
         ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", "7")
         return tr
     }
-    const rosterPageSize = (): number => {
-        const head = (rosterWrap.querySelector("thead") as HTMLElement).offsetHeight
-        return Math.max(1, Math.floor((rosterWrap.clientHeight - head) / 45))
-    }
-
     const rosterRow = (r: RowRecord, no: number): HTMLElement => {
         const tr = el("tr")
         tr.dataset.index = r.index
@@ -954,23 +913,9 @@
         return tr
     }
 
-    const showRosterPage = (): void => {
-        const size = rosterPageSize()
-        const pages = Math.max(1, Math.ceil(rosterShown.length / size))
-        rosterPageNo = Math.min(rosterPageNo, pages - 1)
-        const from = rosterPageNo * size
-        const rows = rosterShown.slice(from, from + size)
-        rosterRows.replaceChildren(...(rows.length ? rows.map((r, i) => rosterRow(r, from + i + 1))
+    const showRoster = (): void => {
+        rosterRows.replaceChildren(...(rosterShown.length ? rosterShown.map((r, i) => rosterRow(r, i + 1))
             : [rosterEmpty(rosterAll.length ? "ไม่พบรายชื่อที่ค้นหา" : "ยังไม่มีรายชื่อในเดือนนี้")]))
-        rosterPrev.disabled = rosterPageNo === 0
-        rosterNext.disabled = rosterPageNo >= pages - 1
-        rosterPage.textContent = "หน้า " + (rosterPageNo + 1) + " / " + pages
-    }
-    let rosterFirstShown = 0
-    const refitRoster = (): void => {
-        if (!rosterTable) return
-        rosterPageNo = Math.floor(rosterFirstShown / rosterPageSize())
-        showRosterPage()
     }
 
     const populateDept = (): void => {
@@ -993,10 +938,10 @@
             return !q || (fullName(r) + " " + (r.department || "")).toLowerCase().includes(q)
         }).sort((a, b) => sortName(a).localeCompare(sortName(b), "th"))
         rosterCount.textContent = fmtNum(rosterShown.length) + " จาก " + fmtNum(rosterAll.length) + " คน"
-        showRosterPage()
+        showRoster()
     }
 
-    // Reload the month; the page stays where it was, or moves to `focus`.
+    // Reload the month; the list stays where it was scrolled, or scrolls to `focus`.
     const reloadRoster = async (focus?: string): Promise<void> => {
         const seq = ++rosterSeq
         const data: { columns: ColumnMeta[]; rows: RowRecord[] } =
@@ -1017,21 +962,21 @@
                 at = rosterShown.findIndex((r) => r.index === focus)
             }
             if (at !== -1) {
-                rosterPageNo = Math.floor(at / rosterPageSize())
-                showRosterPage()
-                const tr = rosterRows.querySelector('tr[data-index="' + focus + '"]')
-                if (tr) { tr.classList.add("flash"); setTimeout(() => tr.classList.remove("flash"), 2400) }
+                const tr = rosterRows.querySelector('tr[data-index="' + focus + '"]') as HTMLElement | null
+                if (tr) {
+                    tr.scrollIntoView({ block: "nearest" })
+                    tr.classList.add("flash")
+                    setTimeout(() => tr.classList.remove("flash"), 2400)
+                }
             }
         }
-        rosterFirstShown = rosterPageNo * rosterPageSize()
     }
 
     // logged: the user opened the tab or picked a month (written to the audit log).
     async function loadRoster(logged: boolean): Promise<void> {
         const seq = ++rosterSeq
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"))
-        rosterPrev.disabled = rosterNext.disabled = true
-        rosterPage.textContent = ""
+        rosterWrap.scrollTop = 0
         void loadRequests()
         try {
             if (!rosterTables) {
@@ -1055,10 +1000,8 @@
             if (seq !== rosterSeq) return
             rosterCols = data.columns
             rosterAll = data.rows
-            rosterPageNo = 0
             populateDept()
             applyRosterFilter()
-            rosterFirstShown = 0
         } catch (e) {
             if (seq !== rosterSeq) return
             console.error("roster failed:", e)
@@ -1067,19 +1010,8 @@
     }
 
     rosterMonth.addEventListener("change", () => { rosterDept.value = ""; void loadRoster(true) })
-    rosterSearch.addEventListener("input", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0 })
-    rosterDept.addEventListener("change", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0 })
-    rosterPrev.addEventListener("click", () => {
-        if (rosterPageNo === 0) return
-        rosterPageNo--
-        showRosterPage()
-        rosterFirstShown = rosterPageNo * rosterPageSize()
-    })
-    rosterNext.addEventListener("click", () => {
-        rosterPageNo++
-        showRosterPage()
-        rosterFirstShown = rosterPageNo * rosterPageSize()
-    })
+    rosterSearch.addEventListener("input", () => { applyRosterFilter(); rosterWrap.scrollTop = 0 })
+    rosterDept.addEventListener("change", () => { applyRosterFilter(); rosterWrap.scrollTop = 0 })
 
     // ── Add / edit one row ──
     let rosterEditing: RowRecord | null = null

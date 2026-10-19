@@ -173,7 +173,10 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 1px 2px rgba(0, 0, 0, .2);
         }
         .logo-mark b { color: #DDBF94; font-weight: 800; }
-        #brand .logo-mark { height: 38px; padding: 0 10px; border-radius: 10px; font-size: 1.1rem; }
+        #brand .logo-mark { height: 38px; padding: 0 10px; border-radius: 10px; font-size: 1.1rem; transition: filter .15s; }
+        /* The logo is the way back to ภาพรวม (there is no separate tab for it). */
+        #brand:hover .logo-mark { filter: brightness(1.25); }
+        #brand:hover > span:last-child { color: var(--primary); }
 
         #nav { display: flex; gap: 12px; }
         /* shadcn "ghost" button; the current page gets the solid brown
@@ -605,8 +608,7 @@
         }
 
         /* ── ประวัติการใช้งาน (owner only) ─────────────────────────────── */
-        /* Fills the same space as the month grid: the table shows as many
-           one-line rows as fit, and the pager below moves between pages. */
+        /* Fills the same space as the month grid; the table scrolls inside. */
         #audit-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
         .audit-filters {
             display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
@@ -619,7 +621,8 @@
         }
         .audit-filters select { min-width: 170px; }
         .audit-filters .btn-ghost { height: 40px; }
-        .audit-table-wrap { flex: 1; min-height: 0; border-radius: var(--radius); overflow: hidden; }
+        /* Fills the rest of the window; the rows scroll inside it under a fixed header. */
+        .audit-table-wrap { flex: 1; min-height: 0; border-radius: var(--radius); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
         .audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9375rem; }
         .audit-table col.c-when { width: 225px; }
         .audit-table col.c-who { width: 130px; }
@@ -627,9 +630,10 @@
         .audit-table col.c-ip { width: 125px; }
         .audit-table th {
             text-align: left; font-size: .8125rem; font-weight: 600; color: var(--muted-foreground);
-            padding: 12px 14px; background: rgba(255, 255, 255, .6); border-bottom: 1px solid var(--border);
+            padding: 12px 14px; background: #FCF9F4; border-bottom: 1px solid var(--border);
+            position: sticky; top: 0; z-index: 1;
         }
-        /* One line per row (full text in the tooltip), so a page's row count is exact. */
+        /* One line per row; the full text is in the tooltip. */
         .audit-table td {
             height: 44px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -644,13 +648,9 @@
         .audit-table tr.warn .what { color: #8A1C12; font-weight: 600; }
         .audit-table tr.change td { background: rgba(255, 248, 230, .6); }
         .audit-table td.audit-empty { height: 88px; text-align: center; color: var(--muted-foreground); white-space: normal; }
-        .audit-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: clamp(12px, 2.2vh, 20px); flex-shrink: 0; }
-        .audit-pager .btn-ghost { height: 40px; min-width: 104px; }
-        .audit-pager .btn-ghost:disabled { opacity: .45; cursor: default; background: #fff; }
-        #audit-page, .pager-page { min-width: 72px; text-align: center; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
         /* ── รายชื่อ: the LINE /admin/ roster editor, as a desktop table ──── */
-        /* Same frame as ประวัติการใช้งาน: toolbar, one screenful of one-line
-           rows, pager. */
+        /* Same frame as ประวัติการใช้งาน: toolbar, then one-line rows that
+           scroll inside the box. */
         #roster-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
         .roster-toolbar { align-items: center; flex-wrap: nowrap; }
         .roster-toolbar select { min-width: 0; flex-shrink: 0; }
@@ -675,7 +675,7 @@
         .audit-table col.c-dept { width: 20%; }
         .audit-table col.c-type { width: 19%; }
         .audit-table col.c-score { width: 84px; }
-        .audit-table col.c-sent { width: 178px; }
+        .audit-table col.c-sent { width: 205px; }
         .audit-table col.c-act { width: 104px; }
         .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
         .roster-table th.num, .roster-table th.score { text-align: right; }
@@ -689,6 +689,7 @@
         .roster-table .acts .icon-btn + .icon-btn { margin-left: 8px; }
         .roster-table .acts .icon-btn svg { width: 18px; height: 18px; }
         .roster-table .acts .del:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
+        .roster-table tbody tr { scroll-margin-top: 48px; }
         .roster-table tr.flash td { background: rgba(21, 127, 61, .09); }
 
         /* Add / edit one roster row, and the access-request list */
@@ -725,21 +726,11 @@
 
     <header id="header">
         <div class="container">
-            <a id="brand" href="/dashboard/" aria-label="SAKHONMSO P4P — หน้าแรก">
+            <a id="brand" href="/dashboard/#overview" data-view="overview" aria-label="SAKHONMSO P4P — ภาพรวม" title="ภาพรวม">
                 <span class="logo-mark" aria-hidden="true">P<b>4</b>P</span>
                 <span>SAKHONMSO</span>
             </a>
             <nav id="nav" aria-label="เมนูหลัก">
-                <a class="nav-btn active" href="/dashboard/#overview" data-view="overview" aria-current="page">
-                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="3" y="3" width="7" height="9" rx="1" />
-                        <rect x="14" y="3" width="7" height="5" rx="1" />
-                        <rect x="14" y="12" width="7" height="9" rx="1" />
-                        <rect x="3" y="16" width="7" height="5" rx="1" />
-                    </svg>
-                    ภาพรวม
-                </a>
                 <a class="nav-btn" href="/dashboard/#followup" data-view="followup">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -840,11 +831,6 @@
                     <tbody id="roster-rows"></tbody>
                 </table>
             </div>
-            <nav class="audit-pager" aria-label="เปลี่ยนหน้า">
-                <button type="button" id="roster-prev" class="btn-ghost" disabled>ก่อนหน้า</button>
-                <span id="roster-page" class="pager-page" aria-live="polite"></span>
-                <button type="button" id="roster-next" class="btn-ghost" disabled>ถัดไป</button>
-            </nav>
         </section>
 
         <!-- ประวัติการใช้งาน: shown to the owner only (main.ts returns 404 to anyone else) -->
@@ -880,11 +866,6 @@
                     <tbody id="audit-rows"></tbody>
                 </table>
             </div>
-            <nav class="audit-pager" aria-label="เปลี่ยนหน้า">
-                <button type="button" id="audit-prev" class="btn-ghost" disabled>ก่อนหน้า</button>
-                <span id="audit-page" aria-live="polite"></span>
-                <button type="button" id="audit-next" class="btn-ghost" disabled>ถัดไป</button>
-            </nav>
         </section>
     </main>
 
