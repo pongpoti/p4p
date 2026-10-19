@@ -948,8 +948,8 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
 const AUDIT_GROUPS: Record<string, string> = {
   login: "action=like.login.*",
   session: "action=like.session.*",
-  view: "action=in.(view.overview,view.followup,pending.open,followup.history,audit.view)",
-  change: "action=in.(followup.add,followup.delete)",
+  view: "action=in.(view.overview,view.followup,view.roster,pending.open,followup.history,audit.view)",
+  change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject)",
   refused: "action=eq.login.refused",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -994,6 +994,164 @@ app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
   } catch (e: any) {
     console.error("[dashboard] audit read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load audit log" })
+  }
+})
+
+// ── รายชื่อ tab: the /admin/ roster editor for every dashboard admin ──────
+// Same reads and writes as the /admin/ routes below (service key, the month
+// must be a live roster table, the body is filtered to real non-PK columns),
+// behind the dashboard session instead of the /admin/ cookie. Every write is
+// in the audit log with what changed.
+const dashRosterTable = async (req: Request, res: Response): Promise<string | null> => {
+  const table = String(req.params.table || "")
+  if (!/^\d{4}_\d{2}$/.test(table)) { res.status(404).json({ error: "unknown table" }); return null }
+  try {
+    await assertRosterTable(table)
+    return table
+  } catch (e: any) {
+    if (e.status === 404) { res.status(404).json({ error: "unknown table" }); return null }
+    throw e
+  }
+}
+const WRITE_HEADERS = () => ({ ...SERVICE_HEADERS(), "Content-Type": "application/json", Prefer: "return=representation" })
+const rosterFullName = (r: Record<string, any>): string =>
+  (((r.prefix || "") + (r.firstname || "")).trim() + " " + (r.lastname || "")).trim().replace(/\s+/g, " ")
+
+app.get("/dashboard/api/roster", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  try {
+    const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
+    res.json({ tables: tables.slice().sort().reverse() })
+  } catch (e: any) {
+    console.error("[dashboard] roster tables failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to list tables" })
+  }
+})
+
+// &refresh=1 marks the page's own reload (not logged).
+app.get("/dashboard/api/roster/:table", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  try {
+    const table = await dashRosterTable(req, res)
+    if (!table) return
+    const [columns, rows] = await Promise.all([
+      callServiceRpc("admin_table_columns", { p_table: table }),
+      axios.get(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(table) + "?select=*", { headers: SERVICE_HEADERS(), timeout: 8000 }),
+    ])
+    if (req.query.refresh !== "1") await audit(req, s, "view.roster", { month: table, rows: rows.data.length })
+    res.json({ columns: columns || [], rows: rows.data })
+  } catch (e: any) {
+    console.error("[dashboard] roster read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load roster" })
+  }
+})
+
+app.post("/dashboard/api/roster/:table", express.json({ limit: "32kb" }), async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  try {
+    const table = await dashRosterTable(req, res)
+    if (!table) return
+    const body = await filterToColumns(table, req.body)
+    const r = await axios.post(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(table), body, { headers: WRITE_HEADERS(), timeout: 8000 })
+    const row = (r.data && r.data[0]) || null
+    if (row) await audit(req, s, "roster.add", { month: table, index: row.index, physician: rosterFullName(row), row })
+    res.json({ row })
+  } catch (e: any) {
+    console.error("[dashboard] roster insert failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(400).json({ error: pgErrorMessage(e, "insert failed") })
+  }
+})
+
+app.patch("/dashboard/api/roster/:table/:index", express.json({ limit: "32kb" }), async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const index = String(req.params.index)
+  if (!UUID_RE.test(index)) return res.status(400).json({ error: "bad request" })
+  try {
+    const table = await dashRosterTable(req, res)
+    if (!table) return
+    const body = await filterToColumns(table, req.body)
+    const url = SUPABASE_URL + "/rest/v1/" + encodeURIComponent(table) + "?index=eq." + index
+    const before = await axios.get(url + "&select=*", { headers: SERVICE_HEADERS(), timeout: 8000 })
+    if (!before.data.length) return res.status(404).json({ error: "not found" })
+    if (!Object.keys(body).length) return res.json({ row: before.data[0] })
+    const r = await axios.patch(url, body, { headers: WRITE_HEADERS(), timeout: 8000 })
+    const row = (r.data && r.data[0]) || null
+    // Only the fields that actually changed, as [before, after].
+    const changes: Record<string, [unknown, unknown]> = {}
+    for (const k of Object.keys(body)) {
+      const was = before.data[0][k]
+      const now = row ? row[k] : body[k]
+      if (JSON.stringify(was ?? null) !== JSON.stringify(now ?? null)) changes[k] = [was ?? null, now ?? null]
+    }
+    if (Object.keys(changes).length) {
+      await audit(req, s, "roster.edit", { month: table, index, physician: rosterFullName(row || before.data[0]), changes })
+    }
+    res.json({ row })
+  } catch (e: any) {
+    console.error("[dashboard] roster update failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(400).json({ error: pgErrorMessage(e, "update failed") })
+  }
+})
+
+app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const index = String(req.params.index)
+  if (!UUID_RE.test(index)) return res.status(400).json({ error: "bad request" })
+  try {
+    const table = await dashRosterTable(req, res)
+    if (!table) return
+    const r = await axios.delete(SUPABASE_URL + "/rest/v1/" + encodeURIComponent(table) + "?index=eq." + index,
+      { headers: { ...SERVICE_HEADERS(), Prefer: "return=representation" }, timeout: 8000 })
+    if (!r.data.length) return res.status(404).json({ error: "not found" })
+    // The whole row, so the log still shows who was removed.
+    await audit(req, s, "roster.delete", { month: table, index, physician: rosterFullName(r.data[0]), row: r.data[0] })
+    res.json({ ok: true })
+  } catch (e: any) {
+    console.error("[dashboard] roster delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "delete failed" })
+  }
+})
+
+app.get("/dashboard/api/access-requests", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!dashSession(req)) return res.status(401).json({ error: "not authenticated" })
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=email,name,department,requested_at&order=requested_at.desc",
+      { headers: SERVICE_HEADERS(), timeout: 8000 })
+    res.json({ requests: r.data || [] })
+  } catch (e: any) {
+    console.error("[dashboard] access-requests failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed to load access requests" })
+  }
+})
+
+app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const email = String(req.params.email || "").trim().toLowerCase()
+  const decision = String(req.params.decision)
+  if (!email || (decision !== "approve" && decision !== "reject")) return res.status(400).json({ error: "bad request" })
+  try {
+    const open = await axios.get(SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=name,department&email=eq." +
+      encodeURIComponent(email), { headers: SERVICE_HEADERS(), timeout: 8000 })
+    if (!open.data.length) return res.status(404).json({ error: "not found" })
+    if (decision === "approve") await approveAccessRequest(email)
+    else await resolveAccessRequest(email)
+    await audit(req, s, "access." + decision, { email, name: open.data[0].name || "", department: open.data[0].department || "" })
+    res.json({ ok: true })
+  } catch (e: any) {
+    console.error("[dashboard] access-request " + decision + " failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: pgErrorMessage(e, decision + " failed") })
   }
 })
 
@@ -1145,46 +1303,57 @@ app.get("/admin/api/access-requests", requireAdmin, async (req: Request, res: Re
   }
 })
 
+// Shared by /admin/ and the dashboard's รายชื่อ tab. Returns the request's
+// name (null when it had none) once the physician is allow-listed.
+async function approveAccessRequest(email: string): Promise<{ name: string | null; department: string | null }> {
+  const reqRow = await axios.get(
+    SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name,department",
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
+  )
+  const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
+  const department = (reqRow.data && reqRow.data[0] && reqRow.data[0].department) || null
+
+  // Upsert rather than insert: the email may already exist (e.g. a
+  // previously revoked physician re-requesting) — approving should
+  // re-activate that row, not fail on the primary key.
+  //
+  // department is omitted from the body entirely when the request never
+  // captured one (a request logged before this field existed) — merge-
+  // duplicates only overwrites columns present in the payload, so leaving
+  // it out preserves whatever department the physicians row already has
+  // rather than clobbering it with null.
+  const upsertBody: Record<string, unknown> = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
+  if (department) upsertBody.department = department
+  await axios.post(
+    SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
+    upsertBody,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      timeout: 8000,
+    }
+  )
+  await resolveAccessRequest(email)
+  return { name, department }
+}
+
+async function resolveAccessRequest(email: string): Promise<void> {
+  await axios.patch(
+    SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email),
+    { resolved: true },
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
+  )
+}
+
 app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req: Request, res: Response) => {
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
-    const reqRow = await axios.get(
-      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name,department",
-      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
-    )
-    const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
-    const department = (reqRow.data && reqRow.data[0] && reqRow.data[0].department) || null
-
-    // Upsert rather than insert: the email may already exist (e.g. a
-    // previously revoked physician re-requesting) — approving should
-    // re-activate that row, not fail on the primary key.
-    //
-    // department is omitted from the body entirely when the request never
-    // captured one (a request logged before this field existed) — merge-
-    // duplicates only overwrites columns present in the payload, so leaving
-    // it out preserves whatever department the physicians row already has
-    // rather than clobbering it with null.
-    const upsertBody: Record<string, unknown> = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
-    if (department) upsertBody.department = department
-    await axios.post(
-      SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
-      upsertBody,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-          "Content-Type": "application/json",
-          Prefer: "resolution=merge-duplicates",
-        },
-        timeout: 8000,
-      }
-    )
-    await axios.patch(
-      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email),
-      { resolved: true },
-      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
-    )
+    await approveAccessRequest(email)
     res.json({ ok: true })
   } catch (e: any) {
     console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -1196,11 +1365,7 @@ app.post("/admin/api/access-requests/:email/reject", requireAdmin, async (req: R
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
-    await axios.patch(
-      SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email),
-      { resolved: true },
-      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json" }, timeout: 8000 }
-    )
+    await resolveAccessRequest(email)
     res.json({ ok: true })
   } catch (e: any) {
     console.error("[admin] reject access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)

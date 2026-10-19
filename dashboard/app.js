@@ -158,6 +158,7 @@
     const TITLES = {
         overview: "ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนที่ผ่านมา",
         followup: "ตามส่ง — เดือนที่ยังส่งไฟล์ Excel ไม่ครบ",
+        roster: "รายชื่อ — รายชื่อแพทย์รายเดือน เพิ่ม แก้ไข และลบ",
         audit: "ประวัติการใช้งาน — การเข้าใช้และการแก้ไขแดชบอร์ด",
     };
     const isComplete = (m) => m.exists && m.total > 0 && m.sent === m.total;
@@ -165,11 +166,14 @@
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false;
     const auditView = document.getElementById("audit-view");
-    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#audit" && isOwner ? "audit" : "overview";
+    const rosterView = document.getElementById("roster-view");
+    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
+        : location.hash === "#audit" && isOwner ? "audit" : "overview";
     const render = () => {
         const view = currentView();
-        const audit = view === "audit";
-        auditView.classList.toggle("hidden", !audit);
+        const audit = view === "audit" || view === "roster";
+        auditView.classList.toggle("hidden", view !== "audit");
+        rosterView.classList.toggle("hidden", view !== "roster");
         for (const a of navBtns) {
             const on = a.dataset.view === view;
             a.classList.toggle("active", on);
@@ -219,6 +223,8 @@
         const view = currentView();
         if (view === "audit")
             void loadAudit();
+        else if (view === "roster")
+            void loadRoster(true);
         else
             void loadOverview(view);
     });
@@ -575,9 +581,29 @@
         "followup.add": "เพิ่มบันทึก",
         "followup.delete": "ลบบันทึก",
         "audit.view": "เปิดประวัติการใช้งาน",
+        "view.roster": "เปิดแท็บรายชื่อ",
+        "roster.add": "เพิ่มรายชื่อ",
+        "roster.edit": "แก้ไขรายชื่อ",
+        "roster.delete": "ลบรายชื่อ",
+        "access.approve": "อนุมัติคำขอเข้าใช้งาน",
+        "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
     };
     const GROUP_LABEL = {
-        change: "เพิ่ม / ลบบันทึก", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
+        change: "การแก้ไข", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
+    };
+    // Roster columns in Thai, for the form and the audit log.
+    const FIELD_LABEL = {
+        prefix: "คำนำหน้า", firstname: "ชื่อ", lastname: "นามสกุล", department: "กลุ่มงาน", position: "ตำแหน่ง",
+        type: "ประเภทบุคลากร", rank: "ระดับ", score: "คะแนน", submitted_at: "ส่งไฟล์เมื่อ",
+    };
+    const auditValue = (k, v) => {
+        if (v === null || v === undefined || v === "")
+            return "—";
+        if (k === "submitted_at")
+            return fmtWhen(String(v));
+        if (typeof v === "number")
+            return v.toLocaleString("th-TH", { maximumFractionDigits: 2 });
+        return String(v);
     };
     const THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
     // "2569_09" → "ก.ย. 2569"
@@ -620,6 +646,30 @@
                 if (t.from || t.to)
                     add((t.from || "…") + " ถึง " + (t.to || "…"));
                 break;
+            case "view.roster":
+                add(monthLabel(t.month));
+                add(fmtNum(Number(t.rows) || 0) + " คน");
+                break;
+            case "roster.add":
+            case "roster.delete":
+                add(monthLabel(t.month));
+                add(t.physician);
+                add(t.row && t.row.department);
+                break;
+            case "roster.edit":
+                add(monthLabel(t.month));
+                add(t.physician);
+                // "คะแนน 2,410 → 2,455"
+                for (const [k, v] of Object.entries((t.changes || {}))) {
+                    add((FIELD_LABEL[k] || k) + " " + auditValue(k, v[0]) + " → " + auditValue(k, v[1]));
+                }
+                break;
+            case "access.approve":
+            case "access.reject":
+                add(t.name);
+                add(t.email);
+                add(t.department);
+                break;
         }
         td.textContent = parts.join(" · ");
         if ((a.action === "followup.add" || a.action === "followup.delete") && t.note) {
@@ -631,8 +681,8 @@
         return td;
     };
     const auditRow = (a) => {
-        const tr = el("tr", a.action === "followup.delete" || a.action === "login.refused" ? "warn"
-            : a.action === "followup.add" ? "change" : "");
+        const tr = el("tr", /\.(delete|reject)$/.test(a.action) || a.action === "login.refused" ? "warn"
+            : /^(followup\.add|roster\.(add|edit)|access\.approve)$/.test(a.action) ? "change" : "");
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)));
         const who = el("td", "who", a.actor_name || "—");
         who.title = a.actor_name;
@@ -761,6 +811,10 @@
     window.addEventListener("resize", () => {
         clearTimeout(auditResizeTimer);
         auditResizeTimer = window.setTimeout(() => {
+            if (currentView() === "roster") {
+                refitRoster();
+                return;
+            }
             if (currentView() !== "audit" || !auditAll.length)
                 return;
             const first = auditPageNo * auditPageSizeAtLastShow;
@@ -776,6 +830,511 @@
         auditFrom.value = "";
         auditTo.value = "";
         void loadAudit();
+    });
+    // Same list and order as admin/app.ts's dep_array (INTERN last).
+    const DEP_ARRAY = ["กุมารเวชกรรม", "จักษุวิทยา", "จิตเวชและยาเสพติด", "เทคนิคการแพทย์และพยาธิวิทยาคลินิก", "นิติเวช", "ผู้ป่วยนอก", "พยาธิวิทยากายวิภาค", "รังสีวิทยา", "วิสัญญีวิทยา", "เวชกรรมฟื้นฟู", "เวชกรรมสังคม", "เวชศาสตร์ฉุกเฉิน", "ศัลยกรรม", "ศัลยกรรมออร์โธปิดิกส์", "สูติ-นรีเวชกรรม", "โสต ศอ นาสิก", "อาชีวเวชกรรม", "อายุรกรรม", "INTERN"];
+    const sortDeps = (list) => [...list].sort((a, b) => {
+        const ia = DEP_ARRAY.indexOf(a);
+        const ib = DEP_ARRAY.indexOf(b);
+        if (ia === -1 && ib === -1)
+            return a.localeCompare(b, "th");
+        if (ia === -1)
+            return 1;
+        if (ib === -1)
+            return -1;
+        return ia - ib;
+    });
+    const deptLabel = (d) => d === "INTERN" ? "INTERN" : "กลุ่มงาน" + d;
+    // Form order: two to a row, กลุ่มงาน on its own; any other column after.
+    const FIELD_ORDER = ["prefix", "position", "firstname", "lastname", "department", "type", "rank", "score", "submitted_at"];
+    // Free-text columns that suggest the values already in the month.
+    const SUGGEST = ["prefix", "position", "type", "rank"];
+    const EDIT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+    const rosterMonth = document.getElementById("roster-month");
+    const rosterSearch = document.getElementById("roster-search");
+    const rosterDept = document.getElementById("roster-dept");
+    const rosterCount = document.getElementById("roster-count");
+    const rosterRows = document.getElementById("roster-rows");
+    const rosterWrap = rosterRows.closest(".audit-table-wrap");
+    const rosterPrev = document.getElementById("roster-prev");
+    const rosterNext = document.getElementById("roster-next");
+    const rosterPage = document.getElementById("roster-page");
+    const rosterAdd = document.getElementById("roster-add");
+    const rosterDlg = document.getElementById("roster-dialog");
+    const rosterDlgT = document.getElementById("roster-dialog-title");
+    const rosterDlgSub = document.getElementById("roster-dialog-sub");
+    const rosterForm = document.getElementById("roster-form");
+    const rosterFields = document.getElementById("roster-fields");
+    const rosterError = document.getElementById("roster-error");
+    const rosterSave = document.getElementById("roster-save");
+    const reqBtn = document.getElementById("req-btn");
+    const reqBadge = document.getElementById("req-badge");
+    const reqDlg = document.getElementById("req-dialog");
+    const reqSub = document.getElementById("req-sub");
+    const reqList = document.getElementById("req-list");
+    for (const d of [rosterDlg, reqDlg])
+        d.addEventListener("click", (ev) => { if (ev.target === d)
+            d.close(); });
+    let rosterCols = [];
+    let rosterAll = [];
+    let rosterShown = [];
+    let rosterTable = "";
+    let rosterPageNo = 0;
+    let rosterSeq = 0;
+    let rosterTables = null;
+    // Errors from the roster API carry the database's reason (e.g. a bad number).
+    const rosterApi = async (url, init) => {
+        const r = await fetch(url, { credentials: "same-origin", ...init });
+        if (r.status === 401) {
+            location.href = "/dashboard/login?error=idle";
+            throw new Error("signed out");
+        }
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+            const err = new Error(body.error || "HTTP " + r.status);
+            err.status = r.status;
+            throw err;
+        }
+        return body;
+    };
+    // This month in Bangkok as a roster table name, e.g. "2569_10".
+    const thisMonthKey = () => {
+        const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+        const get = (t) => p.find((x) => x.type === t).value;
+        return (Number(get("year")) + 543) + "_" + get("month");
+    };
+    // Prefix sticks to the first name: "นพ.สมชาย ใจดี"
+    const fullName = (r) => (((r.prefix || "") + (r.firstname || "")).trim() + " " + (r.lastname || "")).trim().replace(/\s+/g, " ");
+    // Sorted by name without the prefix, as on the LINE page.
+    const sortName = (r) => ((r.firstname || "") + " " + (r.lastname || "")).trim();
+    const isTimestamp = (c) => /timestamp/i.test(c.data_type || "");
+    const isNumeric = (c) => /double precision|numeric|integer|real|bigint/i.test(c.data_type || "");
+    const fmtScore = (v) => v === null || v === undefined || v === "" ? "—" : Number(v).toLocaleString("th-TH", { maximumFractionDigits: 2 });
+    // ISO → the value a datetime-local input wants, in Bangkok time.
+    const toLocalInput = (iso) => {
+        if (!iso)
+            return "";
+        const d = new Date(String(iso));
+        if (isNaN(d.getTime()))
+            return "";
+        return new Date(d.getTime() + 7 * 3600 * 1000).toISOString().slice(0, 16);
+    };
+    const fromLocalInput = (v) => new Date(v + ":00+07:00").toISOString();
+    const rosterEmpty = (text, cls) => {
+        const tr = emptyRow(text, cls);
+        tr.firstElementChild.setAttribute("colspan", "7");
+        return tr;
+    };
+    const rosterPageSize = () => {
+        const head = rosterWrap.querySelector("thead").offsetHeight;
+        return Math.max(1, Math.floor((rosterWrap.clientHeight - head) / 45));
+    };
+    const rosterRow = (r, no) => {
+        const tr = el("tr");
+        tr.dataset.index = r.index;
+        tr.appendChild(el("td", "num", String(no)));
+        const name = fullName(r) || "(ไม่มีชื่อ)";
+        const nameTd = el("td", "name", name);
+        nameTd.title = name + (r.position ? " · " + r.position : "");
+        tr.appendChild(nameTd);
+        const dept = el("td", r.department ? "" : "muted", r.department || "—");
+        dept.title = r.department || "";
+        tr.appendChild(dept);
+        const kind = [r.type, r.rank].filter(Boolean).join(" · ");
+        const kindTd = el("td", "muted", kind || "—");
+        kindTd.title = kind;
+        tr.appendChild(kindTd);
+        tr.appendChild(el("td", "score", fmtScore(r.score)));
+        tr.appendChild(el("td", "sent" + (r.submitted_at ? "" : " none"), r.submitted_at ? fmtWhen(r.submitted_at) : "ยังไม่ส่ง"));
+        const acts = el("td", "acts");
+        const edit = el("button", "icon-btn");
+        edit.type = "button";
+        edit.innerHTML = EDIT_SVG;
+        edit.title = "แก้ไข";
+        edit.setAttribute("aria-label", "แก้ไข " + name);
+        edit.addEventListener("click", () => openRosterForm(r));
+        const del = el("button", "icon-btn del");
+        del.type = "button";
+        del.innerHTML = TRASH_SVG;
+        del.title = "ลบ";
+        del.setAttribute("aria-label", "ลบ " + name);
+        del.addEventListener("click", () => { void deleteRosterRow(r, del); });
+        acts.appendChild(edit);
+        acts.appendChild(del);
+        tr.appendChild(acts);
+        return tr;
+    };
+    const showRosterPage = () => {
+        const size = rosterPageSize();
+        const pages = Math.max(1, Math.ceil(rosterShown.length / size));
+        rosterPageNo = Math.min(rosterPageNo, pages - 1);
+        const from = rosterPageNo * size;
+        const rows = rosterShown.slice(from, from + size);
+        rosterRows.replaceChildren(...(rows.length ? rows.map((r, i) => rosterRow(r, from + i + 1))
+            : [rosterEmpty(rosterAll.length ? "ไม่พบรายชื่อที่ค้นหา" : "ยังไม่มีรายชื่อในเดือนนี้")]));
+        rosterPrev.disabled = rosterPageNo === 0;
+        rosterNext.disabled = rosterPageNo >= pages - 1;
+        rosterPage.textContent = "หน้า " + (rosterPageNo + 1) + " / " + pages;
+    };
+    let rosterFirstShown = 0;
+    const refitRoster = () => {
+        if (!rosterTable)
+            return;
+        rosterPageNo = Math.floor(rosterFirstShown / rosterPageSize());
+        showRosterPage();
+    };
+    const populateDept = () => {
+        const present = sortDeps([...new Set(rosterAll.map((r) => r.department).filter(Boolean))]);
+        const chosen = rosterDept.value;
+        rosterDept.replaceChildren(el("option", undefined, "ทุกกลุ่มงาน"), ...present.map((d) => {
+            const o = el("option", undefined, deptLabel(d));
+            o.value = d;
+            return o;
+        }));
+        rosterDept.options[0].value = "";
+        rosterDept.value = present.includes(chosen) ? chosen : "";
+    };
+    const applyRosterFilter = () => {
+        const q = rosterSearch.value.trim().toLowerCase();
+        const dept = rosterDept.value;
+        rosterShown = rosterAll.filter((r) => {
+            if (dept && r.department !== dept)
+                return false;
+            return !q || (fullName(r) + " " + (r.department || "")).toLowerCase().includes(q);
+        }).sort((a, b) => sortName(a).localeCompare(sortName(b), "th"));
+        rosterCount.textContent = fmtNum(rosterShown.length) + " จาก " + fmtNum(rosterAll.length) + " คน";
+        showRosterPage();
+    };
+    // Reload the month; the page stays where it was, or moves to `focus`.
+    const reloadRoster = async (focus) => {
+        const seq = ++rosterSeq;
+        const data = await rosterApi("/dashboard/api/roster/" + encodeURIComponent(rosterTable) + "?refresh=1");
+        if (seq !== rosterSeq)
+            return;
+        rosterCols = data.columns;
+        rosterAll = data.rows;
+        populateDept();
+        rosterShown = [];
+        applyRosterFilter();
+        if (focus) {
+            let at = rosterShown.findIndex((r) => r.index === focus);
+            if (at === -1 && (rosterSearch.value || rosterDept.value)) {
+                // The saved row is hidden by the filter: clear it so it shows.
+                rosterSearch.value = "";
+                rosterDept.value = "";
+                applyRosterFilter();
+                at = rosterShown.findIndex((r) => r.index === focus);
+            }
+            if (at !== -1) {
+                rosterPageNo = Math.floor(at / rosterPageSize());
+                showRosterPage();
+                const tr = rosterRows.querySelector('tr[data-index="' + focus + '"]');
+                if (tr) {
+                    tr.classList.add("flash");
+                    setTimeout(() => tr.classList.remove("flash"), 2400);
+                }
+            }
+        }
+        rosterFirstShown = rosterPageNo * rosterPageSize();
+    };
+    // logged: the user opened the tab or picked a month (written to the audit log).
+    async function loadRoster(logged) {
+        const seq = ++rosterSeq;
+        rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"));
+        rosterPrev.disabled = rosterNext.disabled = true;
+        rosterPage.textContent = "";
+        void loadRequests();
+        try {
+            if (!rosterTables) {
+                const t = await rosterApi("/dashboard/api/roster");
+                rosterTables = t.tables;
+                rosterMonth.replaceChildren(...rosterTables.map((k) => {
+                    const o = el("option", undefined, monthLabel(k) || k);
+                    o.value = k;
+                    return o;
+                }));
+                const now = thisMonthKey();
+                rosterMonth.value = rosterTables.includes(now) ? now : (rosterTables[0] || "");
+            }
+            rosterTable = rosterMonth.value;
+            if (!rosterTable) {
+                rosterRows.replaceChildren(rosterEmpty("ยังไม่มีตารางรายชื่อ"));
+                return;
+            }
+            const data = await rosterApi("/dashboard/api/roster/" + encodeURIComponent(rosterTable) + (logged ? "" : "?refresh=1"));
+            if (seq !== rosterSeq)
+                return;
+            rosterCols = data.columns;
+            rosterAll = data.rows;
+            rosterPageNo = 0;
+            populateDept();
+            applyRosterFilter();
+            rosterFirstShown = 0;
+        }
+        catch (e) {
+            if (seq !== rosterSeq)
+                return;
+            console.error("roster failed:", e);
+            rosterRows.replaceChildren(rosterEmpty("โหลดรายชื่อไม่สำเร็จ กรุณาลองใหม่", "error-text"));
+        }
+    }
+    rosterMonth.addEventListener("change", () => { rosterDept.value = ""; void loadRoster(true); });
+    rosterSearch.addEventListener("input", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0; });
+    rosterDept.addEventListener("change", () => { rosterPageNo = 0; applyRosterFilter(); rosterFirstShown = 0; });
+    rosterPrev.addEventListener("click", () => {
+        if (rosterPageNo === 0)
+            return;
+        rosterPageNo--;
+        showRosterPage();
+        rosterFirstShown = rosterPageNo * rosterPageSize();
+    });
+    rosterNext.addEventListener("click", () => {
+        rosterPageNo++;
+        showRosterPage();
+        rosterFirstShown = rosterPageNo * rosterPageSize();
+    });
+    // ── Add / edit one row ──
+    let rosterEditing = null;
+    const fieldFor = (c, value) => {
+        const name = c.column_name;
+        const label = el("label", name === "department" ? "wide" : "");
+        label.appendChild(document.createTextNode(FIELD_LABEL[name] || name));
+        let input;
+        if (name === "department") {
+            // Only the canonical names; a legacy spelling stays as the first
+            // option so saving without touching it doesn't change it.
+            const sel = el("select");
+            const opts = value && !DEP_ARRAY.includes(value) ? [value, ...DEP_ARRAY] : DEP_ARRAY;
+            sel.appendChild(el("option", undefined, "—"));
+            sel.options[0].value = "";
+            for (const d of opts) {
+                const o = el("option", undefined, deptLabel(d));
+                o.value = d;
+                sel.appendChild(o);
+            }
+            sel.value = value || "";
+            input = sel;
+        }
+        else {
+            const inp = el("input");
+            if (isTimestamp(c)) {
+                inp.type = "datetime-local";
+                inp.value = toLocalInput(value);
+            }
+            else if (isNumeric(c)) {
+                inp.type = "number";
+                inp.step = "any";
+                inp.value = value === null || value === undefined ? "" : String(value);
+            }
+            else {
+                inp.type = "text";
+                inp.value = value === null || value === undefined ? "" : String(value);
+            }
+            // Almost everyone is นายแพทย์, as on the LINE page.
+            if (name === "position" && !inp.value)
+                inp.value = "นายแพทย์";
+            if (SUGGEST.includes(name)) {
+                const id = "roster-dl-" + name;
+                inp.setAttribute("list", id);
+                const dl = el("datalist");
+                dl.id = id;
+                for (const v of [...new Set(rosterAll.map((r) => r[name]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "th"))) {
+                    const o = el("option");
+                    o.value = v;
+                    dl.appendChild(o);
+                }
+                label.appendChild(dl);
+            }
+            if (name === "firstname")
+                inp.required = true;
+            inp.autocomplete = "off";
+            input = inp;
+        }
+        input.dataset.col = name;
+        // An edit sends only what changed, so an untouched time keeps its seconds.
+        input.dataset.orig = input.value;
+        label.appendChild(input);
+        return label;
+    };
+    const openRosterForm = (row) => {
+        if (!rosterTable)
+            return;
+        rosterEditing = row;
+        rosterDlgT.textContent = row ? "แก้ไขรายชื่อ" : "เพิ่มรายชื่อ";
+        rosterDlgSub.textContent = (monthLabel(rosterTable) || rosterTable) + (row ? " · " + fullName(row) : "");
+        const cols = rosterCols.filter((c) => !c.is_pk);
+        const rank = (n) => { const i = FIELD_ORDER.indexOf(n); return i === -1 ? 99 : i; };
+        cols.sort((a, b) => rank(a.column_name) - rank(b.column_name));
+        rosterFields.replaceChildren(...cols.map((c) => fieldFor(c, row ? row[c.column_name] : null)));
+        rosterError.classList.add("hidden");
+        rosterSave.disabled = false;
+        rosterSave.removeAttribute("aria-busy");
+        rosterSave.textContent = row ? "บันทึก" : "เพิ่ม";
+        rosterDlg.showModal();
+        const first = rosterFields.querySelector(row ? '[data-col="firstname"]' : '[data-col="prefix"]');
+        if (first)
+            first.focus();
+    };
+    rosterAdd.addEventListener("click", () => openRosterForm(null));
+    const collectRoster = () => {
+        const out = {};
+        for (const input of Array.from(rosterFields.querySelectorAll("[data-col]"))) {
+            const name = input.dataset.col;
+            if (rosterEditing && input.value === input.dataset.orig)
+                continue;
+            const col = rosterCols.find((c) => c.column_name === name);
+            const v = input.value.trim();
+            if (v === "") {
+                out[name] = null;
+                continue;
+            }
+            if (col && isNumeric(col))
+                out[name] = Number(v);
+            else if (col && isTimestamp(col))
+                out[name] = fromLocalInput(v);
+            else
+                out[name] = v;
+        }
+        return out;
+    };
+    rosterForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        if (rosterSave.disabled)
+            return;
+        const values = collectRoster();
+        const showErr = (msg) => { rosterError.textContent = msg; rosterError.classList.remove("hidden"); };
+        const first = rosterFields.querySelector('[data-col="firstname"]');
+        if (first && !first.value.trim()) {
+            showErr("กรุณากรอกชื่อ");
+            first.focus();
+            return;
+        }
+        if (rosterEditing && !Object.keys(values).length) {
+            rosterDlg.close();
+            return;
+        }
+        const label = rosterSave.textContent;
+        rosterSave.disabled = true;
+        rosterSave.setAttribute("aria-busy", "true");
+        rosterSave.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"));
+        rosterError.classList.add("hidden");
+        const editing = rosterEditing;
+        let saved = null;
+        try {
+            const url = "/dashboard/api/roster/" + encodeURIComponent(rosterTable) + (editing ? "/" + encodeURIComponent(editing.index) : "");
+            const data = await rosterApi(url, {
+                method: editing ? "PATCH" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(values),
+            });
+            saved = data.row;
+        }
+        catch (e) {
+            console.error("roster save failed:", e);
+            const status = e.status;
+            showErr(status === 404 ? "ไม่พบรายชื่อนี้แล้ว อาจถูกลบไปก่อนหน้า" : "บันทึกไม่สำเร็จ: " + e.message);
+            rosterSave.textContent = label;
+            rosterSave.removeAttribute("aria-busy");
+            rosterSave.disabled = false;
+            return;
+        }
+        rosterDlg.close();
+        try {
+            await reloadRoster(saved ? saved.index : editing ? editing.index : undefined);
+        }
+        catch (e) {
+            console.error("roster reload failed:", e);
+            rosterRows.replaceChildren(rosterEmpty("บันทึกแล้ว แต่โหลดรายชื่อใหม่ไม่สำเร็จ กรุณารีเฟรช", "error-text"));
+        }
+    });
+    const deleteRosterRow = async (r, btn) => {
+        const name = fullName(r) || "(ไม่มีชื่อ)";
+        if (!confirm("ลบ " + name + " ออกจากรายชื่อเดือน " + (monthLabel(rosterTable) || rosterTable) + "?"))
+            return;
+        btn.disabled = true;
+        try {
+            await rosterApi("/dashboard/api/roster/" + encodeURIComponent(rosterTable) + "/" + encodeURIComponent(r.index), { method: "DELETE" });
+        }
+        catch (e) {
+            // 404: someone else already removed it, so just reload.
+            if (e.status !== 404) {
+                console.error("roster delete failed:", e);
+                alert("ลบไม่สำเร็จ กรุณาลองใหม่");
+                btn.disabled = false;
+                return;
+            }
+        }
+        try {
+            await reloadRoster();
+        }
+        catch (e) {
+            console.error("roster reload failed:", e);
+            rosterAll = rosterAll.filter((x) => x !== r);
+            applyRosterFilter();
+        }
+    };
+    // ── Access requests ──
+    const renderRequests = (list) => {
+        reqBadge.textContent = String(list.length);
+        reqBadge.classList.toggle("hidden", list.length === 0);
+        reqBtn.setAttribute("aria-label", "คำขอเข้าใช้งาน " + list.length + " รายการ");
+        reqSub.textContent = list.length ? "รออนุมัติ " + fmtNum(list.length) + " คน" : "";
+        if (!list.length) {
+            reqList.replaceChildren(el("li", "log-empty", "ไม่มีคำขอค้างอยู่"));
+            return;
+        }
+        reqList.replaceChildren(...list.map((q) => {
+            const li = el("li", "req-row");
+            const who = el("div");
+            who.appendChild(el("div", "name", q.name || q.email));
+            who.appendChild(el("div", "meta", [q.name ? q.email : "", q.department ? deptLabel(q.department) : "",
+                q.requested_at ? "ขอเมื่อ " + fmtWhen(q.requested_at) : ""].filter(Boolean).join(" · ")));
+            li.appendChild(who);
+            const acts = el("div", "actions");
+            const ok = el("button", "btn-primary", "อนุมัติ");
+            ok.type = "button";
+            const no = el("button", "btn-ghost reject", "ปฏิเสธ");
+            no.type = "button";
+            const decide = async (decision) => {
+                if (decision === "reject" && !confirm("ปฏิเสธคำขอของ " + (q.name || q.email) + "?"))
+                    return;
+                ok.disabled = no.disabled = true;
+                try {
+                    await rosterApi("/dashboard/api/access-requests/" + encodeURIComponent(q.email) + "/" + decision, { method: "POST" });
+                }
+                catch (e) {
+                    if (e.status !== 404) {
+                        console.error("access request failed:", e);
+                        alert((decision === "approve" ? "อนุมัติ" : "ปฏิเสธ") + "ไม่สำเร็จ กรุณาลองใหม่");
+                        ok.disabled = no.disabled = false;
+                        return;
+                    }
+                }
+                await loadRequests();
+            };
+            ok.addEventListener("click", () => { void decide("approve"); });
+            no.addEventListener("click", () => { void decide("reject"); });
+            acts.appendChild(ok);
+            acts.appendChild(no);
+            li.appendChild(acts);
+            return li;
+        }));
+    };
+    async function loadRequests() {
+        try {
+            const data = await rosterApi("/dashboard/api/access-requests");
+            renderRequests(data.requests);
+        }
+        catch (e) {
+            console.error("access requests failed:", e);
+            if (reqDlg.open)
+                reqList.replaceChildren(el("li", "log-empty error-text", "โหลดคำขอไม่สำเร็จ กรุณาลองใหม่"));
+        }
+    }
+    reqBtn.addEventListener("click", () => {
+        reqList.replaceChildren(el("li", "log-empty", "กำลังโหลด…"));
+        reqDlg.showModal();
+        void loadRequests();
     });
     (async function main() {
         try {
@@ -800,6 +1359,8 @@
         const view = currentView();
         if (view === "audit")
             await loadAudit();
+        else if (view === "roster")
+            await loadRoster(true);
         else
             await loadOverview(view);
     })();
