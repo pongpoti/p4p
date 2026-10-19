@@ -1,4 +1,4 @@
-name: "3. Missing submission report (every 2 hours)"
+name: "2.1 Every 2 hours: missing submission report"
 
 on:
   schedule:

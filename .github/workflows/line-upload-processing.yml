@@ -1,4 +1,4 @@
-name: "Process LINE uploads and submission emails (always on)"
+name: "1. Always on: process LINE uploads and submission emails"
 
 on:
   schedule:

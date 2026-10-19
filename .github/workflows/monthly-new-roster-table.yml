@@ -1,4 +1,4 @@
-name: "Monthly: create next month's roster table"
+name: "2.4 Monthly: create next month's roster table"
 
 # ── Triggers ────────────────────────────────────────────────────────────────
 on:

@@ -1,4 +1,4 @@
-name: "Check: automation tests"
+name: "4.3 Check: automation tests"
 
 on:
   push:

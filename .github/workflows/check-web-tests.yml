@@ -1,4 +1,4 @@
-name: "Check: web tests"
+name: "4.4 Check: web tests"
 
 # The Next.js rewrite (see REACT_REWRITE_PLAN.md). Nothing here is deployed
 # yet; this workflow keeps the rewrite honest while it is built alongside the
