@@ -29,6 +29,8 @@ const { Readable }     = require('stream') as typeof import('stream');
 const fs               = require('fs') as typeof import('fs');
 const os               = require('os') as typeof import('os');
 const path             = require('path') as typeof import('path');
+// Month accent colours shared with the LINE pages and the admin dashboard.
+const { COLOR_ARRAY }  = require('../src/constants') as typeof import('../src/constants');
 const {
   log, withRetry, stripExt, normaliseName,
   createDriveClient, driveListAll, listFolders, listExcelFiles,
@@ -131,7 +133,21 @@ interface MonthGroup {
   monthLabel: string;
   abbMonthLabel: string;
   key: string;
+  month: number; // 1-12, picks the month's accent colour
   rows: ReportPerson[];
+}
+
+/** The month's accent hex (e.g. "#ffa2a2"), same as the app's month tabs. */
+function monthHex(month: number): string {
+  return COLOR_ARRAY[(month - 1) % 12][1];
+}
+
+/** ExcelJS ARGB for a month hex, optionally lightened toward white (0-1). */
+function monthArgb(month: number, lighten = 0): string {
+  const hex = monthHex(month).slice(1);
+  const ch  = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16))
+    .map(v => Math.round(v + (255 - v) * lighten).toString(16).padStart(2, '0'));
+  return ('FF' + ch.join('')).toUpperCase();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -251,8 +267,10 @@ async function buildExcel(monthGroups: MonthGroup[], runTime: string, allDepts: 
     const hdr = ws.getRow(1);
     hdr.height = 22;
     hdr.eachCell({ includeEmpty: true }, cell => {
+      // Column 1 is กลุ่มงาน; each later column is one month in its colour.
+      const group    = monthGroups[Number(cell.col) - 2];
       cell.font      = { bold: true, size: 11 };
-      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: group ? monthArgb(group.month) : 'FFD9E1F2' } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
       cell.border    = FULL_MEDIUM;
     });
@@ -292,7 +310,7 @@ async function buildExcel(monthGroups: MonthGroup[], runTime: string, allDepts: 
 
   // ── Sheets 2+: one per incomplete month ───────────────────────────
   for (const group of monthGroups) {
-    const ws = wb.addWorksheet(group.monthLabel);
+    const ws = wb.addWorksheet(group.monthLabel, { properties: { tabColor: { argb: monthArgb(group.month) } } });
 
     ws.columns = [
       { header: 'ชื่อ-นามสกุล', key: 'fullname',   width: 36 },
@@ -304,7 +322,7 @@ async function buildExcel(monthGroups: MonthGroup[], runTime: string, allDepts: 
     headerRow.height = 22;
     headerRow.eachCell(cell => {
       cell.font      = { bold: true, size: 11 };
-      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: monthArgb(group.month) } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
       cell.border    = FULL_MEDIUM;
     });
@@ -317,7 +335,7 @@ async function buildExcel(monthGroups: MonthGroup[], runTime: string, allDepts: 
     footnoteCell.border    = FULL_THIN;
     footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
     footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FF000000' } };
-    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB8CCE4' } };
+    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: monthArgb(group.month, 0.6) } };
     footnoteRow.height     = 18;
 
     // Rows 3+: Data
@@ -394,6 +412,9 @@ async function uploadReport(drive: drive_v3.Drive, buffer: Buffer): Promise<driv
 // ═══════════════════════════════════════════════════════════════════
 // One PNG per month — receives a single group
 function buildHtml(group: MonthGroup, runTime: string): string {
+  // The month's accent; the pastel colours all take dark text. Tints are the
+  // same hex with an alpha suffix.
+  const accent = monthHex(group.month);
   const rows = group.rows.length === 0
     ? `<tr><td class="no-data" colspan="3">ไม่มีข้อมูล</td></tr>`
     : group.rows.map((r, i) => `
@@ -421,14 +442,14 @@ function buildHtml(group: MonthGroup, runTime: string): string {
 
   /* ── Header bar ── */
   .page-header {
-    background: #1e3a5f;
-    color: #fff;
+    background: ${accent};
+    color: #1e2d3d;
     padding: 28px 40px 22px;
   }
   .page-header h1 { font-size: 38px; font-weight: 700; margin-bottom: 4px; }
   .page-header .month-tag {
     font-size: 26px;
-    color: #a8c4e0;
+    color: #1e2d3d;
     font-weight: 600;
   }
 
@@ -437,8 +458,8 @@ function buildHtml(group: MonthGroup, runTime: string): string {
 
   /* ── Month bar ── */
   .month-bar {
-    background: #4472C4;
-    color: #fff;
+    background: ${accent};
+    color: #1e2d3d;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -448,7 +469,7 @@ function buildHtml(group: MonthGroup, runTime: string): string {
   .month-label { font-size: 28px; font-weight: 700; }
   .month-count {
     font-size: 23px;
-    background: rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.55);
     padding: 3px 14px;
     border-radius: 14px;
     font-weight: 600;
@@ -464,14 +485,14 @@ function buildHtml(group: MonthGroup, runTime: string): string {
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     table-layout: auto;
   }
-  thead tr { background: #D9E1F2; }
+  thead tr { background: ${accent}66; }
   th {
     padding: 12px 18px;
     text-align: left;
     font-weight: 700;
     font-size: 25px;
     color: #2c3e50;
-    border-bottom: 3px solid #b4c6e0;
+    border-bottom: 3px solid ${accent};
     white-space: nowrap;
   }
   td {
@@ -480,12 +501,12 @@ function buildHtml(group: MonthGroup, runTime: string): string {
     vertical-align: middle;
     font-size: 27px;
   }
-  tr.alt { background: #EBF1FB; }
+  tr.alt { background: ${accent}22; }
   tr:last-child td { border-bottom: none; }
   .num    { color: #aaa; font-size: 21px; text-align: center; width: 50px; white-space: nowrap; }
   .th-num { width: 50px; text-align: center; }
   .name   { }
-  .dept   { color: #4472C4; font-weight: 600; white-space: nowrap; }
+  .dept   { color: #1e2d3d; font-weight: 600; white-space: nowrap; }
   .no-data {
     text-align: center; color: #bbb; font-style: italic;
     padding: 22px; font-size: 25px;
@@ -493,8 +514,8 @@ function buildHtml(group: MonthGroup, runTime: string): string {
 
   /* ── Footer ── */
   .footer {
-    background: #1e3a5f;
-    color: #a8c4e0;
+    background: ${accent};
+    color: #1e2d3d;
     font-size: 21px;
     font-style: italic;
     padding: 14px 40px;
@@ -657,7 +678,7 @@ async function main(): Promise<void> {
       // Folder not found — all SB persons are missing
       log(`  [Drive] Folder not found — all ${sbPersons.length} persons have no file`);
       const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
-      monthGroups.push({ monthLabel, abbMonthLabel, key, rows });
+      monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
       totalMissing += rows.length;
       rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
       continue;
@@ -676,7 +697,7 @@ async function main(): Promise<void> {
     const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
     log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
     rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
-    monthGroups.push({ monthLabel, abbMonthLabel, key, rows });
+    monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
     totalMissing += rows.length;
   }
 
