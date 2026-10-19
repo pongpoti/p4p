@@ -602,10 +602,12 @@
         }
 
         /* ── ประวัติการใช้งาน (owner only) ─────────────────────────────── */
-        #audit-view { padding: 24px 0 40px; }
+        /* Fills the same space as the month grid: the table shows as many
+           one-line rows as fit, and the pager below moves between pages. */
+        #audit-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
         .audit-filters {
             display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
-            padding: 16px 18px; border-radius: var(--radius); margin-bottom: 16px;
+            padding: 16px 18px; border-radius: var(--radius); margin-bottom: clamp(12px, 2.2vh, 20px); flex-shrink: 0;
         }
         .audit-filters label { display: flex; flex-direction: column; gap: 4px; font-size: .8125rem; font-weight: 600; color: var(--muted-foreground); }
         .audit-filters select, .audit-filters input {
@@ -614,25 +616,35 @@
         }
         .audit-filters select { min-width: 170px; }
         .audit-filters .btn-ghost { height: 40px; }
-        .audit-table-wrap { border-radius: var(--radius); overflow: hidden; }
-        .audit-table { width: 100%; border-collapse: collapse; font-size: .9375rem; }
+        .audit-table-wrap { flex: 1; min-height: 0; border-radius: var(--radius); overflow: hidden; }
+        .audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9375rem; }
+        .audit-table col.c-when { width: 225px; }
+        .audit-table col.c-who { width: 130px; }
+        .audit-table col.c-what { width: 205px; }
+        .audit-table col.c-ip { width: 125px; }
         .audit-table th {
             text-align: left; font-size: .8125rem; font-weight: 600; color: var(--muted-foreground);
             padding: 12px 14px; background: rgba(255, 255, 255, .6); border-bottom: 1px solid var(--border);
         }
-        .audit-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        /* One line per row (full text in the tooltip), so a page's row count is exact. */
+        .audit-table td {
+            height: 44px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
         .audit-table tr:last-child td { border-bottom: 0; }
         .audit-table .when { white-space: nowrap; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
         .audit-table .who { white-space: nowrap; font-weight: 600; }
         .audit-table .what { white-space: nowrap; }
-        .audit-table .detail { overflow-wrap: anywhere; }
         .audit-table .detail q { quotes: "“" "”"; }
         .audit-table .ip { white-space: nowrap; color: var(--muted-foreground); font-size: .8125rem; font-variant-numeric: tabular-nums; }
         .audit-table tr.warn td { background: rgba(253, 236, 234, .7); }
         .audit-table tr.warn .what { color: #8A1C12; font-weight: 600; }
         .audit-table tr.change td { background: rgba(255, 248, 230, .6); }
-        .audit-empty { padding: 28px; text-align: center; color: var(--muted-foreground); }
-        .audit-more { display: flex; justify-content: center; margin-top: 16px; }
+        .audit-table td.audit-empty { height: 88px; text-align: center; color: var(--muted-foreground); white-space: normal; }
+        .audit-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: clamp(12px, 2.2vh, 20px); flex-shrink: 0; }
+        .audit-pager .btn-ghost { height: 40px; min-width: 104px; }
+        .audit-pager .btn-ghost:disabled { opacity: .45; cursor: default; background: #fff; }
+        #audit-page { min-width: 72px; text-align: center; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
     </style>
 </head>
 
@@ -745,13 +757,18 @@
             </form>
             <div class="audit-table-wrap glass">
                 <table class="audit-table">
+                    <colgroup><col class="c-when"><col class="c-who"><col class="c-what"><col><col class="c-ip"></colgroup>
                     <thead>
                         <tr><th scope="col">เวลา</th><th scope="col">ผู้ใช้</th><th scope="col">การใช้งาน</th><th scope="col">รายละเอียด</th><th scope="col">IP</th></tr>
                     </thead>
                     <tbody id="audit-rows"></tbody>
                 </table>
             </div>
-            <div class="audit-more"><button type="button" id="audit-more" class="btn-ghost hidden">โหลดเพิ่ม</button></div>
+            <nav class="audit-pager" aria-label="เปลี่ยนหน้า">
+                <button type="button" id="audit-prev" class="btn-ghost" disabled>ก่อนหน้า</button>
+                <span id="audit-page" aria-live="polite"></span>
+                <button type="button" id="audit-next" class="btn-ghost" disabled>ถัดไป</button>
+            </nav>
         </section>
     </main>
 
