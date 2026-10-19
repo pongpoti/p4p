@@ -218,7 +218,7 @@
         render();
         const view = currentView();
         if (view === "audit")
-            void loadAudit(false);
+            void loadAudit();
         else
             void loadOverview(view);
     });
@@ -553,7 +553,10 @@
         }
     }
     const auditRows = document.getElementById("audit-rows");
-    const auditMore = document.getElementById("audit-more");
+    const auditWrap = auditRows.closest(".audit-table-wrap");
+    const auditPrev = document.getElementById("audit-prev");
+    const auditNext = document.getElementById("audit-next");
+    const auditPage = document.getElementById("audit-page");
     const auditActor = document.getElementById("audit-actor");
     const auditGroup = document.getElementById("audit-group");
     const auditFrom = document.getElementById("audit-from");
@@ -623,13 +626,17 @@
             td.appendChild(document.createTextNode(parts.length ? " · " : ""));
             td.appendChild(el("q", undefined, String(t.note)));
         }
+        // Rows are one line; the whole text is in the tooltip.
+        td.title = td.textContent || "";
         return td;
     };
     const auditRow = (a) => {
         const tr = el("tr", a.action === "followup.delete" || a.action === "login.refused" ? "warn"
             : a.action === "followup.add" ? "change" : "");
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)));
-        tr.appendChild(el("td", "who", a.actor_name || "—"));
+        const who = el("td", "who", a.actor_name || "—");
+        who.title = a.actor_name;
+        tr.appendChild(who);
         tr.appendChild(el("td", "what", ACTION_LABEL[a.action] || a.action));
         tr.appendChild(auditDetail(a));
         const ip = el("td", "ip", a.ip || "—");
@@ -638,7 +645,12 @@
         tr.appendChild(ip);
         return tr;
     };
-    let auditOldest = null;
+    // Entries arrive 50 at a time, newest first (?before= pages back); the
+    // table shows one screenful of them and ก่อนหน้า / ถัดไป move between
+    // screenfuls, fetching the next 50 only when the page needs them.
+    let auditAll = [];
+    let auditHasMore = false;
+    let auditPageNo = 0;
     let auditSeq = 0;
     const auditQuery = () => {
         const q = new URLSearchParams();
@@ -659,19 +671,41 @@
         tr.appendChild(td);
         return tr;
     };
-    // more = false loads the newest page; true appends the next older one.
-    async function loadAudit(more) {
+    // Rows that fit below the table header (each row is a fixed 44px + border).
+    const auditPageSize = () => {
+        const head = auditWrap.querySelector("thead").offsetHeight;
+        return Math.max(1, Math.floor((auditWrap.clientHeight - head) / 45));
+    };
+    let auditPageSizeAtLastShow = 1;
+    const showAuditPage = () => {
+        const size = auditPageSize();
+        auditPageSizeAtLastShow = size;
+        const from = auditPageNo * size;
+        const rows = auditAll.slice(from, from + size);
+        auditRows.replaceChildren(...(rows.length ? rows.map(auditRow) : [emptyRow("ไม่มีรายการ")]));
+        const lastLoaded = from + size >= auditAll.length;
+        auditPrev.disabled = auditPageNo === 0;
+        auditNext.disabled = lastLoaded && !auditHasMore;
+        const known = auditHasMore ? "" : " / " + Math.max(1, Math.ceil(auditAll.length / size));
+        auditPage.textContent = "หน้า " + (auditPageNo + 1) + known;
+    };
+    const fetchAudit = async (before) => {
+        let q = auditQuery();
+        if (before !== null)
+            q += (q ? "&" : "") + "before=" + before;
+        return api("/dashboard/api/audit" + (q ? "?" + q : ""));
+    };
+    // A filter change (or opening the tab) starts again from the newest entry.
+    async function loadAudit() {
         const seq = ++auditSeq;
-        if (!more) {
-            auditOldest = null;
-            auditRows.replaceChildren(emptyRow("กำลังโหลด…"));
-        }
-        auditMore.disabled = true;
+        auditAll = [];
+        auditHasMore = false;
+        auditPageNo = 0;
+        auditPrev.disabled = auditNext.disabled = true;
+        auditPage.textContent = "";
+        auditRows.replaceChildren(emptyRow("กำลังโหลด…"));
         try {
-            let q = auditQuery();
-            if (more && auditOldest !== null)
-                q += (q ? "&" : "") + "before=" + auditOldest;
-            const data = await api("/dashboard/api/audit" + (q ? "?" + q : ""));
+            const data = await fetchAudit(null);
             if (seq !== auditSeq)
                 return;
             // Keep the chosen person while refreshing the list of names.
@@ -683,35 +717,65 @@
             }));
             auditActor.options[0].value = "";
             auditActor.value = chosen;
-            const rows = data.entries.map(auditRow);
-            if (more)
-                auditRows.append(...rows);
-            else
-                auditRows.replaceChildren(...(rows.length ? rows : [emptyRow("ไม่มีรายการ")]));
-            if (data.entries.length)
-                auditOldest = data.entries[data.entries.length - 1].id;
-            auditMore.classList.toggle("hidden", !data.more);
+            auditAll = data.entries;
+            auditHasMore = data.more;
+            showAuditPage();
         }
         catch (e) {
             if (seq !== auditSeq)
                 return;
             console.error("audit failed:", e);
-            if (!more)
-                auditRows.replaceChildren(emptyRow("โหลดประวัติการใช้งานไม่สำเร็จ กรุณาลองใหม่", "error-text"));
-        }
-        finally {
-            auditMore.disabled = false;
+            auditRows.replaceChildren(emptyRow("โหลดประวัติการใช้งานไม่สำเร็จ กรุณาลองใหม่", "error-text"));
         }
     }
+    auditPrev.addEventListener("click", () => {
+        if (auditPageNo === 0)
+            return;
+        auditPageNo--;
+        showAuditPage();
+    });
+    auditNext.addEventListener("click", async () => {
+        const seq = auditSeq;
+        const need = (auditPageNo + 2) * auditPageSize();
+        auditNext.disabled = auditPrev.disabled = true;
+        try {
+            while (auditAll.length < need && auditHasMore) {
+                const data = await fetchAudit(auditAll[auditAll.length - 1].id);
+                if (seq !== auditSeq)
+                    return;
+                auditAll = auditAll.concat(data.entries);
+                auditHasMore = data.more;
+            }
+            if (auditAll.length > (auditPageNo + 1) * auditPageSize())
+                auditPageNo++;
+        }
+        catch (e) {
+            console.error("audit page failed:", e);
+        }
+        if (seq === auditSeq)
+            showAuditPage();
+    });
+    // A different window height fits a different number of rows: keep the
+    // first entry on screen and re-cut the pages around it.
+    let auditResizeTimer = 0;
+    window.addEventListener("resize", () => {
+        clearTimeout(auditResizeTimer);
+        auditResizeTimer = window.setTimeout(() => {
+            if (currentView() !== "audit" || !auditAll.length)
+                return;
+            const first = auditPageNo * auditPageSizeAtLastShow;
+            auditPageNo = Math.floor(first / auditPageSize());
+            showAuditPage();
+        }, 150);
+    });
     for (const f of [auditActor, auditGroup, auditFrom, auditTo])
-        f.addEventListener("change", () => { void loadAudit(false); });
-    auditMore.addEventListener("click", () => { void loadAudit(true); });
+        f.addEventListener("change", () => { void loadAudit(); });
     auditReset.addEventListener("click", () => {
         auditActor.value = "";
         auditGroup.value = "";
         auditFrom.value = "";
         auditTo.value = "";
-        void loadAudit(false);
+        void loadAudit();
     });
     (async function main() {
         try {
@@ -735,7 +799,7 @@
         render();
         const view = currentView();
         if (view === "audit")
-            await loadAudit(false);
+            await loadAudit();
         else
             await loadOverview(view);
     })();
