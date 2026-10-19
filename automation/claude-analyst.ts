@@ -540,7 +540,7 @@ const TITLE_PREFIX_RE = /^(?:นพ\.|พญ\.|นายแพทย์\s*|แ�
 const NON_NAME_THAI = new Set([
   "P4P", "เดือน", "ปี", "แพทย์", "โรงพยาบาล", "รพ", "ผลงาน", "คะแนน",
   "แต้ม", "รวม", "ข้อมูล", "ส่ง", "ไฟล์", "สค", "สมุทรสาคร", "องค์กร",
-  "ฝ่าย", "กลุ่ม", "งาน", "ประจำ", "ทำงาน",
+  "ฝ่าย", "กลุ่ม", "งาน", "ประจำ", "ทำงาน", "และ", "ถึง",
   // Thai month names (full) — filenames like "ศาศวัต มีนาคม.xlsx" must not treat
   // the month word as a lastname
   "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
@@ -716,6 +716,11 @@ function extractNameFromText(text: string | null | undefined): string | null {
   const text3 = text2.replace(
     /เดือน(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/g,
     "เดือน $1"
+  ).replace(
+    // "สิงหาคมและกันยายน" — two months typed as one word.  Split them so each
+    // is recognised as a month instead of the whole run passing as a name.
+    /(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)(และ|ถึง)(?=มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/g,
+    "$1 $2 "
   );
 
   // Pattern 1.5: "ณ"-compound surnames — a single-character connector
@@ -800,19 +805,54 @@ export function resolvePhysicianNameCandidates(filename: unknown, subject: unkno
   // Strip file extension from filename before scanning
   const fileBase = String(filename ?? "").replace(/\.[^.]+$/, "");
 
-  const sources = [
-    fileBase,
-    String(subject ?? ""),
-    String(body    ?? ""),
-  ];
-
   const candidates: string[] = [];
-  for (const src of sources) {
-    const name = extractNameFromText(src);
-    if (name && !candidates.includes(name)) candidates.push(name);
-  }
+  const add = (n: string | null) => { if (n && !candidates.includes(n)) candidates.push(n); };
+
+  add(extractNameFromText(fileBase));
+  add(extractNameFromText(String(subject ?? "")));
+  for (const n of bodyNameCandidates(String(body ?? ""))) add(n);
 
   return candidates;
+}
+
+// A line that opens a letter ("เรียน เจ้าหน้าที่ที่เกี่ยวข้อง", "Dear …") names the
+// recipient, never the sender.
+const GREETING_LINE_RE = /^\s*(?:เรียน|ถึง|สวัสดี|dear\b|hi\b|hello\b|to\b)/i;
+
+// A line that closes a letter; the sender's name usually sits on the lines
+// right after it ("ขอแสดงความนับถือ", then "Int.1 สมศรี รักดี").
+const CLOSING_LINE_RE = /ขอแสดงความนับถือ|ด้วยความเคารพ|ขอบคุณ|best regards|kind regards|regards|sincerely|thank/i;
+
+/**
+ * Name candidates from an email body, most likely first.
+ *
+ * Scanning the body as one string returned the first Thai word pair, which in
+ * a polite email is the greeting — "เรียน เจ้าหน้าที่ที่เกี่ยวข้อง" — so the
+ * sender's name in the signature was never reached.  Instead:
+ *   1. the signature: lines after the last closing phrase, then the last
+ *      line that is not a greeting or closing;
+ *   2. every other line, top to bottom, except greeting and closing lines;
+ *   3. the remaining text as one string (what the old scan did, minus the
+ *      greeting), for names split across lines.
+ * The caller verifies each candidate against the roster, so extra candidates
+ * only cost a lookup.
+ */
+function bodyNameCandidates(body: string): string[] {
+  const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const out: string[] = [];
+  const add = (n: string | null) => { if (n && !out.includes(n)) out.push(n); };
+
+  let closing = -1;
+  lines.forEach((l, i) => { if (CLOSING_LINE_RE.test(l)) closing = i; });
+  const kept = lines.filter((l) => !GREETING_LINE_RE.test(l) && !CLOSING_LINE_RE.test(l));
+  const signature = closing >= 0 ? lines.slice(closing + 1) : [];
+  for (const l of signature) add(extractNameFromText(l));
+  if (kept.length) add(extractNameFromText(kept[kept.length - 1]!));
+
+  for (const l of kept) add(extractNameFromText(l));
+  add(extractNameFromText(kept.join("\n")));
+
+  return out;
 }
 
 /**
