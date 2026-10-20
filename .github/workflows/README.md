@@ -12,7 +12,7 @@ group 1-2 workflows it watches by their name.
 | Name | File | When |
 |---|---|---|
 | 1. Always on: process LINE uploads and submission emails | `1-always-on-process-line-uploads-and-emails.yml` | Back to back, each run about 60 min, then it starts the next; cron :05/:25/:45 restarts it if the chain breaks. Reads the Gmail inbox every minute. Disable it here to stop the relay. |
-| 1.2 Always on: alert when a scheduled run fails | `1-2-always-on-alert-failed-runs.yml` | Starts by itself whenever a group 1 or 2 run finishes and sends a Telegram alert if it failed or timed out (cancelled runs are normal for the relays and ignored). At :15/:45 it also checks that 1 and 2.1 still have a run going and alerts if either has been stopped for 45 minutes. It watches workflows by name, so add a renamed or new group 1-2 workflow to its list. |
+| 1.2 Always on: alert when a scheduled run fails | `1-2-always-on-alert-failed-runs.yml` | Back to back like 1, each run about 58 min, then it starts the next; cron :15/:45 restarts it. Checks every minute for failed or timed-out runs of the group 1-2 workflows and sends a Telegram alert (cancelled runs are normal for the relays and ignored). Every 5 minutes it also checks that 1 and 2.1 still have a run going, and alerts every 30 minutes while either has been stopped for 45 minutes. It watches workflows by name, so add a renamed or new group 1-2 workflow to its WATCH list. |
 
 ## 2. Scheduled
 
