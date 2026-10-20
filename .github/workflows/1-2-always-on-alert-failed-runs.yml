@@ -1,0 +1,104 @@
+name: "1.2 Always on: alert when a scheduled run fails"
+
+# Watches every workflow in groups 1 and 2 and sends a Telegram message to the
+# admin chat when one of their runs fails. Nothing has to stay running for
+# this: GitHub starts the "failed" job by itself each time a watched run
+# finishes, so it costs a few seconds per run instead of a runner all day.
+#
+# workflow_run matches by the workflow's NAME, not its file. When renaming a
+# workflow in groups 1-2, update the list below, or its failures go unseen.
+on:
+  workflow_run:
+    workflows:
+      - "1. Always on: process LINE uploads and submission emails"
+      - "2.1 Every minute: missing submission report"
+      - "2.2 Nightly: build SK03 files and notify department heads"
+      - "2.3 Daily: keep database awake"
+      - "2.4 Monthly: create next month's roster table"
+      - "2.5 Monthly: update LINE menu month picker"
+      - "2.6 Monthly: eligible physician list (PDF)"
+      - "2.7 Yearly: create Drive year folders"
+    types: [completed]
+  # A failure alert can't catch a relay that simply stopped: no run, nothing
+  # to fail. After PR #240 renamed the files, both relays stopped at 16:51
+  # Bangkok on 2026-10-19 and nobody noticed for two hours. This tick checks
+  # that 1 and 2.1 still have a run alive or a recent one.
+  schedule:
+    - cron: "15,45 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+
+jobs:
+  failed:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      contains(fromJSON('["failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send Telegram alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          TRIGGER: ${{ github.event.workflow_run.event }}
+          STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          started=$(TZ=Asia/Bangkok date -d "$STARTED" '+%Y-%m-%d %H:%M')
+          text=$(printf '⚠️ GitHub Actions run failed\n%s\nResult: %s (%s)\nStarted: %s Bangkok\n%s' \
+            "$WF_NAME" "$CONCLUSION" "$TRIGGER" "$started" "$RUN_URL")
+          curl -fsS --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" > /dev/null
+
+  stalled:
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the relays are still running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Each relay hands over to its next run the moment it ends, and its
+          # cron restarts it within 20 minutes, so 45 minutes with nothing
+          # alive means the chain is broken.
+          MAX_IDLE_MIN: "45"
+        run: |
+          now=$(date +%s)
+          problems=""
+          for wf in 1-always-on-process-line-uploads-and-emails.yml 2-1-every-minute-missing-submission-report.yml; do
+            alive=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --limit 5 \
+              --json status --jq '[.[] | select(.status != "completed")] | length')
+            if [ "$alive" -gt 0 ]; then
+              echo "$wf: running"
+              continue
+            fi
+            last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --limit 1 \
+              --json updatedAt --jq '.[0].updatedAt // empty')
+            if [ -z "$last" ]; then
+              problems="${problems}\n• ${wf}: no runs found"
+              continue
+            fi
+            idle=$(( (now - $(date -d "$last" +%s)) / 60 ))
+            echo "$wf: idle ${idle} min (last run ended $last)"
+            if [ "$idle" -ge "$MAX_IDLE_MIN" ]; then
+              ended=$(TZ=Asia/Bangkok date -d "$last" '+%Y-%m-%d %H:%M')
+              problems="${problems}\n• ${wf}: nothing running since ${ended} Bangkok"
+            fi
+          done
+          if [ -z "$problems" ]; then
+            exit 0
+          fi
+          text=$(printf '⚠️ GitHub Actions relay stopped%b\nOpen Actions and press Run workflow on it:\n%s/%s/actions' \
+            "$problems" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY")
+          curl -fsS --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" > /dev/null

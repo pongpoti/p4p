@@ -4,13 +4,15 @@ The number at the front of each name sorts the Actions tab into four groups,
 and each file name starts with the same number (`3.4 …` lives in `3-4-….yml`).
 When renaming a file, update every reference to it: the relay starts its next
 run by file name (`gh workflow run 1-always-on-process-line-uploads-and-emails.yml`)
-and the checks list their own file in their path filters.
+the checks list their own file in their path filters, and 1.2 lists the
+group 1-2 workflows it watches by their name.
 
 ## 1. Always on
 
 | Name | File | When |
 |---|---|---|
 | 1. Always on: process LINE uploads and submission emails | `1-always-on-process-line-uploads-and-emails.yml` | Back to back, each run about 60 min, then it starts the next; cron :05/:25/:45 restarts it if the chain breaks. Reads the Gmail inbox every minute. Disable it here to stop the relay. |
+| 1.2 Always on: alert when a scheduled run fails | `1-2-always-on-alert-failed-runs.yml` | Starts by itself whenever a group 1 or 2 run finishes and sends a Telegram alert if it failed or timed out (cancelled runs are normal for the relays and ignored). At :15/:45 it also checks that 1 and 2.1 still have a run going and alerts if either has been stopped for 45 minutes. It watches workflows by name, so add a renamed or new group 1-2 workflow to its list. |
 
 ## 2. Scheduled
 
