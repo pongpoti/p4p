@@ -1,104 +1,144 @@
 name: "1.2 Always on: alert when a scheduled run fails"
 
 # Watches every workflow in groups 1 and 2 and sends a Telegram message to the
-# admin chat when one of their runs fails. Nothing has to stay running for
-# this: GitHub starts the "failed" job by itself each time a watched run
-# finishes, so it costs a few seconds per run instead of a runner all day.
+# admin chat when one of their runs fails, or when relay 1 or 2.1 stops.
 #
-# workflow_run matches by the workflow's NAME, not its file. When renaming a
-# workflow in groups 1-2, update the list below, or its failures go unseen.
+# RELAY, like 1-always-on-process-line-uploads-and-emails.yml: each run checks
+# once a minute for ~58 minutes, then starts the next run itself. It does not
+# use the workflow_run trigger: GitHub does not fire workflow_run for runs
+# started by GITHUB_TOKEN, which is how relays 1 and 2.1 start almost every
+# run, so that trigger never fired for them (checked on 2026-10-20).
+#
+# Workflows are matched by their NAME, not their file. When renaming a
+# workflow in groups 1-2, update WATCH below, or its failures go unseen.
 on:
-  workflow_run:
-    workflows:
-      - "1. Always on: process LINE uploads and submission emails"
-      - "2.1 Every minute: missing submission report"
-      - "2.2 Nightly: build SK03 files and notify department heads"
-      - "2.3 Daily: keep database awake"
-      - "2.4 Monthly: create next month's roster table"
-      - "2.5 Monthly: update LINE menu month picker"
-      - "2.6 Monthly: eligible physician list (PDF)"
-      - "2.7 Yearly: create Drive year folders"
-    types: [completed]
-  # A failure alert can't catch a relay that simply stopped: no run, nothing
-  # to fail. After PR #240 renamed the files, both relays stopped at 16:51
-  # Bangkok on 2026-10-19 and nobody noticed for two hours. This tick checks
-  # that 1 and 2.1 still have a run alive or a recent one.
   schedule:
+    # Only restarts the chain if it ever breaks; a tick that lands while a
+    # run is alive waits as the one pending run.
     - cron: "15,45 * * * *"
   workflow_dispatch:
+    inputs:
+      since:
+        description: "Leave blank. Alert on failures that ended after this UTC time (set by the hand-over)."
+        required: false
+        default: ""
+
+concurrency:
+  group: failed-run-alerts
+  cancel-in-progress: false
 
 permissions:
-  actions: read
+  actions: write   # read runs, and let the last step start the next run
 
 jobs:
-  failed:
-    if: >-
-      github.event_name == 'workflow_run' &&
-      contains(fromJSON('["failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion)
+  watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Send Telegram alert
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          WF_NAME: ${{ github.event.workflow_run.name }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          TRIGGER: ${{ github.event.workflow_run.event }}
-          STARTED: ${{ github.event.workflow_run.run_started_at }}
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
-        run: |
-          started=$(TZ=Asia/Bangkok date -d "$STARTED" '+%Y-%m-%d %H:%M')
-          text=$(printf '⚠️ GitHub Actions run failed\n%s\nResult: %s (%s)\nStarted: %s Bangkok\n%s' \
-            "$WF_NAME" "$CONCLUSION" "$TRIGGER" "$started" "$RUN_URL")
-          curl -fsS --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${text}" \
-            --data-urlencode "disable_web_page_preview=true" > /dev/null
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      WATCH: >-
+        ["1. Always on: process LINE uploads and submission emails",
+         "2.1 Every minute: missing submission report",
+         "2.2 Nightly: build SK03 files and notify department heads",
+         "2.3 Daily: keep database awake",
+         "2.4 Monthly: create next month's roster table",
+         "2.5 Monthly: update LINE menu month picker",
+         "2.6 Monthly: eligible physician list (PDF)",
+         "2.7 Yearly: create Drive year folders"]
+      # The relays hand over the moment a run ends and their cron restarts
+      # them within 20 minutes, so 45 minutes with nothing alive means the
+      # chain is broken. Repeats every 30 minutes until someone restarts it.
+      RELAYS: >-
+        1-always-on-process-line-uploads-and-emails.yml
+        2-1-every-minute-missing-submission-report.yml
+      MAX_IDLE_MIN: "45"
+      REPEAT_MIN: "30"
+      LOOP_MINUTES: "58"
 
-  stalled:
-    if: github.event_name != 'workflow_run'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-      - name: Check the relays are still running
+      - name: Watch runs
         env:
-          GH_TOKEN: ${{ github.token }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Each relay hands over to its next run the moment it ends, and its
-          # cron restarts it within 20 minutes, so 45 minutes with nothing
-          # alive means the chain is broken.
-          MAX_IDLE_MIN: "45"
+          SINCE_INPUT: ${{ inputs.since }}
         run: |
-          now=$(date +%s)
-          problems=""
-          for wf in 1-always-on-process-line-uploads-and-emails.yml 2-1-every-minute-missing-submission-report.yml; do
-            alive=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --limit 5 \
-              --json status --jq '[.[] | select(.status != "completed")] | length')
-            if [ "$alive" -gt 0 ]; then
-              echo "$wf: running"
-              continue
-            fi
-            last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --limit 1 \
-              --json updatedAt --jq '.[0].updatedAt // empty')
-            if [ -z "$last" ]; then
-              problems="${problems}\n• ${wf}: no runs found"
-              continue
-            fi
-            idle=$(( (now - $(date -d "$last" +%s)) / 60 ))
-            echo "$wf: idle ${idle} min (last run ended $last)"
-            if [ "$idle" -ge "$MAX_IDLE_MIN" ]; then
-              ended=$(TZ=Asia/Bangkok date -d "$last" '+%Y-%m-%d %H:%M')
-              problems="${problems}\n• ${wf}: nothing running since ${ended} Bangkok"
-            fi
-          done
-          if [ -z "$problems" ]; then
-            exit 0
+          set -u
+          R="$GITHUB_REPOSITORY"
+
+          send() {
+            curl -fsS --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=$1" \
+              --data-urlencode "disable_web_page_preview=true" > /dev/null \
+              || echo "::warning::Telegram send failed"
+          }
+          bkk() { TZ=Asia/Bangkok date -d "$1" '+%Y-%m-%d %H:%M'; }
+
+          # Start where the previous run of this workflow stopped looking, so
+          # a failure is reported once even across hand-overs.
+          since="$SINCE_INPUT"
+          if [ -z "$since" ]; then
+            since=$(gh run list --repo "$R" --workflow 1-2-always-on-alert-failed-runs.yml --limit 20 \
+              --json databaseId,status,conclusion,updatedAt \
+              --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID and .status == \"completed\" and (.conclusion == \"success\" or .conclusion == \"failure\"))][0].updatedAt // empty")
           fi
-          text=$(printf '⚠️ GitHub Actions relay stopped%b\nOpen Actions and press Run workflow on it:\n%s/%s/actions' \
-            "$problems" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY")
-          curl -fsS --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${text}" \
-            --data-urlencode "disable_web_page_preview=true" > /dev/null
+          [ -n "$since" ] || since=$(date -u -d '-60 min' +%FT%TZ)
+          echo "Reporting failures that ended after $since"
+          echo "$since" > "$RUNNER_TEMP/since"
+
+          declare -A last_stall_alert
+          end=$(( $(date +%s) + LOOP_MINUTES * 60 ))
+          i=0
+          while :; do
+            poll=$(date -u +%FT%TZ)
+            if runs=$(gh run list --repo "$R" --limit 60 \
+                --json databaseId,workflowName,status,conclusion,event,startedAt,updatedAt,url); then
+              while IFS=$'\t' read -r name conclusion event started url; do
+                [ -n "$name" ] || continue
+                echo "FAILED: $name ($conclusion) $url"
+                send "$(printf '⚠️ GitHub Actions run failed\n%s\nResult: %s (%s)\nStarted: %s Bangkok\n%s' \
+                  "$name" "$conclusion" "$event" "$(bkk "$started")" "$url")"
+              done < <(echo "$runs" | jq -r --arg since "$since" --arg poll "$poll" --argjson watch "$WATCH" '
+                .[] | select(.status == "completed")
+                    | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")
+                    | select(.workflowName as $n | $watch | index($n))
+                    | select(.updatedAt > $since and .updatedAt <= $poll)
+                    | [.workflowName, .conclusion, .event, .startedAt, .url] | @tsv')
+              since="$poll"
+              echo "$since" > "$RUNNER_TEMP/since"
+            else
+              echo "::warning::could not list runs; will retry next minute"
+            fi
+
+            # Stopped relays, every 5 minutes.
+            if [ $(( i % 5 )) -eq 0 ]; then
+              now=$(date +%s)
+              for wf in $RELAYS; do
+                info=$(gh run list --repo "$R" --workflow "$wf" --limit 5 --json status,updatedAt \
+                  --jq '{alive: ([.[] | select(.status != "completed")] | length), last: (.[0].updatedAt // "")}') || continue
+                [ "$(echo "$info" | jq .alive)" -gt 0 ] && { unset "last_stall_alert[$wf]"; continue; }
+                last=$(echo "$info" | jq -r .last)
+                if [ -z "$last" ]; then idle=99999; else idle=$(( (now - $(date -d "$last" +%s)) / 60 )); fi
+                [ "$idle" -ge "$MAX_IDLE_MIN" ] || continue
+                prev=${last_stall_alert[$wf]:-0}
+                [ $(( now - prev )) -ge $(( REPEAT_MIN * 60 )) ] || continue
+                last_stall_alert[$wf]=$now
+                echo "STOPPED: $wf idle ${idle} min"
+                send "$(printf '⚠️ GitHub Actions relay stopped\n%s\nNothing running since %s Bangkok.\nOpen it in Actions and press Run workflow:\n%s/%s/actions/workflows/%s' \
+                  "$wf" "$( [ -n "$last" ] && bkk "$last" || echo '(no runs found)')" "$GITHUB_SERVER_URL" "$R" "$wf")"
+              done
+            fi
+
+            i=$(( i + 1 ))
+            [ "$(date +%s)" -lt "$end" ] || break
+            sleep 60
+          done
+
+      # Hand over to the next run ourselves instead of trusting the cron
+      # (see 1-always-on-process-line-uploads-and-emails.yml for why). To stop
+      # the relay, disable this workflow in the Actions tab.
+      - name: Hand over to the next run
+        if: always()
+        run: |
+          since=$(cat "$RUNNER_TEMP/since" 2>/dev/null || true)
+          gh workflow run 1-2-always-on-alert-failed-runs.yml --repo "$GITHUB_REPOSITORY" --ref main -f since="$since"
