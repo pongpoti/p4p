@@ -888,7 +888,7 @@ async function formatOverallSheet(
   const R8    = S - 1;          // 0-based row 8
   const RLast = lastRow - 1;    // 0-based last data row
   const GRAY  = { red: 0.831, green: 0.831, blue: 0.831 };
-  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
+  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 16 }, horizontalAlignment: 'CENTER' } };
   const GRAY_FIELDS = 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)';
 
   const fmtReqs: sheets_v4.Schema$Request[] = [];
@@ -1188,6 +1188,27 @@ async function buildDeptSheets(
   }
 }
 
+/**
+ * Put one font family on every cell of every sheet in the SK03 spreadsheet.
+ * The template carries "TH Sarabun PSK" (with a space, most likely from the
+ * xlsx import) while the formatting above writes "TH SarabunPSK", so without
+ * this the file mixes both spellings. Only fontFamily is touched (not size,
+ * bold or colour).
+ */
+async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promise<void> {
+  const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties.sheetId' }));
+  const requests: sheets_v4.Schema$Request[] = (meta.data.sheets ?? []).map(sh => ({
+    repeatCell: {
+      range: { sheetId: sh.properties!.sheetId! },
+      cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK' } } },
+      fields: 'userEnteredFormat.textFormat.fontFamily',
+    },
+  }));
+  if (requests.length === 0) return;
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests } }));
+  log(`  [SK03] Font normalised on ${requests.length} sheets`);
+}
+
 // ─── Master orchestrator ──────────────────────────────────────────
 
 /**
@@ -1424,6 +1445,14 @@ async function createSK03(
   internArray.forEach((p, i) => addToRowNumMap(p, S + i));
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
+
+  // Cosmetic and all-or-nothing: keep the finished SK03 if it fails. Must stay the
+  // last write, because it re-applies one font family over everything written above.
+  try {
+    await normaliseSK03Fonts(sheets, ssId);
+  } catch (err: any) {
+    log(`  [SK03] ⚠ Font normalisation failed — SK03 kept as built: ${err.message}`, 'warn');
+  }
 
   log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
   return ssId;
