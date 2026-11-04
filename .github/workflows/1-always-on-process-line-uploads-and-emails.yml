@@ -91,4 +91,13 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run 1-always-on-process-line-uploads-and-emails.yml --repo "$GITHUB_REPOSITORY" --ref main
+        # Retry: a single HTTP 500 from GitHub's dispatch API on 2026-11-04
+        # 16:38 Bangkok broke the chain, and the cron restarter is unreliable.
+        run: |
+          for wait in 0 10 20 40 80; do
+            sleep "$wait"
+            if gh workflow run 1-always-on-process-line-uploads-and-emails.yml --repo "$GITHUB_REPOSITORY" --ref main; then exit 0; fi
+            echo "Hand-over failed; retrying after the next wait"
+          done
+          echo "::error::Could not start the next run after 5 tries"
+          exit 1
