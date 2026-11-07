@@ -10,9 +10,8 @@
  *           Pay uses the new formula (./sk03-formula.ts): interns first, then
  *           staff by department budget (table on the staff sheet, V33:AF52),
  *           laid out like the new-formula SK03 workbooks of 2026-11-05.
- *           The month's total budget (staff W9) and perP4P (intern U9) come
- *           from ./sk03-budget-inputs.json (see ./budget-inputs.ts); a month
- *           not listed there stays at 0, so its pay shows 0.
+ *           Each month two yellow inputs are typed in by hand: total budget
+ *           in staff W9 and perP4P in intern U9. Until then all pay shows 0.
  *
  * Each run targets the latest 2 complete months (a fixed top-2 scan, not
  * unbounded backlog-hunting): Phase A walks the window newest → oldest,
@@ -52,8 +51,6 @@ const {
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
 type PanelRow = import('./sk03-formula').PanelRow;
-const { loadBudgetInputs, BUDGET_FILE } = require('./budget-inputs') as typeof import('./budget-inputs');
-type BudgetInput = import('./budget-inputs').BudgetInput;
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -828,7 +825,7 @@ function colIdx(letter: string): number {
   return letter.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
 }
 
-const INPUT_FILL  = { red: 1, green: 0.949, blue: 0.8 };            // #FFF2CC: cells typed in (or filled from p4p-analysis)
+const INPUT_FILL  = { red: 1, green: 0.949, blue: 0.8 };            // #FFF2CC: cells typed in by hand
 const HEADER_FILL = { red: 0.988, green: 0.894, blue: 0.714 };      // #FCE4B6: new-formula headers
 const GRAY        = { red: 0.831, green: 0.831, blue: 0.831 };
 const WHITE       = { red: 1, green: 1, blue: 1 };
@@ -848,12 +845,8 @@ function colWidthReq(sheetId: number, col: string, pixelSize: number): sheets_v4
   return { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: c, endIndex: c + 1 }, properties: { pixelSize, hiddenByUser: false }, fields: 'pixelSize,hiddenByUser' } };
 }
 
-/** Where the month's budget input came from, written next to the yellow input cell. */
-function inputNote(input: BudgetInput | undefined): string {
-  return input
-    ? `จาก ${BUDGET_FILE} (ตาม p4p-analysis formula.md)`
-    : `ยังไม่มีเดือนนี้ใน ${BUDGET_FILE} · ค่าตอบแทนเป็น 0 จนกว่าจะเพิ่ม`;
-}
+const STAFF_INPUT_NOTE  = '← กรอกงบทั้งหมด (ค่าตอบแทนเป็น 0 จนกว่าจะกรอก)';
+const INTERN_INPUT_NOTE = '← กรอก perP4P (ค่าตอบแทนเป็น 0 จนกว่าจะกรอก)';
 
 /** Last sheet row the new-formula area (columns Q..AF) uses. */
 function newAreaLastRow(lastRow: number, isIntern: boolean): number {
@@ -875,8 +868,7 @@ async function writeOverallMeta(
   sheetId: number,
   lastRow: number,
   isIntern: boolean,
-  internSheetName: string,
-  input: BudgetInput | undefined
+  internSheetName: string
 ): Promise<void> {
   const S = DATA_START;
   const sh = `'${sheetName}'!`;
@@ -916,10 +908,10 @@ async function writeOverallMeta(
     { range: `${h.col}7`, values: [[h.letter]] },
   ]);
   if (isIntern) {
-    const { panel, extra } = internPanel(S, lastRow, input?.perP4P ?? 0, inputNote(input));
+    const { panel, extra } = internPanel(S, lastRow, 0, INTERN_INPUT_NOTE);
     cells.push(...panelWrites(panel, INTERN_PANEL), ...extra);
   } else {
-    const { panel, table } = staffPanel(internSheetName, S, lastRow, input?.budget ?? 0, inputNote(input));
+    const { panel, table } = staffPanel(internSheetName, S, lastRow, 0, STAFF_INPUT_NOTE);
     cells.push(...panelWrites(panel, STAFF_PANEL), ...table);
   }
 
@@ -1323,8 +1315,7 @@ async function createSK03(
   sheets: sheets_v4.Sheets,
   supabasePersons: SupabasePerson[],
   monthKey: string,
-  supabase: SupabaseClient,
-  input: BudgetInput | undefined
+  supabase: SupabaseClient
 ): Promise<string> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
@@ -1405,7 +1396,7 @@ async function createSK03(
   // Headers, panel and department table first (they also clear the
   // template's old Q.. columns), then the data rows that read them.
   const staffLastRow = S + staffArray.length - 1;
-  await writeOverallMeta(sheets, ssId, staffSheetName, staffSheetId, staffLastRow, false, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffSheetId, staffLastRow, false, internSheetName);
   const staffRows = buildOverallRows(staffArray, S, false, staffSheetName);
   if (staffRows.length > 0) {
     await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:T${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
@@ -1479,7 +1470,7 @@ async function createSK03(
   await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } }));
 
   const internLastRow = S + internArray.length - 1;
-  await writeOverallMeta(sheets, ssId, internSheetName, internSheetId, internLastRow, true, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, internSheetName, internSheetId, internLastRow, true, internSheetName);
   const internRows = buildOverallRows(internArray, S, true, staffSheetName);
   if (internRows.length > 0) {
     await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:Q${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } }));
@@ -1642,10 +1633,6 @@ async function main(): Promise<void> {
     if (dept !== 'INTERN') checkDept(dept); // throws on a department missing from DEPT_CAPACITY
   }
 
-  // Monthly budget and perP4P (throws on a malformed file, before any month is touched)
-  const budgetInputs = loadBudgetInputs();
-  log(`[Pre-flight] ✓ ${BUDGET_FILE}: ${Object.keys(budgetInputs).sort().join(', ') || '(no months)'}`);
-
   console.log('══════════════════════════════════════════════════════');
   console.log(' P4P Excel Merge + SK03 Pipeline');
   console.log('══════════════════════════════════════════════════════');
@@ -1735,13 +1722,7 @@ async function main(): Promise<void> {
 
       // Step 6
       log('  [Step 6] Creating SK03 spreadsheet…');
-      const input = budgetInputs[key];
-      if (input) log(`  [Step 6] Budget and perP4P for ${key} from ${BUDGET_FILE}`);
-      else {
-        log(`  [Step 6] ⚠ ${key} is not in ${BUDGET_FILE} — งบทั้งหมด and perP4P stay 0, so pay shows 0`, 'warn');
-        console.log(`::warning title=SK03 ${key}::no budget/perP4P in ${BUDGET_FILE}; SK03 pay shows 0`);
-      }
-      await createSK03(drive, sheets, sbData, key, supabase, input);
+      await createSK03(drive, sheets, sbData, key, supabase);
 
       results.processed++;
       console.log('└─ ✓ complete\n');

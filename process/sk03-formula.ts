@@ -24,8 +24,7 @@
  *          panel T/U rows 8-20: U9 perP4P · U10 count · U11 pool · U12 mean E ·
  *          U13 Σ multipliers · U14 baht per multiplier · U17 paid · U18 leftover
  * Pay stays in column N on both sheets, so the department sheets keep reading N.
- * W9 and U9 are filled from p4p-analysis (budget-inputs.ts) when that month is
- * listed there, else left at 0 to be typed in by hand.
+ * W9 and U9 are yellow inputs, written as 0 and typed in by hand each month.
  *
  * Pure functions only (no API calls), so the cells can be checked offline.
  */
@@ -171,7 +170,7 @@ export const FMT_RATIO = '0.0000';
 
 /**
  * Staff panel (V/W) and department table (V33:AF52).
- * `budget` is the month's total budget (0 when p4p-analysis has none yet).
+ * `budget` is the month's total budget (written as 0, typed in by hand).
  */
 export function staffPanel(internSheet: string, first: number, last: number, budget: number, budgetNote: string): { panel: PanelRow[]; table: CellWrite[] } {
   const I = q(internSheet);
@@ -233,7 +232,7 @@ export function staffPanel(internSheet: string, first: number, last: number, bud
   return { panel, table };
 }
 
-/** Intern panel (T/U). `perP4P` is the month's per-head rate (0 when p4p-analysis has none yet). */
+/** Intern panel (T/U). `perP4P` is the month's per-head rate (written as 0, typed in by hand). */
 export function internPanel(first: number, last: number, perP4P: number, perP4PNote: string): { panel: PanelRow[]; extra: CellWrite[] } {
   const E = `$L$${first}:$L$${last}`;
   const panel: PanelRow[] = [
