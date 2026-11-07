@@ -11,9 +11,8 @@
  *           staff by department budget (table on the staff sheet, V33:AF52),
  *           laid out like the new-formula SK03 workbooks of 2026-11-05.
  *           The month's total budget (staff W9) and perP4P (intern U9) come
- *           from pongpoti/p4p-analysis docs/formula/formula.md
- *           (./budget-inputs.ts); a month not listed there stays at 0 until
- *           typed in by hand, so its pay shows 0.
+ *           from ./sk03-budget-inputs.json (see ./budget-inputs.ts); a month
+ *           not listed there stays at 0, so its pay shows 0.
  *
  * Each run targets the latest 2 complete months (a fixed top-2 scan, not
  * unbounded backlog-hunting): Phase A walks the window newest → oldest,
@@ -53,7 +52,7 @@ const {
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
 type PanelRow = import('./sk03-formula').PanelRow;
-const { fetchBudgetInputs, BUDGET_REPO, BUDGET_PATH } = require('./budget-inputs') as typeof import('./budget-inputs');
+const { loadBudgetInputs, BUDGET_FILE } = require('./budget-inputs') as typeof import('./budget-inputs');
 type BudgetInput = import('./budget-inputs').BudgetInput;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -852,8 +851,8 @@ function colWidthReq(sheetId: number, col: string, pixelSize: number): sheets_v4
 /** Where the month's budget input came from, written next to the yellow input cell. */
 function inputNote(input: BudgetInput | undefined): string {
   return input
-    ? `จาก ${BUDGET_REPO} ${BUDGET_PATH}`
-    : `ยังไม่มีเดือนนี้ใน ${BUDGET_REPO} ${BUDGET_PATH} · กรอกเอง`;
+    ? `จาก ${BUDGET_FILE} (ตาม p4p-analysis formula.md)`
+    : `ยังไม่มีเดือนนี้ใน ${BUDGET_FILE} · ค่าตอบแทนเป็น 0 จนกว่าจะเพิ่ม`;
 }
 
 /** Last sheet row the new-formula area (columns Q..AF) uses. */
@@ -1643,15 +1642,9 @@ async function main(): Promise<void> {
     if (dept !== 'INTERN') checkDept(dept); // throws on a department missing from DEPT_CAPACITY
   }
 
-  // Monthly budget and perP4P from p4p-analysis (amounts are not logged: this repo is public)
-  log(`[Pre-flight] Reading budget inputs from ${BUDGET_REPO} ${BUDGET_PATH}…`);
-  const { inputs: budgetInputs, problem: budgetProblem } = await fetchBudgetInputs(process.env.P4P_ANALYSIS_TOKEN);
-  if (budgetProblem) {
-    log(`[Pre-flight] ⚠ Budget inputs not read (${budgetProblem}) — งบทั้งหมด and perP4P stay 0 until typed in`, 'warn');
-    console.log(`::warning title=SK03 budget inputs::${budgetProblem}; SK03 pay stays 0 until the budget and perP4P are typed in`);
-  } else {
-    log(`[Pre-flight] ✓ Budget inputs listed for ${Object.keys(budgetInputs).length} month(s)`);
-  }
+  // Monthly budget and perP4P (throws on a malformed file, before any month is touched)
+  const budgetInputs = loadBudgetInputs();
+  log(`[Pre-flight] ✓ ${BUDGET_FILE}: ${Object.keys(budgetInputs).sort().join(', ') || '(no months)'}`);
 
   console.log('══════════════════════════════════════════════════════');
   console.log(' P4P Excel Merge + SK03 Pipeline');
@@ -1743,9 +1736,11 @@ async function main(): Promise<void> {
       // Step 6
       log('  [Step 6] Creating SK03 spreadsheet…');
       const input = budgetInputs[key];
-      log(input
-        ? `  [Step 6] Budget and perP4P for ${key} found in ${BUDGET_REPO}`
-        : `  [Step 6] ⚠ ${key} is not in ${BUDGET_REPO} ${BUDGET_PATH} yet — งบทั้งหมด and perP4P stay 0`, input ? 'info' : 'warn');
+      if (input) log(`  [Step 6] Budget and perP4P for ${key} from ${BUDGET_FILE}`);
+      else {
+        log(`  [Step 6] ⚠ ${key} is not in ${BUDGET_FILE} — งบทั้งหมด and perP4P stay 0, so pay shows 0`, 'warn');
+        console.log(`::warning title=SK03 ${key}::no budget/perP4P in ${BUDGET_FILE}; SK03 pay shows 0`);
+      }
       await createSK03(drive, sheets, sbData, key, supabase, input);
 
       results.processed++;
