@@ -1,26 +1,31 @@
 /**
  * SK03 new payment formula: the cell contents (formulas, labels and inputs)
- * that process.ts writes into the staff, intern and งบรายสาขา sheets.
+ * that process.ts writes into the staff and intern sheets.
  *
  * The formula is the one in pongpoti/p4p-analysis docs/formula/formula.md:
- *   1. INTERN first. Pool = per P4P per intern × interns scoring ≥ 2,200.
- *      Multiplier = clip(1 + 0.05 × (excess ÷ intern mean excess − 1), 0.95, 1.05).
+ *   1. INTERN first. Pool = perP4P × interns scoring ≥ 2,200.
+ *      Multiplier = clip(1 + 0.05 × (E ÷ intern mean E − 1), 0.95, 1.05).
  *      Pay = ROUNDDOWN(multiplier × pool ÷ Σ multipliers, 0).
  *   2. STAFF get the rest: staff budget = total budget − interns' actual pay.
  *      Each department's budget = 7,500 × its staff + the add-on pool shared by
  *      (staff × capacity multiplier). Multiplier as above but against the
  *      department's own mean. Pay = ROUNDDOWN(multiplier × dept budget ÷ dept Σ multipliers, 0).
- * Anyone below 2,200 (excess < 0) gets multiplier 0 and is not counted.
+ * Anyone below 2,200 (E < 0) gets multiplier 0 and is not counted.
  *
- * The layout matches the trial workbook 2569_06_new_formula.xlsx and its
- * Thai manuals: pay stays in column N on both sheets, so the department
- * sheets keep reading N.
- *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept per P4P
- *          panel X/Y: Y9 total budget (input) · Y10 staff budget · Y11 count ·
- *          Y13 guarantee · Y14 add-on · Y15 add-on per capacity unit · Y17-Y20 totals · X23 คงคืน
- *   intern Q ratio · R raw multiplier · S7 mean · T multiplier
- *          panel V/W: W9 pool · W10 count · W12 sum point · W13 per P4P · W16 paid ·
- *          W18 per P4P per intern (input)
+ * The layout is the one in the new-formula SK03 workbooks of 2026-11-05
+ * (project folder sk03-new-formula-2026-11-05, built by build_sk03.py), so
+ * the nightly Google Sheet reads the same way as those files:
+ *   staff  Q แผนก (department name) · R dept mean E · S multiplier · T baht per multiplier
+ *          panel V/W rows 8-31: W9 total budget · W10 intern paid · W11 staff budget ·
+ *          W13-W16 settings (7,500 / 0.05 / 0.95 / 1.05) · W17-W21 staff count and add-on ·
+ *          W24-W28 totals and คงคืน · W30-W31 checks
+ *          department table V33:AF51 (header row 33, one row per department, total row 52)
+ *   intern Q multiplier
+ *          panel T/U rows 8-20: U9 perP4P · U10 count · U11 pool · U12 mean E ·
+ *          U13 Σ multipliers · U14 baht per multiplier · U17 paid · U18 leftover
+ * Pay stays in column N on both sheets, so the department sheets keep reading N.
+ * W9 and U9 are filled from p4p-analysis (budget-inputs.ts) when that month is
+ * listed there, else left at 0 to be typed in by hand.
  *
  * Pure functions only (no API calls), so the cells can be checked offline.
  */
@@ -32,8 +37,6 @@ export const MULT_MAX = 1.05;
 
 /** First data row of the staff and intern sheets. */
 export const DATA_START = 8;
-
-export const BUDGET_SHEET = 'งบรายสาขา';
 
 export interface DeptCapacity {
   no: number;
@@ -70,187 +73,189 @@ export const TIER_LABEL: Record<string, string> = {
   '0.85': 'สาขาเต็มศักยภาพ',
 };
 
-const DEPT_CODE_BY_NAME: Record<string, string> = Object.fromEntries(DEPT_CAPACITY.map(d => [d.name, d.code]));
+const DEPT_NAMES = new Set(DEPT_CAPACITY.map(d => d.name));
 
-/** Department code (PED, EYE, …) for a staff department name; throws on an unknown name. */
-export function deptCode(name: string): string {
-  const code = DEPT_CODE_BY_NAME[name];
-  if (!code) throw new Error(`No capacity multiplier for department "${name}" (sk03-formula.ts DEPT_CAPACITY)`);
-  return code;
+/** Throws when a staff department has no capacity multiplier in DEPT_CAPACITY. */
+export function checkDept(name: string): string {
+  if (!DEPT_NAMES.has(name)) throw new Error(`No capacity multiplier for department "${name}" (sk03-formula.ts DEPT_CAPACITY)`);
+  return name;
 }
 
-/** Budget-sheet rows: header rows 4-5, one row per department from 6, total row after. */
-export const BUDGET_FIRST = 6;
-export const BUDGET_LAST = BUDGET_FIRST + DEPT_CAPACITY.length - 1; // 23
-export const BUDGET_TOTAL = BUDGET_LAST + 1;                         // 24
-
 export interface CellWrite {
-  range: string; // A1 range without the sheet name, e.g. "Q5" or "X9:Y11"
+  range: string; // A1 range without the sheet name, e.g. "Q6" or "V9:W11"
   values: (string | number)[][];
 }
 
 const q = (sheet: string) => `'${sheet.replace(/'/g, "''")}'!`;
 
+// ─── Fixed cells ──────────────────────────────────────────────────
+
+/** Staff panel: label column V, value column W. */
+export const STAFF_PANEL = { label: 'V', value: 'W' } as const;
+/** Intern panel: label column T, value column U. */
+export const INTERN_PANEL = { label: 'T', value: 'U' } as const;
+
+export const STAFF_BUDGET_CELL = 'W9';   // งบทั้งหมด (input)
+export const INTERN_PERP4P_CELL = 'U9';  // perP4P (input)
+
+/** Department table on the staff sheet: header row, first/last department row, total row. */
+export const TABLE_HEAD  = 33;
+export const TABLE_FIRST = TABLE_HEAD + 1;                          // 34
+export const TABLE_LAST  = TABLE_HEAD + DEPT_CAPACITY.length;       // 51
+export const TABLE_TOTAL = TABLE_LAST + 1;                          // 52
+/** Table columns, left to right (V..AF). */
+export const TABLE_COLS = ['V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF'] as const;
+const [TV, , , TY, TZ, TAA, TAB, TAC, TAD, TAE, TAF] = TABLE_COLS;
+const tcol = (c: string) => `$${c}$${TABLE_FIRST}:$${c}$${TABLE_LAST}`;
+
+export const TABLE_HEADERS = [
+  'แผนก', 'รหัส', 'ระดับสาขา', 'ตัวคูณสาขา', 'จำนวน (≥ 2,200)', 'หน่วยถ่วงน้ำหนัก',
+  'งบแผนก', 'รวมตัวคูณคะแนน', 'บาทต่อตัวคูณ', 'จ่ายจริง', 'เศษที่เหลือ',
+];
+
 // ─── Data rows ────────────────────────────────────────────────────
 
 /**
- * Staff row r: pay (column N) and helpers Q..V.
+ * Staff row r: pay (column N) and helpers Q..T.
  * `first`/`last` are the first and last data rows of the staff sheet.
  */
-export function staffRowCells(r: number, code: string, first: number, last: number): { N: string; QtoV: (string | number)[] } {
-  const L = `$L$${first}:$L$${last}`;
-  const Q = `$Q$${first}:$Q$${last}`;
+export function staffRowCells(r: number, dept: string, first: number, last: number): { N: string; QtoT: (string | number)[] } {
+  const E = `$L$${first}:$L$${last}`;
+  const D = `$Q$${first}:$Q$${last}`;
+  const e = `L${r}`;
   return {
-    N: `=ROUNDDOWN(U${r}*V${r},0)`,
-    QtoV: [
-      code,                                                                 // Q  department code
-      `=IFERROR(AVERAGEIFS(${L},${Q},Q${r},${L},">=0"),0)`,                 // R  dept mean excess (≥ 2,200 only)
-      `=IF(OR(L${r}<0,R${r}=0),"",L${r}/R${r})`,                            // S  times the dept mean
-      `=IF(L${r}<0,"",IF(R${r}=0,1,1+${SLOPE}*(S${r}-1)))`,                 // T  raw multiplier
-      `=IF(L${r}<0,0,MIN(MAX(T${r},${MULT_MIN}),${MULT_MAX}))`,             // U  multiplier 0.95-1.05
-      `=VLOOKUP(Q${r},${q(BUDGET_SHEET)}$C$${BUDGET_FIRST}:$L$${BUDGET_LAST},10,FALSE)`, // V  dept per P4P
+    N: `=IF(${e}<0,0,ROUNDDOWN(S${r}*T${r},0))`,
+    QtoT: [
+      checkDept(dept),                                                                       // Q  แผนก
+      `=IF(${e}<0,"",IFERROR(AVERAGEIFS(${E},${D},Q${r},${E},">=0"),0))`,                    // R  ค่าเฉลี่ย E ของแผนก
+      `=IF(${e}<0,0,IF(R${r}=0,1,MIN(MAX(1+$W$14*(${e}/R${r}-1),$W$15),$W$16)))`,            // S  ตัวคูณคะแนน
+      `=IF(${e}<0,0,IFERROR(INDEX(${tcol(TAD)},MATCH(Q${r},${tcol(TV)},0)),0))`,             // T  บาทต่อตัวคูณ
     ],
   };
 }
 
-/** Intern row r: pay (column N) and helpers Q..V (S, U, V stay empty on data rows). */
-export function internRowCells(r: number): { N: string; QtoV: (string | number)[] } {
+/** Intern row r: pay (column N) and the multiplier in Q. */
+export function internRowCells(r: number, staffSheet: string): { N: string; Q: string } {
+  const S = q(staffSheet);
+  const e = `L${r}`;
   return {
-    N: `=ROUNDDOWN(T${r}*$W$13,0)`,
-    QtoV: [
-      `=IF(OR(L${r}<0,$S$7=0),"",L${r}/$S$7)`,                              // Q  times the intern mean
-      `=IF(L${r}<0,"",IF($S$7=0,1,1+${SLOPE}*(Q${r}-1)))`,                  // R  raw multiplier
-      '',                                                                   // S  (mean sits in S7)
-      `=IF(L${r}<0,0,MIN(MAX(R${r},${MULT_MIN}),${MULT_MAX}))`,             // T  multiplier 0.95-1.05
-      '',                                                                   // U
-      '',                                                                   // V  (panel label column)
-    ],
+    N: `=IF(${e}<0,0,ROUNDDOWN(Q${r}*$U$14,0))`,
+    Q: `=IF(${e}<0,0,IF($U$12=0,1,MIN(MAX(1+${S}$W$14*(${e}/$U$12-1),${S}$W$15),${S}$W$16)))`,
   };
 }
 
 // ─── Column headers (rows 5-7) ────────────────────────────────────
 
-export interface HeaderCell { col: string; text: string; bottom: number } // merged from row 5 to `bottom`
+/** Header text (rows 5-6, merged) and the letter row 7, like L7 " E = D-A". */
+export interface HeaderCell { col: string; text: string; letter: string }
 
 export const STAFF_HEADERS: HeaderCell[] = [
-  { col: 'Q', text: 'สาขา', bottom: 7 },
-  { col: 'R', text: 'ค่าเฉลี่ย\nแต้มเกิน\nของสาขา', bottom: 7 },
-  { col: 'S', text: 'เทียบค่าเฉลี่ย\n(เท่า)', bottom: 7 },
-  { col: 'T', text: 'ตัวคูณ\nก่อนจำกัด', bottom: 7 },
-  { col: 'U', text: 'ตัวคูณ\n(0.95–1.05)', bottom: 7 },
-  { col: 'V', text: 'per P4P\nของสาขา', bottom: 7 },
+  { col: 'Q', text: 'แผนก',                     letter: 'F' },
+  { col: 'R', text: 'ค่าเฉลี่ย E\nของแผนก',      letter: 'G' },
+  { col: 'S', text: 'ตัวคูณคะแนน',               letter: 'H = ตัวคูณ' },
+  { col: 'T', text: 'บาทต่อตัวคูณ\n(ของแผนก)',  letter: 'I' },
 ];
 
 export const INTERN_HEADERS: HeaderCell[] = [
-  { col: 'Q', text: 'เทียบค่าเฉลี่ย\n(เท่า)', bottom: 7 },
-  { col: 'R', text: 'ตัวคูณ\nก่อนจำกัด', bottom: 7 },
-  { col: 'S', text: 'ค่าเฉลี่ย\nแต้มเกิน\n(≥ 2,200)', bottom: 6 }, // S7 holds the mean
-  { col: 'T', text: 'ตัวคูณ\n(0.95–1.05)', bottom: 7 },
+  { col: 'Q', text: 'ตัวคูณคะแนน', letter: 'F = ตัวคูณ' },
 ];
-
-/** Intern S7: mean excess of the interns scoring ≥ 2,200. */
-export function internMeanCell(first: number, last: number): CellWrite {
-  return { range: 'S7', values: [[`=IFERROR(AVERAGEIF(L${first}:L${last},">=0"),0)`]] };
-}
 
 // ─── Side panels ──────────────────────────────────────────────────
 
-/** Staff panel (X/Y). Y9 is the month's total budget, typed in by hand. */
-export function staffPanel(internSheet: string, first: number, last: number): CellWrite[] {
+/** A panel row: label, value (omitted for a section heading), and whether the value is a yellow input. */
+export interface PanelRow { row: number; label: string; value?: string | number; heading?: boolean; input?: boolean; fmt?: string }
+
+export const FMT_BAHT  = '#,##0.00';
+export const FMT_INT   = '#,##0';
+export const FMT_RATIO = '0.0000';
+
+/**
+ * Staff panel (V/W) and department table (V33:AF52).
+ * `budget` is the month's total budget (0 when p4p-analysis has none yet).
+ */
+export function staffPanel(internSheet: string, first: number, last: number, budget: number, budgetNote: string): { panel: PanelRow[]; table: CellWrite[] } {
   const I = q(internSheet);
-  const B = q(BUDGET_SHEET);
-  return [
-    { range: 'X8:Y8', values: [['งบจัดสรร', '']] },
-    { range: 'X9:Y11', values: [
-      ['งบทั้งหมด', 0],
-      ['เฉพาะ staff', `=Y9-${I}W16`],
-      ['จำนวน staff (≥ 2,200)', `=COUNTIF(L${first}:L${last},">=0")`],
-    ]},
-    { range: 'X12:Y12', values: [['ค่าที่คำนวณได้', '']] },
-    { range: 'X13:Y15', values: [
-      [`ฐานประกัน ${GUARANTEE.toLocaleString('en-US')} × จำนวน staff`, `=${GUARANTEE}*Y11`],
-      ['ส่วนเพิ่ม (แบ่งตามศักยภาพสาขา)', '=Y10-Y13'],
-      ['ส่วนเพิ่ม ต่อ 1 หน่วยศักยภาพ', `=IF(${B}H${BUDGET_TOTAL}=0,0,Y14/${B}H${BUDGET_TOTAL})`],
-    ]},
-    { range: 'X16:Y16', values: [['ผลรวม', '']] },
-    { range: 'X17:Y20', values: [
-      ['ค่าตอบแทนตามสัดส่วนวิชาชีพ', `=SUM(N${first}:N${last})`],
-      ['ค่าตอบแทนบริหาร', `=SUM(M${first}:M${last})`],
-      ['P4P staff & intern (ไม่รวมค่าบริหาร)', `=Y17+${I}W16`],
-      ['P4P staff & intern (รวมค่าบริหาร)', '=Y19+Y18'],
-    ]},
-    { range: 'X22:Y22', values: [['คงคืน', '']] },
-    { range: 'X23', values: [['=Y9-Y19']] },
-    { range: 'X25:X26', values: [
-      ['เซลล์สีเหลือง = สูตรใหม่ · กรอกงบทั้งหมดที่ Y9'],
-      [`per P4P ของแต่ละสาขา อยู่ในชีต ${BUDGET_SHEET}`],
-    ]},
+  const E = `$L$${first}:$L$${last}`;
+  const D = `$Q$${first}:$Q$${last}`;
+  const X = `$S$${first}:$S$${last}`;
+  const P = `$N$${first}:$N$${last}`;
+  const A = `$M$${first}:$M$${last}`;
+  const panel: PanelRow[] = [
+    { row: 8,  label: 'งบจัดสรร (สูตรใหม่ตาม formula.md)', heading: true },
+    { row: 9,  label: 'งบทั้งหมด', value: budget, input: true, fmt: FMT_BAHT },
+    { row: 10, label: 'จ่าย intern จริง (P4P intern)', value: `=${I}$U$17`, fmt: FMT_INT },
+    { row: 11, label: 'เฉพาะ staff', value: '=$W$9-$W$10', fmt: FMT_BAHT },
+    { row: 12, label: 'ตั้งค่าสูตร', heading: true },
+    { row: 13, label: 'ประกันต่อหัวก่อนถ่วงน้ำหนัก (บาท)', value: GUARANTEE, input: true, fmt: FMT_INT },
+    { row: 14, label: 'ความชันตัวคูณคะแนน', value: SLOPE, input: true, fmt: '0.00' },
+    { row: 15, label: 'ตัวคูณต่ำสุด', value: MULT_MIN, input: true, fmt: '0.00' },
+    { row: 16, label: 'ตัวคูณสูงสุด', value: MULT_MAX, input: true, fmt: '0.00' },
+    { row: 17, label: 'จำนวน staff (≥ 2,200 แต้ม)', value: `=COUNTIF(${E},">=0")`, fmt: FMT_INT },
+    { row: 18, label: 'งบประกันรวม', value: '=$W$13*$W$17', fmt: FMT_BAHT },
+    { row: 19, label: 'งบเพิ่มตามระดับสาขา (addon)', value: '=$W$11-$W$18', fmt: FMT_BAHT },
+    { row: 20, label: 'รวมหน่วยถ่วงน้ำหนัก', value: `=SUM(${tcol(TAA)})`, fmt: FMT_BAHT },
+    { row: 21, label: 'งบเพิ่มต่อหน่วยถ่วงน้ำหนัก', value: '=IF($W$20=0,0,$W$19/$W$20)', fmt: FMT_BAHT },
+    { row: 23, label: 'ผลรวม', heading: true },
+    { row: 24, label: 'ค่าตอบแทนตามสัดส่วนวิชาชีพ (staff)', value: `=SUM(${P})`, fmt: FMT_INT },
+    { row: 25, label: 'ค่าตอบแทนบริหาร', value: `=SUM(${A})`, fmt: FMT_INT },
+    { row: 26, label: 'P4P staff & intern (ไม่รวมค่าบริหาร)', value: '=$W$24+$W$10', fmt: FMT_INT },
+    { row: 27, label: 'P4P staff & intern (รวมค่าบริหาร)', value: '=$W$26+$W$25', fmt: FMT_INT },
+    { row: 28, label: 'คงคืน', value: '=$W$9-$W$26', fmt: FMT_BAHT },
+    { row: 30, label: 'ตรวจ: staff ที่ไม่มีแผนกในตาราง (ต้องเป็น 0)', value: `=SUMPRODUCT((${E}>=0)*ISNA(MATCH(${D},${tcol(TV)},0)))`, fmt: '0' },
+    { row: 31, label: 'ตรวจ: จ่ายเกินงบ (ต้องเป็น FALSE)', value: '=$W$26>$W$9' },
   ];
-}
+  // W9's source, written beside it in X9
+  const note: CellWrite = { range: 'X9', values: [[budgetNote]] };
 
-/** Intern panel (V/W). W18 is the month's per P4P per intern, typed in by hand. */
-export function internPanel(first: number, last: number): CellWrite[] {
-  return [
-    { range: 'V8:W8', values: [['งบจัดสรร', '']] },
-    { range: 'V9:W10', values: [
-      ['เฉพาะ intern', '=W10*W18'],
-      ['จำนวน intern (≥ 2,200)', `=COUNTIF(L${first}:L${last},">=0")`],
-    ]},
-    { range: 'V11:W11', values: [['ค่าที่คำนวณได้', '']] },
-    { range: 'V12:W13', values: [
-      ['sum point', `=SUM(T${first}:T${last})`],
-      ['per P4P', '=IF(W12=0,0,W9/W12)'],
-    ]},
-    { range: 'V15:W15', values: [['ผลรวม', '']] },
-    { range: 'V16:W16', values: [['P4P intern', `=SUM(O${first}:O${last})`]] },
-    { range: 'V18:W18', values: [['per P4P ต่อ intern 1 คน (กรอก)', 0]] },
-  ];
-}
-
-// ─── งบรายสาขา sheet ──────────────────────────────────────────────
-
-export const BUDGET_HEADERS = [
-  'ที่', 'สาขา', 'รหัส', 'ระดับศักยภาพ', 'ตัวคูณ\nศักยภาพ', 'จำนวน\nแพทย์',
-  `ฐานประกัน\n(${GUARANTEE.toLocaleString('en-US')} × จำนวน)`, 'หน่วยศักยภาพ\n(จำนวน × ตัวคูณ)',
-  'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'per P4P\nของสาขา',
-  'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
-];
-
-/** Cells of the งบรายสาขา sheet (A1:N26). */
-export function budgetSheet(staffSheet: string, first: number, last: number, monthLabel: string): CellWrite[] {
-  const S = q(staffSheet);
-  const codes = `${S}$Q$${first}:$Q$${last}`;
-  const rows: (string | number)[][] = DEPT_CAPACITY.map((d, k) => {
-    const r = BUDGET_FIRST + k;
+  const rows = DEPT_CAPACITY.map((d, k) => {
+    const r = TABLE_FIRST + k;
+    const c = (col: string) => `${col}${r}`;
     return [
-      d.no, d.name, d.code, TIER_LABEL[d.cap.toFixed(2)], d.cap,
-      `=COUNTIFS(${codes},C${r},${S}$L$${first}:$L$${last},">=0")`,       // F staff ≥ 2,200
-      `=${GUARANTEE}*F${r}`,                                               // G guarantee
-      `=F${r}*E${r}`,                                                      // H capacity units
-      `=H${r}*${S}$Y$15`,                                                  // I add-on
-      `=G${r}+I${r}`,                                                      // J dept budget
-      `=SUMIF(${codes},C${r},${S}$U$${first}:$U$${last})`,                 // K Σ multipliers
-      `=IF(OR(K${r}=0,${S}$Y$10<=0),0,J${r}/K${r})`,                       // L dept per P4P (0 until the budget is typed in)
-      `=SUMIF(${codes},C${r},${S}$N$${first}:$N$${last})`,                 // M paid
-      `=J${r}-M${r}`,                                                      // N remainder
+      d.name, d.code, TIER_LABEL[d.cap.toFixed(2)], d.cap,
+      `=COUNTIFS(${D},${c(TV)},${E},">=0")`,                      // Z  จำนวน
+      `=${c(TZ)}*${c(TY)}`,                                        // AA หน่วยถ่วงน้ำหนัก
+      `=${c(TZ)}*$W$13+${c(TAA)}*$W$21`,                           // AB งบแผนก
+      `=SUMIFS(${X},${D},${c(TV)})`,                               // AC รวมตัวคูณคะแนน
+      `=IF(OR(${c(TAC)}=0,$W$11<=0),0,${c(TAB)}/${c(TAC)})`,       // AD บาทต่อตัวคูณ (0 until the budget is in)
+      `=SUMIFS(${P},${D},${c(TV)})`,                               // AE จ่ายจริง
+      `=${c(TAB)}-${c(TAE)}`,                                      // AF เศษที่เหลือ
     ];
   });
-  const T = BUDGET_TOTAL;
-  const sum = (c: string) => `=SUM(${c}${BUDGET_FIRST}:${c}${BUDGET_LAST})`;
-  return [
-    { range: 'A1', values: [['งบ P4P staff รายสาขา (สูตรใหม่)']] },
-    { range: 'A2', values: [[monthLabel]] },
-    { range: 'A3', values: [[
-      `งบสาขา = ${GUARANTEE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × (จำนวนแพทย์ × ตัวคูณศักยภาพ)      `
-      + 'per P4P ของสาขา = งบสาขา ÷ sum point ของสาขา',
+  const sum = (col: string) => `=SUM(${col}${TABLE_FIRST}:${col}${TABLE_LAST})`;
+  const table: CellWrite[] = [
+    note,
+    { range: `${TV}${TABLE_HEAD}:${TAF}${TABLE_HEAD}`, values: [TABLE_HEADERS] },
+    { range: `${TV}${TABLE_FIRST}:${TAF}${TABLE_LAST}`, values: rows },
+    { range: `${TV}${TABLE_TOTAL}:${TAF}${TABLE_TOTAL}`, values: [[
+      'รวม', '', '', '', sum(TZ), sum(TAA), sum(TAB), sum(TAC), '', sum(TAE), sum(TAF),
     ]] },
-    { range: 'A4:N4', values: [BUDGET_HEADERS] },
-    { range: `A${BUDGET_FIRST}:N${BUDGET_LAST}`, values: rows },
-    { range: `A${T}:N${T}`, values: [[
-      'รวม staff', '', '', '', '',
-      sum('F'), sum('G'), sum('H'), sum('I'), sum('J'), sum('K'), '', sum('M'), sum('N'),
-    ]] },
-    { range: `B${T + 2}`, values: [['เช็ก: รวมงบสาขา = เฉพาะ staff']] },
-    { range: `J${T + 2}:K${T + 2}`, values: [[`=J${T}-${S}Y10`, '← ต้องเป็น 0']] },
   ];
+  return { panel, table };
+}
+
+/** Intern panel (T/U). `perP4P` is the month's per-head rate (0 when p4p-analysis has none yet). */
+export function internPanel(first: number, last: number, perP4P: number, perP4PNote: string): { panel: PanelRow[]; extra: CellWrite[] } {
+  const E = `$L$${first}:$L$${last}`;
+  const panel: PanelRow[] = [
+    { row: 8,  label: 'งบจัดสรร intern (สูตรใหม่ตาม formula.md)', heading: true },
+    { row: 9,  label: 'perP4P (บาทต่อหัว)', value: perP4P, input: true, fmt: FMT_BAHT },
+    { row: 10, label: 'จำนวน intern (≥ 2,200 แต้ม)', value: `=COUNTIF(${E},">=0")`, fmt: '0' },
+    { row: 11, label: 'เฉพาะ intern', value: '=$U$9*$U$10', fmt: FMT_BAHT },
+    { row: 12, label: 'ค่าเฉลี่ย E ของ intern (≥ 2,200)', value: `=IFERROR(AVERAGEIF(${E},">=0"),0)`, fmt: FMT_BAHT },
+    { row: 13, label: 'รวมตัวคูณคะแนน', value: `=SUM($Q$${first}:$Q$${last})`, fmt: FMT_RATIO },
+    { row: 14, label: 'บาทต่อตัวคูณ', value: '=IF($U$13=0,0,$U$11/$U$13)', fmt: FMT_BAHT },
+    { row: 16, label: 'ผลรวม', heading: true },
+    { row: 17, label: 'P4P intern (จ่ายจริง)', value: `=SUM($N$${first}:$N$${last})`, fmt: FMT_INT },
+    { row: 18, label: 'เศษที่เหลือ (ไปรวมงบ staff)', value: '=$U$11-$U$17', fmt: FMT_BAHT },
+    { row: 20, label: 'ตัวคูณต่ำสุด/สูงสุด และความชัน ใช้ค่าจาก staff' },
+  ];
+  return { panel, extra: [{ range: 'V9', values: [[perP4PNote]] }] };
+}
+
+/** Panel rows as value writes (label column + value column). */
+export function panelWrites(panel: PanelRow[], cols: { label: string; value: string }): CellWrite[] {
+  return panel.map(p => ({
+    range: `${cols.label}${p.row}:${cols.value}${p.row}`,
+    values: [[p.label, p.value ?? '']],
+  }));
 }

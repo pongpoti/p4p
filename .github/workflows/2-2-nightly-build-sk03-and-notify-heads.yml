@@ -70,6 +70,11 @@ jobs:
           GOOGLE_SK03_TEMPLATE_ID: ${{ secrets.GOOGLE_SK03_TEMPLATE_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+          # Read-only token for the private repo pongpoti/p4p-analysis: the
+          # SK03 total budget and perP4P come from its docs/formula/formula.md
+          # ("Monthly Budget Inputs"). Missing token or month → both stay 0
+          # in the sheet (typed in by hand) and the run logs a warning.
+          P4P_ANALYSIS_TOKEN:     ${{ secrets.P4P_ANALYSIS_TOKEN }}
         run: npx tsx process.ts
 
       # Run-log artifact upload REMOVED — see .github/workflows/3-1-manual-email-read-submission-emails.yml
