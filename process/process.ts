@@ -8,9 +8,10 @@
  * Step 5  — Merge individual Excel files → one workbook per person sheet
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  *           Pay uses the new formula (./sk03-formula.ts): interns first, then
- *           staff by department budget (sheet งบรายสาขา). Each month two
- *           inputs are typed in by hand: total budget in staff Y9 and
- *           per P4P per intern in intern W18. Until then all pay shows 0.
+ *           staff by department budget (table on the staff sheet, V33:AF52),
+ *           laid out like the new-formula SK03 workbooks of 2026-11-05.
+ *           Each month two yellow inputs are typed in by hand: total budget
+ *           in staff W9 and perP4P in intern U9. Until then all pay shows 0.
  *
  * Each run targets the latest 2 complete months (a fixed top-2 scan, not
  * unbounded backlog-hunting): Phase A walks the window newest → oldest,
@@ -43,11 +44,13 @@ const {
   createAuth, createDriveClient, driveListAll, listFolders, listExcelFiles,
 } = require('./lib') as typeof import('./lib');
 const {
-  DATA_START, BUDGET_SHEET, BUDGET_FIRST, BUDGET_LAST, BUDGET_TOTAL, DEPT_CAPACITY,
-  STAFF_HEADERS, INTERN_HEADERS, deptCode, staffRowCells, internRowCells,
-  internMeanCell, staffPanel, internPanel, budgetSheet,
+  DATA_START, STAFF_HEADERS, INTERN_HEADERS, STAFF_PANEL, INTERN_PANEL,
+  TABLE_HEAD, TABLE_FIRST, TABLE_LAST, TABLE_TOTAL, TABLE_COLS,
+  FMT_BAHT, FMT_INT, FMT_RATIO,
+  checkDept, staffRowCells, internRowCells, staffPanel, internPanel, panelWrites,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
+type PanelRow = import('./sk03-formula').PanelRow;
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -783,16 +786,18 @@ function bordersReq(sheetId: number, r1: number, c1: number, r2: number, c2: num
 // ─── Overall sheet helpers (staff + intern share the same template) ─
 
 /**
- * Build the 22-column data rows (A..V) for an overall (staff/intern) sheet.
- * A..M and O..P mirror the appendRow loop in both GAS scripts. Pay (N) and
- * the helper columns Q..V use the new formula — see ./sk03-formula.ts.
+ * Build the data rows for an overall (staff/intern) sheet: A..T for staff,
+ * A..Q for interns. A..M and O..P mirror the appendRow loop in both GAS
+ * scripts. Pay (N) and the helper columns use the new formula — see
+ * ./sk03-formula.ts.
  */
-function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolean): (string | number)[][] {
+function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolean, staffSheetName: string): (string | number)[][] {
   const last = S + persons.length - 1;
   return persons.map((p, idx) => {
     const r = S + idx;
     const isDeptHead = DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`));
-    const pay = isIntern ? internRowCells(r) : staffRowCells(r, deptCode(p.department), S, last);
+    const staff  = isIntern ? null : staffRowCells(r, p.department, S, last);
+    const intern = isIntern ? internRowCells(r, staffSheetName) : null;
     return [
       idx + 1,                                               // A: sequence
       p.prefix    || '',                                     // B
@@ -805,51 +810,14 @@ function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolea
       isDeptHead ? 1320 : 0,                                 // I: dept-head extra score
       (p.score ?? p.perf_score ?? 0) - (isDeptHead ? 1320 : 0), // J: score minus dept-head extra (already in col I)
       `=I${r}+J${r}`,                                       // K
-      `=K${r}-H${r}`,                                       // L: score above the 2,200 standard
+      `=K${r}-H${r}`,                                       // L: E = score above the 2,200 standard
       getMgmt(p)?.amount ?? p.boss_score ?? 0,              // M: mgmt amount or boss score (moved from I)
-      pay.N,                                                 // N: P4P pay
+      staff ? staff.N : intern!.N,                           // N: P4P pay
       `=M${r}+N${r}`,                                       // O
       ' ',                                                   // P: remark
-      ...pay.QtoV,                                           // Q..V: new-formula helpers
+      ...(staff ? staff.QtoT : [intern!.Q]),                 // Q..T (staff) / Q (intern)
     ];
   });
-}
-
-/**
- * Write the column headers over Q..V (rows 5-7) and the side panel.
- * The template's old AVG±SD band headers and thresholds in Q5:Y7 are
- * cleared first. Staff panel sits in X/Y, intern panel in V/W (the same
- * cells as the trial workbook and its manual).
- */
-async function writeOverallMeta(
-  sheets: sheets_v4.Sheets,
-  ssId: string,
-  sheetName: string,
-  lastRow: number,
-  isIntern: boolean,
-  internSheetName: string
-): Promise<void> {
-  const S = DATA_START;
-  const sh = `'${sheetName}'!`;
-
-  await withRetry(() => sheets.spreadsheets.values.batchClear({
-    spreadsheetId: ssId,
-    requestBody: { ranges: [`${sh}Q5:Y7`] },
-  }));
-
-  const headers = isIntern ? INTERN_HEADERS : STAFF_HEADERS;
-  const cells: CellWrite[] = [
-    ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
-    ...(isIntern ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow)] : staffPanel(internSheetName, S, lastRow)),
-  ];
-
-  await withRetry(() => sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: ssId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: cells.map(c => ({ range: `${sh}${c.range}`, values: c.values })),
-    },
-  }));
 }
 
 /** 0-based column index of a column letter (A → 0). */
@@ -857,10 +825,12 @@ function colIdx(letter: string): number {
   return letter.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
 }
 
-const NEW_FORMULA_FILL = { red: 1, green: 0.949, blue: 0.8 };       // #FFF2CC: new-formula cells
-const NEW_HEADER_FILL  = { red: 0.988, green: 0.894, blue: 0.714 }; // #FCE4B6: new-formula headers
-const FMT_BAHT  = '#,##0.00';
-const FMT_RATIO = '0.0000';
+const INPUT_FILL  = { red: 1, green: 0.949, blue: 0.8 };            // #FFF2CC: cells typed in by hand
+const HEADER_FILL = { red: 0.988, green: 0.894, blue: 0.714 };      // #FCE4B6: new-formula headers
+const GRAY        = { red: 0.831, green: 0.831, blue: 0.831 };
+const WHITE       = { red: 1, green: 1, blue: 1 };
+const COL_Q  = colIdx('Q');
+const COL_AF = colIdx('AF');
 
 function numFmtReq(sheetId: number, r1: number, c1: number, r2: number, c2: number, pattern: string): sheets_v4.Schema$Request {
   return { repeatCell: { range: gridRange(sheetId, r1, c1, r2, c2), cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern } } }, fields: 'userEnteredFormat.numberFormat' } };
@@ -875,13 +845,113 @@ function colWidthReq(sheetId: number, col: string, pixelSize: number): sheets_v4
   return { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: c, endIndex: c + 1 }, properties: { pixelSize, hiddenByUser: false }, fields: 'pixelSize,hiddenByUser' } };
 }
 
+const STAFF_INPUT_NOTE  = '← กรอกงบทั้งหมด (ค่าตอบแทนเป็น 0 จนกว่าจะกรอก)';
+const INTERN_INPUT_NOTE = '← กรอก perP4P (ค่าตอบแทนเป็น 0 จนกว่าจะกรอก)';
+
+/** Last sheet row the new-formula area (columns Q..AF) uses. */
+function newAreaLastRow(lastRow: number, isIntern: boolean): number {
+  return Math.max(lastRow, isIntern ? 20 : TABLE_TOTAL);
+}
+
+/**
+ * Clear what the template has in columns Q..AF from row 5 down (the old
+ * AVG±SD band headers, thresholds and budget block, with their merges,
+ * formats and conditional formats), make sure the grid reaches column AF,
+ * then write the new-formula headers, the side panel and (staff) the
+ * department table. Staff panel V/W, intern panel T/U, the same cells as the
+ * new-formula workbooks.
+ */
+async function writeOverallMeta(
+  sheets: sheets_v4.Sheets,
+  ssId: string,
+  sheetName: string,
+  sheetId: number,
+  lastRow: number,
+  isIntern: boolean,
+  internSheetName: string
+): Promise<void> {
+  const S = DATA_START;
+  const sh = `'${sheetName}'!`;
+  const endRow = newAreaLastRow(lastRow, isIntern) + 5; // 1-based, inclusive
+
+  const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets(properties(sheetId,gridProperties),merges,conditionalFormats)' }));
+  const me = meta.data.sheets?.find(s => s.properties?.sheetId === sheetId);
+  const grid = me?.properties?.gridProperties ?? {};
+  const prep: sheets_v4.Schema$Request[] = [];
+  const needCols = COL_AF + 1 - (grid.columnCount ?? 0);
+  if (needCols > 0) prep.push({ appendDimension: { sheetId, dimension: 'COLUMNS', length: needCols } });
+  const needRows = endRow - (grid.rowCount ?? 0);
+  if (needRows > 0) prep.push({ appendDimension: { sheetId, dimension: 'ROWS', length: needRows } });
+  // Unmerge every merge from row 5 down that reaches column Q or further
+  // (unmerging part of a merge fails, so each is unmerged over its full range).
+  for (const m of me?.merges ?? []) {
+    if ((m.startRowIndex ?? 0) >= 4 && (m.endColumnIndex ?? 0) > COL_Q) prep.push({ unmergeCells: { range: m } });
+  }
+  // Drop the template's conditional formats on Q and beyond (old band colours).
+  (me?.conditionalFormats ?? [])
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => (rule.ranges ?? []).every(r => (r.startColumnIndex ?? 0) >= COL_Q))
+    .reverse()
+    .forEach(({ index }) => prep.push({ deleteConditionalFormatRule: { sheetId, index } }));
+  // Reset formats in the new-formula area.
+  prep.push({ repeatCell: { range: gridRange(sheetId, 4, COL_Q, endRow - 1, COL_AF), cell: {}, fields: 'userEnteredFormat' } });
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: prep } }));
+
+  await withRetry(() => sheets.spreadsheets.values.batchClear({
+    spreadsheetId: ssId,
+    requestBody: { ranges: [`${sh}Q5:AF${endRow}`] },
+  }));
+
+  const headers = isIntern ? INTERN_HEADERS : STAFF_HEADERS;
+  const cells: CellWrite[] = headers.flatMap(h => [
+    { range: `${h.col}5`, values: [[h.text]] },
+    { range: `${h.col}7`, values: [[h.letter]] },
+  ]);
+  if (isIntern) {
+    const { panel, extra } = internPanel(S, lastRow, 0, INTERN_INPUT_NOTE);
+    cells.push(...panelWrites(panel, INTERN_PANEL), ...extra);
+  } else {
+    const { panel, table } = staffPanel(internSheetName, S, lastRow, 0, STAFF_INPUT_NOTE);
+    cells.push(...panelWrites(panel, STAFF_PANEL), ...table);
+  }
+
+  await withRetry(() => sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: cells.map(c => ({ range: `${sh}${c.range}`, values: c.values })),
+    },
+  }));
+}
+
+/** Format a side panel: grey merged headings, bordered rows, number formats, yellow inputs. */
+function panelFormatReqs(sheetId: number, panel: PanelRow[], cols: { label: string; value: string }): sheets_v4.Schema$Request[] {
+  const L = colIdx(cols.label);
+  const V = colIdx(cols.value);
+  const reqs: sheets_v4.Schema$Request[] = [];
+  for (const p of panel) {
+    const r = p.row - 1;
+    if (p.heading) {
+      reqs.push({ mergeCells: { range: gridRange(sheetId, r, L, r, V), mergeType: 'MERGE_ALL' } });
+      reqs.push({ repeatCell: { range: gridRange(sheetId, r, L, r, V), cell: { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 14 }, horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } });
+      reqs.push(bordersReq(sheetId, r, L, r, V));
+      continue;
+    }
+    if (p.value === undefined) continue; // a plain note line
+    reqs.push(bordersReq(sheetId, r, L, r, V, true));
+    if (p.fmt) reqs.push(numFmtReq(sheetId, r, V, r, V, p.fmt));
+    if (p.input) reqs.push(fillReq(sheetId, r, V, r, V, INPUT_FILL));
+  }
+  return reqs;
+}
+
 /**
  * Apply all formatting for an overall sheet:
  * - J column dept background per row
- * - Number formats (H:O = ###,##0.00, helper columns, panel)
+ * - Number formats (H:O = ###,##0.00, helper columns, panel, table)
  * - Data area borders
- * - New-formula headers in Q..V rows 5-7, yellow new-formula cells, column widths
- * - Side panel grey headers + borders + merges
+ * - New-formula headers (rows 5-6 merged, letter in row 7), yellow input cells, column widths
+ * - Side panel and (staff) department table
  */
 async function formatOverallSheet(
   sheets: sheets_v4.Sheets,
@@ -889,25 +959,13 @@ async function formatOverallSheet(
   sheetId: number,
   persons: SupabasePerson[],
   lastRow: number,
-  isIntern: boolean
+  isIntern: boolean,
+  internSheetName: string
 ): Promise<void> {
   const S     = DATA_START;
   const R8    = S - 1;          // 0-based row 8
   const RLast = lastRow - 1;    // 0-based last data row
-  const GRAY  = { red: 0.831, green: 0.831, blue: 0.831 };
-  const GRAY_CELL: sheets_v4.Schema$CellData   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
-  const GRAY_FIELDS = 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)';
-
-  // Unmerge whatever the template merged in the Q..Y header block (rows 5-7)
-  // before the new headers are merged. Each merge is unmerged over its full
-  // range — unmerging part of a merge fails.
-  const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets(properties.sheetId,merges)' }));
-  const merges = meta.data.sheets?.find(s => s.properties?.sheetId === sheetId)?.merges ?? [];
-  const fmtReqs: sheets_v4.Schema$Request[] = merges
-    .filter(m => (m.startRowIndex ?? 0) <= 6 && (m.endRowIndex ?? 0) > 4 && (m.endColumnIndex ?? 0) > 16 && (m.startColumnIndex ?? 0) <= 24)
-    .map(m => ({ unmergeCells: { range: m } }));
-
-  const WHITE = { red: 1, green: 1, blue: 1 };
+  const fmtReqs: sheets_v4.Schema$Request[] = [];
 
   // J column (idx 9): apply dept colour per data row only
   persons.forEach((p, idx) => {
@@ -936,151 +994,81 @@ async function formatOverallSheet(
     },
   });
 
-  // New-formula headers over Q..V, rows 5-7 (0-based 4-6)
+  // Font for the whole new-formula area (Q..AF)
+  const areaEnd = newAreaLastRow(lastRow, isIntern) - 1;
+  fmtReqs.push({ repeatCell: {
+    range: gridRange(sheetId, 4, COL_Q, areaEnd, COL_AF),
+    cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 14 }, verticalAlignment: 'MIDDLE' } },
+    fields: 'userEnteredFormat(textFormat,verticalAlignment)',
+  }});
+
+  // New-formula headers: text over rows 5-6, letter in row 7 (0-based 4-6)
   const headers = isIntern ? INTERN_HEADERS : STAFF_HEADERS;
   for (const h of headers) {
     const c = colIdx(h.col);
-    const bottom = h.bottom - 1;
-    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, 4, c, bottom, c), mergeType: 'MERGE_ALL' } });
+    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, 4, c, 5, c), mergeType: 'MERGE_ALL' } });
     fmtReqs.push({ repeatCell: {
-      range: gridRange(sheetId, 4, c, bottom, c),
-      cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 13 }, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
+      range: gridRange(sheetId, 4, c, 6, c),
+      cell: { userEnteredFormat: { backgroundColor: HEADER_FILL, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 14 }, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
       fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)',
     }});
-    fmtReqs.push(bordersReq(sheetId, 4, c, 6, c));
+    fmtReqs.push(bordersReq(sheetId, 4, c, 6, c, true));
   }
 
-  // Data rows: N:O and H:M as before, helper columns per their content
+  // Data rows: H:O as before, then the helper columns
   fmtReqs.push(numFmtReq(sheetId, R8, 7, RLast, 14, '###,##0.00'));
   if (isIntern) {
-    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('Q'), RLast, colIdx('T'), FMT_RATIO));
-    fmtReqs.push(numFmtReq(sheetId, 6, colIdx('S'), 6, colIdx('S'), FMT_BAHT));             // S7 mean
-    fmtReqs.push(fillReq(sheetId, 6, colIdx('S'), 6, colIdx('S'), NEW_FORMULA_FILL));
-    fmtReqs.push(bordersReq(sheetId, 6, colIdx('S'), 6, colIdx('S')));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('Q'), RLast, colIdx('R'), NEW_FORMULA_FILL));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('T'), RLast, colIdx('T'), NEW_FORMULA_FILL));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('S'), RLast, colIdx('S'), WHITE));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('U'), RLast, colIdx('V'), WHITE));
-    fmtReqs.push(numFmtReq(sheetId, 7, colIdx('W'), 24, colIdx('W'), FMT_BAHT));             // panel values
-    fmtReqs.push(numFmtReq(sheetId, 9, colIdx('W'), 9, colIdx('W'), '#,##0'));             // W10 count
+    fmtReqs.push(numFmtReq(sheetId, R8, COL_Q, RLast, COL_Q, FMT_RATIO));
+    fmtReqs.push(bordersReq(sheetId, R8, COL_Q, RLast, COL_Q, true));
+    const { panel } = internPanel(S, lastRow, 0, '');
+    fmtReqs.push(...panelFormatReqs(sheetId, panel, INTERN_PANEL));
+    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, 8, colIdx('V'), 8, colIdx('V')), cell: { userEnteredFormat: { textFormat: { italic: true, fontSize: 12 } } }, fields: 'userEnteredFormat.textFormat(italic,fontSize)' } });
   } else {
+    fmtReqs.push(fillReq(sheetId, R8, COL_Q, RLast, COL_Q, INPUT_FILL));                // แผนก (typed in)
     fmtReqs.push(numFmtReq(sheetId, R8, colIdx('R'), RLast, colIdx('R'), FMT_BAHT));
-    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('S'), RLast, colIdx('U'), FMT_RATIO));
-    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('V'), RLast, colIdx('V'), FMT_BAHT));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('Q'), RLast, colIdx('V'), NEW_FORMULA_FILL));
-    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, R8, colIdx('Q'), RLast, colIdx('Q')), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } });
-    fmtReqs.push(numFmtReq(sheetId, 7, colIdx('Y'), 24, colIdx('Y'), FMT_BAHT));             // panel values
-    fmtReqs.push(numFmtReq(sheetId, 10, colIdx('Y'), 10, colIdx('Y'), '#,##0'));           // Y11 count
+    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('S'), RLast, colIdx('S'), FMT_RATIO));
+    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('T'), RLast, colIdx('T'), FMT_BAHT));
+    fmtReqs.push(bordersReq(sheetId, R8, COL_Q, RLast, colIdx('T'), true));
+    const { panel } = staffPanel(internSheetName, S, lastRow, 0, '');
+    fmtReqs.push(...panelFormatReqs(sheetId, panel, STAFF_PANEL));
+    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, 8, colIdx('X'), 8, colIdx('X')), cell: { userEnteredFormat: { textFormat: { italic: true, fontSize: 12 } } }, fields: 'userEnteredFormat.textFormat(italic,fontSize)' } });
+
+    // Department table V33:AF52
+    const c0 = colIdx(TABLE_COLS[0]);
+    const c1 = colIdx(TABLE_COLS[TABLE_COLS.length - 1]);
+    const H = TABLE_HEAD - 1, F = TABLE_FIRST - 1, Lr = TABLE_LAST - 1, T = TABLE_TOTAL - 1;
+    const col = (letter: string) => colIdx(letter);
+    fmtReqs.push({ repeatCell: {
+      range: gridRange(sheetId, H, c0, H, c1),
+      cell: { userEnteredFormat: { backgroundColor: HEADER_FILL, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 14 }, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)',
+    }});
+    fmtReqs.push(bordersReq(sheetId, H, c0, T, c1, true));
+    fmtReqs.push(fillReq(sheetId, F, col('Y'), Lr, col('Y'), INPUT_FILL));               // ตัวคูณสาขา (editable)
+    fmtReqs.push(numFmtReq(sheetId, F, col('Y'), Lr, col('Y'), '0.00'));
+    fmtReqs.push(numFmtReq(sheetId, F, col('Z'), T, col('Z'), FMT_INT));
+    fmtReqs.push(numFmtReq(sheetId, F, col('AA'), T, col('AB'), FMT_BAHT));
+    fmtReqs.push(numFmtReq(sheetId, F, col('AC'), T, col('AC'), FMT_RATIO));
+    fmtReqs.push(numFmtReq(sheetId, F, col('AD'), T, col('AD'), FMT_BAHT));
+    fmtReqs.push(numFmtReq(sheetId, F, col('AE'), T, col('AE'), FMT_INT));
+    fmtReqs.push(numFmtReq(sheetId, F, col('AF'), T, col('AF'), FMT_BAHT));
+    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, F, col('W'), Lr, col('X')), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } });
+    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, T, c0, T, c1), cell: { userEnteredFormat: { backgroundColor: HEADER_FILL, textFormat: { bold: true, fontFamily: 'TH SarabunPSK', fontSize: 14 } } }, fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
   }
-  fmtReqs.push(fillReq(sheetId, R8, colIdx('N'), RLast, colIdx('N'), NEW_FORMULA_FILL));    // pay
 
   // Data area borders (mirrors GAS: A8:A, B8:D, E8:P with inner)
   fmtReqs.push(bordersReq(sheetId, R8, 0,  RLast, 0));
   fmtReqs.push(bordersReq(sheetId, R8, 1,  RLast, 3));
   fmtReqs.push(bordersReq(sheetId, R8, 4,  RLast, 15, true));
 
-  // Column widths (pixels) for the helper columns and the panel
+  // Column widths (pixels) for the helper columns, the panel and the table
   const widths: [string, number][] = isIntern
-    ? [['Q', 85], ['R', 80], ['S', 90], ['T', 85], ['U', 60], ['V', 240], ['W', 150], ['X', 60], ['Y', 60]]
-    : [['Q', 55], ['R', 90], ['S', 85], ['T', 80], ['U', 85], ['V', 95], ['W', 60], ['X', 240], ['Y', 150]];
-  widths.forEach(([col, px]) => fmtReqs.push(colWidthReq(sheetId, col, px)));
-
-  // Side panel: label column / value column, grey header rows, bordered blocks
-  const PL = colIdx(isIntern ? 'V' : 'X');
-  const PV = PL + 1;
-  // Staff: rows 8,12,16,22 → 0-based 7,11,15,21
-  // Intern: rows 8,11,15   → 0-based 7,10,14
-  const hdrRows = isIntern ? [7, 10, 14] : [7, 11, 15, 21];
-  hdrRows.forEach(r => {
-    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, r, PL, r, PV), cell: GRAY_CELL, fields: GRAY_FIELDS } });
-    fmtReqs.push(bordersReq(sheetId, r, PL, r, PV));
-    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, r, PL, r, PV), mergeType: 'MERGE_ALL' } });
-  });
-
-  if (isIntern) {
-    fmtReqs.push(bordersReq(sheetId, 8,  PL, 9,  PV));  // V9:W10
-    fmtReqs.push(bordersReq(sheetId, 11, PL, 12, PV));  // V12:W13
-    fmtReqs.push(bordersReq(sheetId, 15, PL, 15, PV));  // V16:W16
-    fmtReqs.push(bordersReq(sheetId, 17, PL, 17, PV));  // V18:W18 input
-    fmtReqs.push(fillReq(sheetId, 8, PV, 9, PV, NEW_FORMULA_FILL));    // W9:W10
-    fmtReqs.push(fillReq(sheetId, 12, PV, 12, PV, NEW_FORMULA_FILL));  // W13
-    fmtReqs.push(fillReq(sheetId, 17, PL, 17, PV, NEW_FORMULA_FILL));  // V18:W18
-  } else {
-    fmtReqs.push(bordersReq(sheetId, 8,  PL, 10, PV));  // X9:Y11
-    fmtReqs.push(bordersReq(sheetId, 12, PL, 14, PV));  // X13:Y15
-    fmtReqs.push(bordersReq(sheetId, 16, PL, 19, PV));  // X17:Y20
-    fmtReqs.push(bordersReq(sheetId, 22, PL, 22, PV));  // X23:Y23
-    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, 22, PL, 22, PV), mergeType: 'MERGE_ALL' } });
-    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, 22, PL, 22, PV), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', numberFormat: { type: 'NUMBER', pattern: FMT_BAHT } } }, fields: 'userEnteredFormat(horizontalAlignment,numberFormat)' } });
-    fmtReqs.push(fillReq(sheetId, 10, PL, 14, PV, NEW_FORMULA_FILL));  // X11:Y15
-  }
+    ? [['Q', 95], ['R', 20], ['S', 20], ['T', 280], ['U', 130], ['V', 330]]
+    : [['Q', 230], ['R', 95], ['S', 95], ['T', 105], ['U', 20], ['V', 290], ['W', 130], ['X', 120],
+       ['Y', 85], ['Z', 85], ['AA', 100], ['AB', 115], ['AC', 100], ['AD', 105], ['AE', 95], ['AF', 95]];
+  widths.forEach(([c, px]) => fmtReqs.push(colWidthReq(sheetId, c, px)));
 
   await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: fmtReqs } }));
-}
-
-/**
- * Write and format the งบรายสาขา sheet (per-department staff budget and
- * per P4P). The staff sheet's column V reads its column L.
- */
-async function writeBudgetSheet(
-  sheets: sheets_v4.Sheets,
-  ssId: string,
-  sheetId: number,
-  staffSheetName: string,
-  staffLastRow: number,
-  monthLabel: string
-): Promise<void> {
-  const sh = `'${BUDGET_SHEET}'!`;
-  const cells = budgetSheet(staffSheetName, DATA_START, staffLastRow, monthLabel);
-  await withRetry(() => sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: ssId,
-    requestBody: {
-      valueInputOption: 'USER_ENTERED',
-      data: cells.map(c => ({ range: `${sh}${c.range}`, values: c.values })),
-    },
-  }));
-
-  const F1 = BUDGET_FIRST - 1;   // 0-based first dept row
-  const FL = BUDGET_LAST - 1;    // 0-based last dept row
-  const T  = BUDGET_TOTAL - 1;   // 0-based total row
-  const font = (size: number, bold = false): sheets_v4.Schema$CellFormat => ({ textFormat: { fontFamily: 'TH SarabunPSK', fontSize: size, bold } });
-  const reqs: sheets_v4.Schema$Request[] = [
-    { repeatCell: { range: gridRange(sheetId, 0, 0, T + 2, 13), cell: { userEnteredFormat: { ...font(14), verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat(textFormat,verticalAlignment)' } },
-    { repeatCell: { range: gridRange(sheetId, 0, 0, 0, 13), cell: { userEnteredFormat: font(20, true) }, fields: 'userEnteredFormat.textFormat' } },
-    { repeatCell: { range: gridRange(sheetId, 1, 0, 1, 13), cell: { userEnteredFormat: font(16) }, fields: 'userEnteredFormat.textFormat' } },
-    // header rows 4-5: each column merged over both rows
-    ...Array.from({ length: 14 }, (_, c) => ({ mergeCells: { range: gridRange(sheetId, 3, c, 4, c), mergeType: 'MERGE_ALL' as const } })),
-    { repeatCell: {
-      range: gridRange(sheetId, 3, 0, 4, 13),
-      cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, ...font(14, true), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
-      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)',
-    }},
-    bordersReq(sheetId, 3, 0, T, 13, true),
-    // formula cells yellow, inputs (A..E) plain
-    fillReq(sheetId, F1, 5, FL, 13, NEW_FORMULA_FILL),
-    { repeatCell: { range: gridRange(sheetId, F1, 0, FL, 13), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    { repeatCell: { range: gridRange(sheetId, F1, 1, FL, 1), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    { repeatCell: { range: gridRange(sheetId, F1, 3, FL, 3), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    numFmtReq(sheetId, F1, 4, FL, 4, '0.00'),
-    numFmtReq(sheetId, F1, 5, T, 5, '#,##0'),
-    numFmtReq(sheetId, F1, 6, T, 6, FMT_BAHT),
-    numFmtReq(sheetId, F1, 7, T, 7, '0.00'),
-    numFmtReq(sheetId, F1, 8, T, 9, FMT_BAHT),
-    numFmtReq(sheetId, F1, 10, T, 10, FMT_RATIO),
-    numFmtReq(sheetId, F1, 11, T, 11, FMT_BAHT),
-    numFmtReq(sheetId, F1, 12, T, 12, '#,##0'),
-    numFmtReq(sheetId, F1, 13, T, 13, FMT_BAHT),
-    numFmtReq(sheetId, T + 2, 9, T + 2, 9, FMT_BAHT),
-    // total row
-    { mergeCells: { range: gridRange(sheetId, T, 0, T, 4), mergeType: 'MERGE_ALL' } },
-    { repeatCell: { range: gridRange(sheetId, T, 0, T, 13), cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, ...font(14, true), horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } },
-    { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 5, frozenColumnCount: 3, hideGridlines: true } }, fields: 'gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)' } },
-    ...([40, 240, 55, 130, 70, 65, 110, 115, 110, 110, 90, 95, 100, 90] as const).map((px, c) => ({
-      updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS' as const, startIndex: c, endIndex: c + 1 }, properties: { pixelSize: px }, fields: 'pixelSize' },
-    })),
-    { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 3, endIndex: 5 }, properties: { pixelSize: 30 }, fields: 'pixelSize' } },
-  ];
-  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: reqs } }));
 }
 
 /**
@@ -1401,25 +1389,19 @@ async function createSK03(
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
   ]}}));
 
-  // งบรายสาขา sheet (per-department staff budget). Added now, empty, so the
-  // staff column V formulas that read it resolve as soon as they are written;
-  // it is filled after the intern sheet. Ends up second-to-third (staff, intern, งบรายสาขา).
-  const budgetSheetId = (await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
-    { addSheet: { properties: { title: BUDGET_SHEET, index: 1 } } },
-  ]}}))).data.replies![0].addSheet!.properties!.sheetId!;
-
   // A3 header
   await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } }));
 
   // Data rows
-  const staffRows = buildOverallRows(staffArray, S, false);
-  if (staffRows.length > 0) {
-    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:V${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
-  }
+  // Headers, panel and department table first (they also clear the
+  // template's old Q.. columns), then the data rows that read them.
   const staffLastRow = S + staffArray.length - 1;
-
-  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName);
-  await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffSheetId, staffLastRow, false, internSheetName);
+  const staffRows = buildOverallRows(staffArray, S, false, staffSheetName);
+  if (staffRows.length > 0) {
+    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:T${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
+  }
+  await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false, internSheetName);
 
   // Totals row: M, N, O = SUM immediately below last person, above signature.
   // Use values.append so it auto-extends the grid — no grid limit errors.
@@ -1487,14 +1469,18 @@ async function createSK03(
 
   await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } }));
 
-  const internRows = buildOverallRows(internArray, S, true);
-  if (internRows.length > 0) {
-    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:V${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } }));
-  }
   const internLastRow = S + internArray.length - 1;
+  await writeOverallMeta(sheets, ssId, internSheetName, internSheetId, internLastRow, true, internSheetName);
+  const internRows = buildOverallRows(internArray, S, true, staffSheetName);
+  if (internRows.length > 0) {
+    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:Q${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } }));
+  }
+  await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true, internSheetName);
 
-  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName);
-  await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
+  // Staff W10 (intern paid) reads the intern sheet, which did not exist yet
+  // when the staff panel was written — write it again so it cannot stay #REF!.
+  const w10 = staffPanel(internSheetName, S, staffLastRow, 0, '').panel.find(p => p.row === 10)!;
+  await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!${STAFF_PANEL.value}10`, valueInputOption: 'USER_ENTERED', requestBody: { values: [[w10.value!]] } }));
 
   // Intern totals row: N and O only (no M — management fee not applicable for interns)
   const internTotalsRow: (string | number)[] = Array.from({ length: 26 }, () => '');
@@ -1541,12 +1527,6 @@ async function createSK03(
     const { error } = await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, internArray[i].index);
     if (error) log(`  [SK03] ⚠ row_num patch failed for index ${internArray[i].index}: ${error.message}`, 'warn');
   }
-
-  // ══════════════════════════════════════════════════════════════════
-  //  2b. งบรายสาขา sheet (new formula: per-department staff budget)
-  // ══════════════════════════════════════════════════════════════════
-  log(`  [SK03] ${BUDGET_SHEET} sheet (${DEPT_CAPACITY.length} departments)…`);
-  await writeBudgetSheet(sheets, ssId, budgetSheetId, staffSheetName, staffLastRow, `ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`);
 
   // ══════════════════════════════════════════════════════════════════
   //  3. Department sheets
@@ -1650,7 +1630,7 @@ async function main(): Promise<void> {
 
   // Pre-flight: every staff department needs a capacity multiplier (new formula)
   for (const dept of Object.keys(DEPT_COLORS)) {
-    if (dept !== 'INTERN') deptCode(dept); // throws on a department missing from DEPT_CAPACITY
+    if (dept !== 'INTERN') checkDept(dept); // throws on a department missing from DEPT_CAPACITY
   }
 
   console.log('══════════════════════════════════════════════════════');
