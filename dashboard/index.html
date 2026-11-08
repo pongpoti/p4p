@@ -825,6 +825,11 @@
         .rv-reply label { flex-basis: 100%; font-weight: 600; }
         .rv-reply textarea { flex: 1 1 320px; }
         .btn-ghost[aria-disabled="true"], .btn-ghost:disabled { opacity: .55; cursor: not-allowed; }
+        .rv-note { padding: 6px 10px; border-left: 4px solid; border-radius: 6px; font-weight: 600; font-size: .95rem; }
+        .rv-note-ok { color: #0B5E2B; background: #E7F4EC; border-color: #157F3D; }
+        .rv-note-err { color: #8A1C12; background: #FDECEA; border-color: #B42318; }
+        .rv-fail { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(192, 57, 43, .25); border-left: 4px solid #B42318; color: #8A1C12; background: #FDECEA; font-weight: 600; }
+        .rv-fail p { flex: 1 1 260px; }
         .rv-dialog { width: min(640px, 94vw); }
         .rv-dialog-in { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
         .rv-dialog h2 { font-size: 1.1rem; }
@@ -971,6 +976,8 @@
             </div>
             <div id="review-body"></div>
             <p id="review-live" class="sr-only" role="status" aria-live="polite"></p>
+            <!-- failures are announced here at once; review.js also shows them next to the control -->
+            <p id="review-alert" class="sr-only" role="alert"></p>
         </section>
 
         <!-- ประวัติการใช้งาน: shown to the owner only (main.ts returns 404 to anyone else) -->

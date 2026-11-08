@@ -88,6 +88,33 @@ jobs:
           REVIEW_REQUEST_ID:      ${{ inputs.request_id }}
         run: npx tsx process.ts
 
+      # A ตรวจสอบ tab request whose run stopped before process.ts closed it
+      # (an earlier step failed, the run was cancelled or hit timeout-minutes,
+      # process.ts was killed) would wait as "building" until review_state's
+      # time-out. Close it now, only while it is still open, so a request
+      # process.ts already closed keeps its own reason. The nightly run has no
+      # request_id and never gets here. Never fails the job further.
+      - name: Close the ตรวจสอบ tab request if the run stopped
+        if: (failure() || cancelled()) && inputs.request_id != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          REQUEST_ID:   ${{ inputs.request_id }}
+        run: |
+          if ! [[ "$REQUEST_ID" =~ ^[0-9]{1,18}$ ]]; then echo "No valid request id, nothing to close."; exit 0; fi
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then echo "Request $REQUEST_ID: Supabase secrets missing, not closed."; exit 0; fi
+          body="{\"status\":\"failed\",\"error\":\"การสร้างไฟล์หยุดก่อนเสร็จ (งาน 2.2 ล้มเหลวหรือถูกยกเลิก)\",\"finished_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+          # The key goes to curl on stdin (-H @-), never on the command line or in the log.
+          code=$(printf 'apikey: %s\nAuthorization: Bearer %s\n' "$SUPABASE_KEY" "$SUPABASE_KEY" |
+            curl -sS -g -o /dev/null -w '%{http_code}' --max-time 30 -X PATCH \
+              "${SUPABASE_URL%/}/rest/v1/review_requests?id=eq.${REQUEST_ID}&status=in.(queued,dispatched,running)" \
+              -H @- -H 'Content-Type: application/json' -H 'Prefer: return=minimal' \
+              --data "$body" 2>/dev/null) || code="no answer"
+          echo "Request $REQUEST_ID: closed as failed if still open (HTTP $code)"
+          exit 0
+
       # Run-log artifact upload REMOVED — see .github/workflows/3-1-manual-email-read-submission-emails.yml
       # for the reasoning. These logs carry physician names and this repo is
       # public, so the retained artifact was readable by anyone.

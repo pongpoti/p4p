@@ -54,9 +54,22 @@ function supabase(): SupabaseClient | null {
   return _supabase;
 }
 
-const missingTable = (e: { code?: string; message?: string } | null): boolean =>
-  !!e && (e.code === "PGRST205" || e.code === "PGRST202" || e.code === "42P01" || e.code === "42883" ||
-    /does not exist|schema cache/i.test(e.message ?? ""));
+/**
+ * The review tables, columns or functions are not installed: only a definite
+ * "not there" answer, by its code. Anything else, PGRST002 ("Could not query
+ * the database for the schema cache. Retrying." while PostgREST or the
+ * database restarts), PGRST000/001, a 5xx page or a network error, is passing
+ * and takes the normal retry path instead of turning the relay off for the run.
+ */
+const NOT_INSTALLED = new Set([
+  "PGRST205",  // table not in the schema cache
+  "PGRST202",  // function not in the schema cache
+  "42P01",     // undefined table
+  "42883",     // undefined function
+  "42703",     // undefined column (the part-3 columns)
+]);
+export const missingTable = (e: { code?: string | null; message?: string } | null | undefined): boolean =>
+  !!e && NOT_INSTALLED.has(String(e.code ?? ""));
 
 async function github(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}${path}`, {
@@ -133,8 +146,8 @@ export async function dispatchReviewPdf(now: number = Date.now()): Promise<boole
       .or(`pdf_status.eq.queued,and(pdf_status.eq.building,pdf_claimed_at.lt.${stale})`)
       .limit(1);
     if (error) {
-      // 42703: the part-3 columns are not there yet.
-      if (missingTable(error) || error.code === "42703") { pdfDisabled = true; console.log("│  ℹ️  ตรวจสอบ tab PDFs: off (part 3 of the review SQL not installed yet)"); return false; }
+      // 42703 here: the part-3 columns are not there yet.
+      if (missingTable(error)) { pdfDisabled = true; console.log("│  ℹ️  ตรวจสอบ tab PDFs: off (part 3 of the review SQL not installed yet)"); return false; }
       throw new Error(error.message);
     }
     if (!waiting?.length) return false;

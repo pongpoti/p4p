@@ -230,11 +230,29 @@ on conflict (id) do update
       allowed_mime_types = excluded.allowed_mime_types;
 
 -- ── Build requests ──────────────────────────────────────────────────────────
+-- When an open request is given up: 90 minutes after it was queued (or
+-- dispatched), 80 after its run started; 2.2's job stops after 60. A request
+-- still open past this has a dead run (a step before process.ts failed, the
+-- run was cancelled or timed out, or the relay stopped between claim and
+-- dispatch). review_state shows it as failed ('timed out') from then on, and
+-- review_request_build / claim_review_request store that. Null: not open.
+create or replace function public.review_request_deadline(q public.review_requests)
+returns timestamptz
+language sql
+stable
+set search_path = ''
+as $$
+  select case q.status
+    when 'queued'     then q.requested_at + interval '90 minutes'
+    when 'dispatched' then coalesce(q.dispatched_at, q.requested_at) + interval '90 minutes'
+    when 'running'    then coalesce(q.started_at, q.dispatched_at, q.requested_at) + interval '80 minutes'
+  end;
+$$;
+
 -- Queue one build of p_month, or return the one already open. A changed
 -- budget / per P4P ('inputs') while a build is already running queues one
--- more, since the running build read the old numbers. A request that never
--- started (its run was cancelled, or the relay was down) or ran past the
--- job's time limit is given up first, so a stuck one never blocks a retry.
+-- more, since the running build read the old numbers. A request past its
+-- deadline (above) is given up first, so a stuck one never blocks a retry.
 create or replace function public.review_request_build(p_month text, p_reason text, p_actor text)
 returns public.review_requests
 language plpgsql
@@ -244,11 +262,9 @@ declare
   r public.review_requests;
 begin
   if p_month !~ '^[0-9]{4}_[0-9]{2}$' then raise exception 'review: bad month'; end if;
-  update public.review_requests
-     set status = 'failed', finished_at = now(), error = 'timed out'
-   where month = p_month
-     and ((status in ('queued', 'dispatched') and requested_at < now() - interval '90 minutes')
-       or (status = 'running' and started_at < now() - interval '80 minutes'));
+  update public.review_requests q
+     set status = 'failed', finished_at = public.review_request_deadline(q), error = 'timed out'
+   where q.month = p_month and public.review_request_deadline(q) < now();
   select * into r from public.review_requests
    where month = p_month
      and status in ('queued', 'dispatched', 'running')
@@ -262,12 +278,16 @@ begin
 end;
 $$;
 
--- The relay's claim: the oldest queued request, marked dispatched.
+-- The relay's claim: the oldest queued request, marked dispatched. One the
+-- tab already shows as timed out is closed first and never started.
 create or replace function public.claim_review_request()
 returns setof public.review_requests
 language sql
 set search_path = ''
 as $$
+  update public.review_requests q
+     set status = 'failed', finished_at = public.review_request_deadline(q), error = 'timed out'
+   where public.review_request_deadline(q) < now();
   update public.review_requests
      set status = 'dispatched', dispatched_at = now(), attempts = attempts + 1
    where id = (select id from public.review_requests
@@ -414,7 +434,12 @@ begin
         'moneyMissing',  count(*) filter (where money_check = 'missing'))
       from public.review_build_people where build_id = v_build),
     'builds', (select count(*) from public.review_builds where month = p_month),
-    'request', (select to_jsonb(q) from public.review_requests q where q.month = p_month order by q.id desc limit 1),
+    -- A request past its deadline reads as failed, so the tab never waits on a dead run.
+    'request', (select case when public.review_request_deadline(q) < now()
+                  then to_jsonb(q) || jsonb_build_object('status', 'failed', 'error', 'timed out',
+                                                         'finished_at', public.review_request_deadline(q))
+                  else to_jsonb(q) end
+                  from public.review_requests q where q.month = p_month order by q.id desc limit 1),
     'uploads', (select coalesce(jsonb_object_agg(u.kind, to_jsonb(u) - 'path'), '{}'::jsonb) from (
         select distinct on (kind) * from public.review_uploads
          where month = p_month and verified_at is not null order by kind, created_at desc) u),
@@ -748,6 +773,7 @@ declare
   r public.review_rounds;
   p public.review_build_people;
   v_dept jsonb;
+  v_row jsonb;
 begin
   select * into r from public.review_rounds where month = p_month and round_no = p_round;
   if not found then raise exception 'review: not in this round'; end if;
@@ -755,11 +781,24 @@ begin
   if not found then raise exception 'review: not in this round'; end if;
   select e into v_dept from public.review_builds b, jsonb_array_elements(b.depts) e
    where b.id = r.build_id and e->>'name' = p.department limit 1;
+  -- The row the build matched (dept_row, a sheet row number; rowNos holds
+  -- each row's number, in the order of rows). An older build has no rowNos:
+  -- match the name in column B, spaced the way the build's normaliseName()
+  -- does (JS trim() and \s: tabs, new lines, NBSP, U+2000-200A, U+3000, BOM …).
+  if p.dept_row is not null and jsonb_typeof(v_dept->'rowNos') = 'array' then
+    select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
+     where v_dept->'rowNos'->((t.n - 1)::int) = to_jsonb(p.dept_row)
+     order by t.n limit 1;
+  else
+    select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
+     where btrim(regexp_replace(t.x->>1,
+             '[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+', ' ', 'g'), ' ') = p.name
+     order by t.n limit 1;
+  end if;
   return jsonb_build_object(
     'grid', p.sheet,
     'deptHeader', v_dept->'header',
-    'deptRow', (select x from jsonb_array_elements(v_dept->'rows') x
-                 where regexp_replace(btrim(x->>1), '\s+', ' ', 'g') = p.name limit 1));
+    'deptRow', v_row);
 end;
 $$;
 

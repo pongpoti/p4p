@@ -192,7 +192,14 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
   const pages = next - 1;
 
   const doctors = d.depts.reduce((s, x) => s + x.rows.length, 0);
-  const total = d.depts.reduce((s, x) => s + (Number(x.total) || 0), 0);
+  const sumOf = (k: 'admin' | 'pay' | 'total'): number => d.depts.reduce((s, x) => s + (Number(x[k]) || 0), 0);
+  // Department sheet columns: E งานบริหาร (management stipends, paid on top
+  // of the P4P budget), F ตามสัดส่วนวิชาชีพ (the P4P pay), G รวมเป็นเงิน = E + F.
+  // The budget (staff Y9) covers F only: the SK03's own คงคืน is Y9 − Y19,
+  // Y19 being "P4P staff & intern (ไม่รวมค่าบริหาร)".
+  const admin = sumOf('admin');
+  const pay = sumOf('pay');
+  const total = sumOf('total');
   const half = Math.ceil(layout.length / 2);
   const summaryRow = (i: number): string => {
     const x = layout[i].dept;
@@ -205,9 +212,8 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
   const right = layout.slice(half).map((_, i) => summaryRow(half + i)).join('') +
     `<tr class="sum"><td>รวมทั้งสิ้น</td><td class="n">${doctors.toLocaleString('en-US')}</td><td class="n">${money(total)}</td><td></td></tr>`;
 
-  const left_over = d.budget - total;
-  const balance = Math.abs(left_over) < 0.005 ? '' : left_over > 0
-    ? ` (คงเหลือ ${money(left_over)} บาท)` : ` (เกินงบ ${money(-left_over)} บาท)`;
+  const left_over = Math.round((d.budget - pay) * 100) / 100 || 0;   // || 0: never "-0"
+  const balance = left_over < 0 ? `เกินงบ ${money(-left_over)} บาท` : `คงเหลือ ${money(left_over)} บาท`;
   const timeline = [
     `ผู้จัดทำ ${esc(d.submittedBy || '—')} ส่งรอบที่ ${d.roundNo}: ${esc(thaiDateTime(d.submittedAt, true))}`,
     d.reopenedAt ? `ผู้ตรวจสอบ ${esc(d.reopenedBy || '—')} ยกเลิกเอกสารเดิมและเปิดตรวจอีกครั้ง: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
@@ -223,7 +229,8 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 <h2>ข้อมูลที่ใช้คำนวณและผลการตรวจสอบ</h2>
 <table class="info"><tbody>
 <tr><th>งบประมาณทั้งหมด</th><td>${money(d.budget)} บาท</td><th>per P4P (อินเทิร์น)</th><td>${money(d.perP4P)} บาท/คน</td></tr>
-<tr><th>รวมจ่ายตามชีตกลุ่มงาน</th><td>${money(total)} บาท${balance}</td><th>ผลการตรวจสอบ</th><td>อนุมัติ ${d.approvedPeople.toLocaleString('en-US')} / ${d.people.toLocaleString('en-US')} คน ใน ${d.rounds} รอบ</td></tr>
+<tr><th>P4P ที่จ่าย (ไม่รวมค่าบริหาร)</th><td>${money(pay)} บาท (${balance})</td><th>ค่าตอบแทนบริหาร (นอกงบ P4P)</th><td>${money(admin)} บาท</td></tr>
+<tr><th>รวมจ่ายตามชีตกลุ่มงาน</th><td>${money(total)} บาท</td><th>ผลการตรวจสอบ</th><td>อนุมัติ ${d.approvedPeople.toLocaleString('en-US')} / ${d.people.toLocaleString('en-US')} คน ใน ${d.rounds} รอบ</td></tr>
 <tr><th>ไฟล์ที่ใช้</th><td colspan="3">ไฟล์ที่ผู้จัดทำส่งรอบที่ ${d.roundNo}: ${esc(d.sk03File || 'SK03')} · ${esc(d.mergedFile || 'ไฟล์รวมคะแนนรายคน')} (ระบบสร้าง ${esc(thaiDateTime(d.builtAt, true))})</td></tr>
 <tr><th>ลำดับเหตุการณ์</th><td colspan="3">${timeline}</td></tr>
 </tbody></table>
@@ -319,9 +326,14 @@ export async function renderPdf(html: string, pages: number): Promise<Uint8Array
 
 interface Claim { id: number; month: string; round_no: number; claimed_at: string }
 
-const missing = (e: { code?: string; message?: string } | null): boolean =>
-  !!e && (['PGRST202', 'PGRST205', '42P01', '42883', '42703'].includes(String(e.code)) ||
-    /does not exist|schema cache/i.test(e.message ?? ''));
+/**
+ * Part 3 of the review SQL is not installed: only a definite "not there" code.
+ * PGRST002 ("Could not query the database for the schema cache. Retrying."),
+ * PGRST000/001, a 5xx or a network error is passing and fails the run like
+ * any other error, so the round stays queued and the relay starts 2.8 again.
+ */
+export const missing = (e: { code?: string | null; message?: string } | null | undefined): boolean =>
+  !!e && ['PGRST202', 'PGRST205', '42P01', '42883', '42703'].includes(String(e.code ?? ''));
 
 /** Everything the document shows, for one round. */
 export async function loadPdfData(db: SupabaseClient, roundId: number): Promise<PdfData> {

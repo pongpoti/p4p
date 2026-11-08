@@ -157,7 +157,8 @@ already-applied file is safe.
     `review_decisions`, `review_issues`, `review_issue_replies` (RLS on, no
     policies, anon/authenticated revoked), the private Storage bucket
     `review-files` (50 MB, .xlsx and .pdf), and service-role-only functions
-    `review_request_build`, `claim_review_request`, `review_submit_round`,
+    `review_request_deadline` (when an open build request counts as timed
+    out), `review_request_build`, `claim_review_request`, `review_submit_round`,
     `review_withdraw_round`, `review_state`, `review_months`, and for the
     auditor's side `review_live_round`, `review_mark_opened`,
     `review_decide`, `review_return_round`, `review_unreturn_round`,

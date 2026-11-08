@@ -6,23 +6,36 @@
  * (lib/review-server.ts). No network, no dependencies, so the root tests can
  * hold both sides to the same rules (lib/__tests__/review-core.test.mjs).
  *
- *   statedTotal   the total a doctor wrote on their own sheet, read the way
- *                 the submission pipeline reads it (grand-total label rows
- *                 first, then sub-total label rows), from the saved values
- *                 only. Never recalculated: a total formula with no saved
- *                 value is reported as missing, not rebuilt from the days.
+ *   statedTotal   the total a doctor wrote on their own sheet, read with the
+ *                 submission pipeline's rule (lib/p4p-score.ts
+ *                 extractScoreFromRows, the rule that put the score in SK03
+ *                 K): grand-total label rows, then a free-text summary line,
+ *                 then sub-total label rows. Only the passes that read a
+ *                 number the doctor wrote: never the pipeline's guesses or
+ *                 recalculations, and a total formula with no saved value is
+ *                 reported as uncached, not rebuilt from the days.
  *   scoreCheck    SK03 score (staff/intern sheet K) vs that stated total
  *   moneyCheck    staff/intern pay (N) vs the department sheet (F, ตามสัดส่วนวิชาชีพ)
  *   w9Rate        the per P4P typed into the intern W9 formula (=W10*rate)
  *   uploadMatch   which build, if any, an uploaded file is byte-for-byte
  */
 
-// Same label lists as process/process.ts and automation/claude-analyst.ts.
+// Ported from lib/p4p-score.ts (itself a byte-faithful port of
+// automation/claude-analyst.ts): the same label lists, number reading and
+// passes, so the review checks a doctor's total with the rule that wrote
+// their score. Not imported: this file stays dependency-free for both the
+// Vercel app and the Actions build. Keep the two in step
+// (lib/__tests__/review-core.test.mjs compares them).
 const GRAND_TOTAL_LABELS = [
   "รวมแต้มทั้งหมด", "รวมคะแนนทั้งหมด", "รวมทั้งสิ้น", "ยอดรวมทั้งหมด",
   "รวมทั้งหมด", "คะแนนรวมทั้งหมด",
 ]
 const SUBTOTAL_LABELS = ["รวมคะแนน", "รวมแต้ม", "คะแนนรวม", "ผลรวม", "รวม"]
+// A header row cell naming the total-points column (p4p-score findScoreColumn).
+const SCORE_COLUMN_LABELS = ["รวมแต้ม", "รวมคะแนน", "คะแนนรวม", "แต้มรวม"]
+
+const stripSpace = (s: string): string => s.replace(/\s+/g, "")
+const includesLabel = (text: string, label: string): boolean => stripSpace(text).includes(stripSpace(label))
 
 function isYearLike(n: number): boolean {
   if (n >= 1900 && n <= 2099) return true
@@ -39,12 +52,17 @@ function toNum(val: unknown): number {
   return parseFloat(s.replace(/,/g, ""))
 }
 
-function numsFromText(val: unknown): number[] {
+function numsFromText(val: unknown, skipYearFilter = false): number[] {
   const s = String(val ?? "").replace(/,/g, "")
   return [...s.matchAll(/\d+(?:\.\d+)?/g)]
     .map((m) => parseFloat(m[0]))
-    .filter((n) => !isNaN(n) && n > 0 && !isYearLike(n))
+    .filter((n) => !isNaN(n) && n > 0 && (skipYearFilter || !isYearLike(n)))
 }
+
+// A total typed as text: "รวม = 3260", "คะแนนรวม: 1,940.5", "รวม 3260".
+const SUMMARY_LABEL = "(?:รวม|ผลรวม|คะแนนรวม|ยอดรวม)"
+const SUMMARY_WITH_SEP = new RegExp(`${SUMMARY_LABEL}[^=:\\d]*[=:]\\s*([\\d,]+(?:\\.\\d+)?)`, "g")
+const SUMMARY_BARE = new RegExp(`^${SUMMARY_LABEL}[^\\d]*?\\s+([\\d,]+(?:\\.\\d+)?)$`)
 
 /** 0-based column index → letters (0 → A, 26 → AA). */
 function colName(c: number): string {
@@ -66,29 +84,64 @@ function cellName(r: number, c: number): string {
 export interface StatedTotal {
   value: number | null
   cell: string | null
-  /** grand-total · sub-total · largest-over-sub-total · uncached · none */
+  /** grand-total · free-text · sub-total · largest-over-sub-total · uncached · none */
   how: string
 }
 
 interface Candidate { n: number; r: number; c: number }
 
 /**
- * The doctor's stated total. `grid[r][c]` is the saved value of each cell
- * (a formula's cached result; null for a formula Excel never saved a value
- * for), 0-based. `uncached` lists the cells that are formulas with no saved
- * value, so a grand-total row that only holds such a formula is reported as
- * "uncached" instead of falling through to a guess.
+ * The column the sheet's own header row calls its total points, 0-based, or
+ * null: the first row with three or more filled cells, none of them a
+ * number, one of them exactly (spaces aside) a score-column label.
+ */
+function findScoreColumn(grid: unknown[][]): number | null {
+  for (const row of grid) {
+    if (!row) continue
+    const entries: [number, unknown][] = []
+    row.forEach((v, c) => { if (v !== null && v !== undefined && String(v).trim() !== "") entries.push([c, v]) })
+    if (entries.length < 3) continue
+    if (entries.some(([, v]) => !isNaN(toNum(v)))) continue
+    const hit = entries.find(([, v]) => SCORE_COLUMN_LABELS.some((l) => stripSpace(String(v)) === stripSpace(l)))
+    if (hit) return hit[0]
+  }
+  return null
+}
+
+/**
+ * The doctor's stated total. `grid[r][c]` is each cell as the submission
+ * pipeline reads it (a formula's saved result; null or absent for a formula
+ * Excel never saved a value for), 0-based, and may be sparse. `uncached`
+ * lists the cells that are formulas with no saved value, so a grand-total
+ * row that only holds such a formula is reported as "uncached" instead of
+ * falling through to a lesser pass.
+ *
+ * The passes and what each takes are lib/p4p-score.ts extractScoreFromRows'
+ * first three: (1) grand-total label rows, any column: the declared score
+ * column's number, else the row's non-year numbers (its year-like ones only
+ * when it has no other), plus numbers inside the label cell; (2) a total
+ * typed as text; (3) sub-total labels in the first three columns (declared
+ * column first), where a bigger number anywhere in the sheet wins, as it
+ * does in the pipeline. The largest of a pass is the total; `cell` is where
+ * it is (for text, the cell holding the text).
  */
 function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): StatedTotal {
   const best = (cands: Candidate[]): Candidate =>
     cands.reduce((a, b) => (b.n > a.n || (b.n === a.n && b.r > a.r) ? b : a))
-  const rowNums = (row: unknown[], r: number): Candidate[] => {
+  const found = (b: Candidate, how: string): StatedTotal => ({ value: b.n, cell: cellName(b.r, b.c), how })
+  const rowNums = (row: unknown[], r: number, skipYearFilter = false): Candidate[] => {
     const out: Candidate[] = []
     row.forEach((v, c) => {
       const n = toNum(v)
-      if (!isNaN(n) && n > 0 && !isYearLike(n)) out.push({ n, r, c })
+      if (!isNaN(n) && n > 0 && (skipYearFilter || !isYearLike(n))) out.push({ n, r, c })
     })
     return out
+  }
+  const scoreCol = findScoreColumn(grid)
+  const declared = (row: unknown[], r: number): Candidate | null => {
+    if (scoreCol === null) return null
+    const n = toNum(row[scoreCol])
+    return !isNaN(n) && n > 0 ? { n, r, c: scoreCol } : null
   }
 
   // Rows (1-based) holding a formula with no saved value. The grid can be
@@ -101,32 +154,55 @@ function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): Stat
   grid.forEach((row, r) => {
     if (!row) return
     const labels: number[] = []
-    row.forEach((v, c) => { if (GRAND_TOTAL_LABELS.some((l) => String(v ?? "").includes(l))) labels.push(c) })
+    row.forEach((v, c) => { if (GRAND_TOTAL_LABELS.some((l) => includesLabel(String(v ?? ""), l))) labels.push(c) })
     if (!labels.length) return
-    const nums = rowNums(row, r)
-    for (const c of labels) for (const n of numsFromText(row[c])) nums.push({ n, r, c })
+    const d = declared(row, r)
+    if (d) { grand.push(d); return }
+    const nonYear = rowNums(row, r)
+    const nums = nonYear.length ? nonYear : rowNums(row, r, true)
+    for (const c of labels) for (const n of numsFromText(row[c], true)) nums.push({ n, r, c })
     if (nums.length) grand.push(...nums)
     else if (uncachedRows.has(String(r + 1))) grandRowUncached = true
   })
-  if (grand.length) {
-    const b = best(grand)
-    return { value: b.n, cell: cellName(b.r, b.c), how: "grand-total" }
-  }
+  if (grand.length) return found(best(grand), "grand-total")
   if (grandRowUncached) return { value: null, cell: null, how: "uncached" }
 
-  // Pass 2: sub-total labels in the first three columns.
+  // Pass 2: a total typed as text, in any cell.
+  const text: Candidate[] = []
+  grid.forEach((row, r) => {
+    if (!row) return
+    row.forEach((v, c) => {
+      if (typeof v !== "string") return
+      const s = v.replace(/\s+/g, " ").trim()
+      if (!s) return
+      const withSep = [...s.matchAll(SUMMARY_WITH_SEP)]
+        .map((m) => parseFloat(m[1].replace(/,/g, "")))
+        .filter((n) => !isNaN(n) && n > 0)
+      if (withSep.length) { for (const n of withSep) text.push({ n, r, c }); return }
+      const bare = SUMMARY_BARE.exec(s)
+      if (!bare) return
+      const n = parseFloat(bare[1].replace(/,/g, ""))
+      if (!isNaN(n) && n > 0 && !isYearLike(n)) text.push({ n, r, c })
+    })
+  })
+  if (text.length) return found(best(text), "free-text")
+
+  // Pass 3: sub-total labels in the first three columns.
   const sub: Candidate[] = []
   grid.forEach((row, r) => {
     if (!row) return
-    if (row.slice(0, 3).some((v) => SUBTOTAL_LABELS.some((l) => String(v ?? "").includes(l)))) sub.push(...rowNums(row, r))
+    if (![0, 1, 2].some((c) => SUBTOTAL_LABELS.some((l) => includesLabel(String(row[c] ?? ""), l)))) return
+    const d = declared(row, r)
+    if (d) sub.push(d)
+    else sub.push(...rowNums(row, r))
   })
   if (sub.length) {
     const s = best(sub)
     const all: Candidate[] = []
     grid.forEach((row, r) => { if (row) all.push(...rowNums(row, r)) })
-    const m = best(all)
-    if (m.n > s.n) return { value: m.n, cell: cellName(m.r, m.c), how: "largest-over-sub-total" }
-    return { value: s.n, cell: cellName(s.r, s.c), how: "sub-total" }
+    const m = all.length ? best(all) : s
+    if (m.n > s.n) return found(m, "largest-over-sub-total")
+    return found(s, "sub-total")
   }
   return { value: null, cell: null, how: "none" }
 }

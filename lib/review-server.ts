@@ -6,8 +6,9 @@
  * helpers passed in, so this file has no secrets or settings of its own.
  *
  * Tables, functions and the private bucket review-files come from
- * scripts/review-tab-2026-11.sql; until that has been run every route
- * answers { installed: false } and the tab says so.
+ * scripts/review-tab-2026-11.sql; until that has been run the two loads
+ * (months, a month's state) answer { installed: false } and the tab says
+ * so, and every other route fails with 503.
  *
  * The auditee (ผู้จัดทำ) side:
  *   GET  /dashboard/api/review/months                 month picker
@@ -84,10 +85,33 @@ const REFUSALS: [RegExp, number, string][] = [
 ]
 
 const pgError = (e: any): { code?: string; message?: string } => (e && e.response && e.response.data) || {}
+// Part of the SQL is missing: no such function or table (PostgREST's schema
+// cache), or one the installed functions use (an older copy of the file was
+// run). Only these: PGRST002 ("Could not query the database for the schema
+// cache. Retrying.") is the database being briefly unreachable, not missing.
+const NOT_INSTALLED = ["PGRST202", "PGRST205", "42P01", "42883", "42703"]
 const notInstalled = (e: any): boolean => {
   const d = pgError(e)
-  return ["PGRST202", "PGRST205", "42P01", "42883"].includes(String(d.code)) ||
-    /does not exist|schema cache/i.test(String(d.message || ""))
+  const code = String(d.code || "")
+  if (NOT_INSTALLED.includes(code)) return true
+  // An answer with no code at all: only the wording of a missing one.
+  return !code && /^(relation|function|column) .+ does not exist|^could not find the (function|table) .+ in the schema cache/i
+    .test(String(d.message || ""))
+}
+const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส่วนนี้ของแท็บตรวจสอบ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
+
+// Is the newest build made with these numbers?
+const inBuild = (b: any, budget: number, perP4p: number): boolean =>
+  !!b && b.budget !== null && b.per_p4p !== null && Number(b.budget) === budget && Number(b.per_p4p) === perP4p
+// The open request that will build with the numbers saved at savedAt, if
+// any: a queued or dispatched one reads review_inputs after its run starts,
+// a running one did only if it started after they were saved. (review_state
+// already shows a request past its deadline as failed.)
+const carrier = (q: any, savedAt: unknown): any => {
+  if (!q) return null
+  if (q.status === "queued" || q.status === "dispatched") return q
+  const started = Date.parse(String(q.started_at || "")), saved = Date.parse(String(savedAt || ""))
+  return q.status === "running" && started >= saved ? q : null
 }
 
 export function mountReview(d: ReviewDeps): void {
@@ -111,8 +135,16 @@ export function mountReview(d: ReviewDeps): void {
     return { s: { sub: s.sub, name: s.name }, month }
   }
 
-  const fail = (res: Response, what: string, e: any): void => {
-    if (notInstalled(e)) { res.json({ installed: false }); return }
+  // Only the two loads (load = true) answer a missing install with 200
+  // { installed: false }: the tab reads that and shows how to set it up.
+  // Anything else must fail, since the browser only checks r.ok and would
+  // otherwise report a save, a reopen or a list that never happened.
+  const fail = (res: Response, what: string, e: any, load = false): void => {
+    if (notInstalled(e)) {
+      if (load) { res.json({ installed: false }); return }
+      console.error("[dashboard] review " + what + ": not installed (" + String(pgError(e).code || "") + ")")
+      res.status(503).json({ installed: false, error: NOT_INSTALLED_MSG }); return
+    }
     const msg = String(pgError(e).message || "")
     const hit = REFUSALS.find(([re]) => re.test(msg))
     if (hit) { res.status(hit[1]).json({ error: hit[2] }); return }
@@ -135,7 +167,7 @@ export function mountReview(d: ReviewDeps): void {
       const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t)).sort().reverse().slice(0, 12)
       const months = await d.callServiceRpc("review_months", { p_months: tables })
       res.json({ installed: true, months: months || [] })
-    } catch (e: any) { fail(res, "months", e) }
+    } catch (e: any) { fail(res, "months", e, true) }
   })
 
   app.get("/dashboard/api/review/:month", async (req: Request, res: Response) => {
@@ -145,7 +177,7 @@ export function mountReview(d: ReviewDeps): void {
       const st = await state(g.month)
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
       res.json({ installed: true, ...st })
-    } catch (e: any) { fail(res, "state", e) }
+    } catch (e: any) { fail(res, "state", e, true) }
   })
 
   app.put("/dashboard/api/review/:month/inputs", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
@@ -163,12 +195,20 @@ export function mountReview(d: ReviewDeps): void {
       await axios.post(rest("review_inputs?on_conflict=month"),
         { month: g.month, budget, per_p4p: perP4p, updated_at: new Date().toISOString(), updated_by: g.s.name },
         { headers: json({ Prefer: "resolution=merge-duplicates,return=minimal" }), timeout: 8000 })
-      const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
-      const request = changed
-        ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
-        : null
+      // Saved, so on record now, even if asking for the build below fails.
       await d.audit(req, g.s, "review.inputs", { month: g.month, budget, per_p4p: perP4p, before })
-      res.json({ ok: true, changed, request })
+      // A build is needed when the numbers changed, or when they did not
+      // (a retry after the build request failed) but the newest build lacks
+      // them and no open request will build with them.
+      const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
+      const notBuilt = !changed && !inBuild(st.build, budget, perP4p)
+      const open = notBuilt ? carrier(st.request, st.inputs && st.inputs.updated_at) : null
+      const ask = changed || (notBuilt && !open)
+      const request = ask
+        ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
+        : open
+      // changed: a build with these numbers is on its way (the tab's message).
+      res.json({ ok: true, changed: ask || !!open, request })
     } catch (e: any) { fail(res, "inputs", e) }
   })
 
