@@ -1,0 +1,49 @@
+name: "2.8 On request: build the review approval PDF"
+
+# The dashboard's ตรวจสอบ (review) tab: when the auditor approves everyone in
+# a month, workflow 1 starts this run. It builds the approval document
+# (process/review-pdf.ts: cover page plus every department sheet, A4
+# landscape, the approval time on every page) for each approved month whose
+# PDF is waiting, and keeps it in Supabase Storage for the tab. Nothing is
+# emailed or put on Drive, and the log carries no names.
+#
+# Running it by hand is harmless: with nothing waiting it finishes at once.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-pdf
+  cancel-in-progress: false
+
+jobs:
+  pdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: process/package-lock.json
+
+      - name: Install Puppeteer system dependencies
+        run: sudo apt-get install -y libgbm1
+
+      - name: Install dependencies
+        working-directory: process
+        run: npm ci
+
+      - name: Build the approval PDF
+        working-directory: process
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: npx tsx review-pdf.ts

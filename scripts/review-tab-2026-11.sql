@@ -20,6 +20,9 @@
 --    review_decisions     one per person per round (null = still to check)
 --    review_issues        "ปัญหาอื่น ๆ", with review_issue_replies
 --
+--  When the auditor approves everyone, workflow 2.8 (process/review-pdf.ts,
+--  started by workflow 1) builds the approval document into pdf/.
+--
 --  Storage: private bucket review-files (builds/, uploads/, pdf/).
 --
 --  service_role only, like dashboard_followups: RLS on with no policies,
@@ -155,6 +158,14 @@ create table if not exists public.review_rounds (
   pdf_error         text not null default '',
   unique (month, round_no)
 );
+-- Part 3: the approval PDF job and reopening an approved month.
+alter table public.review_rounds
+  add column if not exists pdf_claimed_at timestamptz,   -- workflow 2.8 took it (a claim 20 min old is retried)
+  add column if not exists pdf_attempts   int not null default 0,
+  add column if not exists pdf_built_at   timestamptz,
+  add column if not exists reopened_at    timestamptz,   -- the auditor cancelled the document and checks again
+  add column if not exists reopened_by    text not null default '',
+  add column if not exists reopen_reason  text not null default '';
 -- One live round per month.
 create unique index if not exists review_rounds_one_live
   on public.review_rounds (month) where status in ('submitted', 'returned', 'approved');
@@ -219,11 +230,29 @@ on conflict (id) do update
       allowed_mime_types = excluded.allowed_mime_types;
 
 -- ── Build requests ──────────────────────────────────────────────────────────
+-- When an open request is given up: 90 minutes after it was queued (or
+-- dispatched), 80 after its run started; 2.2's job stops after 60. A request
+-- still open past this has a dead run (a step before process.ts failed, the
+-- run was cancelled or timed out, or the relay stopped between claim and
+-- dispatch). review_state shows it as failed ('timed out') from then on, and
+-- review_request_build / claim_review_request store that. Null: not open.
+create or replace function public.review_request_deadline(q public.review_requests)
+returns timestamptz
+language sql
+stable
+set search_path = ''
+as $$
+  select case q.status
+    when 'queued'     then q.requested_at + interval '90 minutes'
+    when 'dispatched' then coalesce(q.dispatched_at, q.requested_at) + interval '90 minutes'
+    when 'running'    then coalesce(q.started_at, q.dispatched_at, q.requested_at) + interval '80 minutes'
+  end;
+$$;
+
 -- Queue one build of p_month, or return the one already open. A changed
 -- budget / per P4P ('inputs') while a build is already running queues one
--- more, since the running build read the old numbers. A request that never
--- started (its run was cancelled, or the relay was down) or ran past the
--- job's time limit is given up first, so a stuck one never blocks a retry.
+-- more, since the running build read the old numbers. A request past its
+-- deadline (above) is given up first, so a stuck one never blocks a retry.
 create or replace function public.review_request_build(p_month text, p_reason text, p_actor text)
 returns public.review_requests
 language plpgsql
@@ -233,11 +262,9 @@ declare
   r public.review_requests;
 begin
   if p_month !~ '^[0-9]{4}_[0-9]{2}$' then raise exception 'review: bad month'; end if;
-  update public.review_requests
-     set status = 'failed', finished_at = now(), error = 'timed out'
-   where month = p_month
-     and ((status in ('queued', 'dispatched') and requested_at < now() - interval '90 minutes')
-       or (status = 'running' and started_at < now() - interval '80 minutes'));
+  update public.review_requests q
+     set status = 'failed', finished_at = public.review_request_deadline(q), error = 'timed out'
+   where q.month = p_month and public.review_request_deadline(q) < now();
   select * into r from public.review_requests
    where month = p_month
      and status in ('queued', 'dispatched', 'running')
@@ -251,12 +278,16 @@ begin
 end;
 $$;
 
--- The relay's claim: the oldest queued request, marked dispatched.
+-- The relay's claim: the oldest queued request, marked dispatched. One the
+-- tab already shows as timed out is closed first and never started.
 create or replace function public.claim_review_request()
 returns setof public.review_requests
 language sql
 set search_path = ''
 as $$
+  update public.review_requests q
+     set status = 'failed', finished_at = public.review_request_deadline(q), error = 'timed out'
+   where public.review_request_deadline(q) < now();
   update public.review_requests
      set status = 'dispatched', dispatched_at = now(), attempts = attempts + 1
    where id = (select id from public.review_requests
@@ -403,7 +434,12 @@ begin
         'moneyMissing',  count(*) filter (where money_check = 'missing'))
       from public.review_build_people where build_id = v_build),
     'builds', (select count(*) from public.review_builds where month = p_month),
-    'request', (select to_jsonb(q) from public.review_requests q where q.month = p_month order by q.id desc limit 1),
+    -- A request past its deadline reads as failed, so the tab never waits on a dead run.
+    'request', (select case when public.review_request_deadline(q) < now()
+                  then to_jsonb(q) || jsonb_build_object('status', 'failed', 'error', 'timed out',
+                                                         'finished_at', public.review_request_deadline(q))
+                  else to_jsonb(q) end
+                  from public.review_requests q where q.month = p_month order by q.id desc limit 1),
     'uploads', (select coalesce(jsonb_object_agg(u.kind, to_jsonb(u) - 'path'), '{}'::jsonb) from (
         select distinct on (kind) * from public.review_uploads
          where month = p_month and verified_at is not null order by kind, created_at desc) u),
@@ -414,6 +450,9 @@ begin
         'auditor_opened_at', r.auditor_opened_at, 'returned_at', r.returned_at,
         'auditee_opened_at', r.auditee_opened_at, 'approved_at', r.approved_at,
         'pdf_status', r.pdf_status, 'pdf_bytes', r.pdf_bytes, 'pdf_pages', r.pdf_pages,
+        'pdf_error', r.pdf_error, 'pdf_built_at', r.pdf_built_at, 'approved_by', r.approved_by,
+        'returned_by', r.returned_by, 'reopened_at', r.reopened_at, 'reopened_by', r.reopened_by,
+        'reopen_reason', r.reopen_reason,
         'counts', (select jsonb_build_object(
             'approve', count(*) filter (where d.decision = 'approve'),
             'fix', count(*) filter (where d.decision = 'fix'),
@@ -734,6 +773,7 @@ declare
   r public.review_rounds;
   p public.review_build_people;
   v_dept jsonb;
+  v_row jsonb;
 begin
   select * into r from public.review_rounds where month = p_month and round_no = p_round;
   if not found then raise exception 'review: not in this round'; end if;
@@ -741,11 +781,24 @@ begin
   if not found then raise exception 'review: not in this round'; end if;
   select e into v_dept from public.review_builds b, jsonb_array_elements(b.depts) e
    where b.id = r.build_id and e->>'name' = p.department limit 1;
+  -- The row the build matched (dept_row, a sheet row number; rowNos holds
+  -- each row's number, in the order of rows). An older build has no rowNos:
+  -- match the name in column B, spaced the way the build's normaliseName()
+  -- does (JS trim() and \s: tabs, new lines, NBSP, U+2000-200A, U+3000, BOM …).
+  if p.dept_row is not null and jsonb_typeof(v_dept->'rowNos') = 'array' then
+    select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
+     where v_dept->'rowNos'->((t.n - 1)::int) = to_jsonb(p.dept_row)
+     order by t.n limit 1;
+  else
+    select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
+     where btrim(regexp_replace(t.x->>1,
+             '[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+', ' ', 'g'), ' ') = p.name
+     order by t.n limit 1;
+  end if;
   return jsonb_build_object(
     'grid', p.sheet,
     'deptHeader', v_dept->'header',
-    'deptRow', (select x from jsonb_array_elements(v_dept->'rows') x
-                 where regexp_replace(btrim(x->>1), '\s+', ' ', 'g') = p.name limit 1));
+    'deptRow', v_row);
 end;
 $$;
 
@@ -766,12 +819,122 @@ as $$
     from public.review_issues i where i.month = p_month;
 $$;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- The approval PDF and reopening (part 3). Safe to re-run like everything above.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Workflow 2.8 takes the next approved round whose PDF is waiting. A claim
+-- older than 20 minutes (the job died) is taken again, up to 3 tries.
+create or replace function public.claim_review_pdf()
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  update public.review_rounds
+     set pdf_status = 'failed', pdf_error = 'the PDF job stopped 3 times without finishing'
+   where status = 'approved' and pdf_status = 'building' and pdf_attempts >= 3
+     and pdf_claimed_at < now() - interval '20 minutes';
+  select * into r from public.review_rounds
+   where status = 'approved'
+     and (pdf_status = 'queued' or (pdf_status = 'building' and pdf_claimed_at < now() - interval '20 minutes'))
+   order by approved_at
+   limit 1
+   for update skip locked;
+  if not found then return null; end if;
+  update public.review_rounds
+     set pdf_status = 'building', pdf_claimed_at = now(), pdf_attempts = pdf_attempts + 1, pdf_error = ''
+   where id = r.id returning * into r;
+  return jsonb_build_object('id', r.id, 'month', r.month, 'round_no', r.round_no, 'claimed_at', r.pdf_claimed_at);
+end;
+$$;
+
+-- The job reports back. False when the round was reopened or claimed again
+-- meanwhile; the job then deletes the file it made.
+create or replace function public.review_pdf_done(p_round bigint, p_claimed timestamptz, p_path text, p_bytes int, p_pages int)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.review_rounds
+     set pdf_status = 'ready', pdf_path = p_path, pdf_bytes = p_bytes, pdf_pages = p_pages,
+         pdf_built_at = now(), pdf_error = ''
+   where id = p_round and status = 'approved' and pdf_status = 'building' and pdf_claimed_at = p_claimed;
+  return found;
+end;
+$$;
+
+create or replace function public.review_pdf_failed(p_round bigint, p_claimed timestamptz, p_error text)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.review_rounds
+     set pdf_status = 'failed', pdf_error = left(coalesce(p_error, ''), 500)
+   where id = p_round and status = 'approved' and pdf_status = 'building' and pdf_claimed_at = p_claimed;
+  return found;
+end;
+$$;
+
+-- สร้างเอกสารอีกครั้ง after a failed PDF.
+create or replace function public.review_retry_pdf(p_month text, p_actor text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
+  select * into r from public.review_rounds where month = p_month and status = 'approved' for update;
+  if not found then raise exception 'review: not approved'; end if;
+  if r.pdf_status <> 'failed' then raise exception 'review: the document has not failed'; end if;
+  update public.review_rounds
+     set pdf_status = 'queued', pdf_attempts = 0, pdf_error = '', pdf_claimed_at = null
+   where id = r.id returning * into r;
+  return r;
+end;
+$$;
+
+-- ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the document is cancelled, the round
+-- goes back to the auditor with every decision kept, and the reason is added
+-- to ปัญหาอื่น ๆ (open), so the auditee sees it and it must be closed before
+-- approving again. Returns the cancelled PDF's path for the server to delete.
+create or replace function public.review_reopen_round(p_month text, p_reason text, p_actor text)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  v_old text;
+begin
+  if char_length(btrim(coalesce(p_reason, ''))) = 0 then raise exception 'review: a reopen needs a reason'; end if;
+  if char_length(btrim(p_reason)) > 1000 then raise exception 'review: the reason is too long'; end if;
+  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
+  select * into r from public.review_rounds where month = p_month and status = 'approved' for update;
+  if not found then raise exception 'review: not approved'; end if;
+  v_old := r.pdf_path;
+  update public.review_rounds
+     set status = 'submitted', approved_at = null, approved_by = '',
+         pdf_status = 'none', pdf_path = null, pdf_bytes = null, pdf_pages = null, pdf_error = '',
+         pdf_claimed_at = null, pdf_attempts = 0, pdf_built_at = null,
+         reopened_at = now(), reopened_by = coalesce(p_actor, ''), reopen_reason = btrim(p_reason)
+   where id = r.id returning * into r;
+  insert into public.review_issues (month, round_no, body, created_by)
+  values (p_month, r.round_no, 'ยกเลิกเอกสารเบิกจ่ายที่อนุมัติแล้ว: ' || btrim(p_reason), coalesce(p_actor, ''));
+  return jsonb_build_object('round_no', r.round_no, 'old_pdf', v_old);
+end;
+$$;
+
 -- Every review function: service role only.
 do $$
 declare f regprocedure;
 begin
   for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname = 'claim_review_request') loop
+            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname in ('claim_review_request', 'claim_review_pdf')) loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;

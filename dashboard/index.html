@@ -733,7 +733,7 @@
         .rv-tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: .85rem; font-weight: 700; }
         .rv-you { border-left: 6px solid #2F6FDB; } .rv-you .rv-tag { background: #E3EDFF; color: #1D4ED8; }
         .rv-wait { border-left: 6px solid #8A7B6E; } .rv-wait .rv-tag { background: #EFE9E2; color: #4A3D33; }
-        .rv-ok { border-left: 6px solid var(--success); } .rv-ok .rv-tag { background: var(--success-bg); color: var(--success); }
+        .rv-ok { border-left: 6px solid var(--success); } .rv-ok .rv-tag { background: #E7F4EC; color: #0B5E2B; }
         .rv-card { border-radius: var(--radius); padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
         .rv-card-h { font-size: 1.02rem; }
         .rv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 20px; }
@@ -812,12 +812,24 @@
         .rv-issue { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
         .rv-issue.closed { opacity: .75; }
         .rv-issue > .btn-ghost { align-self: flex-start; }
+        .rv-reason { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+        .rv-reason label { font-weight: 600; }
+        .rv-reason textarea { width: 100%; padding: 8px 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; resize: vertical; }
+        .rv-reason textarea[aria-invalid="true"] { border: 2px solid #B42318; }
+        .rv-err { color: #B42318; font-weight: 600; min-height: 1.2em; }
+        a.rv-download { display: inline-flex; align-items: center; height: auto; min-height: 44px; padding: 8px 18px; text-decoration: none; }
+        a.rv-download:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-issue h4 { font-size: .98rem; }
         .rv-replies { padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
         .rv-reply { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
         .rv-reply label { flex-basis: 100%; font-weight: 600; }
         .rv-reply textarea { flex: 1 1 320px; }
         .btn-ghost[aria-disabled="true"], .btn-ghost:disabled { opacity: .55; cursor: not-allowed; }
+        .rv-note { padding: 6px 10px; border-left: 4px solid; border-radius: 6px; font-weight: 600; font-size: .95rem; }
+        .rv-note-ok { color: #0B5E2B; background: #E7F4EC; border-color: #157F3D; }
+        .rv-note-err { color: #8A1C12; background: #FDECEA; border-color: #B42318; }
+        .rv-fail { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(192, 57, 43, .25); border-left: 4px solid #B42318; color: #8A1C12; background: #FDECEA; font-weight: 600; }
+        .rv-fail p { flex: 1 1 260px; }
         .rv-dialog { width: min(640px, 94vw); }
         .rv-dialog-in { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
         .rv-dialog h2 { font-size: 1.1rem; }
@@ -964,6 +976,8 @@
             </div>
             <div id="review-body"></div>
             <p id="review-live" class="sr-only" role="status" aria-live="polite"></p>
+            <!-- failures are announced here at once; review.js also shows them next to the control -->
+            <p id="review-alert" class="sr-only" role="alert"></p>
         </section>
 
         <!-- ประวัติการใช้งาน: shown to the owner only (main.ts returns 404 to anyone else) -->

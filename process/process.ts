@@ -1743,6 +1743,8 @@ async function main(): Promise<void> {
   for (const required of ['overall_template', 'dep_template']) {
     if (!tmplTitles.includes(required)) {
       console.error(`\n❌  SK03 template is missing sheet: "${required}"`);
+      // A ตรวจสอบ tab request is already marked running: close it first.
+      await finishRequest('failed', null, `แม่แบบ SK03 ไม่มีชีต ${required} จึงสร้างไฟล์ไม่ได้`).catch(() => {});
       process.exit(1);
     }
   }

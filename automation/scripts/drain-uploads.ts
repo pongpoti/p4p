@@ -49,7 +49,7 @@ import { pushLine } from "../line-push.js";
 import { createGmailClient, type GmailClient } from "../gmail-client.js";
 import { sendUploadConfirmation } from "../confirmation-email.js";
 import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
-import { reviewCheckDue, dispatchReviewBuild } from "../review-dispatch.js";
+import { reviewCheckDue, dispatchReviewBuild, dispatchReviewPdf } from "../review-dispatch.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
@@ -316,10 +316,11 @@ async function main() {
     }
 
     // The dashboard's ตรวจสอบ tab: start a requested one-month SK03 build
-    // (workflow 2.2). Never throws.
+    // (workflow 2.2), and an approved month's PDF (workflow 2.8). Never throw.
     if (reviewCheckDue(Date.now(), lastReviewCheck)) {
       lastReviewCheck = Date.now();
       await dispatchReviewBuild();
+      await dispatchReviewPdf();
     }
 
     // Archive first: it is the common case and the cheap one (no Claude, no

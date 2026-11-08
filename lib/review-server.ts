@@ -6,8 +6,9 @@
  * helpers passed in, so this file has no secrets or settings of its own.
  *
  * Tables, functions and the private bucket review-files come from
- * scripts/review-tab-2026-11.sql; until that has been run every route
- * answers { installed: false } and the tab says so.
+ * scripts/review-tab-2026-11.sql; until that has been run the two loads
+ * (months, a month's state) answer { installed: false } and the tab says
+ * so, and every other route fails with 503.
  *
  * The auditee (ผู้จัดทำ) side:
  *   GET  /dashboard/api/review/months                 month picker
@@ -77,13 +78,40 @@ const REFUSALS: [RegExp, number, string][] = [
   [/a problem is still open/, 409, "ยังมีปัญหาอื่น ๆ ที่เปิดอยู่ ปิดก่อนอนุมัติ"],
   [/the auditee has started/, 409, "ผู้จัดทำเริ่มแก้แล้ว ดึงกลับไม่ได้"],
   [/not in this round/, 404, "ไม่พบในรอบนี้"],
+  [/not approved/, 409, "เดือนนี้ยังไม่ได้อนุมัติ"],
+  [/has not failed/, 409, "เอกสารไม่ได้สร้างไม่สำเร็จ ไม่ต้องสร้างใหม่"],
+  [/a reopen needs a reason/, 400, "เขียนเหตุผลก่อน"],
+  [/reason is too long/, 400, "เหตุผลไม่เกิน 1,000 ตัวอักษร"],
 ]
 
 const pgError = (e: any): { code?: string; message?: string } => (e && e.response && e.response.data) || {}
+// Part of the SQL is missing: no such function or table (PostgREST's schema
+// cache), or one the installed functions use (an older copy of the file was
+// run). Only these: PGRST002 ("Could not query the database for the schema
+// cache. Retrying.") is the database being briefly unreachable, not missing.
+const NOT_INSTALLED = ["PGRST202", "PGRST205", "42P01", "42883", "42703"]
 const notInstalled = (e: any): boolean => {
   const d = pgError(e)
-  return ["PGRST202", "PGRST205", "42P01", "42883"].includes(String(d.code)) ||
-    /does not exist|schema cache/i.test(String(d.message || ""))
+  const code = String(d.code || "")
+  if (NOT_INSTALLED.includes(code)) return true
+  // An answer with no code at all: only the wording of a missing one.
+  return !code && /^(relation|function|column) .+ does not exist|^could not find the (function|table) .+ in the schema cache/i
+    .test(String(d.message || ""))
+}
+const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส่วนนี้ของแท็บตรวจสอบ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
+
+// Is the newest build made with these numbers?
+const inBuild = (b: any, budget: number, perP4p: number): boolean =>
+  !!b && b.budget !== null && b.per_p4p !== null && Number(b.budget) === budget && Number(b.per_p4p) === perP4p
+// The open request that will build with the numbers saved at savedAt, if
+// any: a queued or dispatched one reads review_inputs after its run starts,
+// a running one did only if it started after they were saved. (review_state
+// already shows a request past its deadline as failed.)
+const carrier = (q: any, savedAt: unknown): any => {
+  if (!q) return null
+  if (q.status === "queued" || q.status === "dispatched") return q
+  const started = Date.parse(String(q.started_at || "")), saved = Date.parse(String(savedAt || ""))
+  return q.status === "running" && started >= saved ? q : null
 }
 
 export function mountReview(d: ReviewDeps): void {
@@ -107,8 +135,16 @@ export function mountReview(d: ReviewDeps): void {
     return { s: { sub: s.sub, name: s.name }, month }
   }
 
-  const fail = (res: Response, what: string, e: any): void => {
-    if (notInstalled(e)) { res.json({ installed: false }); return }
+  // Only the two loads (load = true) answer a missing install with 200
+  // { installed: false }: the tab reads that and shows how to set it up.
+  // Anything else must fail, since the browser only checks r.ok and would
+  // otherwise report a save, a reopen or a list that never happened.
+  const fail = (res: Response, what: string, e: any, load = false): void => {
+    if (notInstalled(e)) {
+      if (load) { res.json({ installed: false }); return }
+      console.error("[dashboard] review " + what + ": not installed (" + String(pgError(e).code || "") + ")")
+      res.status(503).json({ installed: false, error: NOT_INSTALLED_MSG }); return
+    }
     const msg = String(pgError(e).message || "")
     const hit = REFUSALS.find(([re]) => re.test(msg))
     if (hit) { res.status(hit[1]).json({ error: hit[2] }); return }
@@ -131,7 +167,7 @@ export function mountReview(d: ReviewDeps): void {
       const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t)).sort().reverse().slice(0, 12)
       const months = await d.callServiceRpc("review_months", { p_months: tables })
       res.json({ installed: true, months: months || [] })
-    } catch (e: any) { fail(res, "months", e) }
+    } catch (e: any) { fail(res, "months", e, true) }
   })
 
   app.get("/dashboard/api/review/:month", async (req: Request, res: Response) => {
@@ -141,7 +177,7 @@ export function mountReview(d: ReviewDeps): void {
       const st = await state(g.month)
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
       res.json({ installed: true, ...st })
-    } catch (e: any) { fail(res, "state", e) }
+    } catch (e: any) { fail(res, "state", e, true) }
   })
 
   app.put("/dashboard/api/review/:month/inputs", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
@@ -159,12 +195,20 @@ export function mountReview(d: ReviewDeps): void {
       await axios.post(rest("review_inputs?on_conflict=month"),
         { month: g.month, budget, per_p4p: perP4p, updated_at: new Date().toISOString(), updated_by: g.s.name },
         { headers: json({ Prefer: "resolution=merge-duplicates,return=minimal" }), timeout: 8000 })
-      const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
-      const request = changed
-        ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
-        : null
+      // Saved, so on record now, even if asking for the build below fails.
       await d.audit(req, g.s, "review.inputs", { month: g.month, budget, per_p4p: perP4p, before })
-      res.json({ ok: true, changed, request })
+      // A build is needed when the numbers changed, or when they did not
+      // (a retry after the build request failed) but the newest build lacks
+      // them and no open request will build with them.
+      const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
+      const notBuilt = !changed && !inBuild(st.build, budget, perP4p)
+      const open = notBuilt ? carrier(st.request, st.inputs && st.inputs.updated_at) : null
+      const ask = changed || (notBuilt && !open)
+      const request = ask
+        ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
+        : open
+      // changed: a build with these numbers is on its way (the tab's message).
+      res.json({ ok: true, changed: ask || !!open, request })
     } catch (e: any) { fail(res, "inputs", e) }
   })
 
@@ -289,6 +333,15 @@ export function mountReview(d: ReviewDeps): void {
   //   POST /dashboard/api/review/:month/issues           {index?, body}
   //   POST /dashboard/api/review/:month/issues/:id/replies  {role, body}
   //   POST /dashboard/api/review/:month/issues/:id/status   {open}
+  // A person's name for the History tab (the decision routes only get the roster index).
+  const personName = async (index: string): Promise<string> => {
+    try {
+      const r = await axios.get(rest("review_build_people?select=name&roster_index=eq." + index + "&limit=1"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      return String(((r.data as any[])[0] || {}).name || "")
+    } catch { return "" }
+  }
+
   const text = (v: unknown, max: number): string | null => {
     const t = typeof v === "string" ? v.trim() : ""
     return t && t.length <= max ? t : null
@@ -336,7 +389,7 @@ export function mountReview(d: ReviewDeps): void {
     if (remark === null) return res.status(400).json({ error: "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร (ไม่เกิน 1,000 ตัวอักษร)" })
     try {
       const row = await d.callServiceRpc("review_decide", { p_month: g.month, p_index: index, p_decision: decision, p_remark: remark, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.decide", { month: g.month, index, decision, remark })
+      await d.audit(req, g.s, "review.decide", { month: g.month, index, physician: await personName(index), decision, remark })
       res.json({ ok: true, decision: row })
     } catch (e: any) { fail(res, "decide", e) }
   })
@@ -349,7 +402,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!UUID_RE.test(index) || reply.length > 1000) return res.status(400).json({ error: "คำตอบไม่เกิน 1,000 ตัวอักษร" })
     try {
       await d.callServiceRpc("review_reply_decision", { p_month: g.month, p_index: index, p_reply: reply, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.reply", { month: g.month, index, reply })
+      await d.audit(req, g.s, "review.reply", { month: g.month, index, physician: await personName(index), reply })
       res.json({ ok: true })
     } catch (e: any) { fail(res, "reply", e) }
   })
@@ -368,6 +421,51 @@ export function mountReview(d: ReviewDeps): void {
   roundAction("return", "review_return_round", "review.return")
   roundAction("unreturn", "review_unreturn_round", "review.unreturn")
   roundAction("approve", "review_approve_round", "review.approve")
+
+  // The approval document (process/review-pdf.ts, workflow 2.8).
+  app.get("/dashboard/api/review/:month/pdf", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      const r = await axios.get(rest("review_rounds?select=round_no,pdf_status,pdf_path&month=eq." + g.month + "&status=eq.approved"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      const row = (r.data as any[])[0]
+      if (!row || row.pdf_status !== "ready" || !row.pdf_path) return res.status(404).json({ error: "เอกสารยังไม่พร้อม" })
+      const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + row.pdf_path), { expiresIn: 120 },
+        { headers: json(), timeout: 8000 })
+      await d.audit(req, g.s, "review.download", { month: g.month, kind: "pdf", round: row.round_no })
+      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL + "&download=" +
+        encodeURIComponent("P4P_" + g.month + "_approved.pdf"))
+    } catch (e: any) { fail(res, "pdf download", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      const round = await d.callServiceRpc("review_retry_pdf", { p_month: g.month, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.pdf_retry", { month: g.month, round: round && round.round_no })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "pdf retry", e) }
+  })
+
+  // ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the round goes back to the auditor and
+  // the cancelled PDF is deleted, so no old link can fetch it.
+  app.post("/dashboard/api/review/:month/reopen", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const reason = text(req.body && req.body.reason, 1000)
+    if (!reason) return res.status(400).json({ error: "เขียนเหตุผลก่อน (ไม่เกิน 1,000 ตัวอักษร)" })
+    try {
+      const out = await d.callServiceRpc("review_reopen_round", { p_month: g.month, p_reason: reason, p_actor: g.s.name })
+      if (out && out.old_pdf) {
+        await axios.delete(storage("object/" + BUCKET), { headers: json(), data: { prefixes: [out.old_pdf] }, timeout: 8000 })
+          .catch((e: any) => console.error("[dashboard] review: could not delete the cancelled PDF:", e.message))
+      }
+      await d.audit(req, g.s, "review.reopen", { month: g.month, round: out && out.round_no, reason })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "reopen", e) }
+  })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {
     const g = await gate(req, res)

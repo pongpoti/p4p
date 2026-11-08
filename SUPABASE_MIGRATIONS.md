@@ -157,15 +157,20 @@ already-applied file is safe.
     `review_decisions`, `review_issues`, `review_issue_replies` (RLS on, no
     policies, anon/authenticated revoked), the private Storage bucket
     `review-files` (50 MB, .xlsx and .pdf), and service-role-only functions
-    `review_request_build`, `claim_review_request`, `review_submit_round`,
+    `review_request_deadline` (when an open build request counts as timed
+    out), `review_request_build`, `claim_review_request`, `review_submit_round`,
     `review_withdraw_round`, `review_state`, `review_months`, and for the
     auditor's side `review_live_round`, `review_mark_opened`,
     `review_decide`, `review_return_round`, `review_unreturn_round`,
     `review_approve_round`, `review_reply_decision`, `review_add_issue`,
     `review_issue_reply`, `review_issue_status`, `review_people`,
-    `review_person`, `review_issue_list`. Safe to re-run: if you pasted an
-    earlier copy, paste the whole file again after each update so the new
-    functions are added.
+    `review_person`, `review_issue_list`, and for the approval PDF and
+    reopening `claim_review_pdf`, `review_pdf_done`, `review_pdf_failed`,
+    `review_retry_pdf`, `review_reopen_round` (plus six `review_rounds`
+    columns added with `add column if not exists`). Safe to re-run: if you
+    pasted an earlier copy, paste the whole file again after each update so
+    the new functions are added. Until the PDF part is in, an approved month
+    shows "กำลังสร้างเอกสาร" and the relay's PDF dispatcher stays off.
     Until it runs, the tab says it is not set up, workflow 2.2 builds exactly
     as before (no copy for the tab, Y9/W9 stay 0) and the relay's build
     dispatcher stays off.

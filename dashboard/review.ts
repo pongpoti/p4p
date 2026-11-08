@@ -61,6 +61,15 @@
         auditee_opened_at: string | null
         returned_at: string | null
         approved_at: string | null
+        approved_by?: string
+        pdf_status?: "none" | "queued" | "building" | "ready" | "failed"
+        pdf_bytes?: number | null
+        pdf_pages?: number | null
+        pdf_error?: string
+        pdf_built_at?: string | null
+        reopened_at?: string | null
+        reopened_by?: string
+        reopen_reason?: string
         counts: { approve: number; fix: number; waiting: number; carried: number }
     }
     interface State {
@@ -118,16 +127,36 @@
     const int = (n: number): string => Number(n || 0).toLocaleString("th-TH")
     const sizeText = (b: number): string => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"
     const say = (msg: string): void => { live.textContent = ""; setTimeout(() => { live.textContent = msg }, 50) }
+    // A failure is announced at once (role=alert); say() is the polite one.
+    // Either way the same words are also shown on the page (tell, failBox),
+    // without a live role there, so nothing is read out twice.
+    // Failures that come together (people and issues both failing) are read as one.
+    const alertBox = document.getElementById("review-alert") as HTMLElement | null
+    let shoutQ: string[] = []
+    let shoutT: number | undefined
+    const shout = (msg: string): void => {
+        if (!alertBox) { say(msg); return }
+        shoutQ.push(msg)
+        if (shoutT !== undefined) return
+        alertBox.textContent = ""
+        shoutT = window.setTimeout(() => { alertBox.textContent = shoutQ.join(" · "); shoutQ = []; shoutT = undefined }, 50)
+    }
 
     class ApiError extends Error { status: number; constructor(m: string, s: number) { super(m); this.status = s } }
+    const NET_ERROR = "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง"
     async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-        const r = await fetch(path, { credentials: "same-origin", ...init })
+        let r: Response
+        try { r = await fetch(path, { credentials: "same-origin", ...init }) } catch (e) { throw new ApiError(NET_ERROR, 0) }
         if (r.status === 401) { location.href = "/dashboard/login?error=idle"; throw new ApiError("signed out", 401) }
         let data: any = null
         try { data = await r.json() } catch (e) { data = null }
-        if (!r.ok) throw new ApiError((data && data.error) || "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง", r.status)
+        // Any refusal (409, 503 { installed: false, error }, …) carries its reason in error.
+        if (!r.ok) throw new ApiError((data && typeof data.error === "string" && data.error) || "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง (" + r.status + ")", r.status)
         return data as T
     }
+    const errText = (e: unknown, fallback: string): string => (e instanceof Error && e.message) || fallback
+    const signedOut = (e: unknown): boolean => e instanceof ApiError && e.status === 401
+    const monthApi = (s: State): string => "/dashboard/api/review/" + s.month
     const post = <T>(path: string, json?: unknown, method = "POST"): Promise<T> =>
         api<T>(path, json === undefined ? { method } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) })
 
@@ -135,10 +164,86 @@
     const ROLE_KEY = "review.role"
     let role: "auditee" | "auditor" = "auditee"
     try { if (localStorage.getItem(ROLE_KEY) === "auditor") role = "auditor" } catch (e) { /* private window */ }
+    // month is the one picked; st is the state on screen, always of that
+    // month (a switch clears it). Every action builds its URL from the s it
+    // was drawn with, so what a dialog says and what is sent agree.
     let month = ""
     let st: State | null = null
+    let stJson = ""
     let poll: number | undefined
+    let pollFails = 0
     let busy = false
+    let loadSeq = 0
+    let loadError = ""
+    // Something not in st changed (a note, a request ended): the next look
+    // draws even when the state it brings is the same.
+    let dirty = false
+    let freshState = false // the next render draws a state that just arrived
+
+    // Typed text not saved yet, by field. Every re-render (the 15 s look, a
+    // click on a person, a list arriving) draws a field from here first, so
+    // nothing typed is lost. An entry goes once its save succeeds, or when
+    // the month or the round changes.
+    const drafts = new Map<string, string>()
+    let draftScope = ""
+    const fieldErrs = new Map<string, string>()
+    function keep<T extends HTMLInputElement | HTMLTextAreaElement>(i: T, key: string, saved: string): T {
+        const d = drafts.get(key)
+        i.value = d !== undefined ? d : saved
+        i.addEventListener("input", () => { drafts.set(key, i.value) })
+        return i
+    }
+    const forget = (s: State, ...keys: string[]): void => { if (s.month === month) { for (const k of keys) drafts.delete(k); dirty = true } }
+
+    // What the last action at each place said, drawn next to its control by
+    // every render until that place is used again or the month changes.
+    const notes = new Map<string, { kind: "ok" | "err"; text: string; scope?: string }>()
+    const noteId = (spot: string): string => "rv-note-" + spot.replace(/[^A-Za-z0-9_-]/g, "-")
+    function tell(s: State, spot: string, kind: "ok" | "err", text: string): void {
+        // Finished after a switch to another month: say so at the top.
+        if (s.month !== month) { spot = "top"; text = "เดือน " + monthName(s.month) + ": " + text }
+        notes.set(spot, { kind, text })
+        dirty = true
+        if (kind === "err") shout(text)
+        else say(text)
+    }
+    function noteEl(spot: string): HTMLElement | null {
+        const n = notes.get(spot)
+        if (!n) return null
+        const p = el("p", "rv-note rv-note-" + n.kind)
+        p.id = noteId(spot)
+        if (n.kind === "err") p.append(el("strong", undefined, "ไม่สำเร็จ "), n.text)
+        else p.textContent = "✓ " + n.text
+        return p
+    }
+    // One request at a time per control: a second click while the first runs
+    // does nothing. The button shows as unavailable (aria-disabled, so it
+    // keeps focus) until the request ends; a re-render draws it the same way.
+    const inflight = new Set<string>()
+    const flightKey = (s: State, spot: string): string => s.month + "|" + spot
+    const flying = (s: State, spot: string): boolean => inflight.has(flightKey(s, spot))
+    function markBusy(b: HTMLElement): void { b.setAttribute("aria-disabled", "true"); b.setAttribute("aria-busy", "true") }
+    function begin(s: State, spot: string, btn?: HTMLElement | null): boolean {
+        if (flying(s, spot)) return false
+        inflight.add(flightKey(s, spot))
+        if (s.month === month) {
+            for (const k of [spot, "top"]) { notes.delete(k); const n = document.getElementById(noteId(k)); if (n) n.remove() }
+        }
+        if (btn) markBusy(btn)
+        return true
+    }
+    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); dirty = true }
+
+    // A visible failure with a way to try again (role=alert is on shout()).
+    function failBox(text: string, id: string, retry: () => void): HTMLElement {
+        const box = el("div", "rv-fail")
+        const b = el("button", "btn-ghost", "ลองอีกครั้ง")
+        b.type = "button"
+        b.id = id
+        b.addEventListener("click", retry)
+        box.append(el("p", undefined, text), b)
+        return box
+    }
 
     const openRequest = (s: State): Request | null =>
         s.request && ["queued", "dispatched", "running"].includes(s.request.status) ? s.request : null
@@ -171,9 +276,21 @@
             o.value = m.month
             return o
         }))
-        month = keep
+        if (keep !== month) { month = keep; resetMonth() }
         monthSel.value = keep
         return rows.length > 0
+    }
+    // Everything on screen belongs to one month: a switch drops the old
+    // month's state, lists, drafts and notes, and any reply still on its way
+    // for it (the sequence numbers no longer match).
+    function resetMonth(): void {
+        st = null; stJson = ""; loadError = ""; loadSeq++
+        clearTimeout(poll); poll = undefined; pollFails = 0
+        people = null; peopleKey = ""; peopleErr = ""; peopleSeq++
+        issues = null; issuesKey = ""; issuesErr = ""; issuesSeq++
+        details.clear(); detailErrs.clear(); detailLoading.clear(); detailSeq++
+        selected = ""; lastRoundKey = ""
+        drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""
     }
     const monthStatus = (m: MonthRow): string => {
         if (m.round) {
@@ -185,34 +302,116 @@
         return "รอผู้จัดทำส่งข้อมูล"
     }
 
-    async function loadState(logView: boolean): Promise<void> {
+    // Only the newest load of the month picked may draw: a slower reply for
+    // another month, or an older one for this month, is dropped. fromPoll:
+    // the 15 s look, which draws nothing when the state is unchanged.
+    async function loadState(logView: boolean, fromPoll = false): Promise<void> {
         if (!month) return
-        const s = await api<State>("/dashboard/api/review/" + month + (logView ? "?view=1" : ""))
-        if (!s.installed) { renderNotInstalled(); return }
+        const m = month
+        const seq = ++loadSeq
+        const current = (): boolean => seq === loadSeq && m === month
+        let s: State
+        try {
+            s = await api<State>("/dashboard/api/review/" + m + (logView ? "?view=1" : ""))
+        } catch (e) {
+            if (!current()) return
+            throw e
+        }
+        if (!current()) return
+        if (!s || typeof s !== "object") throw new ApiError("โหลดข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง", 0)
+        if (!s.installed) { st = null; stJson = ""; clearTimeout(poll); renderNotInstalled(); return }
+        if (s.month && s.month !== m) return
+        const json = JSON.stringify(s)
+        const same = json === stJson && !loadError && !dirty
         st = s
-        render()
+        stJson = json
+        loadError = ""
+        if (!(fromPoll && same)) { freshState = true; render() }
         clearTimeout(poll)
-        if (openRequest(s)) poll = window.setTimeout(() => { void refresh() }, 15000)
+        poll = undefined
+        const r = liveRound(s)
+        const pdfWaiting = !!(r && r.status === "approved" && (r.pdf_status === "queued" || r.pdf_status === "building"))
+        if (openRequest(s) || pdfWaiting) poll = window.setTimeout(() => { void refresh() }, 15000)
     }
+    // A failed load is shown: over the month's screen when it is still the
+    // month picked (its actions stay right), or in place of it.
+    function loadFailed(e: unknown): void {
+        if (signedOut(e)) return
+        const msg = errText(e, "โหลดข้อมูลไม่สำเร็จ")
+        shout(msg)
+        if (st && st.month === month) { loadError = msg; render(); keepLooking(); return }
+        body.replaceChildren(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
+            loadingLine("กำลังโหลด…")
+            void loadState(true).catch(loadFailed)
+        }))
+        const b = document.getElementById("rv-retry-load")
+        if (b && document.activeElement === document.body) b.focus()
+    }
+    // A failed load while a build or the PDF is on its way: keep looking.
+    function keepLooking(): void {
+        if (poll !== undefined || !st || st.month !== month) return
+        const r = liveRound(st)
+        const pdfWaiting = !!(r && r.status === "approved" && (r.pdf_status === "queued" || r.pdf_status === "building"))
+        if (!openRequest(st) && !pdfWaiting) return
+        pollFails++
+        poll = window.setTimeout(() => { void refresh() }, Math.min(15000 * Math.pow(2, pollFails), 120000))
+    }
+    // The loading line takes the focus a pressed retry button had.
+    function loadingLine(text: string): void {
+        const hadFocus = body.contains(document.activeElement)
+        const p = el("p", "rv-loading", text)
+        p.tabIndex = -1
+        body.replaceChildren(p)
+        if (hadFocus) p.focus()
+    }
+    const reload = (): Promise<void> => loadState(false).catch(loadFailed)
+    // The look while a build or the PDF is on its way. A failed look tries
+    // again later (30 s, 60 s, then every 2 minutes) instead of stopping.
     async function refresh(): Promise<void> {
-        if (view.classList.contains("hidden") || busy) return
-        try { await loadState(false) } catch (e) { /* next look retries */ }
+        poll = undefined
+        if (view.classList.contains("hidden")) return // opening the tab again loads and looks again
+        if (busy) { poll = window.setTimeout(() => { void refresh() }, 3000); return }
+        try {
+            await loadState(false, true)
+            pollFails = 0
+        } catch (e) {
+            if (signedOut(e)) return
+            pollFails++
+            const wait = Math.min(15000 * Math.pow(2, pollFails), 120000)
+            clearTimeout(poll)
+            poll = window.setTimeout(() => { void refresh() }, wait)
+            if (st && st.month === month) {
+                loadError = "อัปเดตอัตโนมัติไม่สำเร็จ (" + errText(e, NET_ERROR) + ") จะลองอีกครั้งใน " + int(Math.round(wait / 1000)) + " วินาที"
+                if (pollFails === 1) say(loadError)
+                render()
+            }
+        }
     }
 
     async function open(): Promise<void> {
-        body.replaceChildren(el("p", "rv-loading", "กำลังโหลด…"))
+        loadingLine("กำลังโหลด…")
         try {
             if (!(await loadMonths())) {
                 if (body.querySelector(".rv-loading")) body.replaceChildren(card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อของเดือนใด")]))
                 return
             }
-            await loadState(true)
         } catch (e) {
-            body.replaceChildren(el("div", "alert", e instanceof Error ? e.message : "โหลดข้อมูลไม่สำเร็จ"))
+            if (signedOut(e)) return
+            const msg = errText(e, "โหลดข้อมูลไม่สำเร็จ")
+            shout(msg)
+            body.replaceChildren(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open() }))
+            return
         }
+        await loadState(true).catch(loadFailed)
     }
     window.addEventListener("dashboard:review", () => { void open() })
-    monthSel.addEventListener("change", () => { month = monthSel.value; void loadState(true) })
+    monthSel.addEventListener("change", () => {
+        if (!monthSel.value || monthSel.value === month) return
+        month = monthSel.value
+        resetMonth()
+        body.replaceChildren(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"))
+        void loadState(true).catch(loadFailed)
+    })
     for (const b of roleBtns) {
         b.addEventListener("click", () => {
             role = b.dataset.role === "auditor" ? "auditor" : "auditee"
@@ -252,18 +451,69 @@
         ]))
     }
 
+    // Redraws #review-body from st, drafts and notes. Every control that can
+    // be focused has a stable id, so focus (and the caret in a text field)
+    // comes back to the same control; if it is gone, to the heading of the
+    // part it was in, never to the page.
     function render(): void {
         for (const b of roleBtns) b.setAttribute("aria-pressed", String(b.dataset.role === role))
         if (!st) return
         const s = st
-        const focusId = document.activeElement && (document.activeElement as HTMLElement).id
+        dirty = false
+        const fresh = freshState
+        freshState = false
+        const lr = liveRound(s)
+        const scope = s.month + ":" + (lr ? lr.round_no + ":" + lr.status : "")
+        if (scope !== draftScope) { if (draftScope) { drafts.clear(); fieldErrs.clear() } draftScope = scope }
+        // A note stays while the screen it was written for is the one shown:
+        // it takes the screen of the first state loaded after it, and a later
+        // round step, build request or role switch clears it.
+        const noteScope = scope + ":" + role + ":" + (s.request ? s.request.id + ":" + s.request.status : "")
+        for (const [k, n] of notes) {
+            if (n.scope === undefined) { if (fresh) n.scope = noteScope }
+            else if (n.scope !== noteScope) notes.delete(k)
+        }
+        const a = document.activeElement as HTMLElement | null
+        const inBody = !!a && a !== body && body.contains(a)
+        const focusId = inBody && a ? a.id : ""
+        const holder = inBody && a ? a.closest("[aria-labelledby]") : null
+        const holderId = holder && body.contains(holder) ? holder.getAttribute("aria-labelledby") || "" : ""
+        let selA: number | null = null, selB: number | null = null
+        if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) {
+            try { selA = a.selectionStart; selB = a.selectionEnd } catch (e) { /* not a text field */ }
+        }
+        const viewTop = view.scrollTop
         const list = body.querySelector(".rv-people-list")
         const listTop = list ? list.scrollTop : 0
+        const sheet = body.querySelector<HTMLElement>(".rv-sheet")
+        const sheetAt = sheet ? { key: sheet.dataset.key || "", top: sheet.scrollTop, left: sheet.scrollLeft } : null
         refreshLists(s)
-        body.replaceChildren(...(role === "auditee" ? auditee(s) : auditor(s)))
+        const top: Node[] = []
+        if (loadError) top.push(failBox(loadError, "rv-retry-load", () => { void reload() }))
+        const tn = noteEl("top")
+        if (tn) top.push(tn)
+        body.replaceChildren(...top, ...(role === "auditee" ? auditee(s) : auditor(s)))
         const list2 = body.querySelector(".rv-people-list")
         if (list2) list2.scrollTop = listTop
-        if (focusId) { const f = document.getElementById(focusId); if (f) f.focus() }
+        const sheet2 = body.querySelector<HTMLElement>(".rv-sheet")
+        if (sheet2 && sheetAt && sheet2.dataset.key === sheetAt.key) {
+            sheet2.dataset.kept = "1"
+            sheet2.scrollTop = sheetAt.top
+            sheet2.scrollLeft = sheetAt.left
+        }
+        if (inBody) {
+            const f = focusId ? document.getElementById(focusId) : null
+            if (f) f.focus({ preventScroll: true })
+            if (f && document.activeElement === f) {
+                if (selA !== null && (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement)) {
+                    try { f.setSelectionRange(selA, selB === null ? selA : selB) } catch (e) { /* not a text field */ }
+                }
+            } else {
+                const h = (holderId && document.getElementById(holderId)) || body.querySelector<HTMLElement>(".rv-turn")
+                if (h) { if (!h.hasAttribute("tabindex")) h.tabIndex = -1; h.focus({ preventScroll: true }) }
+            }
+        }
+        view.scrollTop = viewTop
         markOpened(s)
     }
 
@@ -287,15 +537,12 @@
         const name = monthName(s.month, true)
         if (r && r.status === "submitted") {
             out.push(turn("wait", "รอผู้ตรวจสอบ", "ส่งรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.submitted_at),
-                r.auditor_opened_at ? "ผู้ตรวจสอบเปิดดูแล้ว เมื่อ " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่ได้เปิด ดึงกลับมาแก้ได้จนกว่าผู้ตรวจสอบจะเปิด"))
+                r.reopened_at ? "ผู้ตรวจสอบยกเลิกเอกสารเบิกจ่ายและเปิดตรวจอีกครั้ง เมื่อ " + when(r.reopened_at) + " · เหตุผล: " + (r.reopen_reason || "")
+                    : r.auditor_opened_at ? "ผู้ตรวจสอบเปิดดูแล้ว เมื่อ " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่ได้เปิด ดึงกลับมาแก้ได้จนกว่าผู้ตรวจสอบจะเปิด"))
             out.push(sentSummary(s, r))
             return out
         }
-        if (r && r.status === "approved") {
-            out.push(turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(s.build ? s.build.people : 0) + " คน เมื่อ " + when(r.approved_at),
-                "เอกสารเบิกจ่าย (PDF) จะมาในอัปเดตถัดไป"))
-            return out
-        }
+        if (r && r.status === "approved") return approvedView(s, r, "auditee")
         if (r && r.status === "returned") {
             out.push(turn("you", "ถึงคิวคุณ", "ผู้ตรวจสอบส่งกลับรอบที่ " + r.round_no + " ให้แก้ไข เมื่อ " + when(r.returned_at),
                 "ต้องแก้ " + int(r.counts.fix) + " คน · แก้ในแอป แล้วสร้างไฟล์ใหม่ ดาวน์โหลด และส่งรอบที่ " + (r.round_no + 1)))
@@ -313,6 +560,7 @@
     function inputsCard(s: State): HTMLElement {
         const form = el("form", "rv-form")
         form.noValidate = true
+        const editable = auditeeTurn(s)
         const field = (id: string, label: string, value: number | null, hint: string): HTMLElement => {
             const w = el("div", "rv-field")
             const l = el("label", undefined, label)
@@ -322,11 +570,15 @@
             i.type = "text"
             i.inputMode = "decimal"
             i.autocomplete = "off"
-            i.value = value === null ? "" : Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            const saved = value === null ? "" : Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            if (editable) keep(i, id, saved)
+            else i.value = saved
             const h = el("p", "rv-hint", hint)
             h.id = id + "-h"
-            const err = el("p", "rv-err hidden")
+            const fe = editable ? fieldErrs.get(id) : undefined
+            const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "")
             err.id = id + "-e"
+            if (fe) i.setAttribute("aria-invalid", "true")
             i.setAttribute("aria-describedby", h.id + " " + err.id)
             w.append(l, i, h, err)
             return w
@@ -343,46 +595,63 @@
         const row = el("div", "rv-actions")
         const save = el("button", "btn-primary", "บันทึกและใส่ลง SK03")
         save.type = "submit"
+        save.id = "rv-save-inputs"
+        if (flying(s, "inputs")) markBusy(save)
         row.append(save)
         if (s.inputs) row.append(el("p", "rv-saved", "✓ บันทึกแล้ว " + when(s.inputs.updated_at) + (s.inputs.updated_by ? " โดย " + s.inputs.updated_by : "") + " · ระบบใส่ให้อีกทุกคืนหลังสร้าง SK03 ใหม่ ตัวเลขนี้จึงไม่หาย"))
         form.append(row)
-        const editable = auditeeTurn(s)
+        const n = noteEl("inputs")
+        if (n) form.append(n)
         if (!editable) { for (const i of Array.from(form.querySelectorAll("input"))) i.readOnly = true; save.disabled = true }
         form.addEventListener("submit", (ev) => {
             ev.preventDefault()
-            void saveInputs(form, save)
+            void saveInputs(s, form, save)
         })
         return card("1. กรอกงบประมาณและ per P4P (กรอกที่นี่ที่เดียว ไม่ต้องแก้ใน SK03)", [form], "rv-h1")
     }
 
     const MONEY_RE = /^\d+(\.\d{1,2})?$/
-    async function saveInputs(form: HTMLFormElement, btn: HTMLButtonElement): Promise<void> {
+    async function saveInputs(s: State, form: HTMLFormElement, btn: HTMLButtonElement): Promise<void> {
+        if (flying(s, "inputs")) return
         let bad: HTMLInputElement | null = null
         const read = (id: string): string => {
             const i = form.querySelector("#" + id) as HTMLInputElement
             const e = form.querySelector("#" + id + "-e") as HTMLElement
             const v = i.value.replace(/,/g, "").trim()
             const ok = MONEY_RE.test(v) && Number(v) > 0
+            const msg = ok ? "" : "กรอกตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง เช่น 9,551.81"
             i.setAttribute("aria-invalid", String(!ok))
-            e.textContent = ok ? "" : "กรอกตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง เช่น 9,551.81"
+            e.textContent = msg
             e.classList.toggle("hidden", ok)
+            if (ok) fieldErrs.delete(id)
+            else fieldErrs.set(id, msg)
             if (!ok && !bad) bad = i
             return v
         }
         const budget = read("rv-budget"), rate = read("rv-rate")
         if (bad) { (bad as HTMLInputElement).focus(); return }
+        if (!begin(s, "inputs", btn)) return
         busy = true
-        btn.disabled = true
+        let saved = false
         try {
-            const r = await post<{ changed: boolean }>("/dashboard/api/review/" + month + "/inputs", { budget, per_p4p: rate }, "PUT")
-            say(r.changed ? "บันทึกแล้ว ระบบกำลังสร้าง SK03 ใหม่ที่มีตัวเลขนี้ ประมาณ 5 ถึง 15 นาที" : "บันทึกแล้ว ตัวเลขเหมือนเดิม")
+            const r = await post<{ changed: boolean }>(monthApi(s) + "/inputs", { budget, per_p4p: rate }, "PUT")
+            saved = true
+            tell(s, "inputs", "ok", r.changed ? "บันทึกแล้ว ระบบกำลังสร้าง SK03 ใหม่ที่มีตัวเลขนี้ ประมาณ 5 ถึง 15 นาที" : "บันทึกแล้ว ตัวเลขเหมือนเดิม")
         } catch (e) {
-            say(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ")
+            tell(s, "inputs", "err", errText(e, "บันทึกไม่สำเร็จ"))
         } finally {
             busy = false
-            btn.disabled = false
+            end(s, "inputs")
         }
-        await loadState(false)
+        if (!saved) { await reload(); return }
+        // Saved: the fields show the saved numbers from the new state, or
+        // keep what was typed if that state does not come.
+        const typed = ["rv-budget", "rv-rate"].map((k) => [k, drafts.get(k)] as [string, string | undefined])
+        forget(s, "rv-budget", "rv-rate")
+        await loadState(false).catch((e) => {
+            if (s.month === month) for (const [k, v] of typed) if (v !== undefined && !drafts.has(k)) drafts.set(k, v)
+            loadFailed(e)
+        })
     }
 
     function requestLine(s: State): HTMLElement | null {
@@ -391,7 +660,8 @@
         if (["queued", "dispatched"].includes(q.status)) return el("p", "rv-progress", "⏳ รอเริ่มสร้างไฟล์ใหม่ (ขอเมื่อ " + when(q.requested_at) + ") · ถ้ามีการสร้างอื่นอยู่ จะเริ่มต่อจากนั้น")
         if (q.status === "running") return el("p", "rv-progress", "⏳ กำลังสร้าง SK03 และไฟล์รวมใหม่ (เริ่ม " + when(q.started_at) + ") · ประมาณ 5 ถึง 15 นาที หน้านี้จะอัปเดตเอง")
         if (q.status === "failed" && (!s.build || Date.parse(q.requested_at) > Date.parse(s.build.built_at))) {
-            return el("p", "rv-err", "สร้างไฟล์ไม่สำเร็จ: " + (q.error || "ไม่ทราบสาเหตุ"))
+            const why = q.error === "timed out" ? "งานสร้างไฟล์ไม่เสร็จในเวลาที่กำหนด กดสร้างไฟล์ใหม่อีกครั้งได้" : q.error
+            return el("p", "rv-err", "สร้างไฟล์ไม่สำเร็จ: " + (why || "ไม่ทราบสาเหตุ"))
         }
         return null
     }
@@ -425,6 +695,7 @@
             const link = (kind: "sk03" | "merged", text: string): HTMLElement => {
                 const li = el("li")
                 const a = el("a", "rv-link", text)
+                a.id = "rv-dl-" + kind
                 a.href = "/dashboard/api/review/" + s.month + "/file/" + b.id + "/" + kind
                 a.setAttribute("download", "")
                 li.append(a)
@@ -443,22 +714,27 @@
         rebuild.setAttribute("aria-describedby", "rv-rebuild-h")
         const rh = el("span", "rv-hint", "ใช้หลังแก้ในแอป · ประมาณ 5 ถึง 15 นาที แล้วดาวน์โหลดใหม่")
         rh.id = "rv-rebuild-h"
-        rebuild.addEventListener("click", () => { void doRebuild(rebuild) })
+        if (flying(s, "rebuild")) markBusy(rebuild)
+        rebuild.addEventListener("click", () => { void doRebuild(s, rebuild) })
         row.append(rebuild, rh)
         kids.push(row)
+        const n = noteEl("rebuild")
+        if (n) kids.push(n)
         if (rl) kids.push(rl)
         return card("2. ดาวน์โหลดไฟล์", kids, "rv-h2")
     }
 
-    async function doRebuild(btn: HTMLButtonElement): Promise<void> {
-        btn.disabled = true
+    async function doRebuild(s: State, btn: HTMLButtonElement): Promise<void> {
+        if (!begin(s, "rebuild", btn)) return
         try {
-            await post("/dashboard/api/review/" + month + "/rebuild")
-            say("ขอสร้างไฟล์ใหม่แล้ว ประมาณ 5 ถึง 15 นาที หน้านี้จะอัปเดตเอง")
+            await post(monthApi(s) + "/rebuild")
+            tell(s, "rebuild", "ok", "ขอสร้างไฟล์ใหม่แล้ว ประมาณ 5 ถึง 15 นาที หน้านี้จะอัปเดตเอง")
         } catch (e) {
-            say(e instanceof Error ? e.message : "ขอสร้างไฟล์ใหม่ไม่สำเร็จ")
+            tell(s, "rebuild", "err", errText(e, "ขอสร้างไฟล์ใหม่ไม่สำเร็จ"))
+        } finally {
+            end(s, "rebuild")
         }
-        await loadState(false)
+        await reload()
     }
 
     const UPLOAD_TEXT: Record<string, string> = {
@@ -476,14 +752,20 @@
         slot.append(el("h3", undefined, title))
         const status = el("ul", "rv-checks")
         status.id = "rv-" + kind + "-st"
-        if (u) {
-            slot.append(el("p", "rv-file", u.file_name + " · " + sizeText(u.bytes) + " · เลือกเมื่อ " + when(u.created_at)))
+        const sending = flying(s, "upload-" + kind)
+        if (u) slot.append(el("p", "rv-file", u.file_name + " · " + sizeText(u.bytes) + " · เลือกเมื่อ " + when(u.created_at)))
+        if (sending) {
+            slot.setAttribute("aria-busy", "true")
+            status.append(line("info", "กำลังอัปโหลดและตรวจไฟล์…"))
+        } else if (u) {
             if (u.result === "latest" && !ok) status.append(line("bad", "มีไฟล์ใหม่กว่าที่ระบบสร้างหลังเลือกไฟล์นี้ ดาวน์โหลดใหม่แล้วเลือกอีกครั้ง"))
             else status.append(line(ok ? "ok" : "bad", UPLOAD_TEXT[u.result || "unknown"]))
         } else {
             status.append(line("info", "ยังไม่ได้เลือกไฟล์"))
         }
         slot.append(status)
+        const n = noteEl("upload-" + kind)
+        if (n) slot.append(n)
         const pick = el("div", "rv-pick")
         const input = el("input")
         input.type = "file"
@@ -498,7 +780,7 @@
         const editable = auditeeTurn(s) && !!s.build
         input.disabled = !editable
         if (!editable) lab.classList.add("disabled")
-        input.addEventListener("change", () => { if (input.files && input.files[0]) void doUpload(kind, input.files[0], slot) })
+        input.addEventListener("change", () => { if (input.files && input.files[0]) void doUpload(s, kind, input.files[0], slot) })
         pick.append(input, lab, el("span", "rv-hint", "หรือลากไฟล์มาวางในกรอบนี้"))
         slot.append(pick)
         slot.addEventListener("dragover", (ev) => { if (editable) { ev.preventDefault(); slot.classList.add("drag") } })
@@ -507,32 +789,38 @@
             ev.preventDefault()
             slot.classList.remove("drag")
             const f = ev.dataTransfer && ev.dataTransfer.files[0]
-            if (f && editable) void doUpload(kind, f, slot)
+            if (f && editable) void doUpload(s, kind, f, slot)
         })
         return slot
     }
 
-    async function doUpload(kind: "sk03" | "merged", file: File, slot: HTMLElement): Promise<void> {
+    async function doUpload(s: State, kind: "sk03" | "merged", file: File, slot: HTMLElement): Promise<void> {
         const title = kind === "sk03" ? "SK03" : "ไฟล์รวมคะแนนรายคน"
-        if (!/\.xlsx$/i.test(file.name)) { say(title + ": เลือกไฟล์ .xlsx"); return }
+        const spot = "upload-" + kind
+        if (flying(s, spot)) return
+        if (!/\.xlsx$/i.test(file.name)) { tell(s, spot, "err", title + ": เลือกไฟล์ .xlsx"); render(); return }
+        if (!begin(s, spot)) return
         busy = true
         slot.setAttribute("aria-busy", "true")
         const st2 = slot.querySelector(".rv-checks") as HTMLElement
         st2.replaceChildren(line("info", "กำลังอัปโหลดและตรวจไฟล์…"))
         say(title + ": กำลังอัปโหลดและตรวจไฟล์")
         try {
-            const start = await post<{ id: string; url: string; contentType: string }>("/dashboard/api/review/" + month + "/uploads",
+            const start = await post<{ id: string; url: string; contentType: string }>(monthApi(s) + "/uploads",
                 { kind, fileName: file.name, bytes: file.size })
             const put = await fetch(start.url, { method: "PUT", body: file, headers: { "Content-Type": start.contentType, "x-upsert": "false" } })
+                .catch(() => { throw new Error("อัปโหลดไม่สำเร็จ " + NET_ERROR) })
             if (!put.ok) throw new Error("อัปโหลดไม่สำเร็จ (" + put.status + ") ลองอีกครั้ง")
-            const v = await post<{ result: string }>("/dashboard/api/review/" + month + "/uploads/" + start.id + "/verify")
+            const v = await post<{ result: string }>(monthApi(s) + "/uploads/" + start.id + "/verify")
+            // The slot's own status line shows the result once the state reloads.
             say(title + ": " + (UPLOAD_TEXT[v.result] || v.result))
         } catch (e) {
-            say(title + ": " + (e instanceof Error ? e.message : "อัปโหลดไม่สำเร็จ"))
+            tell(s, spot, "err", title + ": " + errText(e, "อัปโหลดไม่สำเร็จ"))
         } finally {
             busy = false
+            end(s, spot)
         }
-        await loadState(false)
+        await reload()
     }
 
     function submitReasons(s: State): string[] {
@@ -590,39 +878,85 @@
         const note = el("p", "rv-hint", r && r.status === "returned"
             ? "รอบนี้ผู้ตรวจสอบจะตรวจคนที่ส่งกลับให้แก้ และคนที่คะแนน กลุ่มงาน หรือชื่อของตัวเองเปลี่ยน หรือผลเทียบไม่ตรงกันแล้ว คนอื่นที่อนุมัติแล้วคงผลเดิม"
             : "หลังส่ง ระบบล็อกตัวเลขและไฟล์ไว้จนกว่าผู้ตรวจสอบจะส่งผลกลับ ดึงกลับได้จนกว่าผู้ตรวจสอบจะเปิดดู")
-        askConfirm("ตรวจทานก่อนส่งให้ผู้ตรวจสอบ", [ul, note], "ส่งรอบที่ " + roundNo, doSubmit)
+        askConfirm("ตรวจทานก่อนส่งให้ผู้ตรวจสอบ", [ul, note], "ส่งรอบที่ " + roundNo, () => doSubmit(s))
     }
-    // One confirm dialog for every step that hands the month to the other side.
+    // One confirm dialog for every step that hands the month to the other
+    // side. Each action keeps the s the dialog was written from.
     let confirmAction: (() => Promise<void>) | null = null
+    let confirmBusy = false
+    let confirmReturn = ""
+    let confirmErr: HTMLElement | null = null
     function askConfirm(title: string, kids: Node[], button: string, action: () => Promise<void>): void {
         confirmTitle.textContent = title
-        confirmBody.replaceChildren(...kids)
+        const err = el("p", "rv-err rv-confirm-err")
+        err.id = "review-confirm-err"
+        err.setAttribute("role", "alert")
+        confirmErr = err
+        confirmBody.replaceChildren(...kids, err)
         confirmSend.textContent = button
-        confirmAction = action
-        confirmDlg.showModal()
-    }
-    confirmSend.addEventListener("click", () => { if (confirmAction) void confirmAction() })
-    async function doSubmit(): Promise<void> {
-        if (!st) return
-        const s = st
-        const sk03 = s.uploads.sk03, merged = s.uploads.merged
-        if (!sk03 || !merged) return
-        confirmSend.disabled = true
-        confirmSend.setAttribute("aria-busy", "true")
-        try {
-            const r = await post<{ round: { round_no: number } }>("/dashboard/api/review/" + month + "/rounds", { sk03: sk03.id, merged: merged.id })
-            confirmDlg.close()
-            say("ส่งรอบที่ " + r.round.round_no + " ให้ผู้ตรวจสอบแล้ว")
-        } catch (e) {
-            confirmDlg.close()
-            say(e instanceof Error ? e.message : "ส่งไม่สำเร็จ")
-        } finally {
-            confirmSend.disabled = false
+        if (!confirmBusy) {
+            confirmSend.removeAttribute("aria-disabled")
             confirmSend.removeAttribute("aria-busy")
         }
-        await loadMonths().catch(() => false)
-        await loadState(false)
-        const h = document.querySelector<HTMLElement>("#review-body .rv-turn")
+        confirmAction = action
+        const a = document.activeElement as HTMLElement | null
+        confirmReturn = a && a.id ? a.id : ""
+        confirmDlg.showModal()
+    }
+    confirmSend.addEventListener("click", () => { if (confirmAction && !confirmBusy) void confirmAction() })
+    // Esc and ยกเลิก do not close it while the step is being sent (the
+    // capture listener runs before the shared data-close one in app.ts).
+    confirmDlg.addEventListener("cancel", (ev) => { if (confirmBusy) ev.preventDefault() })
+    const confirmCancel = confirmDlg.querySelector<HTMLElement>("[data-close]")
+    confirmDlg.addEventListener("click", (ev) => {
+        if (confirmBusy && confirmCancel && ev.target instanceof Node && confirmCancel.contains(ev.target)) { ev.stopPropagation(); ev.preventDefault() }
+    }, true)
+    // The button that opened it may have been redrawn while it was open.
+    confirmDlg.addEventListener("close", () => {
+        const a = document.activeElement
+        if ((!a || a === document.body || confirmDlg.contains(a)) && confirmReturn) {
+            const f = document.getElementById(confirmReturn)
+            if (f) f.focus()
+            else { const h = body.querySelector<HTMLElement>(".rv-turn"); if (h) { h.tabIndex = -1; h.focus() } }
+        }
+    })
+    // Sends a dialog's step: on success the dialog closes; on a refusal or
+    // a network error it stays open with the reason inside it.
+    async function confirmRun(s: State, call: () => Promise<string>): Promise<boolean> {
+        if (confirmBusy) return false
+        confirmBusy = true
+        markBusy(confirmSend)
+        if (confirmCancel) confirmCancel.setAttribute("aria-disabled", "true")
+        const sent = confirmAction
+        const err = confirmErr
+        if (err) err.textContent = ""
+        try {
+            const done = await call()
+            if (confirmDlg.open && confirmAction === sent) confirmDlg.close()
+            tell(s, "top", "ok", done)
+            return true
+        } catch (e) {
+            const msg = errText(e, "ทำรายการไม่สำเร็จ")
+            if (confirmDlg.open && confirmAction === sent && err && err.isConnected) setTimeout(() => { err.textContent = msg }, 50)
+            else { tell(s, "top", "err", msg); if (s.month === month) render() }
+            return false
+        } finally {
+            confirmBusy = false
+            if (confirmCancel) confirmCancel.removeAttribute("aria-disabled")
+            confirmSend.removeAttribute("aria-disabled")
+            confirmSend.removeAttribute("aria-busy")
+        }
+    }
+    async function doSubmit(s: State): Promise<void> {
+        const sk03 = s.uploads.sk03, merged = s.uploads.merged
+        if (!sk03 || !merged) return
+        const ok = await confirmRun(s, async () => {
+            const r = await post<{ round: { round_no: number } }>(monthApi(s) + "/rounds", { sk03: sk03.id, merged: merged.id })
+            return "ส่งรอบที่ " + r.round.round_no + " ให้ผู้ตรวจสอบแล้ว"
+        })
+        if (ok) await loadMonths().catch(() => false)
+        await reload()
+        const h = ok ? document.querySelector<HTMLElement>("#review-body .rv-turn") : null
         if (h) { h.tabIndex = -1; h.focus() }
     }
 
@@ -638,22 +972,30 @@
             const row = el("div", "rv-actions")
             const w = el("button", "btn-ghost", "ดึงกลับมาแก้")
             w.type = "button"
-            w.addEventListener("click", () => { void doWithdraw(w) })
+            w.id = "rv-withdraw"
+            if (flying(s, "withdraw")) markBusy(w)
+            w.addEventListener("click", () => { void doWithdraw(s, w) })
             row.append(w, el("span", "rv-hint", "ใช้เมื่อส่งผิด · ดึงกลับได้จนกว่าผู้ตรวจสอบจะเปิดดู"))
             kids.push(row)
         }
+        const n = noteEl("withdraw")
+        if (n) kids.push(n)
         return card("รอบที่ " + r.round_no + " ที่ส่งไว้", kids, "rv-h-sent")
     }
-    async function doWithdraw(btn: HTMLButtonElement): Promise<void> {
-        btn.disabled = true
+    async function doWithdraw(s: State, btn: HTMLButtonElement): Promise<void> {
+        if (!begin(s, "withdraw", btn)) return
+        let ok = false
         try {
-            await post("/dashboard/api/review/" + month + "/rounds/withdraw")
-            say("ดึงกลับแล้ว แก้แล้วส่งใหม่ได้")
+            await post(monthApi(s) + "/rounds/withdraw")
+            tell(s, "top", "ok", "ดึงกลับแล้ว แก้แล้วส่งใหม่ได้")
+            ok = true
         } catch (e) {
-            say(e instanceof Error ? e.message : "ดึงกลับไม่สำเร็จ")
+            tell(s, "withdraw", "err", errText(e, "ดึงกลับไม่สำเร็จ"))
+        } finally {
+            end(s, "withdraw")
         }
-        await loadMonths().catch(() => false)
-        await loadState(false)
+        if (ok) await loadMonths().catch(() => false)
+        await reload()
     }
 
     // ── People in a round (both sides) ───────────────────────────────────
@@ -695,45 +1037,84 @@
         replies: { id: number; role: "auditor" | "auditee"; body: string; round_no: number | null; created_at: string; created_by: string }[]
     }
 
+    // The key says what is loaded or on its way; the sequence number lets
+    // only the newest request land (a month switch bumps them all). A failed
+    // load clears its key and keeps the reason, shown with a retry button,
+    // instead of loading again on every render.
     let people: Person[] | null = null
     let peopleKey = ""
+    let peopleErr = ""
+    let peopleSeq = 0
     let issues: Issue[] | null = null
     let issuesKey = ""
+    let issuesErr = ""
+    let issuesSeq = 0
     let selected = ""
     let filter = "todo"
     let search = ""
     const details = new Map<string, Detail>()
+    const detailErrs = new Map<string, string>()
+    const detailLoading = new Set<string>()
+    let detailSeq = 0
 
     const roundKey = (s: State, r: Round): string => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix)
     async function loadPeople(s: State, r: Round): Promise<void> {
         const key = s.month + ":" + r.round_no
-        const res = await api<{ people: Person[] }>("/dashboard/api/review/" + s.month + "/people?round=" + r.round_no)
-        people = res.people
+        const seq = ++peopleSeq
         peopleKey = key
-        if (!selected || !people.some((p) => p.index === selected)) {
-            const first = people.find((p) => p.decision === null) || people[0]
-            selected = first ? first.index : ""
+        peopleErr = ""
+        try {
+            const res = await api<{ people: Person[] }>(monthApi(s) + "/people?round=" + r.round_no)
+            if (seq !== peopleSeq || s.month !== month) return
+            people = res.people || []
+            if (!selected || !people.some((p) => p.index === selected)) {
+                const first = people.find((p) => p.decision === null) || people[0]
+                selected = first ? first.index : ""
+            }
+        } catch (e) {
+            if (seq !== peopleSeq || s.month !== month || signedOut(e)) return
+            peopleKey = ""
+            peopleErr = errText(e, "โหลดรายชื่อไม่สำเร็จ")
+            shout("โหลดรายชื่อไม่สำเร็จ: " + peopleErr)
         }
         render()
     }
     async function loadIssues(s: State): Promise<void> {
-        const res = await api<{ issues: Issue[] }>("/dashboard/api/review/" + s.month + "/issues")
-        issues = res.issues
+        const seq = ++issuesSeq
         issuesKey = s.month
+        issuesErr = ""
+        try {
+            const res = await api<{ issues: Issue[] }>(monthApi(s) + "/issues")
+            if (seq !== issuesSeq || s.month !== month) return
+            issues = res.issues || []
+        } catch (e) {
+            if (seq !== issuesSeq || s.month !== month || signedOut(e)) return
+            issuesKey = ""
+            issuesErr = errText(e, "โหลดปัญหาอื่น ๆ ไม่สำเร็จ")
+            shout("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr)
+        }
         render()
     }
     const needPeople = (s: State, r: Round): boolean => peopleKey !== s.month + ":" + r.round_no
+    const ensureIssues = (s: State): void => { if (issuesKey !== s.month && !issuesErr) void loadIssues(s) }
     const ensure = (s: State, r: Round): void => {
-        if (needPeople(s, r)) { peopleKey = s.month + ":" + r.round_no; void loadPeople(s, r).catch((e) => say(e.message)) }
-        if (issuesKey !== s.month) { issuesKey = s.month; void loadIssues(s).catch((e) => say(e.message)) }
+        if (needPeople(s, r) && !peopleErr) void loadPeople(s, r)
+        ensureIssues(s)
     }
+    // Retry: forget the failure and draw again, which loads again.
+    const retryPeople = (): void => { peopleErr = ""; render() }
+    const retryIssues = (): void => { issuesErr = ""; render() }
     // A new state (another round, a decision made elsewhere) reloads both.
     let lastRoundKey = ""
     function refreshLists(s: State): void {
         const r = liveRound(s)
         if (!r) return
         const k = roundKey(s, r)
-        if (k !== lastRoundKey) { lastRoundKey = k; peopleKey = ""; issuesKey = "" }
+        if (k === lastRoundKey) return
+        // Another round: its people are not the old round's.
+        if (lastRoundKey.split(":").slice(0, 2).join(":") !== s.month + ":" + r.round_no) people = null
+        lastRoundKey = k
+        peopleKey = ""; issuesKey = ""; peopleErr = ""; issuesErr = ""
     }
 
     const CHECK_TEXT: Record<string, string> = { match: "ตรงกัน", mismatch: "ไม่ตรงกัน", missing: "ไม่พบ" }
@@ -742,7 +1123,7 @@
         department: "กลุ่มงานเปลี่ยน", name: "ชื่อเปลี่ยน", check: "ผลเทียบไม่ตรงกัน",
     }
     const HOW_TEXT: Record<string, string> = {
-        "grand-total": "แถวรวมทั้งหมด", "sub-total": "แถวรวม", "largest-over-sub-total": "ตัวเลขมากที่สุดในชีต (มากกว่าแถวรวม)",
+        "grand-total": "แถวรวมทั้งหมด", "free-text": "ข้อความสรุปยอดรวม", "sub-total": "แถวรวม", "largest-over-sub-total": "ตัวเลขมากที่สุดในชีต (มากกว่าแถวรวม)",
         uncached: "แถวรวมเป็นสูตรที่ Excel ไม่ได้บันทึกค่าไว้", none: "ไม่พบแถวรวม", empty: "ชีตว่าง", "no-sheet": "ไม่พบชีตของแพทย์",
     }
     const bothMatch = (p: Person): boolean => p.scoreCheck === "match" && p.moneyCheck === "match"
@@ -765,21 +1146,25 @@
                 const row = el("div", "rv-actions")
                 const b = el("button", "btn-ghost", "ดึงผลตรวจกลับมาแก้")
                 b.type = "button"
-                b.addEventListener("click", () => { void roundStep("unreturn", "ดึงกลับแล้ว ตรวจต่อได้") })
+                b.id = "rv-unreturn"
+                if (flying(s, "unreturn")) markBusy(b)
+                b.addEventListener("click", () => { void roundStep(s, "unreturn", "ดึงกลับแล้ว ตรวจต่อได้", b) })
                 row.append(b, el("span", "rv-hint", "ใช้ได้จนกว่าผู้จัดทำจะเปิดดู"))
-                out.push(card("ส่งผิด?", [row], "rv-h-unret"))
+                const kids: Node[] = [row]
+                const n = noteEl("unreturn")
+                if (n) kids.push(n)
+                out.push(card("ส่งผิด?", kids, "rv-h-unret"))
             }
             return out
         }
-        if (r.status === "approved") {
-            return [turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(r.counts.approve) + " คน เมื่อ " + when(r.approved_at), "เอกสารเบิกจ่าย (PDF) จะมาในอัปเดตถัดไป")]
-        }
+        if (r.status === "approved") return approvedView(s, r, "auditor")
         ensure(s, r)
         const out: Node[] = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true),
             "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
             " · งบประมาณ " + baht(r.budget) + " · per P4P อินเทิร์น " + baht(r.per_p4p))]
         out.push(finishBar(s, r))
-        if (!people) { out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
+        if (peopleErr) out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
+        if (!people) { if (!peopleErr) out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
         const wrap = el("div", "rv-review")
         wrap.append(peopleList(), personPanel(s, r))
         out.push(wrap, issuesCard(s, "auditor"))
@@ -788,54 +1173,173 @@
 
     function finishBar(s: State, r: Round): HTMLElement {
         const c = r.counts
-        const openIssues = (issues || []).filter((i) => i.status === "open").length
+        // Not known until the issues load: no "0 open" and no approve-all before that.
+        const openIssues = issues ? issues.filter((i) => i.status === "open").length : null
         const bar = el("div", "rv-finish glass")
         bar.append(el("p", "rv-counts", "รอตรวจ " + int(c.waiting) + " · อนุมัติ " + int(c.approve) +
-            (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " + int(openIssues)))
+            (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " +
+            (openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "กำลังโหลด…") : int(openIssues))))
         const btn = el("button", "btn-primary")
         btn.type = "button"
         btn.id = "rv-finish"
         const why = el("span", "rv-hint")
         why.id = "rv-finish-why"
-        if (c.waiting > 0) {
+        if (c.waiting > 0 || openIssues === null) {
             btn.textContent = "ส่งผลตรวจ…"
             btn.setAttribute("aria-disabled", "true")
             btn.setAttribute("aria-describedby", why.id)
-            why.textContent = "ส่งได้เมื่อตรวจครบทุกคน (เหลือ " + int(c.waiting) + " คน)"
+            why.textContent = c.waiting > 0 ? "ส่งได้เมื่อตรวจครบทุกคน (เหลือ " + int(c.waiting) + " คน)"
+                : issuesErr ? "ส่งได้เมื่อโหลดปัญหาอื่น ๆ ได้ กดลองอีกครั้งในกล่องปัญหาอื่น ๆ" : "รอโหลดปัญหาอื่น ๆ"
             btn.addEventListener("click", () => say(why.textContent || ""))
         } else if (c.fix > 0 || openIssues > 0) {
             btn.textContent = "ส่งกลับให้ผู้จัดทำแก้…"
             why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน · ปัญหาอื่น " + int(openIssues) + " เรื่อง"
             btn.addEventListener("click", () => {
-                askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน · ปัญหาอื่นที่เปิดอยู่ " + int(openIssues) + " เรื่อง"),
-                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep("return", "ส่งกลับให้ผู้จัดทำแล้ว"))
+                askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน · ปัญหาอื่นที่เปิดอยู่ " + int(openIssues) + " เรื่อง"),
+                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"))
             })
         } else {
             btn.textContent = "อนุมัติทั้งหมด…"
             why.textContent = "อนุมัติครบ " + int(c.approve) + " คน และไม่มีปัญหาที่เปิดอยู่"
             btn.addEventListener("click", () => {
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
-                    el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep("approve", "อนุมัติแล้ว"))
+                    el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep(s, "approve", "อนุมัติแล้ว"))
             })
         }
         bar.append(btn, why)
         return bar
     }
 
-    async function roundStep(step: "return" | "unreturn" | "approve", done: string): Promise<void> {
-        confirmSend.disabled = true
-        try {
-            await post("/dashboard/api/review/" + month + "/" + step)
-            say(done)
-        } catch (e) {
-            say(e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ")
-        } finally {
-            confirmSend.disabled = false
-            if (confirmDlg.open) confirmDlg.close()
+    // ── Approved: the document, a retry, and reopening ───────────────────
+    function approvedView(s: State, r: Round, side: "auditee" | "auditor"): Node[] {
+        const status = r.pdf_status || "queued"
+        const out: Node[] = [turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(r.counts.approve) + " คน เมื่อ " + when(r.approved_at) +
+            (r.approved_by ? " โดย " + r.approved_by : ""),
+            status === "ready" ? "เอกสารเบิกจ่ายพร้อมแล้ว" + (r.pdf_built_at ? " (สร้างเมื่อ " + when(r.pdf_built_at) + ")" : "") + " · ทั้งสองฝั่งดาวน์โหลดได้"
+                : status === "failed" ? "สร้างเอกสารเบิกจ่ายไม่สำเร็จ ดูด้านล่าง"
+                    : "กำลังสร้างเอกสารเบิกจ่าย (PDF) · ปกติไม่เกินไม่กี่นาที หน้านี้อัปเดตเอง")]
+        const kids: Node[] = []
+        if (status === "ready") {
+            const a = el("a", "btn-primary rv-download", "ดาวน์โหลดเอกสารเบิกจ่าย " + monthName(s.month, true) + " (PDF" +
+                (r.pdf_pages ? ", " + int(r.pdf_pages) + " หน้า" : "") + (r.pdf_bytes ? ", " + sizeText(r.pdf_bytes) : "") + ")")
+            a.href = "/dashboard/api/review/" + s.month + "/pdf"
+            a.id = "rv-pdf"
+            kids.push(el("div", "rv-actions"))
+            ;(kids[0] as HTMLElement).append(a)
+            kids.push(el("p", "rv-hint", "A4 แนวนอน · หน้าแรกสรุปรายกลุ่มงาน ตามด้วยชีตกลุ่มงานทุกกลุ่ม · เวลาอนุมัติอยู่มุมขวาล่างทุกหน้า"))
+        } else if (status === "failed") {
+            const p = el("p", "alert", "สร้างเอกสารเบิกจ่ายไม่สำเร็จ")
+            p.setAttribute("role", "alert")
+            kids.push(p)
+            if (r.pdf_error) kids.push(el("p", "rv-hint", "รายละเอียด: " + r.pdf_error))
+            const row = el("div", "rv-actions")
+            const b = el("button", "btn-primary", "สร้างเอกสารอีกครั้ง")
+            b.type = "button"
+            b.id = "rv-pdf-retry"
+            if (flying(s, "pdf")) markBusy(b)
+            b.addEventListener("click", () => { void retryPdf(s, b) })
+            row.append(b)
+            kids.push(row)
+        } else {
+            const p = el("p", "rv-loading", "กำลังสร้างเอกสาร…")
+            p.setAttribute("aria-busy", "true")
+            kids.push(p)
         }
-        peopleKey = ""; issuesKey = ""
-        await loadMonths().catch(() => false)
-        await loadState(false)
+        const n = noteEl("pdf")
+        if (n) kids.push(n)
+        out.push(card("เอกสารเบิกจ่าย", kids, "rv-h-pdf"))
+        if (side === "auditor") {
+            const row = el("div", "rv-actions")
+            const b = el("button", "btn-ghost", "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง…")
+            b.type = "button"
+            b.id = "rv-reopen"
+            b.addEventListener("click", () => askReopen(s, r))
+            row.append(b)
+            out.push(card("ต้องแก้หลังอนุมัติ?", [row,
+                el("p", "rv-hint", "เอกสารที่สร้างแล้วจะใช้ไม่ได้ รอบที่ " + r.round_no + " กลับมาเป็นคิวผู้ตรวจสอบ ผลอนุมัติเดิมยังอยู่")], "rv-h-reopen"))
+        }
+        return out
+    }
+
+    async function retryPdf(s: State, b: HTMLButtonElement): Promise<void> {
+        if (!begin(s, "pdf", b)) return
+        try {
+            await post(monthApi(s) + "/pdf/retry")
+            tell(s, "pdf", "ok", "สั่งสร้างเอกสารอีกครั้งแล้ว")
+        } catch (e) {
+            tell(s, "pdf", "err", errText(e, "ทำรายการไม่สำเร็จ"))
+        } finally {
+            end(s, "pdf")
+        }
+        await reload()
+    }
+
+    function askReopen(s: State, r: Round): void {
+        const ta = el("textarea")
+        ta.id = "rv-reopen-reason"
+        ta.rows = 3
+        ta.maxLength = 1000
+        ta.required = true
+        ta.setAttribute("aria-required", "true")
+        const lab = el("label", undefined, "เหตุผล (ต้องกรอก)")
+        lab.htmlFor = ta.id
+        const err = el("p", "rv-err")
+        err.id = "rv-reopen-err"
+        ta.setAttribute("aria-describedby", err.id)
+        const field = el("div", "rv-reason")
+        field.append(lab, ta, err)
+        askConfirm("ยกเลิกเอกสารและเปิดตรวจอีกครั้ง · " + monthName(s.month, true), [
+            el("p", undefined, "เอกสารเบิกจ่าย" + (r.pdf_built_at ? "ที่สร้างเมื่อ " + when(r.pdf_built_at) : "") +
+                " จะใช้ไม่ได้ รวมถึงฉบับที่ดาวน์โหลดหรือพิมพ์ไปแล้ว ผู้จัดทำจะเห็นเหตุผลนี้ และบันทึกในประวัติการใช้งาน"),
+            el("p", undefined, "สิ่งที่จะเกิดขึ้น: ผลอนุมัติ " + int(r.counts.approve) + " คนยังอยู่ · เหตุผลจะเป็นปัญหาอื่น ๆ ที่เปิดอยู่ · " +
+                "เปลี่ยนคนที่ต้องแก้เป็น ต้องแก้ไข แล้วส่งกลับ · ผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1) +
+                " · ถ้าไม่มีอะไรต้องแก้ ปิดเรื่องแล้วอนุมัติใหม่ได้"),
+            field,
+        ], "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง", async () => {
+            const reason = ta.value.trim()
+            if (!reason) {
+                ta.setAttribute("aria-invalid", "true")
+                err.textContent = "เขียนเหตุผลก่อน จึงจะกดได้"
+                ta.focus()
+                return
+            }
+            ta.removeAttribute("aria-invalid")
+            err.textContent = ""
+            const ok = await confirmRun(s, async () => {
+                await post(monthApi(s) + "/reopen", { reason })
+                return "ยกเลิกเอกสารแล้ว รอบที่ " + r.round_no + " กลับมาให้ตรวจอีกครั้ง"
+            })
+            if (!ok) return
+            if (s.month === month) { peopleKey = ""; issuesKey = "" }
+            await loadMonths().catch(() => false)
+            await reload()
+        })
+        setTimeout(() => ta.focus(), 0)
+    }
+
+    // approve / return come from the confirm dialog (which stays open with
+    // the reason when refused); unreturn is a plain button (btn).
+    async function roundStep(s: State, step: "return" | "unreturn" | "approve", done: string, btn?: HTMLButtonElement): Promise<void> {
+        const call = async (): Promise<string> => { await post(monthApi(s) + "/" + step); return done }
+        let ok = false
+        if (btn) {
+            if (!begin(s, step, btn)) return
+            try {
+                tell(s, "top", "ok", await call())
+                ok = true
+            } catch (e) {
+                tell(s, step, "err", errText(e, "ทำรายการไม่สำเร็จ"))
+            } finally {
+                end(s, step)
+            }
+        } else {
+            ok = await confirmRun(s, call)
+        }
+        if (ok) {
+            if (s.month === month) { peopleKey = ""; issuesKey = "" }
+            await loadMonths().catch(() => false)
+        }
+        await reload()
     }
 
     function visiblePeople(): Person[] {
@@ -936,13 +1440,14 @@
         t.append(cap, thead, tbody)
         panel.append(t)
         panel.append(sheetBox(s, r, p))
-        panel.append(decideBox(p))
+        panel.append(decideBox(s, p))
         const nav = el("div", "rv-actions")
         const list = visiblePeople()
         const i = list.findIndex((x) => x.index === p.index)
         const go = (d: number, text: string): HTMLButtonElement => {
             const b = el("button", "btn-ghost", text)
             b.type = "button"
+            b.id = d < 0 ? "rv-prev-person" : "rv-next-person"
             const target = list[i + d]
             b.disabled = !target
             b.addEventListener("click", () => { if (target) { selected = target.index; render(); const hh = document.getElementById("rv-person-h"); if (hh) hh.focus() } })
@@ -964,13 +1469,32 @@
 
     function sheetBox(s: State, r: Round, p: Person): HTMLElement {
         const box = el("div", "rv-sheet-box")
-        const key = r.round_no + ":" + p.index
+        const key = s.month + ":" + r.round_no + ":" + p.index
         const d = details.get(key)
         if (!d) {
+            const de = detailErrs.get(key)
+            if (de) {
+                box.append(failBox("โหลดชีตของแพทย์ไม่สำเร็จ: " + de, "rv-retry-sheet", () => { detailErrs.delete(key); render() }))
+                return box
+            }
             box.append(el("p", "rv-hint", "กำลังโหลดชีตของแพทย์…"))
-            void api<Detail>("/dashboard/api/review/" + s.month + "/person/" + r.round_no + "/" + p.index)
-                .then((x) => { details.set(key, x); if (selected === p.index) render() })
-                .catch((e) => say(e.message))
+            // One request per person at a time, whatever re-renders meanwhile.
+            if (!detailLoading.has(key)) {
+                detailLoading.add(key)
+                const seq = detailSeq
+                void api<Detail>(monthApi(s) + "/person/" + r.round_no + "/" + p.index)
+                    .then((x) => { if (seq === detailSeq) details.set(key, x) }, (e) => {
+                        if (seq !== detailSeq || signedOut(e)) return
+                        const msg = errText(e, "โหลดไม่สำเร็จ")
+                        detailErrs.set(key, msg)
+                        if (selected === p.index) shout("โหลดชีตของแพทย์ไม่สำเร็จ: " + msg)
+                    })
+                    .then(() => {
+                        if (seq !== detailSeq) return
+                        detailLoading.delete(key)
+                        if (selected === p.index) render()
+                    })
+            }
             return box
         }
         if (d.deptRow) {
@@ -989,6 +1513,8 @@
         if (!g) { box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู")); return box }
         const hit = cellRC(p.statedCell)
         const region = el("div", "rv-sheet")
+        region.id = "rv-sheet"
+        region.dataset.key = key
         region.setAttribute("role", "region")
         region.tabIndex = 0
         const capId = "rv-sheet-cap"
@@ -1010,7 +1536,7 @@
             for (let c = 0; c < g.cols; c++) {
                 const v = map.get(rr + ":" + c)
                 const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v))
-                if (hit && hit[0] === rr && hit[1] === c) { td.className += " hit"; td.setAttribute("aria-label", "คะแนนที่ใช้ " + num(Number(v))) }
+                if (hit && hit[0] === rr && hit[1] === c) { td.className += " hit"; td.setAttribute("aria-label", "คะแนนที่ใช้ " + (p.stated !== null ? num(p.stated) : String(v))) }
                 tr.append(td)
             }
             tbody.append(tr)
@@ -1018,8 +1544,10 @@
         tbl.append(thead, tbody)
         region.append(tbl)
         box.append(cap, region)
-        // Bring the cell used as the score into view (it is often far right / bottom).
+        // Bring the cell used as the score into view (it is often far right / bottom),
+        // unless this is a redraw of the sheet already open (render kept its scroll).
         requestAnimationFrame(() => {
+            if (region.dataset.kept) return
             const h = tbl.querySelector("td.hit") as HTMLElement | null
             if (!h) return
             region.scrollTop = Math.max(0, h.offsetTop - region.clientHeight / 2)
@@ -1028,9 +1556,10 @@
         return box
     }
 
-    function decideBox(p: Person): HTMLElement {
+    function decideBox(s: State, p: Person): HTMLElement {
         const box = el("div", "rv-decide")
         const ok = bothMatch(p)
+        const spot = "decide-" + p.index
         const approve = el("button", "btn-primary", p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
         approve.type = "button"
         approve.id = "rv-approve"
@@ -1043,17 +1572,18 @@
         }
         approve.addEventListener("click", () => {
             if (!ok) { say(why.textContent || ""); return }
-            void decide(p, "approve", "")
+            void decide(s, p, "approve", "", approve)
         })
         const fixLabel = el("label", undefined, "หมายเหตุ (ต้องมีเมื่อเลือก ต้องแก้ไข)")
         fixLabel.htmlFor = "rv-remark"
-        const ta = el("textarea")
+        const ta = keep(el("textarea"), "remark:" + p.index, p.decision === "fix" ? p.remark : "")
         ta.id = "rv-remark"
         ta.rows = 2
         ta.maxLength = 1000
-        ta.value = p.decision === "fix" ? p.remark : ""
-        const err = el("p", "rv-err hidden")
+        const fe = fieldErrs.get("remark:" + p.index)
+        const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "")
         err.id = "rv-remark-e"
+        if (fe) ta.setAttribute("aria-invalid", "true")
         ta.setAttribute("aria-describedby", err.id)
         const fix = el("button", "btn-ghost", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "ต้องแก้ไข")
         fix.type = "button"
@@ -1061,12 +1591,14 @@
         fix.addEventListener("click", () => {
             if (!ta.value.trim()) {
                 err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร"
+                fieldErrs.set("remark:" + p.index, err.textContent)
                 err.classList.remove("hidden")
                 ta.setAttribute("aria-invalid", "true")
                 ta.focus()
                 return
             }
-            void decide(p, "fix", ta.value)
+            fieldErrs.delete("remark:" + p.index)
+            void decide(s, p, "fix", ta.value, fix)
         })
         const row = el("div", "rv-actions")
         row.append(approve, fix)
@@ -1074,33 +1606,41 @@
             const undo = el("button", "btn-ghost", "ยกเลิกผล")
             undo.type = "button"
             undo.id = "rv-undo"
-            undo.addEventListener("click", () => { void decide(p, null, "") })
+            undo.addEventListener("click", () => { void decide(s, p, null, "", undo) })
             row.append(undo)
         }
+        if (flying(s, spot)) for (const b of [approve, fix]) markBusy(b)
         box.append(fixLabel, ta, err, row, why)
+        const n = noteEl(spot) || noteEl("decided")
+        if (n) box.append(n)
         return box
     }
 
-    async function decide(p: Person, decision: "approve" | "fix" | null, remark: string): Promise<void> {
+    async function decide(s: State, p: Person, decision: "approve" | "fix" | null, remark: string, btn: HTMLButtonElement): Promise<void> {
+        const spot = "decide-" + p.index
+        if (!begin(s, spot, btn)) return
+        notes.delete("decided")
         busy = true
         try {
-            await post("/dashboard/api/review/" + month + "/decisions/" + p.index, { decision, remark }, "PUT")
+            await post(monthApi(s) + "/decisions/" + p.index, { decision, remark }, "PUT")
             p.decision = decision
             p.remark = decision === "fix" ? remark.trim() : ""
             p.carried = false
-            say(p.name + ": " + decisionText(p))
+            forget(s, "remark:" + p.index)
+            tell(s, "decided", "ok", p.name + ": " + decisionText(p))
             // Straight on to the next person still to check.
-            if (decision) {
+            if (decision && s.month === month) {
                 const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
                 if (next) selected = next.index
             }
         } catch (e) {
-            say(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ")
+            tell(s, spot, "err", p.name + ": " + errText(e, "บันทึกไม่สำเร็จ"))
         } finally {
             busy = false
+            end(s, spot)
         }
-        await loadState(false)
-        const hh = document.getElementById("rv-person-h")
+        await reload()
+        const hh = s.month === month ? document.getElementById("rv-person-h") : null
         if (hh) hh.focus()
     }
 
@@ -1109,9 +1649,11 @@
         const kids: Node[] = []
         const r = liveRound(s)
         const canAct = side === "auditor" ? !!r && r.status === "submitted" : !!r && r.status === "returned"
-        if (issuesKey !== s.month) { issuesKey = s.month; void loadIssues(s).catch((e) => say(e.message)) }
+        ensureIssues(s)
+        if (issuesErr) kids.push(failBox("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr, "rv-retry-issues", retryIssues))
+        else if (!issues) kids.push(el("p", "rv-loading", "กำลังโหลด…"))
         const list = issues || []
-        if (!list.length) kids.push(el("p", "rv-hint", side === "auditor" ? "ยังไม่มี ใช้สำหรับเรื่องที่ไม่ใช่ของแพทย์คนใดคนหนึ่ง เช่น ลายเซ็น หรือยอดรวมของกลุ่มงาน" : "ไม่มี"))
+        if (issues && !list.length) kids.push(el("p", "rv-hint", side === "auditor" ? "ยังไม่มี ใช้สำหรับเรื่องที่ไม่ใช่ของแพทย์คนใดคนหนึ่ง เช่น ลายเซ็น หรือยอดรวมของกลุ่มงาน" : "ไม่มี"))
         for (const i of list) {
             const item = el("article", "rv-issue" + (i.status === "closed" ? " closed" : ""))
             const hid = "rv-issue-" + i.id
@@ -1127,59 +1669,78 @@
             if (canAct) {
                 const form = el("form", "rv-reply")
                 const lab = el("label", "sr-only", "ตอบเรื่องที่ " + i.id)
-                const ta = el("textarea")
+                const ta = keep(el("textarea"), "reply:" + i.id, "")
                 ta.id = "rv-reply-" + i.id
                 ta.rows = 1
                 ta.maxLength = 2000
                 lab.htmlFor = ta.id
                 const send = el("button", "btn-ghost", "ตอบ")
                 send.type = "submit"
+                send.id = "rv-reply-send-" + i.id
+                const spot = "reply-" + i.id
+                if (flying(s, spot)) markBusy(send)
                 form.append(lab, ta, send)
                 form.addEventListener("submit", (ev) => {
                     ev.preventDefault()
+                    if (flying(s, spot)) return
                     if (!ta.value.trim()) { ta.focus(); return }
-                    void issueCall("/issues/" + i.id + "/replies", { role: side, body: ta.value }, "ส่งคำตอบแล้ว")
+                    void issueCall(s, spot, "/issues/" + i.id + "/replies", { role: side, body: ta.value }, "ส่งคำตอบแล้ว", send, "reply:" + i.id)
                 })
                 item.append(form)
                 if (side === "auditor") {
                     const t = el("button", "btn-ghost", i.status === "open" ? "ปิดเรื่องนี้" : "เปิดอีกครั้ง")
                     t.type = "button"
-                    t.addEventListener("click", () => { void issueCall("/issues/" + i.id + "/status", { open: i.status !== "open" }, i.status === "open" ? "ปิดแล้ว" : "เปิดอีกครั้งแล้ว") })
+                    t.id = "rv-issue-toggle-" + i.id
+                    const tspot = "status-" + i.id
+                    if (flying(s, tspot)) markBusy(t)
+                    t.addEventListener("click", () => { void issueCall(s, tspot, "/issues/" + i.id + "/status", { open: i.status !== "open" }, i.status === "open" ? "ปิดแล้ว" : "เปิดอีกครั้งแล้ว", t) })
                     item.append(t)
                 }
             }
+            for (const k of ["reply-" + i.id, "status-" + i.id]) { const n = noteEl(k); if (n) item.append(n) }
             kids.push(item)
         }
         if (side === "auditor" && canAct) {
             const form = el("form", "rv-reply")
             const lab = el("label", undefined, "แจ้งปัญหาอื่น")
-            const ta = el("textarea")
+            const ta = keep(el("textarea"), "issue:new", "")
             ta.id = "rv-new-issue"
             ta.rows = 2
             ta.maxLength = 2000
             lab.htmlFor = ta.id
             const add = el("button", "btn-ghost", "เพิ่มปัญหา")
             add.type = "submit"
+            add.id = "rv-new-issue-add"
+            if (flying(s, "issue-new")) markBusy(add)
             form.append(lab, ta, add)
             form.addEventListener("submit", (ev) => {
                 ev.preventDefault()
+                if (flying(s, "issue-new")) return
                 if (!ta.value.trim()) { ta.focus(); return }
-                void issueCall("/issues", { body: ta.value }, "เพิ่มปัญหาแล้ว")
+                void issueCall(s, "issue-new", "/issues", { body: ta.value }, "เพิ่มปัญหาแล้ว", add, "issue:new")
             })
             kids.push(form)
+            const n = noteEl("issue-new")
+            if (n) kids.push(n)
         }
         return card("ปัญหาอื่น ๆ", kids, "rv-h-issues")
     }
 
-    async function issueCall(path: string, json: unknown, done: string): Promise<void> {
+    // One request per form at a time; the typed text (draft) is cleared
+    // only once the server has it.
+    async function issueCall(s: State, spot: string, path: string, json: unknown, done: string, btn: HTMLElement, draft?: string): Promise<void> {
+        if (!begin(s, spot, btn)) return
         try {
-            await post("/dashboard/api/review/" + month + path, json)
-            say(done)
+            await post(monthApi(s) + path, json)
+            if (draft) forget(s, draft)
+            tell(s, spot, "ok", done)
         } catch (e) {
-            say(e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ")
+            tell(s, spot, "err", errText(e, "ทำรายการไม่สำเร็จ"))
+        } finally {
+            end(s, spot)
         }
-        issuesKey = ""
-        await loadState(false)
+        if (s.month === month) issuesKey = ""
+        await reload()
     }
 
     // ผู้จัดทำ: what the auditor sent back, with a reply to each ─────────────
@@ -1187,7 +1748,8 @@
         ensure(s, r)
         const kids: Node[] = []
         const fixes = (people || []).filter((p) => p.decision === "fix")
-        if (!people) kids.push(el("p", "rv-loading", "กำลังโหลด…"))
+        if (peopleErr) kids.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
+        else if (!people) kids.push(el("p", "rv-loading", "กำลังโหลด…"))
         else if (!fixes.length) kids.push(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้ ดูปัญหาอื่น ๆ ด้านล่าง"))
         for (const p of fixes) {
             const item = el("article", "rv-issue")
@@ -1198,26 +1760,24 @@
             item.append(h, el("p", undefined, "ผู้ตรวจสอบ: " + p.remark))
             const form = el("form", "rv-reply")
             const lab = el("label", undefined, "คำตอบของผู้จัดทำ (ไม่บังคับ)")
-            const ta = el("textarea")
+            const ta = keep(el("textarea"), "answer:" + p.index, p.reply)
             ta.id = "rv-answer-" + p.index
             ta.rows = 1
             ta.maxLength = 1000
-            ta.value = p.reply
             lab.htmlFor = ta.id
             const save = el("button", "btn-ghost", "บันทึกคำตอบ")
             save.type = "submit"
+            save.id = "rv-answer-save-" + p.index
+            const spot = "answer-" + p.index
+            if (flying(s, spot)) markBusy(save)
             form.append(lab, ta, save)
             form.addEventListener("submit", (ev) => {
                 ev.preventDefault()
-                void (async () => {
-                    try {
-                        await post("/dashboard/api/review/" + month + "/replies/" + p.index, { reply: ta.value }, "PUT")
-                        p.reply = ta.value.trim()
-                        say("บันทึกคำตอบแล้ว ส่งไปกับรอบถัดไป")
-                    } catch (e) { say(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ") }
-                })()
+                void saveAnswer(s, p, ta.value, save)
             })
             item.append(form)
+            const n = noteEl(spot)
+            if (n) item.append(n)
             kids.push(item)
         }
         kids.push(el("p", "rv-hint", "แก้ในแอป (แท็บรายชื่อ หรือให้แพทย์ส่งไฟล์ใหม่) แล้วสร้างไฟล์ใหม่ในข้อ 2 ดาวน์โหลด และส่งรอบที่ " + (r.round_no + 1) +
@@ -1225,5 +1785,22 @@
         const wrap = el("div", "rv-stack")
         wrap.append(card("สิ่งที่ผู้ตรวจสอบให้แก้ (รอบที่ " + r.round_no + ")", kids, "rv-h-ans"), issuesCard(s, "auditee"))
         return wrap
+    }
+    async function saveAnswer(s: State, p: Person, text: string, btn: HTMLButtonElement): Promise<void> {
+        const spot = "answer-" + p.index
+        if (!begin(s, spot, btn)) return
+        try {
+            await post(monthApi(s) + "/replies/" + p.index, { reply: text }, "PUT")
+            p.reply = text.trim()
+            const cur = s.month === month && people ? people.find((x) => x.index === p.index) : undefined
+            if (cur) cur.reply = p.reply
+            forget(s, "answer:" + p.index)
+            tell(s, spot, "ok", "บันทึกคำตอบแล้ว ส่งไปกับรอบถัดไป")
+        } catch (e) {
+            tell(s, spot, "err", errText(e, "บันทึกไม่สำเร็จ"))
+        } finally {
+            end(s, spot)
+        }
+        render()
     }
 })()

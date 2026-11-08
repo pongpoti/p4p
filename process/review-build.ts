@@ -81,8 +81,14 @@ export interface ReviewPerson {
   submitted_at?: string | null;
 }
 
-const missingTable = (e: { code?: string; message?: string } | null): boolean =>
-  !!e && (e.code === 'PGRST205' || e.code === '42P01' || /does not exist|schema cache/i.test(e.message ?? ''));
+/**
+ * The review tables are not installed: a definite "no such table" code, or
+ * that wording on an answer with no code. PGRST002 ("Could not query the
+ * database for the schema cache. Retrying.") is a passing outage, not this.
+ */
+export const missingTable = (e: { code?: string | null; message?: string } | null | undefined): boolean =>
+  !!e && (e.code === 'PGRST205' || e.code === '42P01' ||
+    (!e.code && /^relation .* does not exist|could not find the table/i.test(e.message ?? '')));
 
 /** True once scripts/review-tab-2026-11.sql is in the database. */
 export async function reviewReady(supabase: SupabaseClient): Promise<boolean> {
@@ -144,8 +150,39 @@ export function savedValue(v: unknown): { value: string | number | null; uncache
 }
 
 /**
+ * A cell as the submission pipeline reads it into a row (automation/index.ts
+ * rowsOfSheet, lib/p4p-score.ts rowsFromWorksheet), so statedTotal sees the
+ * numbers the doctor's score was taken from: a formula's cell.result (a
+ * shared-formula copy's only when it is a number, a merged copy's none),
+ * dates as ISO text, rich text joined. `uncached` is a formula Excel saved
+ * no value for (a saved 0 is a value).
+ */
+export function pipelineValue(cell: { value: unknown; result?: unknown; master?: { result?: unknown } }): { value: unknown; uncached: boolean } {
+  const val = cell.value as Record<string, unknown> | null | undefined;
+  const isMaster = val !== null && typeof val === 'object' && 'formula' in val;
+  const isClone = val !== null && typeof val === 'object' && 'sharedFormula' in val && !('formula' in val);
+  if (isMaster || isClone) {
+    const r = cell.result;
+    const saved = (cell.master ?? cell).result;
+    const uncached = saved === null || saved === undefined;
+    if (isClone) return { value: typeof r === 'number' ? r : null, uncached };
+    if (r === null || r === undefined) return { value: null, uncached };
+    return { value: r instanceof Date ? r.toISOString() : r, uncached };
+  }
+  if (val === null || val === undefined) return { value: null, uncached: false };
+  if (val instanceof Date) return { value: val.toISOString(), uncached: false };
+  if (typeof val === 'object' && Array.isArray(val.richText)) {
+    return { value: (val.richText as { text?: string }[]).map((r) => r.text || '').join(''), uncached: false };
+  }
+  if (typeof val === 'object' && 'text' in val) return { value: String(val.text || ''), uncached: false };
+  return { value: val, uncached: false };
+}
+
+/**
  * Reads the sheet merge.py copies into the merged file (the first sheet with
  * more than one row of data) and returns its stated total and a snapshot.
+ * The total is read from the cells as the pipeline reads them
+ * (pipelineValue), the snapshot from their saved values (savedValue).
  */
 export async function analyseDoctorFile(buffer: Buffer): Promise<{ stated: StatedTotal; grid: SheetGrid | null; sha256: string }> {
   const fileSha = sha256(buffer);
@@ -161,30 +198,29 @@ export async function analyseDoctorFile(buffer: Buffer): Promise<{ stated: State
   const ws = wb.worksheets.find((w) => dataRows(w) > 1);
   if (!ws) return { stated: { value: null, cell: null, how: 'empty' }, grid: null, sha256: fileSha };
 
-  const grid: unknown[][] = [];
+  // The whole sheet, as the pipeline read it when it saved the score.
+  const scoreGrid: unknown[][] = [];
   const uncached = new Set<string>();
   const cells: [number, number, string | number][] = [];
   let maxR = 0, maxC = 0;
   ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     const r = rowNumber - 1;
-    if (r >= 2000) return;
     row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       const c = colNumber - 1;
-      if (c >= 200) return;
-      const { value, uncached: u } = savedValue(cell.value);
-      if (u) uncached.add(core.cellName(r, c));
+      const p = pipelineValue(cell as unknown as Parameters<typeof pipelineValue>[0]);
+      if (p.uncached) uncached.add(core.cellName(r, c));
+      if (p.value !== null && p.value !== undefined && p.value !== '') (scoreGrid[r] ??= [])[c] = p.value;
+      if (r >= SNAPSHOT_ROWS || c >= SNAPSHOT_COLS) return;
+      const { value } = savedValue(cell.value);
       if (value === null || value === '') return;
-      (grid[r] ??= [])[c] = value;
-      if (r < SNAPSHOT_ROWS && c < SNAPSHOT_COLS) {
-        cells.push([r, c, typeof value === 'string' && value.length > 120 ? value.slice(0, 120) + '…' : value]);
-        maxR = Math.max(maxR, r + 1);
-        maxC = Math.max(maxC, c + 1);
-      }
+      cells.push([r, c, typeof value === 'string' && value.length > 120 ? value.slice(0, 120) + '…' : value]);
+      maxR = Math.max(maxR, r + 1);
+      maxC = Math.max(maxC, c + 1);
     });
   });
   const merges = ((ws as unknown as { model?: { merges?: string[] } }).model?.merges ?? []).slice(0, 300);
   return {
-    stated: core.statedTotal(grid, uncached),
+    stated: core.statedTotal(scoreGrid, uncached),
     grid: { sheet: ws.name, rows: maxR, cols: maxC, cells, merges },
     sha256: fileSha,
   };
@@ -322,13 +358,25 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
   else if (Math.round((sheetBudget ?? -1) * 100) !== Math.round(o.input.budget * 100) || core.w9Rate(w9) !== o.input.per_p4p) {
     problems.push({ code: 'inputs_not_in_sheet', blocking: true, sheet_budget: sheetBudget, sheet_w9: str(w9) });
   }
-  if (notInSk03.length) problems.push({ code: 'not_in_sk03', blocking: true, count: notInSk03.length, names: notInSk03.slice(0, 50) });
-  if (noSheet.length) problems.push({ code: 'no_doctor_sheet', blocking: true, count: noSheet.length, names: noSheet.slice(0, 50) });
-  if (notInDept.length) problems.push({ code: 'not_in_dept_sheet', blocking: false, count: notInDept.length, names: notInDept.slice(0, 50) });
+  // Names in a fixed order: the roster comes back in no particular order,
+  // and past 50 the order would decide which names are kept.
+  const someNames = (list: string[]): string[] => [...list].sort().slice(0, 50);
+  if (notInSk03.length) problems.push({ code: 'not_in_sk03', blocking: true, count: notInSk03.length, names: someNames(notInSk03) });
+  if (noSheet.length) problems.push({ code: 'no_doctor_sheet', blocking: true, count: noSheet.length, names: someNames(noSheet) });
+  if (notInDept.length) problems.push({ code: 'not_in_dept_sheet', blocking: false, count: notInDept.length, names: someNames(notInDept) });
 
-  const deptsJson = depts.map((d) => ({ name: d.name, header: d.header, admin: d.admin, pay: d.pay, total: d.total, rows: d.rows.map((r) => r.cells) }));
+  // rowNos: the 1-based sheet row of each element of rows, same order.
+  const deptsJson = depts.map((d) => ({
+    name: d.name, header: d.header, admin: d.admin, pay: d.pay, total: d.total,
+    rows: d.rows.map((r) => r.cells), rowNos: d.rows.map((r) => r.row),
+  }));
+  // The fingerprint reads people in roster_index order: the roster is read
+  // with select('*') and no ORDER BY, and the same month in another order
+  // must not make a new newest build (the auditee's downloaded files would
+  // turn "older" and their upload be refused).
+  const byIndex = [...people].sort((a, b) => (a.roster_index < b.roster_index ? -1 : a.roster_index > b.roster_index ? 1 : 0));
   const contentSha = crypto.createHash('sha256').update(JSON.stringify({
-    v: 1, input: o.input, sheetBudget, w9: str(w9), people, depts: deptsJson, problems,
+    v: 2, input: o.input, sheetBudget, w9: str(w9), people: byIndex, depts: deptsJson, problems,
     files: [...o.docs.entries()].map(([k, d]) => [k, d.sheetName, d.sha256]).sort(),
   })).digest('hex');
   const { data: last, error: lastErr } = await supabase.from('review_builds')
