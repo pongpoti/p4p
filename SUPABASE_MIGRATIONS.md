@@ -158,7 +158,14 @@ already-applied file is safe.
     policies, anon/authenticated revoked), the private Storage bucket
     `review-files` (50 MB, .xlsx and .pdf), and service-role-only functions
     `review_request_build`, `claim_review_request`, `review_submit_round`,
-    `review_withdraw_round`, `review_state`, `review_months`. Safe to re-run.
+    `review_withdraw_round`, `review_state`, `review_months`, and for the
+    auditor's side `review_live_round`, `review_mark_opened`,
+    `review_decide`, `review_return_round`, `review_unreturn_round`,
+    `review_approve_round`, `review_reply_decision`, `review_add_issue`,
+    `review_issue_reply`, `review_issue_status`, `review_people`,
+    `review_person`, `review_issue_list`. Safe to re-run: if you pasted an
+    earlier copy, paste the whole file again after each update so the new
+    functions are added.
     Until it runs, the tab says it is not set up, workflow 2.2 builds exactly
     as before (no copy for the tab, Y9/W9 stay 0) and the relay's build
     dispatcher stays off.

@@ -58,6 +58,7 @@
         submitted_at: string
         submitted_by: string
         auditor_opened_at: string | null
+        auditee_opened_at: string | null
         returned_at: string | null
         approved_at: string | null
         counts: { approve: number; fix: number; waiting: number; carried: number }
@@ -91,6 +92,7 @@
     const confirmDlg = document.getElementById("review-confirm") as HTMLDialogElement
     const confirmBody = document.getElementById("review-confirm-body") as HTMLElement
     const confirmSend = document.getElementById("review-confirm-send") as HTMLButtonElement
+    const confirmTitle = document.getElementById("review-confirm-title") as HTMLElement
 
     // ── Small helpers ────────────────────────────────────────────────────
     function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -255,8 +257,27 @@
         if (!st) return
         const s = st
         const focusId = document.activeElement && (document.activeElement as HTMLElement).id
+        const list = body.querySelector(".rv-people-list")
+        const listTop = list ? list.scrollTop : 0
+        refreshLists(s)
         body.replaceChildren(...(role === "auditee" ? auditee(s) : auditor(s)))
+        const list2 = body.querySelector(".rv-people-list")
+        if (list2) list2.scrollTop = listTop
         if (focusId) { const f = document.getElementById(focusId); if (f) f.focus() }
+        markOpened(s)
+    }
+
+    // Opening a round on your side stops the other side taking it back.
+    const opened = new Set<string>()
+    function markOpened(s: State): void {
+        const r = liveRound(s)
+        if (!r) return
+        const who = r.status === "submitted" && role === "auditor" && !r.auditor_opened_at ? "auditor"
+            : r.status === "returned" && role === "auditee" && !r.auditee_opened_at ? "auditee" : ""
+        const key = s.month + ":" + r.round_no + ":" + who
+        if (!who || opened.has(key)) return
+        opened.add(key)
+        void post("/dashboard/api/review/" + s.month + "/opened", { role: who }).catch(() => { opened.delete(key) })
     }
 
     // ผู้จัดทำ ─────────────────────────────────────────────────────────────
@@ -284,6 +305,7 @@
         } else {
             out.push(turn("you", "ถึงคิวคุณ", "ส่งข้อมูลเดือน " + name + " ให้ผู้ตรวจสอบ", "แพทย์ส่งไฟล์ครบ " + int(s.roster.total) + " คนแล้ว · ทำตามลำดับข้อ 1 ถึง 3"))
         }
+        if (r && r.status === "returned") out.push(answersCard(s, r))
         out.push(inputsCard(s), filesCard(s), uploadCard(s))
         return out
     }
@@ -568,11 +590,18 @@
         const note = el("p", "rv-hint", r && r.status === "returned"
             ? "รอบนี้ผู้ตรวจสอบจะตรวจคนที่ส่งกลับให้แก้ และคนที่คะแนน กลุ่มงาน หรือชื่อของตัวเองเปลี่ยน หรือผลเทียบไม่ตรงกันแล้ว คนอื่นที่อนุมัติแล้วคงผลเดิม"
             : "หลังส่ง ระบบล็อกตัวเลขและไฟล์ไว้จนกว่าผู้ตรวจสอบจะส่งผลกลับ ดึงกลับได้จนกว่าผู้ตรวจสอบจะเปิดดู")
-        confirmBody.replaceChildren(ul, note)
-        confirmSend.textContent = "ส่งรอบที่ " + roundNo
+        askConfirm("ตรวจทานก่อนส่งให้ผู้ตรวจสอบ", [ul, note], "ส่งรอบที่ " + roundNo, doSubmit)
+    }
+    // One confirm dialog for every step that hands the month to the other side.
+    let confirmAction: (() => Promise<void>) | null = null
+    function askConfirm(title: string, kids: Node[], button: string, action: () => Promise<void>): void {
+        confirmTitle.textContent = title
+        confirmBody.replaceChildren(...kids)
+        confirmSend.textContent = button
+        confirmAction = action
         confirmDlg.showModal()
     }
-    confirmSend.addEventListener("click", () => { void doSubmit() })
+    confirmSend.addEventListener("click", () => { if (confirmAction) void confirmAction() })
     async function doSubmit(): Promise<void> {
         if (!st) return
         const s = st
@@ -627,31 +656,574 @@
         await loadState(false)
     }
 
+    // ── People in a round (both sides) ───────────────────────────────────
+    interface Person {
+        index: string
+        name: string
+        department: string
+        intern: boolean
+        sk03Row: number | null
+        score: number | null
+        stated: number | null
+        statedCell: string | null
+        statedHow: string
+        sheet: string | null
+        pay: number | null
+        deptRow: number | null
+        deptPay: number | null
+        admin: number | null
+        scoreCheck: "match" | "mismatch" | "missing"
+        moneyCheck: "match" | "mismatch" | "missing"
+        decision: "approve" | "fix" | null
+        remark: string
+        carried: boolean
+        why: string
+        decidedAt: string | null
+        reply: string
+        prev: { decision: string | null; remark: string; reply: string } | null
+    }
+    interface Grid { sheet: string; rows: number; cols: number; cells: [number, number, string | number][]; merges: string[] }
+    interface Detail { grid: Grid | null; deptHeader: string[][] | null; deptRow: (string | number | null)[] | null }
+    interface Issue {
+        id: number
+        round_no: number
+        index: string | null
+        body: string
+        status: "open" | "closed"
+        created_at: string
+        created_by: string
+        replies: { id: number; role: "auditor" | "auditee"; body: string; round_no: number | null; created_at: string; created_by: string }[]
+    }
+
+    let people: Person[] | null = null
+    let peopleKey = ""
+    let issues: Issue[] | null = null
+    let issuesKey = ""
+    let selected = ""
+    let filter = "todo"
+    let search = ""
+    const details = new Map<string, Detail>()
+
+    const roundKey = (s: State, r: Round): string => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix)
+    async function loadPeople(s: State, r: Round): Promise<void> {
+        const key = s.month + ":" + r.round_no
+        const res = await api<{ people: Person[] }>("/dashboard/api/review/" + s.month + "/people?round=" + r.round_no)
+        people = res.people
+        peopleKey = key
+        if (!selected || !people.some((p) => p.index === selected)) {
+            const first = people.find((p) => p.decision === null) || people[0]
+            selected = first ? first.index : ""
+        }
+        render()
+    }
+    async function loadIssues(s: State): Promise<void> {
+        const res = await api<{ issues: Issue[] }>("/dashboard/api/review/" + s.month + "/issues")
+        issues = res.issues
+        issuesKey = s.month
+        render()
+    }
+    const needPeople = (s: State, r: Round): boolean => peopleKey !== s.month + ":" + r.round_no
+    const ensure = (s: State, r: Round): void => {
+        if (needPeople(s, r)) { peopleKey = s.month + ":" + r.round_no; void loadPeople(s, r).catch((e) => say(e.message)) }
+        if (issuesKey !== s.month) { issuesKey = s.month; void loadIssues(s).catch((e) => say(e.message)) }
+    }
+    // A new state (another round, a decision made elsewhere) reloads both.
+    let lastRoundKey = ""
+    function refreshLists(s: State): void {
+        const r = liveRound(s)
+        if (!r) return
+        const k = roundKey(s, r)
+        if (k !== lastRoundKey) { lastRoundKey = k; peopleKey = ""; issuesKey = "" }
+    }
+
+    const CHECK_TEXT: Record<string, string> = { match: "ตรงกัน", mismatch: "ไม่ตรงกัน", missing: "ไม่พบ" }
+    const WHY_TEXT: Record<string, string> = {
+        fix: "รอบก่อนให้แก้ไข", new: "ไม่มีในรอบก่อน", score: "คะแนนของตัวเองเปลี่ยน",
+        department: "กลุ่มงานเปลี่ยน", name: "ชื่อเปลี่ยน", check: "ผลเทียบไม่ตรงกัน",
+    }
+    const HOW_TEXT: Record<string, string> = {
+        "grand-total": "แถวรวมทั้งหมด", "sub-total": "แถวรวม", "largest-over-sub-total": "ตัวเลขมากที่สุดในชีต (มากกว่าแถวรวม)",
+        uncached: "แถวรวมเป็นสูตรที่ Excel ไม่ได้บันทึกค่าไว้", none: "ไม่พบแถวรวม", empty: "ชีตว่าง", "no-sheet": "ไม่พบชีตของแพทย์",
+    }
+    const bothMatch = (p: Person): boolean => p.scoreCheck === "match" && p.moneyCheck === "match"
+    const decisionText = (p: Person): string => p.decision === "approve" ? (p.carried ? "อนุมัติ (คงผลรอบก่อน)" : "อนุมัติ")
+        : p.decision === "fix" ? "ต้องแก้ไข" : "รอตรวจ"
+    const num = (n: number | null): string => n === null ? "—" : Number(n).toLocaleString("th-TH", { maximumFractionDigits: 2 })
+
+    function chip(kind: string, text: string): HTMLElement {
+        return el("span", "rv-chip rv-chip-" + kind, text)
+    }
+
     // ผู้ตรวจสอบ ───────────────────────────────────────────────────────────
     function auditor(s: State): Node[] {
         const r = liveRound(s)
-        if (!r || r.status === "returned") {
-            const t = r
-                ? turn("wait", "รอผู้จัดทำ", "ส่งกลับรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.returned_at), "รอผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1))
-                : turn("wait", "รอผู้จัดทำ", "ผู้จัดทำยังไม่ได้ส่งข้อมูลเดือน " + monthName(s.month, true), "เมื่อส่งแล้วจะขึ้นที่นี่")
-            return [t]
+        if (!r) return [turn("wait", "รอผู้จัดทำ", "ผู้จัดทำยังไม่ได้ส่งข้อมูลเดือน " + monthName(s.month, true), "เมื่อส่งแล้วจะขึ้นที่นี่")]
+        if (r.status === "returned") {
+            const out: Node[] = [turn("wait", "รอผู้จัดทำ", "ส่งกลับรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.returned_at),
+                "ต้องแก้ " + int(r.counts.fix) + " คน · รอผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1))]
+            if (!r.auditee_opened_at) {
+                const row = el("div", "rv-actions")
+                const b = el("button", "btn-ghost", "ดึงผลตรวจกลับมาแก้")
+                b.type = "button"
+                b.addEventListener("click", () => { void roundStep("unreturn", "ดึงกลับแล้ว ตรวจต่อได้") })
+                row.append(b, el("span", "rv-hint", "ใช้ได้จนกว่าผู้จัดทำจะเปิดดู"))
+                out.push(card("ส่งผิด?", [row], "rv-h-unret"))
+            }
+            return out
         }
         if (r.status === "approved") {
-            return [turn("ok", "เสร็จแล้ว", "อนุมัติครบ เมื่อ " + when(r.approved_at))]
+            return [turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(r.counts.approve) + " คน เมื่อ " + when(r.approved_at), "เอกสารเบิกจ่าย (PDF) จะมาในอัปเดตถัดไป")]
         }
-        return [
-            turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true), "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "")),
-            card("สรุปรอบที่ " + r.round_no, [
-                (() => {
-                    const ul = el("ul", "rv-confirm-list")
-                    ul.append(
-                        el("li", undefined, "งบประมาณ " + baht(r.budget) + " บาท · per P4P อินเทิร์น " + baht(r.per_p4p) + " บาท"),
-                        el("li", undefined, "รอตรวจ " + int(r.counts.waiting) + " คน · อนุมัติแล้ว " + int(r.counts.approve) + (r.counts.carried ? " (คงผลจากรอบก่อน " + int(r.counts.carried) + ")" : "") + " · ต้องแก้ " + int(r.counts.fix)),
-                    )
-                    return ul
-                })(),
-                el("p", "rv-hint", "หน้าตรวจรายคน (เทียบคะแนนกับชีตของแพทย์ และเทียบเงินกับชีตกลุ่มงาน) จะมาในอัปเดตถัดไป"),
-            ], "rv-h-aud"),
-        ]
+        ensure(s, r)
+        const out: Node[] = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true),
+            "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
+            " · งบประมาณ " + baht(r.budget) + " · per P4P อินเทิร์น " + baht(r.per_p4p))]
+        out.push(finishBar(s, r))
+        if (!people) { out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
+        const wrap = el("div", "rv-review")
+        wrap.append(peopleList(), personPanel(s, r))
+        out.push(wrap, issuesCard(s, "auditor"))
+        return out
+    }
+
+    function finishBar(s: State, r: Round): HTMLElement {
+        const c = r.counts
+        const openIssues = (issues || []).filter((i) => i.status === "open").length
+        const bar = el("div", "rv-finish glass")
+        bar.append(el("p", "rv-counts", "รอตรวจ " + int(c.waiting) + " · อนุมัติ " + int(c.approve) +
+            (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " + int(openIssues)))
+        const btn = el("button", "btn-primary")
+        btn.type = "button"
+        btn.id = "rv-finish"
+        const why = el("span", "rv-hint")
+        why.id = "rv-finish-why"
+        if (c.waiting > 0) {
+            btn.textContent = "ส่งผลตรวจ…"
+            btn.setAttribute("aria-disabled", "true")
+            btn.setAttribute("aria-describedby", why.id)
+            why.textContent = "ส่งได้เมื่อตรวจครบทุกคน (เหลือ " + int(c.waiting) + " คน)"
+            btn.addEventListener("click", () => say(why.textContent || ""))
+        } else if (c.fix > 0 || openIssues > 0) {
+            btn.textContent = "ส่งกลับให้ผู้จัดทำแก้…"
+            why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน · ปัญหาอื่น " + int(openIssues) + " เรื่อง"
+            btn.addEventListener("click", () => {
+                askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน · ปัญหาอื่นที่เปิดอยู่ " + int(openIssues) + " เรื่อง"),
+                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep("return", "ส่งกลับให้ผู้จัดทำแล้ว"))
+            })
+        } else {
+            btn.textContent = "อนุมัติทั้งหมด…"
+            why.textContent = "อนุมัติครบ " + int(c.approve) + " คน และไม่มีปัญหาที่เปิดอยู่"
+            btn.addEventListener("click", () => {
+                askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
+                    el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep("approve", "อนุมัติแล้ว"))
+            })
+        }
+        bar.append(btn, why)
+        return bar
+    }
+
+    async function roundStep(step: "return" | "unreturn" | "approve", done: string): Promise<void> {
+        confirmSend.disabled = true
+        try {
+            await post("/dashboard/api/review/" + month + "/" + step)
+            say(done)
+        } catch (e) {
+            say(e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ")
+        } finally {
+            confirmSend.disabled = false
+            if (confirmDlg.open) confirmDlg.close()
+        }
+        peopleKey = ""; issuesKey = ""
+        await loadMonths().catch(() => false)
+        await loadState(false)
+    }
+
+    function visiblePeople(): Person[] {
+        const q = search.trim().toLowerCase()
+        return (people || []).filter((p) => {
+            if (q && !(p.name.toLowerCase().includes(q) || p.department.toLowerCase().includes(q))) return false
+            if (filter === "todo") return p.decision === null
+            if (filter === "diff") return !bothMatch(p)
+            if (filter === "fix") return p.decision === "fix"
+            if (filter === "approve") return p.decision === "approve"
+            return true
+        })
+    }
+
+    function peopleList(): HTMLElement {
+        const side = el("div", "rv-people glass")
+        const tools = el("div", "rv-people-tools")
+        const fl = el("label", "rv-mini", "แสดง")
+        const sel = el("select")
+        sel.id = "rv-filter"
+        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ผลเทียบไม่ตรง"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
+            const o = el("option", undefined, t)
+            o.value = v
+            sel.append(o)
+        }
+        sel.value = filter
+        sel.addEventListener("change", () => { filter = sel.value; render() })
+        fl.append(sel)
+        const sl = el("label", "rv-mini", "ค้นหา")
+        const si = el("input")
+        si.type = "search"
+        si.id = "rv-search"
+        si.value = search
+        si.autocomplete = "off"
+        si.addEventListener("input", () => { search = si.value; render() })
+        sl.append(si)
+        tools.append(fl, sl)
+        const shown = visiblePeople()
+        const count = el("p", "rv-hint", int(shown.length) + " คน")
+        count.setAttribute("aria-live", "polite")
+        const ul = el("ul", "rv-people-list")
+        ul.setAttribute("aria-label", "รายชื่อในรอบนี้")
+        for (const p of shown) {
+            const li = el("li")
+            const b = el("button", "rv-person-btn" + (p.index === selected ? " current" : ""))
+            b.type = "button"
+            b.id = "rv-p-" + p.index
+            if (p.index === selected) b.setAttribute("aria-current", "true")
+            const top = el("span", "rv-pname", p.name)
+            const sub = el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + " · " + decisionText(p))
+            b.append(top, sub)
+            if (!bothMatch(p)) b.append(chip("bad", "ผลเทียบไม่ตรง"))
+            b.addEventListener("click", () => { selected = p.index; render(); const t = document.getElementById("rv-person-h"); if (t) t.focus() })
+            li.append(b)
+            ul.append(li)
+        }
+        if (!shown.length) ul.append(el("li", "rv-hint", filter === "todo" ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"))
+        side.append(tools, count, ul)
+        return side
+    }
+
+    function personPanel(s: State, r: Round): HTMLElement {
+        const panel = el("section", "rv-person glass")
+        const p = (people || []).find((x) => x.index === selected)
+        if (!p) { panel.append(el("p", "rv-hint", "เลือกรายชื่อทางซ้าย")); return panel }
+        const h = el("h3", "rv-person-h", p.name)
+        h.id = "rv-person-h"
+        h.tabIndex = -1
+        panel.setAttribute("aria-labelledby", h.id)
+        panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + (p.sk03Row ? " · SK03 แถว " + p.sk03Row : "") + " · " + decisionText(p)))
+        if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + (WHY_TEXT[p.why] || p.why)))
+        if (p.prev && (p.prev.remark || p.prev.reply)) {
+            const prev = el("div", "rv-prev")
+            if (p.prev.remark) prev.append(el("p", undefined, "รอบก่อน ผู้ตรวจสอบ: " + p.prev.remark))
+            prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")))
+            panel.append(prev)
+        }
+        const t = el("table", "rv-compare")
+        const cap = el("caption", "sr-only", "ผลเทียบอัตโนมัติ")
+        const head = el("tr")
+        for (const x of ["เรื่อง", "SK03", "เทียบกับ", "ผล"]) { const th = el("th", undefined, x); th.scope = "col"; head.append(th) }
+        const row = (label: string, a: string, b: string, check: string): HTMLElement => {
+            const tr = el("tr")
+            const th = el("th", undefined, label)
+            th.scope = "row"
+            const res = el("td")
+            res.append(chip(check === "match" ? "ok" : "bad", CHECK_TEXT[check]))
+            tr.append(th, el("td", undefined, a), el("td", undefined, b), res)
+            return tr
+        }
+        const thead = el("thead"), tbody = el("tbody")
+        thead.append(head)
+        tbody.append(
+            row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
+                : num(p.stated) + " ช่อง " + p.statedCell + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck),
+            row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน แถว " + p.deptRow + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck),
+        )
+        t.append(cap, thead, tbody)
+        panel.append(t)
+        panel.append(sheetBox(s, r, p))
+        panel.append(decideBox(p))
+        const nav = el("div", "rv-actions")
+        const list = visiblePeople()
+        const i = list.findIndex((x) => x.index === p.index)
+        const go = (d: number, text: string): HTMLButtonElement => {
+            const b = el("button", "btn-ghost", text)
+            b.type = "button"
+            const target = list[i + d]
+            b.disabled = !target
+            b.addEventListener("click", () => { if (target) { selected = target.index; render(); const hh = document.getElementById("rv-person-h"); if (hh) hh.focus() } })
+            return b
+        }
+        nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"))
+        panel.append(nav)
+        return panel
+    }
+
+    function cellRC(name: string | null): [number, number] | null {
+        const m = /^([A-Z]+)(\d+)$/.exec(name || "")
+        if (!m) return null
+        let c = 0
+        for (const ch of m[1]) c = c * 26 + (ch.charCodeAt(0) - 64)
+        return [Number(m[2]) - 1, c - 1]
+    }
+    const colLetters = (c: number): string => { let s2 = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s2 = String.fromCharCode(65 + m) + s2; n = Math.floor((n - 1) / 26) } return s2 }
+
+    function sheetBox(s: State, r: Round, p: Person): HTMLElement {
+        const box = el("div", "rv-sheet-box")
+        const key = r.round_no + ":" + p.index
+        const d = details.get(key)
+        if (!d) {
+            box.append(el("p", "rv-hint", "กำลังโหลดชีตของแพทย์…"))
+            void api<Detail>("/dashboard/api/review/" + s.month + "/person/" + r.round_no + "/" + p.index)
+                .then((x) => { details.set(key, x); if (selected === p.index) render() })
+                .catch((e) => say(e.message))
+            return box
+        }
+        if (d.deptRow) {
+            const dt = el("table", "rv-dept")
+            const cap = el("caption", undefined, "แถวในชีตกลุ่มงาน " + p.department)
+            const hr = el("tr")
+            for (const x of ["ที่", "ชื่อ", "ตำแหน่ง", "ประเภท", "งานบริหาร (E)", "ตามสัดส่วนวิชาชีพ (F)", "รวม (G)"]) { const th = el("th", undefined, x); th.scope = "col"; hr.append(th) }
+            const tr = el("tr")
+            d.deptRow.slice(0, 7).forEach((v, k) => tr.append(el("td", k >= 4 ? "num" : "", typeof v === "number" ? num(v) : String(v === null ? "" : v))))
+            const th2 = el("thead"); th2.append(hr)
+            const tb = el("tbody"); tb.append(tr)
+            dt.append(cap, th2, tb)
+            box.append(dt)
+        }
+        const g = d.grid
+        if (!g) { box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู")); return box }
+        const hit = cellRC(p.statedCell)
+        const region = el("div", "rv-sheet")
+        region.setAttribute("role", "region")
+        region.tabIndex = 0
+        const capId = "rv-sheet-cap"
+        region.setAttribute("aria-labelledby", capId)
+        const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)" + (p.statedCell ? " · ช่องที่ใช้เป็นคะแนน: " + p.statedCell : ""))
+        cap.id = capId
+        const tbl = el("table", "rv-xl")
+        const map = new Map<string, string | number>()
+        for (const [rr, cc, v] of g.cells) map.set(rr + ":" + cc, v)
+        const hd = el("tr")
+        hd.append(el("th", "corner"))
+        for (let c = 0; c < g.cols; c++) { const th = el("th", undefined, colLetters(c)); th.scope = "col"; hd.append(th) }
+        const thead = el("thead"); thead.append(hd)
+        const tbody = el("tbody")
+        for (let rr = 0; rr < g.rows; rr++) {
+            const tr = el("tr")
+            const th = el("th", undefined, String(rr + 1)); th.scope = "row"
+            tr.append(th)
+            for (let c = 0; c < g.cols; c++) {
+                const v = map.get(rr + ":" + c)
+                const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v))
+                if (hit && hit[0] === rr && hit[1] === c) { td.className += " hit"; td.setAttribute("aria-label", "คะแนนที่ใช้ " + num(Number(v))) }
+                tr.append(td)
+            }
+            tbody.append(tr)
+        }
+        tbl.append(thead, tbody)
+        region.append(tbl)
+        box.append(cap, region)
+        // Bring the cell used as the score into view (it is often far right / bottom).
+        requestAnimationFrame(() => {
+            const h = tbl.querySelector("td.hit") as HTMLElement | null
+            if (!h) return
+            region.scrollTop = Math.max(0, h.offsetTop - region.clientHeight / 2)
+            region.scrollLeft = Math.max(0, h.offsetLeft - region.clientWidth / 2)
+        })
+        return box
+    }
+
+    function decideBox(p: Person): HTMLElement {
+        const box = el("div", "rv-decide")
+        const ok = bothMatch(p)
+        const approve = el("button", "btn-primary", p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
+        approve.type = "button"
+        approve.id = "rv-approve"
+        const why = el("p", "rv-hint")
+        why.id = "rv-approve-why"
+        if (!ok) {
+            approve.setAttribute("aria-disabled", "true")
+            approve.setAttribute("aria-describedby", why.id)
+            why.textContent = "อนุมัติได้เมื่อเทียบคะแนนและเทียบเงินตรงกันทั้งคู่ คนนี้ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ"
+        }
+        approve.addEventListener("click", () => {
+            if (!ok) { say(why.textContent || ""); return }
+            void decide(p, "approve", "")
+        })
+        const fixLabel = el("label", undefined, "หมายเหตุ (ต้องมีเมื่อเลือก ต้องแก้ไข)")
+        fixLabel.htmlFor = "rv-remark"
+        const ta = el("textarea")
+        ta.id = "rv-remark"
+        ta.rows = 2
+        ta.maxLength = 1000
+        ta.value = p.decision === "fix" ? p.remark : ""
+        const err = el("p", "rv-err hidden")
+        err.id = "rv-remark-e"
+        ta.setAttribute("aria-describedby", err.id)
+        const fix = el("button", "btn-ghost", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "ต้องแก้ไข")
+        fix.type = "button"
+        fix.id = "rv-fix"
+        fix.addEventListener("click", () => {
+            if (!ta.value.trim()) {
+                err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร"
+                err.classList.remove("hidden")
+                ta.setAttribute("aria-invalid", "true")
+                ta.focus()
+                return
+            }
+            void decide(p, "fix", ta.value)
+        })
+        const row = el("div", "rv-actions")
+        row.append(approve, fix)
+        if (p.decision) {
+            const undo = el("button", "btn-ghost", "ยกเลิกผล")
+            undo.type = "button"
+            undo.id = "rv-undo"
+            undo.addEventListener("click", () => { void decide(p, null, "") })
+            row.append(undo)
+        }
+        box.append(fixLabel, ta, err, row, why)
+        return box
+    }
+
+    async function decide(p: Person, decision: "approve" | "fix" | null, remark: string): Promise<void> {
+        busy = true
+        try {
+            await post("/dashboard/api/review/" + month + "/decisions/" + p.index, { decision, remark }, "PUT")
+            p.decision = decision
+            p.remark = decision === "fix" ? remark.trim() : ""
+            p.carried = false
+            say(p.name + ": " + decisionText(p))
+            // Straight on to the next person still to check.
+            if (decision) {
+                const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
+                if (next) selected = next.index
+            }
+        } catch (e) {
+            say(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ")
+        } finally {
+            busy = false
+        }
+        await loadState(false)
+        const hh = document.getElementById("rv-person-h")
+        if (hh) hh.focus()
+    }
+
+    // ปัญหาอื่น ๆ (both sides) ──────────────────────────────────────────────
+    function issuesCard(s: State, side: "auditor" | "auditee"): HTMLElement {
+        const kids: Node[] = []
+        const r = liveRound(s)
+        const canAct = side === "auditor" ? !!r && r.status === "submitted" : !!r && r.status === "returned"
+        if (issuesKey !== s.month) { issuesKey = s.month; void loadIssues(s).catch((e) => say(e.message)) }
+        const list = issues || []
+        if (!list.length) kids.push(el("p", "rv-hint", side === "auditor" ? "ยังไม่มี ใช้สำหรับเรื่องที่ไม่ใช่ของแพทย์คนใดคนหนึ่ง เช่น ลายเซ็น หรือยอดรวมของกลุ่มงาน" : "ไม่มี"))
+        for (const i of list) {
+            const item = el("article", "rv-issue" + (i.status === "closed" ? " closed" : ""))
+            const hid = "rv-issue-" + i.id
+            const h = el("h4", undefined, "เรื่องที่ " + i.id + (i.status === "closed" ? " (ปิดแล้ว)" : ""))
+            h.id = hid
+            item.setAttribute("aria-labelledby", hid)
+            item.append(h, el("p", undefined, i.body), el("p", "rv-hint", "แจ้งรอบที่ " + i.round_no + " · " + when(i.created_at)))
+            const ul = el("ul", "rv-replies")
+            for (const x of i.replies) {
+                ul.append(el("li", undefined, (x.role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ") + (x.round_no === null ? " (ร่าง ส่งไปกับรอบถัดไป)" : "") + ": " + x.body))
+            }
+            if (i.replies.length) item.append(ul)
+            if (canAct) {
+                const form = el("form", "rv-reply")
+                const lab = el("label", "sr-only", "ตอบเรื่องที่ " + i.id)
+                const ta = el("textarea")
+                ta.id = "rv-reply-" + i.id
+                ta.rows = 1
+                ta.maxLength = 2000
+                lab.htmlFor = ta.id
+                const send = el("button", "btn-ghost", "ตอบ")
+                send.type = "submit"
+                form.append(lab, ta, send)
+                form.addEventListener("submit", (ev) => {
+                    ev.preventDefault()
+                    if (!ta.value.trim()) { ta.focus(); return }
+                    void issueCall("/issues/" + i.id + "/replies", { role: side, body: ta.value }, "ส่งคำตอบแล้ว")
+                })
+                item.append(form)
+                if (side === "auditor") {
+                    const t = el("button", "btn-ghost", i.status === "open" ? "ปิดเรื่องนี้" : "เปิดอีกครั้ง")
+                    t.type = "button"
+                    t.addEventListener("click", () => { void issueCall("/issues/" + i.id + "/status", { open: i.status !== "open" }, i.status === "open" ? "ปิดแล้ว" : "เปิดอีกครั้งแล้ว") })
+                    item.append(t)
+                }
+            }
+            kids.push(item)
+        }
+        if (side === "auditor" && canAct) {
+            const form = el("form", "rv-reply")
+            const lab = el("label", undefined, "แจ้งปัญหาอื่น")
+            const ta = el("textarea")
+            ta.id = "rv-new-issue"
+            ta.rows = 2
+            ta.maxLength = 2000
+            lab.htmlFor = ta.id
+            const add = el("button", "btn-ghost", "เพิ่มปัญหา")
+            add.type = "submit"
+            form.append(lab, ta, add)
+            form.addEventListener("submit", (ev) => {
+                ev.preventDefault()
+                if (!ta.value.trim()) { ta.focus(); return }
+                void issueCall("/issues", { body: ta.value }, "เพิ่มปัญหาแล้ว")
+            })
+            kids.push(form)
+        }
+        return card("ปัญหาอื่น ๆ", kids, "rv-h-issues")
+    }
+
+    async function issueCall(path: string, json: unknown, done: string): Promise<void> {
+        try {
+            await post("/dashboard/api/review/" + month + path, json)
+            say(done)
+        } catch (e) {
+            say(e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ")
+        }
+        issuesKey = ""
+        await loadState(false)
+    }
+
+    // ผู้จัดทำ: what the auditor sent back, with a reply to each ─────────────
+    function answersCard(s: State, r: Round): HTMLElement {
+        ensure(s, r)
+        const kids: Node[] = []
+        const fixes = (people || []).filter((p) => p.decision === "fix")
+        if (!people) kids.push(el("p", "rv-loading", "กำลังโหลด…"))
+        else if (!fixes.length) kids.push(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้ ดูปัญหาอื่น ๆ ด้านล่าง"))
+        for (const p of fixes) {
+            const item = el("article", "rv-issue")
+            const hid = "rv-ans-" + p.index
+            const h = el("h4", undefined, p.name + " · " + (p.intern ? "อินเทิร์น" : p.department))
+            h.id = hid
+            item.setAttribute("aria-labelledby", hid)
+            item.append(h, el("p", undefined, "ผู้ตรวจสอบ: " + p.remark))
+            const form = el("form", "rv-reply")
+            const lab = el("label", undefined, "คำตอบของผู้จัดทำ (ไม่บังคับ)")
+            const ta = el("textarea")
+            ta.id = "rv-answer-" + p.index
+            ta.rows = 1
+            ta.maxLength = 1000
+            ta.value = p.reply
+            lab.htmlFor = ta.id
+            const save = el("button", "btn-ghost", "บันทึกคำตอบ")
+            save.type = "submit"
+            form.append(lab, ta, save)
+            form.addEventListener("submit", (ev) => {
+                ev.preventDefault()
+                void (async () => {
+                    try {
+                        await post("/dashboard/api/review/" + month + "/replies/" + p.index, { reply: ta.value }, "PUT")
+                        p.reply = ta.value.trim()
+                        say("บันทึกคำตอบแล้ว ส่งไปกับรอบถัดไป")
+                    } catch (e) { say(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ") }
+                })()
+            })
+            item.append(form)
+            kids.push(item)
+        }
+        kids.push(el("p", "rv-hint", "แก้ในแอป (แท็บรายชื่อ หรือให้แพทย์ส่งไฟล์ใหม่) แล้วสร้างไฟล์ใหม่ในข้อ 2 ดาวน์โหลด และส่งรอบที่ " + (r.round_no + 1) +
+            " ในข้อ 3 รอบถัดไปผู้ตรวจสอบจะตรวจคนที่ต้องแก้ไข และคนที่คะแนน กลุ่มงาน หรือชื่อของตัวเองเปลี่ยน หรือผลเทียบไม่ตรงกัน"))
+        const wrap = el("div", "rv-stack")
+        wrap.append(card("สิ่งที่ผู้ตรวจสอบให้แก้ (รอบที่ " + r.round_no + ")", kids, "rv-h-ans"), issuesCard(s, "auditee"))
+        return wrap
     }
 })()
