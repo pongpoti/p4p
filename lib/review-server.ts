@@ -77,6 +77,10 @@ const REFUSALS: [RegExp, number, string][] = [
   [/a problem is still open/, 409, "ยังมีปัญหาอื่น ๆ ที่เปิดอยู่ ปิดก่อนอนุมัติ"],
   [/the auditee has started/, 409, "ผู้จัดทำเริ่มแก้แล้ว ดึงกลับไม่ได้"],
   [/not in this round/, 404, "ไม่พบในรอบนี้"],
+  [/not approved/, 409, "เดือนนี้ยังไม่ได้อนุมัติ"],
+  [/has not failed/, 409, "เอกสารไม่ได้สร้างไม่สำเร็จ ไม่ต้องสร้างใหม่"],
+  [/a reopen needs a reason/, 400, "เขียนเหตุผลก่อน"],
+  [/reason is too long/, 400, "เหตุผลไม่เกิน 1,000 ตัวอักษร"],
 ]
 
 const pgError = (e: any): { code?: string; message?: string } => (e && e.response && e.response.data) || {}
@@ -289,6 +293,15 @@ export function mountReview(d: ReviewDeps): void {
   //   POST /dashboard/api/review/:month/issues           {index?, body}
   //   POST /dashboard/api/review/:month/issues/:id/replies  {role, body}
   //   POST /dashboard/api/review/:month/issues/:id/status   {open}
+  // A person's name for the History tab (the decision routes only get the roster index).
+  const personName = async (index: string): Promise<string> => {
+    try {
+      const r = await axios.get(rest("review_build_people?select=name&roster_index=eq." + index + "&limit=1"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      return String(((r.data as any[])[0] || {}).name || "")
+    } catch { return "" }
+  }
+
   const text = (v: unknown, max: number): string | null => {
     const t = typeof v === "string" ? v.trim() : ""
     return t && t.length <= max ? t : null
@@ -336,7 +349,7 @@ export function mountReview(d: ReviewDeps): void {
     if (remark === null) return res.status(400).json({ error: "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร (ไม่เกิน 1,000 ตัวอักษร)" })
     try {
       const row = await d.callServiceRpc("review_decide", { p_month: g.month, p_index: index, p_decision: decision, p_remark: remark, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.decide", { month: g.month, index, decision, remark })
+      await d.audit(req, g.s, "review.decide", { month: g.month, index, physician: await personName(index), decision, remark })
       res.json({ ok: true, decision: row })
     } catch (e: any) { fail(res, "decide", e) }
   })
@@ -349,7 +362,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!UUID_RE.test(index) || reply.length > 1000) return res.status(400).json({ error: "คำตอบไม่เกิน 1,000 ตัวอักษร" })
     try {
       await d.callServiceRpc("review_reply_decision", { p_month: g.month, p_index: index, p_reply: reply, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.reply", { month: g.month, index, reply })
+      await d.audit(req, g.s, "review.reply", { month: g.month, index, physician: await personName(index), reply })
       res.json({ ok: true })
     } catch (e: any) { fail(res, "reply", e) }
   })
@@ -368,6 +381,51 @@ export function mountReview(d: ReviewDeps): void {
   roundAction("return", "review_return_round", "review.return")
   roundAction("unreturn", "review_unreturn_round", "review.unreturn")
   roundAction("approve", "review_approve_round", "review.approve")
+
+  // The approval document (process/review-pdf.ts, workflow 2.8).
+  app.get("/dashboard/api/review/:month/pdf", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      const r = await axios.get(rest("review_rounds?select=round_no,pdf_status,pdf_path&month=eq." + g.month + "&status=eq.approved"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      const row = (r.data as any[])[0]
+      if (!row || row.pdf_status !== "ready" || !row.pdf_path) return res.status(404).json({ error: "เอกสารยังไม่พร้อม" })
+      const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + row.pdf_path), { expiresIn: 120 },
+        { headers: json(), timeout: 8000 })
+      await d.audit(req, g.s, "review.download", { month: g.month, kind: "pdf", round: row.round_no })
+      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL + "&download=" +
+        encodeURIComponent("P4P_" + g.month + "_approved.pdf"))
+    } catch (e: any) { fail(res, "pdf download", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      const round = await d.callServiceRpc("review_retry_pdf", { p_month: g.month, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.pdf_retry", { month: g.month, round: round && round.round_no })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "pdf retry", e) }
+  })
+
+  // ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the round goes back to the auditor and
+  // the cancelled PDF is deleted, so no old link can fetch it.
+  app.post("/dashboard/api/review/:month/reopen", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const reason = text(req.body && req.body.reason, 1000)
+    if (!reason) return res.status(400).json({ error: "เขียนเหตุผลก่อน (ไม่เกิน 1,000 ตัวอักษร)" })
+    try {
+      const out = await d.callServiceRpc("review_reopen_round", { p_month: g.month, p_reason: reason, p_actor: g.s.name })
+      if (out && out.old_pdf) {
+        await axios.delete(storage("object/" + BUCKET), { headers: json(), data: { prefixes: [out.old_pdf] }, timeout: 8000 })
+          .catch((e: any) => console.error("[dashboard] review: could not delete the cancelled PDF:", e.message))
+      }
+      await d.audit(req, g.s, "review.reopen", { month: g.month, round: out && out.round_no, reason })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "reopen", e) }
+  })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {
     const g = await gate(req, res)

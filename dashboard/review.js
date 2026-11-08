@@ -144,7 +144,9 @@
         st = s;
         render();
         clearTimeout(poll);
-        if (openRequest(s))
+        const r = liveRound(s);
+        const pdfWaiting = !!(r && r.status === "approved" && (r.pdf_status === "queued" || r.pdf_status === "building"));
+        if (openRequest(s) || pdfWaiting)
             poll = window.setTimeout(() => { void refresh(); }, 15000);
     }
     async function refresh() {
@@ -253,14 +255,13 @@
         const r = liveRound(s);
         const name = monthName(s.month, true);
         if (r && r.status === "submitted") {
-            out.push(turn("wait", "รอผู้ตรวจสอบ", "ส่งรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.submitted_at), r.auditor_opened_at ? "ผู้ตรวจสอบเปิดดูแล้ว เมื่อ " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่ได้เปิด ดึงกลับมาแก้ได้จนกว่าผู้ตรวจสอบจะเปิด"));
+            out.push(turn("wait", "รอผู้ตรวจสอบ", "ส่งรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.submitted_at), r.reopened_at ? "ผู้ตรวจสอบยกเลิกเอกสารเบิกจ่ายและเปิดตรวจอีกครั้ง เมื่อ " + when(r.reopened_at) + " · เหตุผล: " + (r.reopen_reason || "")
+                : r.auditor_opened_at ? "ผู้ตรวจสอบเปิดดูแล้ว เมื่อ " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่ได้เปิด ดึงกลับมาแก้ได้จนกว่าผู้ตรวจสอบจะเปิด"));
             out.push(sentSummary(s, r));
             return out;
         }
-        if (r && r.status === "approved") {
-            out.push(turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(s.build ? s.build.people : 0) + " คน เมื่อ " + when(r.approved_at), "เอกสารเบิกจ่าย (PDF) จะมาในอัปเดตถัดไป"));
-            return out;
-        }
+        if (r && r.status === "approved")
+            return approvedView(s, r, "auditee");
         if (r && r.status === "returned") {
             out.push(turn("you", "ถึงคิวคุณ", "ผู้ตรวจสอบส่งกลับรอบที่ " + r.round_no + " ให้แก้ไข เมื่อ " + when(r.returned_at), "ต้องแก้ " + int(r.counts.fix) + " คน · แก้ในแอป แล้วสร้างไฟล์ใหม่ ดาวน์โหลด และส่งรอบที่ " + (r.round_no + 1)));
         }
@@ -734,9 +735,8 @@
             }
             return out;
         }
-        if (r.status === "approved") {
-            return [turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(r.counts.approve) + " คน เมื่อ " + when(r.approved_at), "เอกสารเบิกจ่าย (PDF) จะมาในอัปเดตถัดไป")];
-        }
+        if (r.status === "approved")
+            return approvedView(s, r, "auditor");
         ensure(s, r);
         const out = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true), "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
                 " · งบประมาณ " + baht(r.budget) + " · per P4P อินเทิร์น " + baht(r.per_p4p))];
@@ -786,6 +786,116 @@
         }
         bar.append(btn, why);
         return bar;
+    }
+    // ── Approved: the document, a retry, and reopening ───────────────────
+    function approvedView(s, r, side) {
+        const status = r.pdf_status || "queued";
+        const out = [turn("ok", "เสร็จแล้ว", "อนุมัติครบ " + int(r.counts.approve) + " คน เมื่อ " + when(r.approved_at) +
+                (r.approved_by ? " โดย " + r.approved_by : ""), status === "ready" ? "เอกสารเบิกจ่ายพร้อมแล้ว" + (r.pdf_built_at ? " (สร้างเมื่อ " + when(r.pdf_built_at) + ")" : "") + " · ทั้งสองฝั่งดาวน์โหลดได้"
+                : status === "failed" ? "สร้างเอกสารเบิกจ่ายไม่สำเร็จ ดูด้านล่าง"
+                    : "กำลังสร้างเอกสารเบิกจ่าย (PDF) · ปกติไม่เกินไม่กี่นาที หน้านี้อัปเดตเอง")];
+        const kids = [];
+        if (status === "ready") {
+            const a = el("a", "btn-primary rv-download", "ดาวน์โหลดเอกสารเบิกจ่าย " + monthName(s.month, true) + " (PDF" +
+                (r.pdf_pages ? ", " + int(r.pdf_pages) + " หน้า" : "") + (r.pdf_bytes ? ", " + sizeText(r.pdf_bytes) : "") + ")");
+            a.href = "/dashboard/api/review/" + s.month + "/pdf";
+            a.id = "rv-pdf";
+            kids.push(el("div", "rv-actions"));
+            kids[0].append(a);
+            kids.push(el("p", "rv-hint", "A4 แนวนอน · หน้าแรกสรุปรายกลุ่มงาน ตามด้วยชีตกลุ่มงานทุกกลุ่ม · เวลาอนุมัติอยู่มุมขวาล่างทุกหน้า"));
+        }
+        else if (status === "failed") {
+            const p = el("p", "alert", "สร้างเอกสารเบิกจ่ายไม่สำเร็จ");
+            p.setAttribute("role", "alert");
+            kids.push(p);
+            if (r.pdf_error)
+                kids.push(el("p", "rv-hint", "รายละเอียด: " + r.pdf_error));
+            const row = el("div", "rv-actions");
+            const b = el("button", "btn-primary", "สร้างเอกสารอีกครั้ง");
+            b.type = "button";
+            b.id = "rv-pdf-retry";
+            b.addEventListener("click", () => { void retryPdf(b); });
+            row.append(b);
+            kids.push(row);
+        }
+        else {
+            const p = el("p", "rv-loading", "กำลังสร้างเอกสาร…");
+            p.setAttribute("aria-busy", "true");
+            kids.push(p);
+        }
+        out.push(card("เอกสารเบิกจ่าย", kids, "rv-h-pdf"));
+        if (side === "auditor") {
+            const row = el("div", "rv-actions");
+            const b = el("button", "btn-ghost", "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง…");
+            b.type = "button";
+            b.id = "rv-reopen";
+            b.addEventListener("click", () => askReopen(s, r));
+            row.append(b);
+            out.push(card("ต้องแก้หลังอนุมัติ?", [row,
+                el("p", "rv-hint", "เอกสารที่สร้างแล้วจะใช้ไม่ได้ รอบที่ " + r.round_no + " กลับมาเป็นคิวผู้ตรวจสอบ ผลอนุมัติเดิมยังอยู่")], "rv-h-reopen"));
+        }
+        return out;
+    }
+    async function retryPdf(b) {
+        b.disabled = true;
+        try {
+            await post("/dashboard/api/review/" + month + "/pdf/retry");
+            say("สั่งสร้างเอกสารอีกครั้งแล้ว");
+        }
+        catch (e) {
+            say(e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ");
+        }
+        await loadState(false);
+    }
+    function askReopen(s, r) {
+        const ta = el("textarea");
+        ta.id = "rv-reopen-reason";
+        ta.rows = 3;
+        ta.maxLength = 1000;
+        ta.required = true;
+        ta.setAttribute("aria-required", "true");
+        const lab = el("label", undefined, "เหตุผล (ต้องกรอก)");
+        lab.htmlFor = ta.id;
+        const err = el("p", "rv-err");
+        err.id = "rv-reopen-err";
+        ta.setAttribute("aria-describedby", err.id);
+        const field = el("div", "rv-reason");
+        field.append(lab, ta, err);
+        askConfirm("ยกเลิกเอกสารและเปิดตรวจอีกครั้ง · " + monthName(s.month, true), [
+            el("p", undefined, "เอกสารเบิกจ่าย" + (r.pdf_built_at ? "ที่สร้างเมื่อ " + when(r.pdf_built_at) : "") +
+                " จะใช้ไม่ได้ รวมถึงฉบับที่ดาวน์โหลดหรือพิมพ์ไปแล้ว ผู้จัดทำจะเห็นเหตุผลนี้ และบันทึกในประวัติการใช้งาน"),
+            el("p", undefined, "สิ่งที่จะเกิดขึ้น: ผลอนุมัติ " + int(r.counts.approve) + " คนยังอยู่ · เหตุผลจะเป็นปัญหาอื่น ๆ ที่เปิดอยู่ · " +
+                "เปลี่ยนคนที่ต้องแก้เป็น ต้องแก้ไข แล้วส่งกลับ · ผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1) +
+                " · ถ้าไม่มีอะไรต้องแก้ ปิดเรื่องแล้วอนุมัติใหม่ได้"),
+            field,
+        ], "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง", async () => {
+            const reason = ta.value.trim();
+            if (!reason) {
+                ta.setAttribute("aria-invalid", "true");
+                err.textContent = "เขียนเหตุผลก่อน จึงจะกดได้";
+                ta.focus();
+                return;
+            }
+            confirmSend.disabled = true;
+            try {
+                await post("/dashboard/api/review/" + month + "/reopen", { reason });
+                say("ยกเลิกเอกสารแล้ว รอบที่ " + r.round_no + " กลับมาให้ตรวจอีกครั้ง");
+                if (confirmDlg.open)
+                    confirmDlg.close();
+            }
+            catch (e) {
+                err.textContent = e instanceof Error ? e.message : "ทำรายการไม่สำเร็จ";
+                return;
+            }
+            finally {
+                confirmSend.disabled = false;
+            }
+            peopleKey = "";
+            issuesKey = "";
+            await loadMonths().catch(() => false);
+            await loadState(false);
+        });
+        setTimeout(() => ta.focus(), 0);
     }
     async function roundStep(step, done) {
         confirmSend.disabled = true;

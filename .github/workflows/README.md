@@ -11,7 +11,7 @@ group 1-2 workflows it watches by their name.
 
 | Name | File | When |
 |---|---|---|
-| 1. Always on: process LINE uploads and submission emails | `1-always-on-process-line-uploads-and-emails.yml` | Back to back, each run about 60 min, then it starts the next; cron :05/:25/:45 restarts it if the chain breaks. Reads the Gmail inbox every minute, and starts 2.2 for one month when the dashboard's ตรวจสอบ tab asks for a fresh build (never while a 2.2 run is queued or running). Disable it here to stop the relay. |
+| 1. Always on: process LINE uploads and submission emails | `1-always-on-process-line-uploads-and-emails.yml` | Back to back, each run about 60 min, then it starts the next; cron :05/:25/:45 restarts it if the chain breaks. Reads the Gmail inbox every minute, starts 2.2 for one month when the dashboard's ตรวจสอบ tab asks for a fresh build (never while a 2.2 run is queued or running), and starts 2.8 when the auditor approves a month. Disable it here to stop the relay. |
 | 1.2 Always on: alert when a scheduled run fails | `1-2-always-on-alert-failed-runs.yml` | Back to back like 1, each run about 58 min, then it starts the next; cron :15/:45 restarts it. Checks every minute for failed or timed-out runs of the group 1-2 workflows and sends a Telegram alert (cancelled runs are normal for the relays and ignored). Every 5 minutes it also checks that 1 and 2.1 still have a run going, and alerts every 30 minutes while either has been stopped for 45 minutes. It watches workflows by name, so add a renamed or new group 1-2 workflow to its WATCH list. |
 
 ## 2. Scheduled
@@ -25,6 +25,7 @@ group 1-2 workflows it watches by their name.
 | 2.5 Monthly: update LINE menu month picker | `2-5-monthly-update-line-menu-month.yml` | 1st of month 06:00 |
 | 2.6 Monthly: eligible physician list (PDF) | `2-6-monthly-eligible-physician-list.yml` | 1st of month 09:00 |
 | 2.7 Yearly: create Drive year folders | `2-7-yearly-create-drive-folders.yml` | 1 January 07:00 |
+| 2.8 On request: build the review approval PDF | `2-8-on-request-build-review-approval-pdf.yml` | Started by 1 when the auditor approves a month in the ตรวจสอบ tab. Builds the approval PDF (cover plus every department sheet, A4 landscape, approval time on every page) into Supabase Storage for the tab; sends nothing. Running it by hand is harmless. |
 
 ## 3. Manual (Run workflow button)
 

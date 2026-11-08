@@ -20,6 +20,9 @@
 --    review_decisions     one per person per round (null = still to check)
 --    review_issues        "ปัญหาอื่น ๆ", with review_issue_replies
 --
+--  When the auditor approves everyone, workflow 2.8 (process/review-pdf.ts,
+--  started by workflow 1) builds the approval document into pdf/.
+--
 --  Storage: private bucket review-files (builds/, uploads/, pdf/).
 --
 --  service_role only, like dashboard_followups: RLS on with no policies,
@@ -155,6 +158,14 @@ create table if not exists public.review_rounds (
   pdf_error         text not null default '',
   unique (month, round_no)
 );
+-- Part 3: the approval PDF job and reopening an approved month.
+alter table public.review_rounds
+  add column if not exists pdf_claimed_at timestamptz,   -- workflow 2.8 took it (a claim 20 min old is retried)
+  add column if not exists pdf_attempts   int not null default 0,
+  add column if not exists pdf_built_at   timestamptz,
+  add column if not exists reopened_at    timestamptz,   -- the auditor cancelled the document and checks again
+  add column if not exists reopened_by    text not null default '',
+  add column if not exists reopen_reason  text not null default '';
 -- One live round per month.
 create unique index if not exists review_rounds_one_live
   on public.review_rounds (month) where status in ('submitted', 'returned', 'approved');
@@ -414,6 +425,9 @@ begin
         'auditor_opened_at', r.auditor_opened_at, 'returned_at', r.returned_at,
         'auditee_opened_at', r.auditee_opened_at, 'approved_at', r.approved_at,
         'pdf_status', r.pdf_status, 'pdf_bytes', r.pdf_bytes, 'pdf_pages', r.pdf_pages,
+        'pdf_error', r.pdf_error, 'pdf_built_at', r.pdf_built_at, 'approved_by', r.approved_by,
+        'returned_by', r.returned_by, 'reopened_at', r.reopened_at, 'reopened_by', r.reopened_by,
+        'reopen_reason', r.reopen_reason,
         'counts', (select jsonb_build_object(
             'approve', count(*) filter (where d.decision = 'approve'),
             'fix', count(*) filter (where d.decision = 'fix'),
@@ -766,12 +780,122 @@ as $$
     from public.review_issues i where i.month = p_month;
 $$;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- The approval PDF and reopening (part 3). Safe to re-run like everything above.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Workflow 2.8 takes the next approved round whose PDF is waiting. A claim
+-- older than 20 minutes (the job died) is taken again, up to 3 tries.
+create or replace function public.claim_review_pdf()
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  update public.review_rounds
+     set pdf_status = 'failed', pdf_error = 'the PDF job stopped 3 times without finishing'
+   where status = 'approved' and pdf_status = 'building' and pdf_attempts >= 3
+     and pdf_claimed_at < now() - interval '20 minutes';
+  select * into r from public.review_rounds
+   where status = 'approved'
+     and (pdf_status = 'queued' or (pdf_status = 'building' and pdf_claimed_at < now() - interval '20 minutes'))
+   order by approved_at
+   limit 1
+   for update skip locked;
+  if not found then return null; end if;
+  update public.review_rounds
+     set pdf_status = 'building', pdf_claimed_at = now(), pdf_attempts = pdf_attempts + 1, pdf_error = ''
+   where id = r.id returning * into r;
+  return jsonb_build_object('id', r.id, 'month', r.month, 'round_no', r.round_no, 'claimed_at', r.pdf_claimed_at);
+end;
+$$;
+
+-- The job reports back. False when the round was reopened or claimed again
+-- meanwhile; the job then deletes the file it made.
+create or replace function public.review_pdf_done(p_round bigint, p_claimed timestamptz, p_path text, p_bytes int, p_pages int)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.review_rounds
+     set pdf_status = 'ready', pdf_path = p_path, pdf_bytes = p_bytes, pdf_pages = p_pages,
+         pdf_built_at = now(), pdf_error = ''
+   where id = p_round and status = 'approved' and pdf_status = 'building' and pdf_claimed_at = p_claimed;
+  return found;
+end;
+$$;
+
+create or replace function public.review_pdf_failed(p_round bigint, p_claimed timestamptz, p_error text)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.review_rounds
+     set pdf_status = 'failed', pdf_error = left(coalesce(p_error, ''), 500)
+   where id = p_round and status = 'approved' and pdf_status = 'building' and pdf_claimed_at = p_claimed;
+  return found;
+end;
+$$;
+
+-- สร้างเอกสารอีกครั้ง after a failed PDF.
+create or replace function public.review_retry_pdf(p_month text, p_actor text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
+  select * into r from public.review_rounds where month = p_month and status = 'approved' for update;
+  if not found then raise exception 'review: not approved'; end if;
+  if r.pdf_status <> 'failed' then raise exception 'review: the document has not failed'; end if;
+  update public.review_rounds
+     set pdf_status = 'queued', pdf_attempts = 0, pdf_error = '', pdf_claimed_at = null
+   where id = r.id returning * into r;
+  return r;
+end;
+$$;
+
+-- ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the document is cancelled, the round
+-- goes back to the auditor with every decision kept, and the reason is added
+-- to ปัญหาอื่น ๆ (open), so the auditee sees it and it must be closed before
+-- approving again. Returns the cancelled PDF's path for the server to delete.
+create or replace function public.review_reopen_round(p_month text, p_reason text, p_actor text)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  v_old text;
+begin
+  if char_length(btrim(coalesce(p_reason, ''))) = 0 then raise exception 'review: a reopen needs a reason'; end if;
+  if char_length(btrim(p_reason)) > 1000 then raise exception 'review: the reason is too long'; end if;
+  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
+  select * into r from public.review_rounds where month = p_month and status = 'approved' for update;
+  if not found then raise exception 'review: not approved'; end if;
+  v_old := r.pdf_path;
+  update public.review_rounds
+     set status = 'submitted', approved_at = null, approved_by = '',
+         pdf_status = 'none', pdf_path = null, pdf_bytes = null, pdf_pages = null, pdf_error = '',
+         pdf_claimed_at = null, pdf_attempts = 0, pdf_built_at = null,
+         reopened_at = now(), reopened_by = coalesce(p_actor, ''), reopen_reason = btrim(p_reason)
+   where id = r.id returning * into r;
+  insert into public.review_issues (month, round_no, body, created_by)
+  values (p_month, r.round_no, 'ยกเลิกเอกสารเบิกจ่ายที่อนุมัติแล้ว: ' || btrim(p_reason), coalesce(p_actor, ''));
+  return jsonb_build_object('round_no', r.round_no, 'old_pdf', v_old);
+end;
+$$;
+
 -- Every review function: service role only.
 do $$
 declare f regprocedure;
 begin
   for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname = 'claim_review_request') loop
+            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname in ('claim_review_request', 'claim_review_pdf')) loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;

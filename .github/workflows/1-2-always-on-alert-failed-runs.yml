@@ -46,7 +46,8 @@ jobs:
          "2.4 Monthly: create next month's roster table",
          "2.5 Monthly: update LINE menu month picker",
          "2.6 Monthly: eligible physician list (PDF)",
-         "2.7 Yearly: create Drive year folders"]
+         "2.7 Yearly: create Drive year folders",
+         "2.8 On request: build the review approval PDF"]
       # The relays hand over the moment a run ends and their cron restarts
       # them within 20 minutes, so 45 minutes with nothing alive means the
       # chain is broken. Repeats every 30 minutes until someone restarts it.

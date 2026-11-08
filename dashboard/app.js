@@ -608,6 +608,17 @@
         "review.upload": "อัปโหลดไฟล์ตรวจสอบ",
         "review.submit": "ส่งให้ผู้ตรวจสอบ",
         "review.withdraw": "ดึงรอบที่ส่งกลับ",
+        "review.decide": "ตรวจรายคน",
+        "review.reply": "ตอบหมายเหตุผู้ตรวจสอบ",
+        "review.return": "ส่งผลตรวจกลับให้ผู้จัดทำ",
+        "review.unreturn": "ดึงผลตรวจกลับมาแก้",
+        "review.approve": "อนุมัติครบทุกคน",
+        "review.issue": "เพิ่มปัญหาอื่น ๆ",
+        "review.issue_reply": "ตอบปัญหาอื่น ๆ",
+        "review.issue_open": "เปิดปัญหาอีกครั้ง",
+        "review.issue_close": "ปิดปัญหา",
+        "review.pdf_retry": "สร้างเอกสารเบิกจ่ายอีกครั้ง",
+        "review.reopen": "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง",
     };
     const GROUP_LABEL = {
         change: "การแก้ไข", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
@@ -701,7 +712,7 @@
                 break;
             case "review.download":
                 add(monthLabel(t.month));
-                add(t.kind === "sk03" ? "SK03" : "ไฟล์รวมคะแนนรายคน");
+                add(t.kind === "sk03" ? "SK03" : t.kind === "pdf" ? "เอกสารเบิกจ่าย (PDF)" : "ไฟล์รวมคะแนนรายคน");
                 break;
             case "review.upload":
                 add(monthLabel(t.month));
@@ -711,8 +722,49 @@
                 break;
             case "review.submit":
             case "review.withdraw":
+            case "review.return":
+            case "review.unreturn":
+            case "review.approve":
+            case "review.pdf_retry":
                 add(monthLabel(t.month));
-                add("รอบที่ " + t.round);
+                if (t.round)
+                    add("รอบที่ " + t.round);
+                break;
+            case "review.reopen":
+                add(monthLabel(t.month));
+                if (t.round)
+                    add("รอบที่ " + t.round);
+                add("เหตุผล: " + (t.reason || ""));
+                break;
+            case "review.decide":
+                add(monthLabel(t.month));
+                add(t.physician);
+                add(t.decision === "approve" ? "อนุมัติ" : t.decision === "fix" ? "ต้องแก้ไข" : "ยกเลิกผล");
+                if (t.remark)
+                    add("หมายเหตุ: " + t.remark);
+                break;
+            case "review.reply":
+                add(monthLabel(t.month));
+                add(t.physician);
+                if (t.reply)
+                    add("คำตอบ: " + t.reply);
+                break;
+            case "review.issue":
+                add(monthLabel(t.month));
+                if (t.id)
+                    add("เรื่องที่ " + t.id);
+                add(t.body);
+                break;
+            case "review.issue_reply":
+                add(monthLabel(t.month));
+                add("เรื่องที่ " + t.id);
+                add(t.role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ");
+                add(t.body);
+                break;
+            case "review.issue_open":
+            case "review.issue_close":
+                add(monthLabel(t.month));
+                add("เรื่องที่ " + t.id);
                 break;
         }
         td.textContent = parts.join(" · ");

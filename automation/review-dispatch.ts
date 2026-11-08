@@ -12,12 +12,19 @@
  * running (the nightly one included), so 2.2's concurrency group never has
  * two runs waiting, which would cancel one of them.
  *
+ * The same loop starts workflow 2.8 (process/review-pdf.ts) when the auditor
+ * has approved a month and its approval PDF is waiting; 2.8 claims the round
+ * itself (claim_review_pdf), so a lost dispatch is simply tried again.
+ *
  * Quiet until the review tables exist, and never throws into the drain loop.
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const BUILD_WORKFLOW = "2-2-nightly-build-sk03-and-notify-heads.yml";
+export const PDF_WORKFLOW = "2-8-on-request-build-review-approval-pdf.yml";
+/** A PDF claim this old means the 2.8 run died; claim_review_pdf takes it again. */
+const PDF_STALE_MS = 20 * 60_000;
 const CHECK_MS = 30_000;
 const MAX_ATTEMPTS = 3;
 
@@ -35,6 +42,8 @@ export function buildBusy(runs: { status?: string | null }[]): boolean {
 let _supabase: SupabaseClient | null = null;
 let disabled = false;
 let warned = false;
+let pdfDisabled = false;
+let pdfNextTry = 0;
 
 function supabase(): SupabaseClient | null {
   if (_supabase) return _supabase;
@@ -108,6 +117,46 @@ export async function dispatchReviewBuild(): Promise<boolean> {
     return false;
   } catch (err) {
     console.error(`│  ❌  ตรวจสอบ tab dispatcher: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/** Starts workflow 2.8 when an approved month's PDF is waiting. True when it did. */
+export async function dispatchReviewPdf(now: number = Date.now()): Promise<boolean> {
+  if (disabled || pdfDisabled || now < pdfNextTry) return false;
+  const db = supabase();
+  if (!db || !process.env.GH_TOKEN || !process.env.GITHUB_REPOSITORY) return false;
+  try {
+    const stale = new Date(now - PDF_STALE_MS).toISOString();
+    const { data: waiting, error } = await db.from("review_rounds").select("id")
+      .eq("status", "approved")
+      .or(`pdf_status.eq.queued,and(pdf_status.eq.building,pdf_claimed_at.lt.${stale})`)
+      .limit(1);
+    if (error) {
+      // 42703: the part-3 columns are not there yet.
+      if (missingTable(error) || error.code === "42703") { pdfDisabled = true; console.log("│  ℹ️  ตรวจสอบ tab PDFs: off (part 3 of the review SQL not installed yet)"); return false; }
+      throw new Error(error.message);
+    }
+    if (!waiting?.length) return false;
+
+    const runsRes = await github(`/actions/workflows/${PDF_WORKFLOW}/runs?per_page=5`);
+    if (!runsRes.ok) throw new Error(`list runs: HTTP ${runsRes.status}`);
+    const runs = ((await runsRes.json()) as { workflow_runs?: { status?: string }[] }).workflow_runs ?? [];
+    if (buildBusy(runs)) return false;
+
+    const res = await github(`/actions/workflows/${PDF_WORKFLOW}/dispatches`, {
+      method: "POST",
+      body: JSON.stringify({ ref: "main" }),
+    });
+    if (res.status === 204) {
+      console.log("│  🧾  ตรวจสอบ tab: started the approval PDF run");
+      pdfNextTry = now + 60_000;   // give the run a minute to show up as queued
+      return true;
+    }
+    throw new Error(`start 2.8: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  } catch (err) {
+    pdfNextTry = now + 5 * 60_000;
+    console.error(`│  ❌  ตรวจสอบ tab PDF dispatcher: ${err instanceof Error ? err.message : String(err)} — trying again in 5 min`);
     return false;
   }
 }
