@@ -948,8 +948,9 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
 const AUDIT_GROUPS: Record<string, string> = {
   login: "action=like.login.*",
   session: "action=like.session.*",
-  view: "action=in.(view.overview,view.followup,view.roster,pending.open,followup.history,audit.view)",
-  change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject)",
+  view: "action=in.(view.overview,view.followup,view.roster,view.review,pending.open,followup.history,audit.view,review.download)",
+  change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
+    "review.inputs,review.rebuild,review.upload,review.submit,review.withdraw)",
   refused: "action=eq.login.refused",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -1126,6 +1127,23 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
     console.error("[dashboard] roster delete failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "delete failed" })
   }
+})
+
+// ── ตรวจสอบ tab: the month's SK03 check, owner only ─────────────────────────
+// Routes live in lib/review-server.ts; tables and the private bucket come
+// from scripts/review-tab-2026-11.sql (pasted by hand), and the tab says so
+// until they exist.
+;(require("./lib/review-server") as { mountReview(deps: Record<string, unknown>): void }).mountReview({
+  app,
+  express,
+  axios,
+  supabaseUrl: SUPABASE_URL,
+  serviceHeaders: SERVICE_HEADERS,
+  callServiceRpc,
+  listRosterTables: async (): Promise<string[]> => (await callServiceRpc("admin_list_roster_tables")) || [],
+  dashSession,
+  isDashOwner,
+  audit,
 })
 
 app.get("/dashboard/api/access-requests", async (req: Request, res: Response) => {

@@ -150,6 +150,18 @@ already-applied file is safe.
     or deleted). service_role only (RLS on, no policies) and append-only:
     triggers refuse UPDATE, DELETE and TRUNCATE for every role, checked
     live in a rolled-back transaction.
+23. `scripts/review-tab-2026-11.sql` — **not applied yet; paste it into the
+    SQL editor to turn the dashboard's ตรวจสอบ tab on.** Tables
+    `review_inputs`, `review_requests`, `review_builds`,
+    `review_build_people`, `review_uploads`, `review_rounds`,
+    `review_decisions`, `review_issues`, `review_issue_replies` (RLS on, no
+    policies, anon/authenticated revoked), the private Storage bucket
+    `review-files` (50 MB, .xlsx and .pdf), and service-role-only functions
+    `review_request_build`, `claim_review_request`, `review_submit_round`,
+    `review_withdraw_round`, `review_state`, `review_months`. Safe to re-run.
+    Until it runs, the tab says it is not set up, workflow 2.2 builds exactly
+    as before (no copy for the tab, Y9/W9 stay 0) and the relay's build
+    dispatcher stays off.
 
 ## Superseded — do NOT run
 

@@ -49,6 +49,7 @@ import { pushLine } from "../line-push.js";
 import { createGmailClient, type GmailClient } from "../gmail-client.js";
 import { sendUploadConfirmation } from "../confirmation-email.js";
 import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
+import { reviewCheckDue, dispatchReviewBuild } from "../review-dispatch.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
@@ -303,6 +304,7 @@ async function main() {
   let handled = 0;
   let alerted = false;
   let lastEmailPoll: number | null = null;
+  let lastReviewCheck: number | null = null;
   while (Date.now() < until) {
     let didWork = false;
 
@@ -311,6 +313,13 @@ async function main() {
     if (emailPollDue(Date.now(), lastEmailPoll, until)) {
       lastEmailPoll = Date.now();
       await pollEmails();
+    }
+
+    // The dashboard's ตรวจสอบ tab: start a requested one-month SK03 build
+    // (workflow 2.2). Never throws.
+    if (reviewCheckDue(Date.now(), lastReviewCheck)) {
+      lastReviewCheck = Date.now();
+      await dispatchReviewBuild();
     }
 
     // Archive first: it is the common case and the cheap one (no Claude, no

@@ -176,6 +176,7 @@
         overview: "ภาพรวม — สถานะการส่งไฟล์ Excel 6 เดือนที่ผ่านมา",
         followup: "ตามส่ง — เดือนที่ยังส่งไฟล์ Excel ไม่ครบ",
         roster: "รายชื่อ — รายชื่อแพทย์รายเดือน เพิ่ม แก้ไข และลบ",
+        review: "ตรวจสอบ — ตรวจ SK03 ก่อนเบิกจ่าย",
         audit: "ประวัติการใช้งาน — การเข้าใช้และการแก้ไขแดชบอร์ด",
     }
     const isComplete = (m: MonthStatus): boolean => m.exists && m.total > 0 && m.sent === m.total
@@ -184,14 +185,22 @@
     let isOwner = false
     const auditView = document.getElementById("audit-view") as HTMLElement
     const rosterView = document.getElementById("roster-view") as HTMLElement
+    const reviewView = document.getElementById("review-view") as HTMLElement
+    // ประวัติการใช้งาน is #history; #audit is its old address, kept working
+    // for bookmarks. (The code and API still say "audit".)
+    if (location.hash === "#audit") history.replaceState(null, "", "#history")
     const currentView = (): string =>
         location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
-            : location.hash === "#audit" && isOwner ? "audit" : "overview"
+            : location.hash === "#review" && isOwner ? "review"
+            : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview"
+    // ตรวจสอบ is drawn by review.js, which listens for this.
+    const showReview = (): void => { window.dispatchEvent(new CustomEvent("dashboard:review")) }
     const render = (): void => {
         const view = currentView()
-        const audit = view === "audit" || view === "roster"
+        const audit = view === "audit" || view === "roster" || view === "review"
         auditView.classList.toggle("hidden", view !== "audit")
         rosterView.classList.toggle("hidden", view !== "roster")
+        reviewView.classList.toggle("hidden", view !== "review")
         for (const a of navBtns) {
             const on = a.dataset.view === view
             a.classList.toggle("active", on)
@@ -231,10 +240,12 @@
     // them in the background (the server is a slow round trip away).
     // Each tab visit is logged for the owner (?view=), so ภาพรวม reloads too.
     window.addEventListener("hashchange", () => {
+        if (location.hash === "#audit") history.replaceState(null, "", "#history")
         render()
         const view = currentView()
         if (view === "audit") void loadAudit()
         else if (view === "roster") void loadRoster(true)
+        else if (view === "review") showReview()
         else void loadOverview(view)
     })
     render()
@@ -584,6 +595,7 @@
     const auditNav    = document.getElementById("audit-nav") as HTMLElement
     // รายชื่อ is owner-only too (main.ts returns 404 to anyone else).
     const rosterNav   = document.getElementById("roster-nav") as HTMLElement
+    const reviewNav   = document.getElementById("review-nav") as HTMLElement
 
     const ACTION_LABEL: Record<string, string> = {
         "login.success": "เข้าสู่ระบบ",
@@ -603,6 +615,13 @@
         "roster.delete": "ลบรายชื่อ",
         "access.approve": "อนุมัติคำขอเข้าใช้งาน",
         "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
+        "view.review": "เปิดแท็บตรวจสอบ",
+        "review.inputs": "บันทึกงบประมาณและ per P4P",
+        "review.rebuild": "ขอสร้าง SK03 ใหม่",
+        "review.download": "ดาวน์โหลดไฟล์ตรวจสอบ",
+        "review.upload": "อัปโหลดไฟล์ตรวจสอบ",
+        "review.submit": "ส่งให้ผู้ตรวจสอบ",
+        "review.withdraw": "ดึงรอบที่ส่งกลับ",
     }
     const GROUP_LABEL: Record<string, string> = {
         change: "การแก้ไข", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
@@ -668,6 +687,25 @@
             case "access.reject":
                 add(t.name); add(t.email); add(t.department)
                 break
+            case "view.review":
+            case "review.rebuild":
+                add(monthLabel(t.month))
+                break
+            case "review.inputs":
+                add(monthLabel(t.month))
+                add("งบประมาณ " + auditValue("", t.budget) + " · per P4P " + auditValue("", t.per_p4p))
+                break
+            case "review.download":
+                add(monthLabel(t.month)); add(t.kind === "sk03" ? "SK03" : "ไฟล์รวมคะแนนรายคน")
+                break
+            case "review.upload":
+                add(monthLabel(t.month)); add(t.kind === "sk03" ? "SK03" : "ไฟล์รวมคะแนนรายคน"); add(t.file)
+                add(t.result === "latest" ? "ตรงกับไฟล์ล่าสุด" : t.result === "older" ? "ไฟล์รุ่นเก่า" : t.result === "other_kind" ? "สลับช่อง" : "ไม่ใช่ไฟล์ที่ระบบสร้าง")
+                break
+            case "review.submit":
+            case "review.withdraw":
+                add(monthLabel(t.month)); add("รอบที่ " + t.round)
+                break
         }
         td.textContent = parts.join(" · ")
         if ((a.action === "followup.add" || a.action === "followup.delete") && t.note) {
@@ -681,7 +719,7 @@
 
     const auditRow = (a: AuditEntry): HTMLElement => {
         const tr = el("tr", /\.(delete|reject)$/.test(a.action) || a.action === "login.refused" ? "warn"
-            : /^(followup\.add|roster\.(add|edit)|access\.approve)$/.test(a.action) ? "change" : "")
+            : /^(followup\.add|roster\.(add|edit)|access\.approve|review\.(inputs|submit))$/.test(a.action) ? "change" : "")
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)))
         const who = el("td", "who", a.actor_name || "—")
         who.title = a.actor_name
@@ -1246,6 +1284,7 @@
                 isOwner = session.isOwner === true
                 auditNav.classList.toggle("hidden", !isOwner)
                 rosterNav.classList.toggle("hidden", !isOwner)
+                reviewNav.classList.toggle("hidden", !isOwner)
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
@@ -1255,6 +1294,7 @@
         const view = currentView()
         if (view === "audit") await loadAudit()
         else if (view === "roster") await loadRoster(true)
+        else if (view === "review") showReview()
         else await loadOverview(view)
     })()
 })()

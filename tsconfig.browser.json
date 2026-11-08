@@ -18,6 +18,7 @@
     "admin/app.ts",
     "dashboard/app.ts",
     "dashboard/login.ts",
+    "dashboard/review.ts",
     "upload/app.ts",
     "lib/line-receipt-flex.ts",
     "lib/isomorphic-globals.d.ts"

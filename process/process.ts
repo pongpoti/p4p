@@ -9,8 +9,11 @@
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  *           Pay uses the new formula (./sk03-formula.ts): interns first, then
  *           staff by department budget (sheet งบรายสาขา). Each month two
- *           inputs are typed in by hand: total budget in staff Y9 and
- *           per P4P per intern in intern W18. Until then all pay shows 0.
+ *           inputs are typed once in the dashboard's ตรวจสอบ tab
+ *           (review_inputs): total budget → staff Y9, per P4P per intern →
+ *           intern W9 (=W10×rate). Until then all pay shows 0.
+ * Step 7  — Keep a copy of both files and run the two automatic checks for
+ *           the ตรวจสอบ tab (./review-build.ts).
  *
  * Each run targets the latest 2 complete months (a fixed top-2 scan, not
  * unbounded backlog-hunting): Phase A walks the window newest → oldest,
@@ -22,6 +25,10 @@
  * each complete month — there is no dedup guard, so a repeat trigger (the
  * daily cron firing again, or a manual workflow_dispatch) always refreshes
  * the output from the current Drive + Supabase data.
+ *
+ * TARGET_MONTH (e.g. 2569_10) builds only that month: the ตรวจสอบ tab's
+ * "สร้างไฟล์ใหม่" button and a changed budget start such a run through the
+ * always-on relay, with REVIEW_REQUEST_ID so the tab can show its progress.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -48,6 +55,9 @@ const {
   internMeanCell, staffPanel, internPanel, budgetSheet,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
+const review = require('./review-build') as typeof import('./review-build');
+type ReviewInput = import('./review-build').ReviewInput;
+type DocInfo = import('./review-build').DocInfo;
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -140,6 +150,7 @@ interface SupabasePerson {
   perf_score: number;
   score: number | null;      // overrides perf_score in col J when not null
   index: number | string | null;
+  submitted_at: string | null;
 }
 
 /** A row from the management_stipends table (see automation/sql/management_stipends.sql). */
@@ -215,6 +226,13 @@ const SB = {
 //  STEP 1 — 6-month window
 // ═══════════════════════════════════════════════════════════════════
 function getTargetMonths(): MonthInfo[] {
+  const target = (process.env.TARGET_MONTH ?? '').trim();
+  if (target) {
+    const m = /^(\d{4})_(\d{2})$/.exec(target);
+    const month = m ? parseInt(m[2], 10) : 0;
+    if (!m || month < 1 || month > 12) throw new Error(`TARGET_MONTH "${target}" is not like 2569_10`);
+    return [{ key: target, beYear: parseInt(m[1], 10), month }];
+  }
   const now = new Date();
   return Array.from({ length: 6 }, (_, i) => {
     const d      = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -368,6 +386,7 @@ async function getSupabaseMonthData(supabase: SupabaseClient, tableKey: string):
     perf_score: sbVal(r, SB.perf,     0),
     score:      sbVal<number | null>(r, SB.score, null), // overrides perf_score in col J when not null
     index:      sbVal<number | string | null>(r, SB.index, null),
+    submitted_at: r.submitted_at ?? null,
   }));
 }
 
@@ -668,12 +687,19 @@ function sortByDeptThenName(a: NamedDriveFile, b: NamedDriveFile, deptMap: Recor
 }
 
 /** Merge all Excel files → one workbook with one sheet per person (via Python/openpyxl) */
+interface MergeResult {
+  uploaded: drive_v3.Schema$File;
+  buffer: Buffer;                 // the merged file exactly as uploaded
+  docs: Map<string, DocInfo>;     // per doctor (normalised name): sheet name, stated total, snapshot
+}
+
 async function mergeAndUpload(
   drive: drive_v3.Drive,
   driveFiles: DriveFile[],
   supabasePersons: SupabasePerson[],
-  monthKey: string
-): Promise<drive_v3.Schema$File | null> {
+  monthKey: string,
+  forReview = false
+): Promise<MergeResult | null> {
   const deptMap: Record<string, string> = {};
   supabasePersons.forEach(p => { deptMap[normaliseName(p.fullname)] = p.department; });
 
@@ -698,6 +724,7 @@ async function mergeAndUpload(
     }
     const manifestEntries: ManifestEntry[] = [];
     const usedSheetNames  = new Set<string>();
+    const docs = new Map<string, DocInfo>();
 
     // Download each file into the temp directory
     for (const file of filesWithName) {
@@ -718,6 +745,17 @@ async function mergeAndUpload(
       const dept    = deptMap[file.normName] ?? '';
       const tabArgb = hexToArgb(DEPT_COLORS[dept]) ?? '';
       manifestEntries.push({ path: filePath, sheet_name: sheetName, tab_color: tabArgb });
+
+      // For the ตรวจสอบ tab: the total the doctor wrote, from the saved values
+      // (the merged copy loses them), and a snapshot of the sheet.
+      if (forReview) {
+        try {
+          const a = await review.analyseDoctorFile(buffer);
+          if (!docs.has(file.normName)) docs.set(file.normName, { sheetName, ...a });
+        } catch (err: any) {
+          log(`  [Merge] ⚠ could not read "${file.origName}" for the review tab: ${err.message}`, 'warn');
+        }
+      }
     }
 
     if (manifestEntries.length === 0) {
@@ -749,7 +787,7 @@ async function mergeAndUpload(
     log(`\n  [Merge] Uploading "${name}" — ${sheetCnt} sheets…`);
     const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
     log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
-    return uploaded;
+    return { uploaded, buffer: buf, docs };
 
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -827,7 +865,8 @@ async function writeOverallMeta(
   sheetName: string,
   lastRow: number,
   isIntern: boolean,
-  internSheetName: string
+  internSheetName: string,
+  input: ReviewInput | null
 ): Promise<void> {
   const S = DATA_START;
   const sh = `'${sheetName}'!`;
@@ -840,7 +879,9 @@ async function writeOverallMeta(
   const headers = isIntern ? INTERN_HEADERS : STAFF_HEADERS;
   const cells: CellWrite[] = [
     ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
-    ...(isIntern ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow)] : staffPanel(internSheetName, S, lastRow)),
+    ...(isIntern
+      ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow, input?.per_p4p ?? 0)]
+      : staffPanel(internSheetName, S, lastRow, input?.budget ?? 0)),
   ];
 
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
@@ -1407,8 +1448,9 @@ async function createSK03(
   sheets: sheets_v4.Sheets,
   supabasePersons: SupabasePerson[],
   monthKey: string,
-  supabase: SupabaseClient
-): Promise<string> {
+  supabase: SupabaseClient,
+  input: ReviewInput | null = null
+): Promise<{ ssId: string; staffSheetName: string; internSheetName: string }> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
   const month  = parseInt(monthStr);
@@ -1505,7 +1547,7 @@ async function createSK03(
   }
   const staffLastRow = S + staffArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName);
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName, input);
   await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
 
   // Totals row: M, N, O = SUM immediately below last person, above signature.
@@ -1556,7 +1598,7 @@ async function createSK03(
   }
   const internLastRow = S + internArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName);
+  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName, input);
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
 
   // Intern totals row: N and O only (no M — management fee not applicable for interns)
@@ -1612,7 +1654,7 @@ async function createSK03(
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
   log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
-  return ssId;
+  return { ssId, staffSheetName, internSheetName };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1679,6 +1721,16 @@ async function main(): Promise<void> {
   const sheets   = createSheetsClient();
   const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
   const months   = getTargetMonths();
+  const targeted = !!(process.env.TARGET_MONTH ?? '').trim();
+
+  // ตรวจสอบ tab (./review-build.ts): off until its tables exist, and never
+  // allowed to stop the SK03 build itself.
+  let reviewOn = false;
+  try { reviewOn = await review.reviewReady(supabase); }
+  catch (err: any) { log(`[Review] ⚠ ${err.message} — building without the review copy`, 'warn'); }
+  const requestId = reviewOn && targeted ? (parseInt(process.env.REVIEW_REQUEST_ID ?? '', 10) || null) : null;
+  reviewRequest = requestId ? { supabase, id: requestId } : null;
+  await review.markRequest(supabase, requestId, { status: 'running', started_at: new Date().toISOString(), run_url: review.runUrl() });
 
   // Management stipend data is the same across every month in this run —
   // fetch it once here rather than per month.
@@ -1705,7 +1757,7 @@ async function main(): Promise<void> {
   console.log(' P4P Excel Merge + SK03 Pipeline');
   console.log('══════════════════════════════════════════════════════');
   showDataflow();
-  const TARGET_COMPLETE_MONTHS = 2;
+  const TARGET_COMPLETE_MONTHS = targeted ? 1 : 2;
   console.log('Candidate window:', months.map(m => m.key).join(', '), `(targets the latest ${TARGET_COMPLETE_MONTHS} complete months)`);
   console.log('');
 
@@ -1756,6 +1808,9 @@ async function main(): Promise<void> {
     completeMonths.push({ key, monthInfo, driveData, sbData });
   }
   console.log(`└─ Found ${completeMonths.length} complete month(s): ${completeMonths.map(m => m.key).join(', ') || '(none)'}\n`);
+  if (targeted && completeMonths.length === 0) {
+    await finishRequest('failed', null, 'ไฟล์ใน Drive ยังไม่ครบหรือรายชื่อไม่ตรงกับในระบบ จึงยังสร้างไฟล์เดือนนี้ไม่ได้');
+  }
 
   // ── Phase B — processing ─────────────────────────────────────────
   // Each discovered complete month is handled independently: an
@@ -1779,24 +1834,50 @@ async function main(): Promise<void> {
       if (nullAfterFill.length > 0) {
         log(`  → ✗ ${nullAfterFill.length} person(s) still have no score after Step 4.5 — skipping merge & SK03`, 'warn');
         nullAfterFill.forEach(p => log(`    • ${p.fullname}`, 'warn'));
+        if (targeted) await finishRequest('failed', null, `ยังมี ${nullAfterFill.length} คนที่ไม่มีคะแนน จึงยังสร้างไฟล์ไม่ได้`);
         results.skipped++; console.log('└─ skipped (null scores)\n'); continue;
       }
       log('  → ✓ All scores present');
 
       // Step 5
       log('  [Step 5] Merging…');
-      const uploaded = await mergeAndUpload(drive, driveData.files, sbData, key);
-      if (!uploaded) { results.skipped++; console.log('└─ skipped\n'); continue; }
+      const merged = await mergeAndUpload(drive, driveData.files, sbData, key, reviewOn);
+      if (!merged) {
+        if (targeted) await finishRequest('failed', null, 'ไม่มีไฟล์ของแพทย์ให้รวม');
+        results.skipped++; console.log('└─ skipped\n'); continue;
+      }
 
-      // Step 6
-      log('  [Step 6] Creating SK03 spreadsheet…');
-      await createSK03(drive, sheets, sbData, key, supabase);
+      // Step 6 — budget and per P4P as typed in the ตรวจสอบ tab
+      const input = reviewOn ? await review.loadReviewInput(supabase, key) : null;
+      log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'not typed yet → 0'})`);
+      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+
+      // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
+      // built but ends the job red so 1.2 alerts.
+      if (reviewOn) {
+        log('  [Step 7] Saving files and checks for the ตรวจสอบ tab…');
+        try {
+          const built = await review.packageReviewBuild({
+            drive, sheets, supabase, monthKey: key, ...sk03,
+            persons: sbData, docs: merged.docs, mergedBuffer: merged.buffer,
+            input, requestId,
+          });
+          if (targeted) await finishRequest('done', built.id, '');
+        } catch (err: any) {
+          console.error(`  [Review] ✗ ${err.stack ?? err.message}`);
+          results.failed.push({ key, error: `review copy: ${err.message}` });
+          if (targeted) await finishRequest('failed', null, `สร้างไฟล์แล้ว แต่เก็บสำเนาให้หน้าตรวจสอบไม่สำเร็จ: ${err.message}`);
+          console.log('└─ SK03 built, review copy failed\n');
+          continue;
+        }
+      }
 
       results.processed++;
       console.log('└─ ✓ complete\n');
     } catch (err: any) {
       console.error(`  [ERROR] ${err.stack ?? err.message}`);
       results.failed.push({ key, error: err.message });
+      if (targeted) await finishRequest('failed', null, `สร้างไฟล์ไม่สำเร็จ: ${err.message}`);
       console.log('└─ failed\n');
       // NOT a break/return — the other discovered complete month still runs.
     }
@@ -1812,6 +1893,24 @@ async function main(): Promise<void> {
   // end red so that 1.2 sends the failure alert. After PR #248 every SK03
   // build stopped half-way (no department sheets) while the run showed green.
   if (results.failed.length > 0) process.exitCode = 1;
+  if (reviewRequest) await finishRequest('failed', null, 'การสร้างไฟล์หยุดก่อนเสร็จ');
 }
 
-main().catch((err: any) => { console.error('\nFatal:', err.stack ?? err); process.exit(1); });
+// The ตรวจสอบ tab's "build this month now" request this run answers, if any.
+let reviewRequest: { supabase: SupabaseClient; id: number } | null = null;
+
+/** Closes the tab's request once; later calls do nothing. */
+async function finishRequest(status: 'done' | 'failed', buildId: string | null, error: string): Promise<void> {
+  if (!reviewRequest) return;
+  const { supabase, id } = reviewRequest;
+  reviewRequest = null;
+  await review.markRequest(supabase, id, {
+    status, build_id: buildId, error: error.slice(0, 500), finished_at: new Date().toISOString(),
+  });
+}
+
+main().catch(async (err: any) => {
+  console.error('\nFatal:', err.stack ?? err);
+  await finishRequest('failed', null, `สร้างไฟล์ไม่สำเร็จ: ${err.message ?? err}`).catch(() => {});
+  process.exit(1);
+});

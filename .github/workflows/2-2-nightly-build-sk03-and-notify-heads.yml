@@ -19,9 +19,23 @@ on:
         description: "score-tracker job only: send to this address instead of the real dept head, and skip marking months as sent; blank = normal run"
         required: false
         default: ""
+      month:
+        description: "build only this month (e.g. 2569_10) and skip the dept-head emails; blank = normal run. The dashboard's ตรวจสอบ tab starts these through workflow 1"
+        required: false
+        default: ""
+      request_id:
+        description: "set by workflow 1 for a ตรวจสอบ tab request; leave blank"
+        required: false
+        default: ""
 
 permissions:
   contents: read
+
+# One build at a time: the nightly run and a ตรวจสอบ tab request both
+# replace the month's SK03 and merged file on Drive.
+concurrency:
+  group: sk03-build
+  cancel-in-progress: false
 
 jobs:
   process:
@@ -70,6 +84,8 @@ jobs:
           GOOGLE_SK03_TEMPLATE_ID: ${{ secrets.GOOGLE_SK03_TEMPLATE_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+          TARGET_MONTH:           ${{ inputs.month }}
+          REVIEW_REQUEST_ID:      ${{ inputs.request_id }}
         run: npx tsx process.ts
 
       # Run-log artifact upload REMOVED — see .github/workflows/3-1-manual-email-read-submission-emails.yml
@@ -81,8 +97,9 @@ jobs:
     needs: process
     # Notification is logically independent of merge/SK03 success — a
     # pipeline hiccup on the `process` job shouldn't also silence the
-    # completion email heads are waiting on.
-    if: always()
+    # completion email heads are waiting on. A one-month build from the
+    # ตรวจสอบ tab sends nothing.
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.month == '')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
