@@ -784,7 +784,10 @@ begin
   -- The row the build matched (dept_row, a sheet row number; rowNos holds
   -- each row's number, in the order of rows). An older build has no rowNos:
   -- match the name in column B, spaced the way the build's normaliseName()
-  -- does (JS trim() and \s: tabs, new lines, NBSP, U+2000-200A, U+3000, BOM …).
+  -- does (JS trim() and its whitespace class: tab, new line, vertical tab,
+  -- form feed, return, space, NBSP, U+1680, U+2000-200A, U+2028, U+2029,
+  -- U+202F, U+205F, U+3000, BOM). Written with chr() so the file has no
+  -- backslash escapes and pastes through any chat unchanged.
   if p.dept_row is not null and jsonb_typeof(v_dept->'rowNos') = 'array' then
     select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
      where v_dept->'rowNos'->((t.n - 1)::int) = to_jsonb(p.dept_row)
@@ -792,7 +795,9 @@ begin
   else
     select t.x into v_row from jsonb_array_elements(v_dept->'rows') with ordinality t(x, n)
      where btrim(regexp_replace(t.x->>1,
-             '[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+', ' ', 'g'), ' ') = p.name
+             '[' || chr(9) || chr(10) || chr(11) || chr(12) || chr(13) || ' ' || chr(160) || chr(5760)
+                 || chr(8192) || '-' || chr(8202) || chr(8232) || chr(8233) || chr(8239) || chr(8287)
+                 || chr(12288) || chr(65279) || ']+', ' ', 'g'), ' ') = p.name
      order by t.n limit 1;
   end if;
   return jsonb_build_object(
@@ -934,7 +939,7 @@ do $$
 declare f regprocedure;
 begin
   for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname in ('claim_review_request', 'claim_review_pdf')) loop
+            where n.nspname = 'public' and (starts_with(p.proname, 'review_') or p.proname in ('claim_review_request', 'claim_review_pdf')) loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;
