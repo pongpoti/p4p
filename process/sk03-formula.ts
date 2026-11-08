@@ -155,14 +155,17 @@ export function internMeanCell(first: number, last: number): CellWrite {
 
 // ─── Side panels ──────────────────────────────────────────────────
 
-/** Staff panel (X/Y). Y9 is the month's total budget, typed in by hand. */
-export function staffPanel(internSheet: string, first: number, last: number): CellWrite[] {
+/**
+ * Staff panel (X/Y). Y9 is the month's total budget: the one typed in the
+ * dashboard's ตรวจสอบ tab (review_inputs), or 0 until someone types it.
+ */
+export function staffPanel(internSheet: string, first: number, last: number, budget = 0): CellWrite[] {
   const I = q(internSheet);
   const B = q(BUDGET_SHEET);
   return [
     { range: 'X8:Y8', values: [['งบจัดสรร', '']] },
     { range: 'X9:Y11', values: [
-      ['งบทั้งหมด', 0],
+      ['งบทั้งหมด', budget],
       ['เฉพาะ staff', `=Y9-${I}W16`],
       ['จำนวน staff (≥ 2,200)', `=COUNTIF(L${first}:L${last},">=0")`],
     ]},
@@ -189,15 +192,15 @@ export function staffPanel(internSheet: string, first: number, last: number): Ce
 }
 
 /**
- * Intern panel (V/W). W9 = W10 × the month's per P4P per intern; the rate
- * is typed into the formula by hand (written as 0), like the SK03 form's
- * `=9906.44*24`.
+ * Intern panel (V/W). W9 = W10 × the month's per P4P per intern, the rate
+ * written into the formula like the SK03 form's `=9906.44*24`: the one typed
+ * in the dashboard's ตรวจสอบ tab (review_inputs), or 0 until someone types it.
  */
-export function internPanel(first: number, last: number): CellWrite[] {
+export function internPanel(first: number, last: number, rate = 0): CellWrite[] {
   return [
     { range: 'V8:W8', values: [['งบจัดสรร', '']] },
     { range: 'V9:W10', values: [
-      ['เฉพาะ intern', '=W10*0'],
+      ['เฉพาะ intern', `=W10*${rate}`],
       ['จำนวน intern (≥ 2,200)', `=COUNTIF(L${first}:L${last},">=0")`],
     ]},
     { range: 'V11:W11', values: [['ค่าที่คำนวณได้', '']] },

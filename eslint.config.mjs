@@ -37,6 +37,7 @@ export default tseslint.config(
       "admin/app.js",
       "dashboard/app.js",
       "dashboard/login.js",
+      "dashboard/review.js",
       "upload/app.js",
       "lib/line-receipt-flex.js",
       "lib/line-receipt-flex.browser.js",
@@ -91,6 +92,7 @@ export default tseslint.config(
       "admin/app.ts",
       "dashboard/app.ts",
       "dashboard/login.ts",
+      "dashboard/review.ts",
       "upload/app.ts",
     ],
     languageOptions: {
