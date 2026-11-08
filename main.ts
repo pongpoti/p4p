@@ -950,7 +950,8 @@ const AUDIT_GROUPS: Record<string, string> = {
   session: "action=like.session.*",
   view: "action=in.(view.overview,view.followup,view.roster,view.review,pending.open,followup.history,audit.view,review.download)",
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
-    "review.inputs,review.rebuild,review.upload,review.submit,review.withdraw)",
+    "review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
+    "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close)",
   refused: "action=eq.login.refused",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/

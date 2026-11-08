@@ -20,6 +20,9 @@
  *   POST /dashboard/api/review/:month/rounds          send the round to the auditor
  *   POST /dashboard/api/review/:month/rounds/withdraw take it back before the auditor opens it
  *
+ * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
+ * their routes further down.
+ *
  * Files go browser ⇄ Storage directly with signed URLs: a Vercel function
  * takes at most ~4.5 MB in a request body, and these files can be larger.
  */
@@ -66,6 +69,14 @@ const REFUSALS: [RegExp, number, string][] = [
   [/nothing to withdraw/, 409, "ไม่มีรอบที่ส่งไว้ให้ดึงกลับ"],
   [/auditor has started/, 409, "ผู้ตรวจสอบเริ่มตรวจแล้ว ดึงกลับไม่ได้"],
   [/bad month/, 404, "ไม่พบเดือนนี้"],
+  [/not the auditor's turn/, 409, "ยังไม่ใช่คิวผู้ตรวจสอบ (ส่งกลับแล้ว อนุมัติแล้ว หรือยังไม่ได้ส่งมา)"],
+  [/a fix needs a remark/, 400, "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร"],
+  [/someone is still to check/, 409, "ยังมีคนที่รอตรวจ ตรวจให้ครบก่อน"],
+  [/nothing to fix/, 409, "ไม่มีคนที่ต้องแก้หรือปัญหาที่เปิดอยู่ ใช้ปุ่มอนุมัติแทน"],
+  [/not everyone is approved/, 409, "ยังอนุมัติไม่ครบทุกคน"],
+  [/a problem is still open/, 409, "ยังมีปัญหาอื่น ๆ ที่เปิดอยู่ ปิดก่อนอนุมัติ"],
+  [/the auditee has started/, 409, "ผู้จัดทำเริ่มแก้แล้ว ดึงกลับไม่ได้"],
+  [/not in this round/, 404, "ไม่พบในรอบนี้"],
 ]
 
 const pgError = (e: any): { code?: string; message?: string } => (e && e.response && e.response.data) || {}
@@ -265,6 +276,147 @@ export function mountReview(d: ReviewDeps): void {
       await d.audit(req, g.s, "review.withdraw", { month: g.month, round: roundNo })
       res.json({ ok: true })
     } catch (e: any) { fail(res, "withdraw", e) }
+  })
+
+  // ── The auditor's side, and the auditee's answers ─────────────────────
+  //   GET  /dashboard/api/review/:month/people?round=N   everyone in a round (live round by default)
+  //   GET  /dashboard/api/review/:month/person/:round/:index   their sheet and department row
+  //   POST /dashboard/api/review/:month/opened           {role} the auditor / auditee opened the round
+  //   PUT  /dashboard/api/review/:month/decisions/:index {decision: approve|fix|null, remark}
+  //   PUT  /dashboard/api/review/:month/replies/:index   {reply} the auditee's answer to a ต้องแก้ไข
+  //   POST /dashboard/api/review/:month/return | unreturn | approve
+  //   GET  /dashboard/api/review/:month/issues
+  //   POST /dashboard/api/review/:month/issues           {index?, body}
+  //   POST /dashboard/api/review/:month/issues/:id/replies  {role, body}
+  //   POST /dashboard/api/review/:month/issues/:id/status   {open}
+  const text = (v: unknown, max: number): string | null => {
+    const t = typeof v === "string" ? v.trim() : ""
+    return t && t.length <= max ? t : null
+  }
+
+  app.get("/dashboard/api/review/:month/people", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const round = /^[1-9][0-9]{0,3}$/.test(String(req.query.round || "")) ? Number(req.query.round) : null
+    try {
+      res.json(await d.callServiceRpc("review_people", { p_month: g.month, p_round: round }))
+    } catch (e: any) { fail(res, "people", e) }
+  })
+
+  app.get("/dashboard/api/review/:month/person/:round/:index", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const round = String(req.params.round), index = String(req.params.index)
+    if (!/^[1-9][0-9]{0,3}$/.test(round) || !UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
+    try {
+      res.json(await d.callServiceRpc("review_person", { p_month: g.month, p_round: Number(round), p_index: index }))
+    } catch (e: any) { fail(res, "person", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/opened", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const role = req.body && req.body.role
+    if (role !== "auditor" && role !== "auditee") return res.status(400).json({ error: "bad role" })
+    try {
+      await d.callServiceRpc("review_mark_opened", { p_month: g.month, p_role: role })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "opened", e) }
+  })
+
+  app.put("/dashboard/api/review/:month/decisions/:index", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const index = String(req.params.index)
+    const decision = req.body ? req.body.decision : undefined
+    if (!UUID_RE.test(index) || !(decision === "approve" || decision === "fix" || decision === null)) {
+      return res.status(400).json({ error: "bad decision" })
+    }
+    const remark = decision === "fix" ? text(req.body.remark, 1000) : ""
+    if (remark === null) return res.status(400).json({ error: "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร (ไม่เกิน 1,000 ตัวอักษร)" })
+    try {
+      const row = await d.callServiceRpc("review_decide", { p_month: g.month, p_index: index, p_decision: decision, p_remark: remark, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.decide", { month: g.month, index, decision, remark })
+      res.json({ ok: true, decision: row })
+    } catch (e: any) { fail(res, "decide", e) }
+  })
+
+  app.put("/dashboard/api/review/:month/replies/:index", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const index = String(req.params.index)
+    const reply = typeof (req.body && req.body.reply) === "string" ? req.body.reply.trim() : ""
+    if (!UUID_RE.test(index) || reply.length > 1000) return res.status(400).json({ error: "คำตอบไม่เกิน 1,000 ตัวอักษร" })
+    try {
+      await d.callServiceRpc("review_reply_decision", { p_month: g.month, p_index: index, p_reply: reply, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.reply", { month: g.month, index, reply })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "reply", e) }
+  })
+
+  const roundAction = (path: string, fn: string, action: string): void => {
+    app.post("/dashboard/api/review/:month/" + path, async (req: Request, res: Response) => {
+      const g = await gate(req, res)
+      if (!g) return
+      try {
+        const round = await d.callServiceRpc(fn, { p_month: g.month, p_actor: g.s.name })
+        await d.audit(req, g.s, action, { month: g.month, round: round && round.round_no })
+        res.json({ ok: true, round })
+      } catch (e: any) { fail(res, path, e) }
+    })
+  }
+  roundAction("return", "review_return_round", "review.return")
+  roundAction("unreturn", "review_unreturn_round", "review.unreturn")
+  roundAction("approve", "review_approve_round", "review.approve")
+
+  app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      res.json({ issues: (await d.callServiceRpc("review_issue_list", { p_month: g.month })) || [] })
+    } catch (e: any) { fail(res, "issues", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/issues", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const body = text(req.body && req.body.body, 2000)
+    const index = req.body && req.body.index ? String(req.body.index) : null
+    if (!body || (index !== null && !UUID_RE.test(index))) return res.status(400).json({ error: "พิมพ์รายละเอียดของปัญหา (ไม่เกิน 2,000 ตัวอักษร)" })
+    try {
+      const issue = await d.callServiceRpc("review_add_issue", { p_month: g.month, p_index: index, p_body: body, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.issue", { month: g.month, id: issue && issue.id, body })
+      res.json({ ok: true, issue })
+    } catch (e: any) { fail(res, "issue", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/issues/:id/replies", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const id = String(req.params.id)
+    const role = req.body && req.body.role
+    const body = text(req.body && req.body.body, 2000)
+    if (!/^[1-9][0-9]{0,17}$/.test(id) || (role !== "auditor" && role !== "auditee") || !body) {
+      return res.status(400).json({ error: "พิมพ์คำตอบ (ไม่เกิน 2,000 ตัวอักษร)" })
+    }
+    try {
+      await d.callServiceRpc("review_issue_reply", { p_month: g.month, p_issue: Number(id), p_role: role, p_body: body, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.issue_reply", { month: g.month, id: Number(id), role, body })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "issue reply", e) }
+  })
+
+  app.post("/dashboard/api/review/:month/issues/:id/status", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const id = String(req.params.id)
+    const open = req.body && req.body.open === true
+    if (!/^[1-9][0-9]{0,17}$/.test(id)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
+    try {
+      await d.callServiceRpc("review_issue_status", { p_month: g.month, p_issue: Number(id), p_open: open, p_actor: g.s.name })
+      await d.audit(req, g.s, open ? "review.issue_open" : "review.issue_close", { month: g.month, id: Number(id) })
+      res.json({ ok: true })
+    } catch (e: any) { fail(res, "issue status", e) }
   })
 }
 

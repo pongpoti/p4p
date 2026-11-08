@@ -474,3 +474,305 @@ grant execute on function public.review_submit_round(text, uuid, uuid, text) to 
 grant execute on function public.review_withdraw_round(text, text) to service_role;
 grant execute on function public.review_state(text) to service_role;
 grant execute on function public.review_months(text[]) to service_role;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- The auditor's side (part 2). Safe to re-run like everything above.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- The live round of a month, locked; raises unless it is in p_status.
+create or replace function public.review_live_round(p_month text, p_status text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
+  select * into r from public.review_rounds
+   where month = p_month and status in ('submitted', 'returned', 'approved') for update;
+  if not found or r.status <> p_status then
+    raise exception 'review: not %', case p_status when 'submitted' then 'the auditor''s turn' else 'the auditee''s turn' end;
+  end if;
+  return r;
+end;
+$$;
+
+-- Who opened what: the auditee can withdraw a round until the auditor opens
+-- it, and the auditor can take back a return until the auditee opens it.
+create or replace function public.review_mark_opened(p_month text, p_role text)
+returns void
+language sql
+set search_path = ''
+as $$
+  update public.review_rounds set auditor_opened_at = coalesce(auditor_opened_at, now())
+   where month = p_month and status = 'submitted' and p_role = 'auditor';
+  update public.review_rounds set auditee_opened_at = coalesce(auditee_opened_at, now())
+   where month = p_month and status = 'returned' and p_role = 'auditee';
+$$;
+
+-- อนุมัติ / ต้องแก้ไข (with a remark) / null to undo, for one person.
+create or replace function public.review_decide(p_month text, p_index uuid, p_decision text, p_remark text, p_actor text)
+returns public.review_decisions
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  d public.review_decisions;
+begin
+  if p_decision is not null and p_decision not in ('approve', 'fix') then raise exception 'review: bad decision'; end if;
+  if p_decision = 'fix' and char_length(btrim(coalesce(p_remark, ''))) = 0 then raise exception 'review: a fix needs a remark'; end if;
+  r := public.review_live_round(p_month, 'submitted');
+  update public.review_rounds set auditor_opened_at = coalesce(auditor_opened_at, now()) where id = r.id;
+  update public.review_decisions
+     set decision = p_decision,
+         remark = case when p_decision = 'fix' then btrim(p_remark) else '' end,
+         carried = false,
+         decided_at = case when p_decision is null then null else now() end,
+         decided_by = case when p_decision is null then '' else coalesce(p_actor, '') end
+   where round_id = r.id and roster_index = p_index
+  returning * into d;
+  if not found then raise exception 'review: not in this round'; end if;
+  return d;
+end;
+$$;
+
+-- Send the round back (someone needs a fix, or another problem is open) …
+create or replace function public.review_return_round(p_month text, p_actor text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  r := public.review_live_round(p_month, 'submitted');
+  if exists (select 1 from public.review_decisions where round_id = r.id and decision is null) then
+    raise exception 'review: someone is still to check';
+  end if;
+  if not exists (select 1 from public.review_decisions where round_id = r.id and decision = 'fix')
+     and not exists (select 1 from public.review_issues where month = p_month and status = 'open') then
+    raise exception 'review: nothing to fix';
+  end if;
+  update public.review_rounds
+     set status = 'returned', returned_at = now(), returned_by = coalesce(p_actor, ''), auditee_opened_at = null
+   where id = r.id returning * into r;
+  return r;
+end;
+$$;
+
+-- … take a return back before the auditee opens it …
+create or replace function public.review_unreturn_round(p_month text, p_actor text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  r := public.review_live_round(p_month, 'returned');
+  if r.auditee_opened_at is not null then raise exception 'review: the auditee has started'; end if;
+  if exists (select 1 from public.review_issue_replies x join public.review_issues i on i.id = x.issue_id
+              where i.month = p_month and x.role = 'auditee' and x.round_no is null)
+     or exists (select 1 from public.review_decisions where round_id = r.id and reply <> '') then
+    raise exception 'review: the auditee has started';
+  end if;
+  update public.review_rounds set status = 'submitted', returned_at = null, returned_by = ''
+   where id = r.id returning * into r;
+  return r;
+end;
+$$;
+
+-- … or approve it: everyone approved and no problem left open. The PDF is
+-- built after this (pdf_status queued).
+create or replace function public.review_approve_round(p_month text, p_actor text)
+returns public.review_rounds
+language plpgsql
+set search_path = ''
+as $$
+declare r public.review_rounds;
+begin
+  r := public.review_live_round(p_month, 'submitted');
+  if exists (select 1 from public.review_decisions where round_id = r.id and decision is distinct from 'approve') then
+    raise exception 'review: not everyone is approved';
+  end if;
+  if exists (select 1 from public.review_issues where month = p_month and status = 'open') then
+    raise exception 'review: a problem is still open';
+  end if;
+  update public.review_rounds
+     set status = 'approved', approved_at = now(), approved_by = coalesce(p_actor, ''),
+         auditor_opened_at = coalesce(auditor_opened_at, now()),
+         pdf_status = 'queued', pdf_path = null, pdf_bytes = null, pdf_pages = null, pdf_error = ''
+   where id = r.id returning * into r;
+  return r;
+end;
+$$;
+
+-- The auditee's answer to a ต้องแก้ไข, while the round is back with them.
+create or replace function public.review_reply_decision(p_month text, p_index uuid, p_reply text, p_actor text)
+returns public.review_decisions
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  d public.review_decisions;
+begin
+  r := public.review_live_round(p_month, 'returned');
+  update public.review_rounds set auditee_opened_at = coalesce(auditee_opened_at, now()) where id = r.id;
+  update public.review_decisions set reply = left(btrim(coalesce(p_reply, '')), 1000)
+   where round_id = r.id and roster_index = p_index and decision = 'fix'
+  returning * into d;
+  if not found then raise exception 'review: not in this round'; end if;
+  return d;
+end;
+$$;
+
+-- ปัญหาอื่น ๆ: the auditor raises and closes them; both sides reply. An
+-- auditee reply waits as a draft (round_no null) and goes with the next round.
+create or replace function public.review_add_issue(p_month text, p_index uuid, p_body text, p_actor text)
+returns public.review_issues
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  i public.review_issues;
+begin
+  r := public.review_live_round(p_month, 'submitted');
+  update public.review_rounds set auditor_opened_at = coalesce(auditor_opened_at, now()) where id = r.id;
+  insert into public.review_issues (month, round_no, roster_index, body, created_by)
+  values (p_month, r.round_no, p_index, btrim(p_body), coalesce(p_actor, ''))
+  returning * into i;
+  return i;
+end;
+$$;
+
+create or replace function public.review_issue_reply(p_month text, p_issue bigint, p_role text, p_body text, p_actor text)
+returns public.review_issue_replies
+language plpgsql
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  x public.review_issue_replies;
+begin
+  if p_role not in ('auditor', 'auditee') then raise exception 'review: bad role'; end if;
+  r := public.review_live_round(p_month, case p_role when 'auditor' then 'submitted' else 'returned' end);
+  if not exists (select 1 from public.review_issues where id = p_issue and month = p_month) then
+    raise exception 'review: not in this round';
+  end if;
+  insert into public.review_issue_replies (issue_id, role, body, round_no, created_by)
+  values (p_issue, p_role, btrim(p_body), case p_role when 'auditor' then r.round_no end, coalesce(p_actor, ''))
+  returning * into x;
+  return x;
+end;
+$$;
+
+create or replace function public.review_issue_status(p_month text, p_issue bigint, p_open boolean, p_actor text)
+returns public.review_issues
+language plpgsql
+set search_path = ''
+as $$
+declare i public.review_issues;
+begin
+  perform public.review_live_round(p_month, 'submitted');
+  update public.review_issues
+     set status = case when p_open then 'open' else 'closed' end,
+         closed_at = case when p_open then null else now() end,
+         closed_by = case when p_open then '' else coalesce(p_actor, '') end
+   where id = p_issue and month = p_month
+  returning * into i;
+  if not found then raise exception 'review: not in this round'; end if;
+  return i;
+end;
+$$;
+
+-- Everyone in a round, with both checks, the decision and the previous
+-- round's decision, remark and reply. p_round null: the live round.
+create or replace function public.review_people(p_month text, p_round int)
+returns jsonb
+language plpgsql
+stable
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  v_prev bigint;
+begin
+  select * into r from public.review_rounds
+   where month = p_month and (round_no = p_round or (p_round is null and status in ('submitted', 'returned', 'approved')))
+   order by round_no desc limit 1;
+  if not found then return jsonb_build_object('round', null, 'people', '[]'::jsonb); end if;
+  select id into v_prev from public.review_rounds where month = p_month and round_no = r.round_no - 1;
+  return jsonb_build_object(
+    'round', jsonb_build_object('id', r.id, 'round_no', r.round_no, 'status', r.status, 'build_id', r.build_id),
+    'people', coalesce((select jsonb_agg(jsonb_build_object(
+        'index', p.roster_index, 'name', p.name, 'department', p.department, 'intern', p.is_intern,
+        'sk03Row', p.sk03_row, 'score', p.sk03_score, 'stated', p.stated_total, 'statedCell', p.stated_cell,
+        'statedHow', p.stated_how, 'sheet', p.merged_sheet, 'pay', p.sk03_pay, 'deptRow', p.dept_row,
+        'deptPay', p.dept_pay, 'admin', p.dept_admin, 'scoreCheck', p.score_check, 'moneyCheck', p.money_check,
+        'decision', d.decision, 'remark', d.remark, 'carried', d.carried, 'why', d.recheck_why,
+        'decidedAt', d.decided_at, 'reply', d.reply,
+        'prev', case when pd.roster_index is null then null else
+          jsonb_build_object('decision', pd.decision, 'remark', pd.remark, 'reply', pd.reply) end
+      ) order by p.is_intern, p.department, p.name)
+      from public.review_build_people p
+      left join public.review_decisions d on d.round_id = r.id and d.roster_index = p.roster_index
+      left join public.review_decisions pd on pd.round_id = v_prev and pd.roster_index = p.roster_index
+     where p.build_id = r.build_id), '[]'::jsonb));
+end;
+$$;
+
+-- One person in a round: the above plus their sheet snapshot and their row
+-- of the department sheet (with its header).
+create or replace function public.review_person(p_month text, p_round int, p_index uuid)
+returns jsonb
+language plpgsql
+stable
+set search_path = ''
+as $$
+declare
+  r public.review_rounds;
+  p public.review_build_people;
+  v_dept jsonb;
+begin
+  select * into r from public.review_rounds where month = p_month and round_no = p_round;
+  if not found then raise exception 'review: not in this round'; end if;
+  select * into p from public.review_build_people where build_id = r.build_id and roster_index = p_index;
+  if not found then raise exception 'review: not in this round'; end if;
+  select e into v_dept from public.review_builds b, jsonb_array_elements(b.depts) e
+   where b.id = r.build_id and e->>'name' = p.department limit 1;
+  return jsonb_build_object(
+    'grid', p.sheet,
+    'deptHeader', v_dept->'header',
+    'deptRow', (select x from jsonb_array_elements(v_dept->'rows') x
+                 where regexp_replace(btrim(x->>1), '\s+', ' ', 'g') = p.name limit 1));
+end;
+$$;
+
+-- The month's other problems with their replies.
+create or replace function public.review_issue_list(p_month text)
+returns jsonb
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', i.id, 'round_no', i.round_no, 'index', i.roster_index, 'body', i.body, 'status', i.status,
+      'created_at', i.created_at, 'created_by', i.created_by, 'closed_at', i.closed_at,
+      'replies', coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'role', x.role, 'body', x.body,
+          'round_no', x.round_no, 'created_at', x.created_at, 'created_by', x.created_by) order by x.id)
+        from public.review_issue_replies x where x.issue_id = i.id), '[]'::jsonb)
+    ) order by i.id), '[]'::jsonb)
+    from public.review_issues i where i.month = p_month;
+$$;
+
+-- Every review function: service role only.
+do $$
+declare f regprocedure;
+begin
+  for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and (p.proname like 'review\_%' or p.proname = 'claim_review_request') loop
+    execute format('revoke all on function %s from public, anon, authenticated', f);
+    execute format('grant execute on function %s to service_role', f);
+  end loop;
+end $$;
