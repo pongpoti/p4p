@@ -2,7 +2,7 @@
  * review-dispatch.ts
  *
  * The dashboard's ตรวจสอบ tab asks for "build this month now" (the
- * สร้างไฟล์ใหม่ button, or a changed budget / per P4P) by adding a row to
+ * สร้างไฟล์ใหม่ button, or a changed budget, or a score edited in the tab) by adding a row to
  * review_requests (scripts/review-tab-2026-11.sql). Vercel has no GitHub
  * token, so the always-on relay picks the request up here and starts
  * workflow 2.2 for that month with this run's own GITHUB_TOKEN. 2.2 then

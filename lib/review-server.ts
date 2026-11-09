@@ -6,39 +6,39 @@
  * helpers passed in, so this file has no secrets or settings of its own.
  *
  * Tables, functions and the private bucket review-files come from
- * scripts/review-tab-2026-11.sql; until that has been run the two loads
- * (months, a month's state) answer { installed: false } and the tab says
- * so, and every other route fails with 503.
+ * scripts/review-tab-2026-11.sql and then scripts/review-tab-2026-11-auditee.sql;
+ * until both have been run the two loads (months, a month's state) answer
+ * { installed: false } and the tab says so, and every other route fails
+ * with 503.
  *
- * The auditee (ผู้จัดทำ) side:
- *   GET  /dashboard/api/review/months                 month picker
+ * The auditee (ผู้จัดทำ) side, from ส.ค. 2569 (2569_08) on:
+ *   GET  /dashboard/api/review/months                 the month tabs, oldest first
  *   GET  /dashboard/api/review/:month                 the month's state (?view=1 logs the visit)
- *   PUT  /dashboard/api/review/:month/inputs          budget + per P4P, then a fresh build
+ *   GET  /dashboard/api/review/:month/list            everyone in the newest build, with checks and edits
+ *   PUT  /dashboard/api/review/:month/inputs          {budget, doctors}: per P4P = budget ÷ N, then a fresh build
+ *   PUT  /dashboard/api/review/:month/scores/:index   {score, note}: one person's score, then a fresh build
  *   POST /dashboard/api/review/:month/rebuild         a fresh build (workflow 2.2 via the relay)
- *   GET  /dashboard/api/review/:month/file/:build/:kind   download (302 to a short signed URL)
- *   POST /dashboard/api/review/:month/uploads         start an upload: signed URL straight to Storage
- *   POST /dashboard/api/review/:month/uploads/:id/verify  which build the uploaded file is, by SHA-256
- *   POST /dashboard/api/review/:month/rounds          send the round to the auditor
+ *   POST /dashboard/api/review/:month/rounds          send the newest build to the auditor
  *   POST /dashboard/api/review/:month/rounds/withdraw take it back before the auditor opens it
+ *
+ * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
+ * Google Drive (the state carries their ids, the tab links them view only),
+ * and a round is the newest build as the system checked it.
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
- *
- * Files go browser ⇄ Storage directly with signed URLs: a Vercel function
- * takes at most ~4.5 MB in a request body, and these files can be larger.
  */
 
 import type { Express, Request, Response } from "express"
 import type { AxiosStatic } from "axios"
 
-const crypto = require("crypto") as typeof import("crypto")
 const core = require("./review-core") as {
-  uploadMatch(kind: "sk03" | "merged", sha: string, builds: BuildRow[]): { result: string; build: BuildRow | null }
   parseMonth(key: unknown): { be: number; month: number } | null
   parseMoney(v: unknown, max: number): number | null
+  parseCount(v: unknown, max: number): number | null
+  parseScore(v: unknown): number | null
 }
 
-interface BuildRow { id: string; built_at: string; sk03_sha256: string; merged_sha256: string }
 type Actor = { sub: string; name: string }
 
 export interface ReviewDeps {
@@ -55,17 +55,25 @@ export interface ReviewDeps {
 }
 
 const BUCKET = "review-files"
-const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-const MAX_BYTES = 50 * 1024 * 1024
+// The tab starts at ส.ค. 2569: earlier months were paid before it existed.
+const FIRST_MONTH = "2569_08"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // The SQL functions' refusals, in the tab's words.
 const REFUSALS: [RegExp, number, string][] = [
-  [/no budget yet/, 409, "ยังไม่ได้กรอกงบประมาณและ per P4P"],
+  [/no budget yet/, 409, "ยังไม่ได้กรอกงบประมาณและ N"],
   [/no build yet/, 409, "ยังไม่มีไฟล์ที่ระบบสร้างของเดือนนี้"],
-  [/not the latest build/, 409, "ไฟล์ที่อัปโหลดไม่ใช่ไฟล์ล่าสุดที่ระบบสร้าง ดาวน์โหลดใหม่แล้วอัปโหลดอีกครั้ง"],
+  [/a build is on its way/, 409, "รอสร้างไฟล์ใหม่เสร็จก่อน"],
   [/blocking problem/, 409, "ไฟล์ล่าสุดยังมีปัญหาที่ต้องแก้ในระบบก่อนส่ง"],
-  [/does not carry the typed numbers/, 409, "ไฟล์ล่าสุดยังไม่มีงบประมาณและ per P4P ที่กรอกไว้ กดสร้างไฟล์ใหม่ก่อน"],
+  [/does not carry the typed numbers/, 409, "ไฟล์ล่าสุดยังไม่มีงบประมาณและ N ที่กรอกไว้ กดสร้างใหม่ก่อน"],
+  [/the build is out of date/, 409, "รายชื่อหรือคะแนนเปลี่ยนหลังสร้างไฟล์ล่าสุด กดสร้างใหม่ก่อนส่ง"],
+  [/a score is out of range/, 409, "มีคะแนนผิดปกติ (30,000 ขึ้นไป หรือต่ำกว่า 2,200) แก้ก่อนส่ง"],
+  [/bad budget/, 400, "งบประมาณ: ใส่ตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง"],
+  [/bad doctors/, 400, "N: ต้องเป็นจำนวนเต็มมากกว่า 0"],
+  [/per P4P out of range/, 400, "per P4P (งบประมาณ ÷ N) ต้องมากกว่า 0.00"],
+  [/bad score/, 400, "คะแนน: ใส่ตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง"],
+  [/the note is too long/, 400, "หมายเหตุไม่เกิน 500 ตัวอักษร"],
+  [/not on the roster/, 404, "ไม่พบชื่อนี้ในรายชื่อเดือนนี้"],
   [/not the auditee's turn/, 409, "ส่งให้ผู้ตรวจสอบไปแล้ว รอผลตรวจก่อน"],
   [/nothing to withdraw/, 409, "ไม่มีรอบที่ส่งไว้ให้ดึงกลับ"],
   [/auditor has started/, 409, "ผู้ตรวจสอบเริ่มตรวจแล้ว ดึงกลับไม่ได้"],
@@ -89,7 +97,7 @@ const pgError = (e: any): { code?: string; message?: string } => (e && e.respons
 // cache), or one the installed functions use (an older copy of the file was
 // run). Only these: PGRST002 ("Could not query the database for the schema
 // cache. Retrying.") is the database being briefly unreachable, not missing.
-const NOT_INSTALLED = ["PGRST202", "PGRST205", "42P01", "42883", "42703"]
+const NOT_INSTALLED = ["PGRST202", "PGRST204", "PGRST205", "42P01", "42883", "42703"]
 const notInstalled = (e: any): boolean => {
   const d = pgError(e)
   const code = String(d.code || "")
@@ -98,7 +106,9 @@ const notInstalled = (e: any): boolean => {
   return !code && /^(relation|function|column) .+ does not exist|^could not find the (function|table) .+ in the schema cache/i
     .test(String(d.message || ""))
 }
-const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส่วนนี้ของแท็บตรวจสอบ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
+const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส่วนนี้ของแท็บตรวจสอบ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql แล้ว scripts/review-tab-2026-11-auditee.sql ใน Supabase SQL editor"
+// review_state says v: 2 once the second file has been run.
+const SQL_VERSION = 2
 
 // Is the newest build made with these numbers?
 const inBuild = (b: any, budget: number, perP4p: number): boolean =>
@@ -128,7 +138,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!d.isDashOwner(s.sub)) { res.status(404).json({ error: "not found" }); return null }
     const month = String(req.params.month || "")
     if (req.params.month !== undefined) {
-      if (!core.parseMonth(month) || !(await d.listRosterTables()).includes(month)) {
+      if (!core.parseMonth(month) || month < FIRST_MONTH || !(await d.listRosterTables()).includes(month)) {
         res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null
       }
     }
@@ -164,7 +174,7 @@ export function mountReview(d: ReviewDeps): void {
     const g = await gate(req, res)
     if (!g) return
     try {
-      const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t)).sort().reverse().slice(0, 12)
+      const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort()
       const months = await d.callServiceRpc("review_months", { p_months: tables })
       res.json({ installed: true, months: months || [] })
     } catch (e: any) { fail(res, "months", e, true) }
@@ -175,6 +185,8 @@ export function mountReview(d: ReviewDeps): void {
     if (!g) return
     try {
       const st = await state(g.month)
+      // Only the first SQL file run: the tab says the second is needed.
+      if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
       res.json({ installed: true, ...st })
     } catch (e: any) { fail(res, "state", e, true) }
@@ -184,22 +196,23 @@ export function mountReview(d: ReviewDeps): void {
     const g = await gate(req, res)
     if (!g) return
     const budget = core.parseMoney(req.body && req.body.budget, 1e11)
-    const perP4p = core.parseMoney(req.body && req.body.per_p4p, 1e7)
-    if (budget === null || perP4p === null) {
-      return res.status(400).json({ error: "กรอกตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง" })
-    }
+    const doctors = core.parseCount(req.body && req.body.doctors, 1e5)
+    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่ตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง", field: "budget" })
+    if (doctors === null) return res.status(400).json({ error: "N: ต้องเป็นจำนวนเต็มมากกว่า 0", field: "doctors" })
     try {
       const st = await state(g.month)
       if (!auditeeTurn(st)) return res.status(409).json({ error: "ส่งให้ผู้ตรวจสอบแล้ว เปลี่ยนตัวเลขไม่ได้จนกว่าจะได้ผลตรวจ" })
-      const before = st.inputs ? { budget: Number(st.inputs.budget), per_p4p: Number(st.inputs.per_p4p) } : null
-      await axios.post(rest("review_inputs?on_conflict=month"),
-        { month: g.month, budget, per_p4p: perP4p, updated_at: new Date().toISOString(), updated_by: g.s.name },
-        { headers: json({ Prefer: "resolution=merge-duplicates,return=minimal" }), timeout: 8000 })
+      // per P4P = round(budget ÷ N, 2) is worked out by the SQL function.
+      const saved = await d.callServiceRpc("review_save_inputs", { p_month: g.month, p_budget: budget, p_doctors: doctors, p_actor: g.s.name })
+      const was = saved && saved.before, now = (saved && saved.after) || {}
+      const before = was ? { budget: Number(was.budget), per_p4p: Number(was.per_p4p), doctors: was.doctors === null ? null : Number(was.doctors) } : null
+      const perP4p = Number(now.per_p4p)
       // Saved, so on record now, even if asking for the build below fails.
-      await d.audit(req, g.s, "review.inputs", { month: g.month, budget, per_p4p: perP4p, before })
-      // A build is needed when the numbers changed, or when they did not
-      // (a retry after the build request failed) but the newest build lacks
-      // them and no open request will build with them.
+      await d.audit(req, g.s, "review.inputs", { month: g.month, budget, doctors, per_p4p: perP4p, before })
+      // A build is needed when the numbers in the SK03 (budget, per P4P)
+      // changed, or when they did not (a retry after the build request
+      // failed) but the newest build lacks them and no open request will
+      // build with them. N on its own is not in the SK03.
       const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
       const notBuilt = !changed && !inBuild(st.build, budget, perP4p)
       const open = notBuilt ? carrier(st.request, st.inputs && st.inputs.updated_at) : null
@@ -208,8 +221,41 @@ export function mountReview(d: ReviewDeps): void {
         ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
         : open
       // changed: a build with these numbers is on its way (the tab's message).
-      res.json({ ok: true, changed: ask || !!open, request })
+      res.json({ ok: true, changed: ask || !!open, per_p4p: perP4p, request })
     } catch (e: any) { fail(res, "inputs", e) }
+  })
+
+  // One person's score: written to the month's roster table, logged as a
+  // roster edit (so History shows it with the รายชื่อ tab's edits), and a
+  // fresh build is queued. Only on the auditee's turn (the SQL checks).
+  app.put("/dashboard/api/review/:month/scores/:index", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const index = String(req.params.index)
+    if (!UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้" })
+    const score = core.parseScore(req.body && req.body.score)
+    if (score === null) return res.status(400).json({ error: "ใส่ตัวเลข เช่น 2,480.00", field: "score" })
+    const note = typeof (req.body && req.body.note) === "string" ? req.body.note.trim() : ""
+    if (note.length > 500) return res.status(400).json({ error: "หมายเหตุไม่เกิน 500 ตัวอักษร", field: "note" })
+    try {
+      const out = await d.callServiceRpc("review_edit_score", { p_month: g.month, p_index: index, p_score: score, p_note: note, p_actor: g.s.name })
+      if (out && out.changed && out.edit) {
+        await d.audit(req, g.s, "roster.edit", {
+          month: g.month, index, physician: out.edit.name, via: "review",
+          changes: { score: [out.edit.old_score, out.edit.new_score] }, ...(note ? { note } : {}),
+        })
+      }
+      res.json({ ok: true, changed: !!(out && out.changed), edit: (out && out.edit) || null, request: (out && out.request) || null })
+    } catch (e: any) { fail(res, "score", e) }
+  })
+
+  // Everyone in the newest build: the auditee's list.
+  app.get("/dashboard/api/review/:month/list", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      res.json(await d.callServiceRpc("review_auditee_people", { p_month: g.month }))
+    } catch (e: any) { fail(res, "list", e) }
   })
 
   app.post("/dashboard/api/review/:month/rebuild", async (req: Request, res: Response) => {
@@ -224,89 +270,11 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { fail(res, "rebuild", e) }
   })
 
-  app.get("/dashboard/api/review/:month/file/:build/:kind", async (req: Request, res: Response) => {
+  app.post("/dashboard/api/review/:month/rounds", async (req: Request, res: Response) => {
     const g = await gate(req, res)
     if (!g) return
-    const build = String(req.params.build), kind = String(req.params.kind)
-    if (!UUID_RE.test(build) || (kind !== "sk03" && kind !== "merged")) return res.status(404).json({ error: "ไม่พบไฟล์" })
     try {
-      const r = await axios.get(rest("review_builds?select=id,month," + kind + "_path&id=eq." + build + "&month=eq." + g.month),
-        { headers: d.serviceHeaders(), timeout: 8000 })
-      const row = (r.data as any[])[0]
-      if (!row) return res.status(404).json({ error: "ไม่พบไฟล์" })
-      const objectPath: string = row[kind + "_path"]
-      const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + objectPath), { expiresIn: 120 },
-        { headers: json(), timeout: 8000 })
-      const name = (kind === "sk03" ? "SK03_" : "merged_") + g.month + ".xlsx"
-      await d.audit(req, g.s, "review.download", { month: g.month, kind, build })
-      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL + "&download=" + encodeURIComponent(name))
-    } catch (e: any) { fail(res, "download", e) }
-  })
-
-  app.post("/dashboard/api/review/:month/uploads", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
-    if (!g) return
-    const kind = req.body && req.body.kind
-    const bytes = Number(req.body && req.body.bytes)
-    const fileName = String((req.body && req.body.fileName) || "").slice(0, 200)
-    if (kind !== "sk03" && kind !== "merged") return res.status(400).json({ error: "bad kind" })
-    if (!/\.xlsx$/i.test(fileName)) return res.status(400).json({ error: "เลือกไฟล์ .xlsx" })
-    if (!(bytes > 0 && bytes <= MAX_BYTES)) return res.status(400).json({ error: "ไฟล์ต้องไม่เกิน 50 MB" })
-    try {
-      const st = await state(g.month)
-      if (!auditeeTurn(st)) return res.status(409).json({ error: "ส่งให้ผู้ตรวจสอบแล้ว อัปโหลดไม่ได้จนกว่าจะได้ผลตรวจ" })
-      const id = crypto.randomUUID()
-      const objectPath = "uploads/" + g.month + "/" + id + ".xlsx"
-      await axios.post(rest("review_uploads"),
-        { id, month: g.month, kind, path: objectPath, file_name: fileName, bytes, created_by: g.s.name },
-        { headers: json({ Prefer: "return=minimal" }), timeout: 8000 })
-      const signed = await axios.post(storage("object/upload/sign/" + BUCKET + "/" + objectPath), {},
-        { headers: json(), timeout: 8000 })
-      res.json({ id, url: d.supabaseUrl + "/storage/v1" + signed.data.url, contentType: XLSX })
-    } catch (e: any) { fail(res, "upload", e) }
-  })
-
-  app.post("/dashboard/api/review/:month/uploads/:id/verify", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
-    if (!g) return
-    const id = String(req.params.id || "")
-    if (!UUID_RE.test(id)) return res.status(404).json({ error: "ไม่พบไฟล์" })
-    try {
-      const u = await axios.get(rest("review_uploads?select=id,kind,path,file_name,verified_at&id=eq." + id + "&month=eq." + g.month),
-        { headers: d.serviceHeaders(), timeout: 8000 })
-      const row = (u.data as any[])[0]
-      if (!row) return res.status(404).json({ error: "ไม่พบไฟล์" })
-      let file: Buffer
-      try {
-        const obj = await axios.get(storage("object/" + BUCKET + "/" + row.path),
-          { headers: d.serviceHeaders(), responseType: "arraybuffer", timeout: 25000, maxContentLength: MAX_BYTES + 1 })
-        file = Buffer.from(obj.data)
-      } catch (e: any) {
-        if (e.response && (e.response.status === 400 || e.response.status === 404)) {
-          return res.status(409).json({ error: "อัปโหลดไม่สำเร็จ ลองเลือกไฟล์อีกครั้ง" })
-        }
-        throw e
-      }
-      const sha = crypto.createHash("sha256").update(file).digest("hex")
-      const b = await axios.get(rest("review_builds?select=id,built_at,sk03_sha256,merged_sha256&month=eq." + g.month + "&order=built_at.desc"),
-        { headers: d.serviceHeaders(), timeout: 8000 })
-      const m = core.uploadMatch(row.kind, sha, b.data as BuildRow[])
-      await axios.patch(rest("review_uploads?id=eq." + id),
-        { verified_at: new Date().toISOString(), sha256: sha, bytes: file.length, build_id: m.build ? m.build.id : null, result: m.result },
-        { headers: json({ Prefer: "return=minimal" }), timeout: 8000 })
-      await d.audit(req, g.s, "review.upload", { month: g.month, kind: row.kind, result: m.result, file: row.file_name })
-      res.json({ ok: true, result: m.result, buildId: m.build ? m.build.id : null, builtAt: m.build ? m.build.built_at : null })
-    } catch (e: any) { fail(res, "verify", e) }
-  })
-
-  app.post("/dashboard/api/review/:month/rounds", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
-    if (!g) return
-    const sk03 = String((req.body && req.body.sk03) || "")
-    const merged = String((req.body && req.body.merged) || "")
-    if (!UUID_RE.test(sk03) || !UUID_RE.test(merged)) return res.status(400).json({ error: "เลือกไฟล์ทั้งสองไฟล์ก่อน" })
-    try {
-      const round = await d.callServiceRpc("review_submit_round", { p_month: g.month, p_sk03: sk03, p_merged: merged, p_actor: g.s.name })
+      const round = await d.callServiceRpc("review_submit_round", { p_month: g.month, p_actor: g.s.name })
       await d.audit(req, g.s, "review.submit", { month: g.month, round: round && round.round_no })
       res.json({ ok: true, round })
     } catch (e: any) { fail(res, "submit", e) }
@@ -434,8 +402,10 @@ export function mountReview(d: ReviewDeps): void {
       const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + row.pdf_path), { expiresIn: 120 },
         { headers: json(), timeout: 8000 })
       await d.audit(req, g.s, "review.download", { month: g.month, kind: "pdf", round: row.round_no })
-      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL + "&download=" +
-        encodeURIComponent("P4P_" + g.month + "_approved.pdf"))
+      // Opens in the browser's PDF viewer (the tab links it in a new tab);
+      // ?download=1 saves it under a readable name instead.
+      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
+        (req.query.download === "1" ? "&download=" + encodeURIComponent("P4P_" + g.month + "_approved.pdf") : ""))
     } catch (e: any) { fail(res, "pdf download", e) }
   })
 

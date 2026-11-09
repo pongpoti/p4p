@@ -16,8 +16,10 @@
  *                 reported as uncached, not rebuilt from the days.
  *   scoreCheck    SK03 score (staff/intern sheet K) vs that stated total
  *   moneyCheck    staff/intern pay (N) vs the department sheet (F, ตามสัดส่วนวิชาชีพ)
- *   w9Rate        the per P4P typed into the intern W9 formula (=W10*rate)
- *   uploadMatch   which build, if any, an uploaded file is byte-for-byte
+ *   w9Rate        the per P4P written into the intern W9 formula (=W10*rate)
+ *   perP4p        per P4P = budget ÷ N, to the satang (what the SQL stores)
+ *   scoreFlag     a score of 30,000 or more, or under 2,200: sending waits
+ *                 until it is edited (scripts/review-tab-2026-11-auditee.sql)
  */
 
 // Ported from lib/p4p-score.ts (itself a byte-faithful port of
@@ -227,32 +229,6 @@ function w9Rate(formula: unknown): number | null {
   return m ? parseFloat(m[1]) : null
 }
 
-export interface BuildFiles {
-  id: string
-  built_at: string
-  sk03_sha256: string
-  merged_sha256: string
-}
-
-/**
- * Which build an uploaded file is, by its SHA-256. `builds` newest first.
- * latest: the newest build's file of that kind · older: an earlier build's ·
- * other_kind: the other file of some build (SK03 picked as the merged file,
- * or the reverse) · unknown: not a file the system built (edited, or from
- * somewhere else).
- */
-function uploadMatch(kind: "sk03" | "merged", sha: string, builds: BuildFiles[]):
-  { result: "latest" | "older" | "other_kind" | "unknown"; build: BuildFiles | null } {
-  const own = (b: BuildFiles): string => (kind === "sk03" ? b.sk03_sha256 : b.merged_sha256)
-  const other = (b: BuildFiles): string => (kind === "sk03" ? b.merged_sha256 : b.sk03_sha256)
-  const i = builds.findIndex((b) => own(b) === sha)
-  if (i === 0) return { result: "latest", build: builds[0] }
-  if (i > 0) return { result: "older", build: builds[i] }
-  const j = builds.find((b) => other(b) === sha)
-  if (j) return { result: "other_kind", build: j }
-  return { result: "unknown", build: null }
-}
-
 /** "2569_10" → { be: 2569, month: 10 } or null. */
 function parseMonth(key: unknown): { be: number; month: number } | null {
   const m = /^(\d{4})_(\d{2})$/.exec(String(key ?? ""))
@@ -262,12 +238,46 @@ function parseMonth(key: unknown): { be: number; month: number } | null {
   return { be: parseInt(m[1], 10), month }
 }
 
-/** Budget and per P4P as typed: up to 2 decimals, commas allowed. */
+/** Budget as typed: up to 2 decimals, commas allowed. */
 function parseMoney(v: unknown, max: number): number | null {
   const s = String(v ?? "").replace(/,/g, "").trim()
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null
   const n = parseFloat(s)
   return n > 0 && n < max ? n : null
+}
+
+/** N (จำนวนแพทย์) as typed: a whole number from 1, commas allowed. */
+function parseCount(v: unknown, max: number): number | null {
+  const s = String(v ?? "").replace(/,/g, "").trim()
+  if (!/^\d+$/.test(s)) return null
+  const n = parseInt(s, 10)
+  return n > 0 && n < max ? n : null
+}
+
+/** A score as typed in the tab: 0 or more, up to 2 decimals, commas allowed. */
+function parseScore(v: unknown): number | null {
+  const s = String(v ?? "").replace(/,/g, "").trim()
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null
+  const n = parseFloat(s)
+  return n < 1e6 ? n : null
+}
+
+/**
+ * per P4P = budget ÷ N, rounded half up to the satang, in whole satang so
+ * no float rounding creeps in: 2,158,709.06 ÷ 226 = 9,551.81. The same
+ * number the SQL stores (round(budget / doctors, 2)).
+ */
+function perP4p(budget: number, doctors: number): number | null {
+  if (!(budget > 0) || !Number.isInteger(doctors) || doctors <= 0) return null
+  return Math.round(Math.round(budget * 100) / doctors) / 100
+}
+
+const SCORE_HIGH = 30000
+const SCORE_LOW = 2200
+/** "high" from 30,000, "low" under 2,200 (exactly 2,200 is fine), else null. */
+function scoreFlag(score: number | null | undefined): "high" | "low" | null {
+  if (score === null || score === undefined || !isFinite(score)) return null
+  return score >= SCORE_HIGH ? "high" : score < SCORE_LOW ? "low" : null
 }
 
 ;(module as NodeModule).exports = {
@@ -279,7 +289,12 @@ function parseMoney(v: unknown, max: number): number | null {
   scoreCheck,
   moneyCheck,
   w9Rate,
-  uploadMatch,
   parseMonth,
   parseMoney,
+  parseCount,
+  parseScore,
+  perP4p,
+  SCORE_HIGH,
+  SCORE_LOW,
+  scoreFlag,
 }
