@@ -177,9 +177,11 @@ function readSessionCookie(req: Request): SessionCookie | null {
     return { at: null, rt: raw }
   }
 }
-// Read a JWT's payload without verifying it (the token itself was already
-// validated by Supabase at /auth/session or the refresh call below — this is
-// just for reading claims out of a token we already trust).
+// Read a JWT's payload WITHOUT verifying it. Fit only for deciding when to
+// refresh (jwtExp below), never for identity or access decisions: the
+// session cookie is unsigned, so a cached access token's claims are whatever
+// the browser sent. Identity comes from verifiedUserEmail(), which asks
+// Supabase Auth.
 function jwtPayload(token: string): Record<string, any> {
   try {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
@@ -337,27 +339,62 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
   return { at, reason: null }
 }
 
-// Single boolean gate check: is this session's email still allowed to be
-// here — active in `physicians` and, as of auth-rewrite-2026-08.sql, not
-// sitting on a revoked Supabase session either. Called with the USER'S
-// access token, not the anon key, and the RPC reads the email from the
-// caller's own JWT rather than taking one as a parameter — there is nothing
-// here for an unauthenticated caller to enumerate.
-async function isCurrentUserAllowlisted(accessToken: string): Promise<boolean> {
+// Whether a failed Supabase call is an outage rather than an answer: no
+// response at all (network error, DNS, timeout) or a 5xx. Any 4xx — above all
+// the 401 for a token whose signature or expiry does not check out — is
+// Supabase rejecting the request, and must never be mistaken for a hiccup.
+function isTransientSupabaseError(e: any): boolean {
+  const status = e && e.response && typeof e.response.status === "number" ? e.response.status : 0
+  return status === 0 || status >= 500
+}
+
+// The gate check: is this session's email still allowed to be here — active
+// in `physicians` and, as of auth-rewrite-2026-08.sql, not sitting on a
+// revoked Supabase session either. Called with the USER'S access token, not
+// the anon key, and the RPC reads the email from the caller's own JWT rather
+// than taking one as a parameter — there is nothing here for an
+// unauthenticated caller to enumerate.
+//
+// "allowed" / "blocked" is the RPC's own answer. "invalid" means Supabase
+// refused the token itself (forged, or no longer valid), which callers treat
+// like an expired session rather than a revoked account.
+type GateVerdict = "allowed" | "blocked" | "invalid"
+async function checkAllowlist(accessToken: string): Promise<GateVerdict> {
   try {
     const r = await axios.post(
       SUPABASE_URL + "/rest/v1/rpc/is_current_user_allowlisted",
       {},
       { headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, timeout: 8000 }
     )
-    return r.data === true
+    return r.data === true ? "allowed" : "blocked"
   } catch (e: any) {
     console.error("[gate] is_current_user_allowlisted failed:",
       e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    // Fail open on a transient Supabase hiccup rather than locking out a
-    // whole hospital over a network blip — the same trade the old gate made.
-    // RLS is still the real data barrier regardless of what this returns.
-    return true
+    // Fail open ONLY on a transient Supabase outage rather than locking out
+    // a whole hospital over a network blip — the same trade the old gate
+    // made. A 401/403 (or any 4xx) is not a blip: the session cookie is
+    // unsigned and its cached access token is reused until its claimed
+    // expiry, so treating a rejected token as a hiccup let a hand-written
+    // cookie through. RLS is still the real data barrier for the page.
+    return isTransientSupabaseError(e) ? "allowed" : "invalid"
+  }
+}
+
+// The caller's email as Supabase Auth itself reports it for this access
+// token. GET /auth/v1/user checks the token's signature, expiry and session
+// server-side, so this — not the token's own claims — is where the
+// service-role routes take identity from. `transient` is set when Supabase
+// could not be asked; otherwise a null email means the token was refused.
+async function verifiedUserEmail(accessToken: string): Promise<{ email: string | null; transient: boolean }> {
+  try {
+    const r = await axios.get(SUPABASE_URL + "/auth/v1/user", {
+      headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken }, timeout: 8000,
+    })
+    const email = r.data && typeof r.data.email === "string" ? r.data.email.trim().toLowerCase() : ""
+    return { email: email || null, transient: false }
+  } catch (e: any) {
+    console.error("[gate] /auth/v1/user failed:", e.response ? e.response.status : e.message)
+    return { email: null, transient: isTransientSupabaseError(e) }
   }
 }
 
@@ -393,8 +430,15 @@ function servePage(name: string) {
     const { at, reason } = await resolveAccessToken(req, res)
     if (!at) return res.redirect(302, "/verify/?return=" + ret + "&reason=" + reason + "#")
 
-    const allowed = await isCurrentUserAllowlisted(at)
-    if (!allowed) {
+    const verdict = await checkAllowlist(at)
+    if (verdict === "invalid") {
+      // The token itself was refused. Same as a lapsed session: back to
+      // /verify/ with the return target, where silent LINE reauth can still
+      // resume a real physician's session without an OTP.
+      clearSessionCookie(res)
+      return res.redirect(302, "/verify/?return=" + ret + "&reason=expired#")
+    }
+    if (verdict === "blocked") {
       clearSessionCookie(res)
       return res.redirect(302, "/verify/?reason=blocked#")
     }
@@ -1560,11 +1604,25 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   // res.json(). A 401 with a JSON body lets the page decide.
   const { at, reason } = await resolveAccessToken(req, res)
   if (!at) return res.status(401).json({ error: "no_session", reason })
-  if (!(await isCurrentUserAllowlisted(at))) {
-    clearSessionCookie(res)
-    return res.status(401).json({ error: "blocked" })
+  // Everything below runs with the service role, so the caller's email must
+  // come from Supabase Auth, not from the cookie's (unsigned) cached token.
+  const caller = await verifiedUserEmail(at)
+  if (caller.transient) {
+    // Nothing can be checked while Supabase is unreachable. Touch nothing:
+    // the row stays pending as enqueue left it, the worker scores it, and
+    // the physician gets the result in chat.
+    return res.json({ pending: true })
   }
-  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+  if (!caller.email) {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: "no_session", reason: "invalid" })
+  }
+  const verdict = await checkAllowlist(at)
+  if (verdict !== "allowed") {
+    clearSessionCookie(res)
+    return res.status(401).json(verdict === "blocked" ? { error: "blocked" } : { error: "no_session", reason: "invalid" })
+  }
+  const callerEmail = caller.email
 
   let row: QueueRow | null
   try {
@@ -1576,7 +1634,8 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   if (!row) return res.status(404).json({ error: "not_found" })
   // The id is an opaque uuid the browser just received from its own enqueue
   // call, not a secret — THIS check is the access control, mirroring how
-  // object_path ownership is checked at enqueue time.
+  // object_path ownership is checked at enqueue time. It holds only because
+  // callerEmail came from Supabase Auth (verifiedUserEmail above).
   if (String(row.email).toLowerCase() !== callerEmail) {
     return res.status(403).json({ error: "forbidden" })
   }
@@ -1873,11 +1932,20 @@ app.post("/upload/receipt", express.json({ limit: "4kb" }), async (req: Request,
   // Same gate and ownership check as /upload/score, for the same reasons.
   const { at, reason: authReason } = await resolveAccessToken(req, res)
   if (!at) return res.status(401).json({ error: "no_session", reason: authReason })
-  if (!(await isCurrentUserAllowlisted(at))) {
+  const caller = await verifiedUserEmail(at)
+  // The page ignores this route's answer, so an outage just means no stamp
+  // and no alert for this one receipt.
+  if (caller.transient) return res.status(503).json({ error: "auth_unavailable" })
+  if (!caller.email) {
     clearSessionCookie(res)
-    return res.status(401).json({ error: "blocked" })
+    return res.status(401).json({ error: "no_session", reason: "invalid" })
   }
-  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+  const verdict = await checkAllowlist(at)
+  if (verdict !== "allowed") {
+    clearSessionCookie(res)
+    return res.status(401).json(verdict === "blocked" ? { error: "blocked" } : { error: "no_session", reason: "invalid" })
+  }
+  const callerEmail = caller.email
 
   let row: QueueRow | null
   try {
