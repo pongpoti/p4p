@@ -516,6 +516,21 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
 
 // ── Processing pipeline ───────────────────────────────────────────────────
 
+/**
+ * The time a submission counts as received: Gmail's own receive time when it
+ * has a usable one, else the fallback (the Date header on the email path, the
+ * queue's received_at on the LINE path), else now.
+ */
+export function submissionTime(gmailReceivedAt: string | null | undefined, fallback: string | null | undefined, now: Date = new Date()): Date {
+  for (const candidate of [gmailReceivedAt, fallback]) {
+    if (!candidate) continue;
+    const d = new Date(candidate);
+    if (!isNaN(d.getTime())) return d;
+    console.warn(`│        ⚠️  Unparseable submission time "${candidate}" — trying the next source`);
+  }
+  return now;
+}
+
 export interface ProcessBufferContext {
   subject?: string;
   body?: string;
@@ -543,6 +558,12 @@ export interface ProcessBufferContext {
   textDate?: string | null;
   /** When Gmail received the message whose words the gate reads (its own clock). A Date header days away from it is not trusted. */
   receivedDate?: string | null;
+  /**
+   * When Gmail received the message this submission is timed by (its internalDate, the server's clock):
+   * the punctuality timestamp saved as submitted_at. `emailDate` (the sender-written Date header, or the
+   * LINE path's server-side received_at) is only the fallback when this is missing.
+   */
+  gmailReceivedAt?: string | null;
   /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
   receipt?: { answered: boolean };
 }
@@ -576,7 +597,7 @@ export interface ProcessBufferContext {
  *   when identity is set. The pipeline stops knowing which channel it is.
  */
 export async function processBuffer(buffer: Buffer, {
-  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, receipt = undefined,
+  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, gmailReceivedAt = null, receipt = undefined,
 }: ProcessBufferContext): Promise<ProcessOutcome> {
   const isUpload = identity !== null;
 
@@ -1020,11 +1041,13 @@ export async function processBuffer(buffer: Buffer, {
   }
 
   // ── Save score to Supabase (only after Drive upload confirmed) ────────
-  let ts = emailDate ? new Date(emailDate) : new Date();
-  if (isNaN(ts.getTime())) {
-    console.warn(`│        ⚠️  Unparseable email date "${emailDate}" — falling back to now`);
-    ts = new Date();
-  }
+  // The punctuality timestamp is Gmail's receive time, not the Date header:
+  // the header is whatever the sender's client wrote (a wrong clock, or set
+  // on purpose), and saveScore only ever moves submitted_at EARLIER, so a
+  // backdated header would pin an on-time stamp for good. The header is the
+  // fallback only when Gmail gave no time; the LINE path passes its own
+  // server-side received_at as emailDate.
+  const ts = submissionTime(gmailReceivedAt, emailDate);
   let scoreSaved = false;
   if (match) {
     try {
@@ -1391,6 +1414,7 @@ export async function readSubmissionEmails(): Promise<void> {
                 replyTo  : tmEmail,   // reply to the original physician, not the relay
                 messageId: id,        // thread-link to the current (relay) message
                 emailDate: msg.date,
+                gmailReceivedAt: msg.receivedAt,
                 // the words come from the original message when it has any, else from the relay
                 textDate    : tm.msg.body ? tm.msg.date : msg.date,
                 receivedDate: tm.msg.body ? tm.msg.receivedAt : msg.receivedAt,
@@ -1472,6 +1496,7 @@ export async function readSubmissionEmails(): Promise<void> {
           messageId: id,
           emailDate: msg.date,
           receivedDate: msg.receivedAt,
+          gmailReceivedAt: msg.receivedAt,
           threadId : msg.threadId,
           siblingFilenames: threadXlsx.atts.map((a) => a.filename),
         };
@@ -1569,6 +1594,7 @@ export async function readSubmissionEmails(): Promise<void> {
       messageId: id,
       emailDate: msg.date,
       receivedDate: msg.receivedAt,
+      gmailReceivedAt: msg.receivedAt,
       threadId : msg.threadId,
       siblingFilenames: attachments.filter((a) => isExcelFile(a.mimeType, a.filename)).map((a) => a.filename),
       receipt,
