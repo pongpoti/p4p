@@ -320,7 +320,12 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
   const sess = readSessionCookie(req)
   if (!sess) return { at: null, reason: "no_session" }
 
-  let at = sess.at
+  // The cookie is unsigned, so a cached token that is not even JWT-shaped
+  // (three base64url segments) is not used at all: it is dropped and the
+  // refresh below decides, exactly as for an expired one. Without this, a
+  // token holding a character Node refuses in a header (a %7F, say) failed
+  // inside axios before any request was sent, which looked like an outage.
+  let at = sess.at && isJwtShaped(sess.at) ? sess.at : null
   // Refresh only when the cached access token is missing or within 60s of
   // expiry — so a normal browsing session refreshes ~once an hour, not per page.
   if (!at || jwtExp(at) < Date.now() / 1000 + 60) {
@@ -331,7 +336,7 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
         { headers: { apikey: SUPABASE_ANON, "Content-Type": "application/json" }, timeout: 8000 }
       )
       at = r.data && r.data.access_token
-      if (!at) throw new Error("no access_token in refresh response")
+      if (!at || !isJwtShaped(at)) throw new Error("no access_token in refresh response")
       setSessionCookie(res, at, r.data.refresh_token || sess.rt)
     } catch (e) {
       clearSessionCookie(res)
@@ -341,13 +346,31 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
   return { at, reason: null }
 }
 
-// Whether a failed Supabase call is an outage rather than an answer: no
-// response at all (network error, DNS, timeout) or a 5xx. Any 4xx — above all
-// the 401 for a token whose signature or expiry does not check out — is
-// Supabase rejecting the request, and must never be mistaken for a hiccup.
+// A JWT's shape: three base64url segments, nothing else. Says nothing about
+// whether the token is valid (only Supabase can), only that it can be sent.
+function isJwtShaped(token: string): boolean {
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)
+}
+
+// Whether a failed Supabase call is an outage rather than an answer: a 5xx,
+// or a network error that left no response (connection refused or reset,
+// DNS, timeout). Any 4xx — above all the 401 for a token whose signature or
+// expiry does not check out — is Supabase rejecting the request, and must
+// never be mistaken for a hiccup. Nor is any other error with no response:
+// axios also throws locally, before sending anything, for a request it
+// cannot make (ERR_INVALID_CHAR for a header holding a forbidden
+// character), and a hand-made cookie must not be able to pass for an outage.
 function isTransientSupabaseError(e: any): boolean {
   const status = e && e.response && typeof e.response.status === "number" ? e.response.status : 0
-  return status === 0 || status >= 500
+  if (status) return status >= 500
+  // Node and axios codes for a request that got no answer: the connection
+  // failed, was cut or timed out, or the name did not resolve.
+  const networkCodes = [
+    "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ESOCKETTIMEDOUT",
+    "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EPIPE",
+    "ERR_NETWORK", "ERR_SOCKET_CONNECTION_TIMEOUT",
+  ]
+  return Boolean(e && typeof e.code === "string" && networkCodes.includes(e.code))
 }
 
 // The gate check: is this session's email still allowed to be here — active
