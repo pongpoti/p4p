@@ -7,6 +7,11 @@ name: "4.2 Check: root tests"
 #
 # Any workflow change runs it too: lib/__tests__/workflows.test.mjs runs the
 # shell steps of several workflows.
+#
+# The paths below are every file outside lib/ that a root test reads or loads:
+# the process/ scripts, the SQL in scripts/ and automation/sql/ and its ledger,
+# and the automation files the parity and guard tests compare against. A change
+# to any of them could break a root test, so it runs this check.
 on:
   push:
     paths:
@@ -15,8 +20,19 @@ on:
       - "assets/**"
       - "upload/**"
       - "src/**"
+      - "verify/**"
+      - "web/lib/config.ts"
+      - "process/**"
+      - "scripts/**"
+      - "SUPABASE_MIGRATIONS.md"
       - "automation/claude-analyst.ts"
+      - "automation/config.ts"
+      - "automation/telegram.ts"
+      - "automation/zip-guard.ts"
+      - "automation/sql/**"
+      - "automation/package-lock.json"
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/**"
   pull_request:
     paths:
@@ -25,8 +41,19 @@ on:
       - "assets/**"
       - "upload/**"
       - "src/**"
+      - "verify/**"
+      - "web/lib/config.ts"
+      - "process/**"
+      - "scripts/**"
+      - "SUPABASE_MIGRATIONS.md"
       - "automation/claude-analyst.ts"
+      - "automation/config.ts"
+      - "automation/telegram.ts"
+      - "automation/zip-guard.ts"
+      - "automation/sql/**"
+      - "automation/package-lock.json"
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/**"
 
 permissions:
@@ -53,6 +80,15 @@ jobs:
       - name: Install automation dependencies (for the parity test)
         run: npm ci
         working-directory: automation
+
+      # fill-score, preprocess-drive, review-build and review-pdf load process/
+      # modules, which need process/'s own dependencies. Without them those
+      # tests skip and a broken process/ change still passes this check.
+      - name: Install process dependencies (for the process/ tests)
+        run: npm ci
+        working-directory: process
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
 
       - run: npm test
 
