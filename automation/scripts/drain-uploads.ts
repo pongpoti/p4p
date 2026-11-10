@@ -53,6 +53,7 @@ import { reviewCheckDue, dispatchReviewBuild, dispatchReviewPdf } from "../revie
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
 import { errForLog, redactForLog } from "../log-safe.js";
+import { ADMIN_REVIEW_ERROR_TYPE } from "../admin-review.js";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -185,6 +186,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
       rosterIndex: row.roster_index,
       lineUserId : row.line_user_id,
       attempt    : row.attempts,
+      queueId    : row.id,
     },
     notify,
   });
@@ -259,7 +261,9 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     }),
   ]);
   if (pushed) await markNotified(row.id);
-  await deleteObject(row.object_path);
+  // A row held for the admin keeps its file: the admin's alert says how to
+  // run it again once the right roster row is set (admin-review.ts).
+  if (errorType !== ADMIN_REVIEW_ERROR_TYPE) await deleteObject(row.object_path);
 }
 
 // ── Stuck-archive alerting ────────────────────────────────────────────────

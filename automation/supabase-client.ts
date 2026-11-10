@@ -2,14 +2,16 @@
  * supabase-client.js
  *
  * Exports:
- *   matchName(name, date)       — fuzzy-match physician name in Supabase table,
- *                                 returns { matchedName, index, similarity } or null
+ *   findRosterMatch(name, date) — fuzzy-match physician name in Supabase table:
+ *                                 one row, none, or ambiguous (two or more fit)
+ *   matchName(name, date)       — the same, as { matchedName, index, similarity }
+ *                                 or null (none or ambiguous)
  *   saveScore(date, index, score) — write score (float8) to the matched row
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { SIMILARITY_THRESHOLD, SUPABASE_ROW_LIMIT } from "./config.js";
-import type { RosterMatch } from "./types.js";
+import type { RosterLookup, RosterMatch } from "./types.js";
 import type { PhysicianAccount } from "./sender-gate.js";
 
 // ── Singleton client ───────────────────────────────────────────────────────
@@ -89,7 +91,7 @@ export function isValidDate(date: unknown): boolean {
   return yr >= 2400 && yr <= 2700 && mo >= 1 && mo <= 12;
 }
 
-interface RosterRow {
+export interface RosterRow {
   index: number | string;
   firstname: string | null;
   lastname: string | null;
@@ -97,18 +99,83 @@ interface RosterRow {
   department: string | null;
 }
 
+/**
+ * How close a runner-up's similarity may come to the best row's before the
+ * name is ambiguous: "อนันต์ สุข" is 0.9 to both "อนันต์ สุขสวัสดิ์" and
+ * "อนันต์ สุขใจ", and taking whichever row came first wrote one physician's
+ * score onto the other's row.
+ */
+export const AMBIGUITY_MARGIN = 0.05;
+
+function rosterMatchOf(row: RosterRow, sim: number): RosterMatch {
+  return {
+    matchedName: `${row.firstname ?? ""} ${row.lastname ?? ""}`.trim(),
+    prefix     : row.prefix     ?? "",
+    department : row.department ?? "",
+    index      : row.index,
+    similarity : sim,
+  };
+}
+
 // ── Exports ────────────────────────────────────────────────────────────────
 
 /**
- * Fuzzy-match a physician name against all rows in the date table.
- * Returns the best match above the similarity threshold, or null.
+ * Pick the roster row a name belongs to, or say that none or more than one
+ * fits. Pure: findRosterMatch() fetches the rows.
+ *   • exactly one row is the name exactly       → that row
+ *   • two or more rows are the name exactly     → ambiguous (a duplicate roster name)
+ *   • otherwise the best row at >= threshold    → that row, unless another
+ *     row at >= threshold is within `margin` of it → ambiguous
+ * A single token (first name only) matches by first name: one row → that
+ * row, two or more → ambiguous, none → the fuzzy rules above.
+ */
+export function pickRosterMatch(name: string, rows: RosterRow[], threshold: number = SIMILARITY_THRESHOLD, margin: number = AMBIGUITY_MARGIN): RosterLookup {
+  // ── Single-token (firstname-only) fast path ──────────────────────────────
+  // When the extracted name is a single token (no last name supplied), check
+  // whether exactly one row shares that first name. If unambiguous, auto-
+  // assign the last name from the database record.
+  const normName = normalise(name);
+  const tokens   = normName.split(" ").filter(Boolean);
+  if (tokens.length === 1) {
+    const hits = rows.filter((row) => normalise(row.firstname ?? "") === normName);
+    if (hits.length === 1) {
+      console.log(`│        🔤  Single-token firstname match → roster row #${hits[0]!.index} (unique)`);
+      return { kind: "match", match: rosterMatchOf(hits[0]!, 0.95) };  // high-confidence — unique firstname in this table
+    }
+    if (hits.length > 1) {
+      console.warn(`│        ⚠️  Single-token name matches ${hits.length} rows — ambiguous`);
+      return { kind: "ambiguous", similarity: 0.95, candidates: hits.map((row) => rosterMatchOf(row, 0.95)) };
+    }
+    // 0 exact firstname matches → fall through to Levenshtein
+  }
+
+  // ── Normal fuzzy matching ──────────────────────────────────────────────────
+  const scored = rows.map((row) => rosterMatchOf(row, similarity(name, `${row.firstname ?? ""} ${row.lastname ?? ""}`.trim())));
+
+  const exact = scored.filter((m) => m.similarity === 1);
+  if (exact.length === 1) return { kind: "match", match: exact[0]! };
+  if (exact.length > 1) return { kind: "ambiguous", similarity: 1, candidates: exact };
+
+  const best = scored.reduce((b, m) => Math.max(b, m.similarity), -1);
+  if (best < threshold) return { kind: "none" };
+  // 1e-9: 0.9 - 0.85 is not exactly 0.05 in floating point
+  const contenders = scored
+    .filter((m) => m.similarity >= threshold && best - m.similarity <= margin + 1e-9)
+    .sort((a, b) => b.similarity - a.similarity);
+  if (contenders.length > 1) return { kind: "ambiguous", similarity: best, candidates: contenders };
+  return { kind: "match", match: contenders[0]! };
+}
+
+/**
+ * Look a physician name up in the date table: one row, none, or ambiguous
+ * (see pickRosterMatch). Throws on a query error.
  *
  * @param name   Physician name from Claude, e.g. "สมชาย ใจดี"
  * @param date   Table name, e.g. "2569_02"
  * @param threshold  Minimum similarity to accept (0–1)
  */
-export async function matchName(name: string, date: string, threshold: number = SIMILARITY_THRESHOLD): Promise<RosterMatch | null> {
-  if (!isValidDate(date)) return null;
+export async function findRosterMatch(name: string, date: string, threshold: number = SIMILARITY_THRESHOLD): Promise<RosterLookup> {
+  if (!isValidDate(date)) return { kind: "none" };
 
   const supabase = getSupabase();
   const { data, error } = await supabase
@@ -117,59 +184,23 @@ export async function matchName(name: string, date: string, threshold: number = 
     .limit(SUPABASE_ROW_LIMIT);
 
   if (error) throw new Error(`Supabase query error on table "${date}": ${error.message}`);
-  if (!data || data.length === 0) return null;
-  const rows = data as unknown as RosterRow[];
-
-  // ── Single-token (firstname-only) fast path ──────────────────────────────
-  // When the extracted name is a single token (no last name supplied), check
-  // whether exactly one row shares that first name.  If unambiguous, auto-
-  // assign the last name from the database record.
-  //   • Exactly 1 row matches → safe to use (unique firstname in this table)
-  //   • 2+ rows match         → ambiguous, return null (safer than wrong match)
-  //   • 0 rows match          → fall through to Levenshtein
-  const normName = normalise(name);
-  const tokens   = normName.split(" ").filter(Boolean);
-  if (tokens.length === 1) {
-    const hits = rows.filter((row) => normalise(row.firstname ?? "") === normName);
-    if (hits.length === 1) {
-      const row      = hits[0]!;
-      const fullName = `${row.firstname ?? ""} ${row.lastname ?? ""}`.trim();
-      console.log(`│        🔤  Single-token firstname match → roster row #${row.index} (unique)`);
-      return {
-        matchedName: fullName,
-        prefix     : row.prefix     ?? "",
-        department : row.department ?? "",
-        index      : row.index,
-        similarity : 0.95, // high-confidence — unique firstname in this table
-      };
-    }
-    if (hits.length > 1) {
-      console.warn(`│        ⚠️  Single-token name matches ${hits.length} rows — ambiguous, skipping`);
-      return null;
-    }
-    // 0 exact firstname matches → fall through to Levenshtein
+  if (!data || data.length === 0) return { kind: "none" };
+  const lookup = pickRosterMatch(name, data as unknown as RosterRow[], threshold);
+  if (lookup.kind === "ambiguous") {
+    console.warn(`│        ⚠️  Name fits ${lookup.candidates.length} roster rows (#${lookup.candidates.map((c) => c.index).join(", #")}) — ambiguous`);
   }
+  return lookup;
+}
 
-  // ── Normal fuzzy matching ──────────────────────────────────────────────────
-  let best: RosterMatch | null = null;
-
-  for (const row of rows) {
-    const fullName = `${row.firstname ?? ""} ${row.lastname ?? ""}`.trim();
-    const sim = similarity(name, fullName);
-    if (sim > (best?.similarity ?? -1)) {
-      best = {
-        matchedName: fullName,
-        prefix     : row.prefix      ?? "",
-        department : row.department  ?? "",
-        index      : row.index,
-        similarity : sim,
-      };
-      if (sim === 1.0) break; // exact match — no need to scan remaining rows
-    }
-  }
-
-  if (!best || best.similarity < threshold) return null;
-  return best;
+/**
+ * The one roster row a name belongs to, or null — also null when it is
+ * ambiguous (see pickRosterMatch): a script that cannot ask an admin must not
+ * pick one of two physicians. The live pipeline uses findRosterMatch() so it
+ * can tell the two apart.
+ */
+export async function matchName(name: string, date: string, threshold: number = SIMILARITY_THRESHOLD): Promise<RosterMatch | null> {
+  const lookup = await findRosterMatch(name, date, threshold);
+  return lookup.kind === "match" ? lookup.match : null;
 }
 
 /**

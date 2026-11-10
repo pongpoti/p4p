@@ -12,7 +12,8 @@
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
-import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex, getPhysicianByEmail, getRosterScore } from "./supabase-client.js";
+import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex, getPhysicianByEmail, getRosterScore } from "./supabase-client.js";
+import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { decideSenderGate, formatHoldAlert, formatNewSenderAlert, HOLD_REPLY_SUBJECT, holdReplyBody, type SenderGateResult } from "./sender-gate.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
@@ -29,7 +30,7 @@ import log                              from "./logger.js";
 import * as path                        from "path";
 import { pathToFileURL }                from "url";
 import ExcelJS from "exceljs";
-import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, UploadIdentity, NotifyHooks, ProcessOutcome } from "./types.js";
+import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, RosterLookup, UploadIdentity, NotifyHooks, ProcessOutcome } from "./types.js";
 // override:true ensures .env values win over stale system-level env vars
 // (e.g. ANTHROPIC_API_KEY="" set at OS level would otherwise shadow the real key)
 import { config as dotenvConfig } from "dotenv";
@@ -567,7 +568,7 @@ export interface ProcessBufferContext {
    */
   gmailReceivedAt?: string | null;
   /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
-  receipt?: { answered: boolean; holdNoticeSent?: boolean };
+  receipt?: { answered: boolean; holdNoticeSent?: boolean; reviewNoticeSent?: boolean };
   /** A Drive client to use instead of the one P4P_FOLDER_ID configures (tests); null means no Drive. */
   drive?: DriveClient | null;
 }
@@ -896,12 +897,16 @@ export async function processBuffer(buffer: Buffer, {
   // match. The row comes from the exact match enqueue_p4p_upload() already
   // made, or — when that deferred (a name spelled differently in `physicians`
   // than in the roster, or two physicians sharing a name) — from ONE
-  // matchName() call against the authenticated name. Claude's name output is
+  // findRosterMatch() call against the authenticated name; rows that fit it
+  // equally well go to the admin, never the first. Claude's name output is
   // compared and reported, never routed on: a physician can legitimately
   // submit a workbook whose header carries a colleague's name if they copied
   // a template, and the score still belongs to the account that uploaded it.
   // `physician_not_found` is therefore structurally impossible here (§8).
   let match: RosterMatch | null = null;
+  // Two or more roster rows fit the name equally well: no row is chosen, the
+  // admin is (see admin-review.ts).
+  let ambiguous: Extract<RosterLookup, { kind: "ambiguous" }> | null = null;
   if (isUpload) {
     if (uploadCtx) uploadCtx.nameInFile = analysis.name ?? null;
     try {
@@ -910,10 +915,14 @@ export async function processBuffer(buffer: Buffer, {
         if (match) console.log(`│        ✅  Roster row #${match.index} (exact, from enqueue)`);
       }
       if (!match) {
-        match = await matchName(identity!.fullName, workMonth);
-        if (match) {
+        const lookup = await findRosterMatch(identity!.fullName, workMonth);
+        if (lookup.kind === "match") {
+          match = lookup.match;
           if (uploadCtx) uploadCtx.rosterMatch = `fuzzy ${(match.similarity * 100).toFixed(0)}%`;
           console.log(`│        ✅  Roster row #${match.index} (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
+        } else if (lookup.kind === "ambiguous") {
+          ambiguous = lookup;
+          if (uploadCtx) uploadCtx.rosterMatch = `ambiguous (${lookup.candidates.length} rows)`;
         } else {
           if (uploadCtx) uploadCtx.rosterMatch = "none";
           console.warn(`│        ⚠️  The account is not in roster table "${workMonth}" — score cannot be written`);
@@ -934,9 +943,12 @@ export async function processBuffer(buffer: Buffer, {
   // ── Fuzzy name match (lookup only — score saved after Drive succeeds) ──
   console.log(`│        🔍  Fuzzy-matching name in Supabase table "${analysis.date}"…`);
   try {
-    match = await matchName(analysis.name, analysis.date);
-    if (match) {
+    const lookup = await findRosterMatch(analysis.name, analysis.date);
+    if (lookup.kind === "match") {
+      match = lookup.match;
       console.log(`│        ✅  Best match : roster row #${match.index} (${(match.similarity * 100).toFixed(0)}% similar)`);
+    } else if (lookup.kind === "ambiguous") {
+      ambiguous = lookup;
     } else {
       console.log(`│        ⚠️  No sufficiently similar name found.`);
     }
@@ -972,6 +984,9 @@ export async function processBuffer(buffer: Buffer, {
   // produced — the subject and body first (the sender spelled those out
   // deliberately), then the workbook itself (a ชื่อแพทย์ header cell or the
   // sheet tab, which usually carry the correct name even when the file does not).
+  // An ambiguous name is retried the same way: a fuller name elsewhere (the
+  // sheet's ชื่อแพทย์ cell, say) can settle which of the rows it is. Only a
+  // single-row match counts; if none comes, the ambiguity stands.
   if (!match) {
     const fallbackNames = [...new Set([
       ...resolvePhysicianNameCandidates(filename ?? "", subject, body),
@@ -979,19 +994,69 @@ export async function processBuffer(buffer: Buffer, {
     ])];
     for (const candidate of fallbackNames) {
       if (candidate === analysis.name) continue;
-      let alt: RosterMatch | null;
+      let alt: RosterLookup;
       try {
-        alt = await matchName(candidate, analysis.date);
+        alt = await findRosterMatch(candidate, analysis.date);
       } catch { continue; } // table/DB errors already surfaced by the primary match
-      if (alt) {
-        console.log(`│        🔁  First name missed — another source's name matched roster row #${alt.index} (${(alt.similarity * 100).toFixed(0)}%)`);
+      if (alt.kind === "ambiguous") { ambiguous ??= alt; continue; }
+      if (alt.kind === "match") {
+        console.log(`│        🔁  First name missed — another source's name matched roster row #${alt.match.index} (${(alt.match.similarity * 100).toFixed(0)}%)`);
         analysis.name = candidate;
-        match = alt;
+        match = alt.match;
         break;
       }
     }
   }
   } // end email-only identity resolution
+
+  /**
+   * Hold a submission for the admin (admin-review.ts): nothing saved, no
+   * Drive file replaced. The admin is told first; if Telegram fails this
+   * throws, nothing has gone to the sender yet, and the submission is retried
+   * (bounded). Then the sender gets one polite notice per message (email), or
+   * the queue row is closed with error_type admin_review (LINE).
+   */
+  const holdForAdmin = async (held: Pick<AdminReviewAlertData, "reason" | "candidates" | "match" | "conflict">): Promise<ProcessOutcome> => {
+    const alert = formatAdminReviewAlert({
+      ...held,
+      source     : isUpload ? "line-upload" : "email",
+      sender     : isUpload ? identity!.email ?? "" : replyTo,
+      accountName: isUpload ? identity!.fullName : null,
+      nameInFile : analysis.name ?? null,
+      monthKey   : workMonth,
+      score      : analysis.score,
+      filename   : filename ?? null,
+      messageId  : isUpload ? null : messageId,
+      queueId    : isUpload ? identity!.queueId ?? null : null,
+    }, P4P_LABEL_NAME);
+    try {
+      await sendTelegram(alert);
+    } catch (err) {
+      throw new RetryLaterError(`held for admin review (${held.reason}): admin alert not delivered (${err instanceof Error ? err.message : err})`);
+    }
+    console.log(`│        ⏸️   Held for admin review (${held.reason}): score not saved, Drive file not replaced`);
+    if (isUpload) {
+      await notifyFailure(ADMIN_REVIEW_ERROR_TYPE, { detail: adminReviewDetail(held.reason) });
+      return "rejected";
+    }
+    const owed = Boolean(replyTo && messageId && SEND_ERROR_REPLIES && !isAutomatedSender(replyTo) && !receipt?.reviewNoticeSent);
+    if (owed) {
+      if (receipt) receipt.reviewNoticeSent = true;
+      try {
+        await gmail!.sendMessage({ to: replyTo, subject: ADMIN_REVIEW_REPLY_SUBJECT, body: adminReviewReplyBody(held.reason), replyToMessageId: messageId });
+        console.log(`│        📧  Admin-review notice sent to the sender`);
+      } catch (err) {
+        console.error(`│        ❌  Admin-review notice failed: ${errForLog(err)}`);
+        if (receipt) receipt.answered = false;
+      }
+    }
+    return "replied";
+  };
+
+  // ── Ambiguous name: the admin picks the row, never "the first one" ──────
+  if (!match && ambiguous) {
+    return holdForAdmin({ reason: "ambiguous_name", candidates: ambiguous.candidates });
+  }
 
   // ── Sender check (email path) ────────────────────────────────────────────
   // The physician was named by text the sender controls, so the name alone

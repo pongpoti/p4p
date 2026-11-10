@@ -54,6 +54,16 @@ export interface RosterMatch {
   similarity: number;
 }
 
+/**
+ * A name looked up in a roster table (findRosterMatch). "ambiguous": two or
+ * more rows fit equally well (the same name twice, or similarities within
+ * the ambiguity margin), so no row may be chosen without an admin.
+ */
+export type RosterLookup =
+  | { kind: "match"; match: RosterMatch }
+  | { kind: "ambiguous"; similarity: number; candidates: RosterMatch[] }
+  | { kind: "none" };
+
 /** One Gmail attachment, as gmail-client.js exposes it. */
 export interface GmailAttachment {
   partId?: string | null;
@@ -120,6 +130,8 @@ export interface UploadIdentity {
   rosterIndex: number | string | null;
   lineUserId: string;
   attempt?: number | null;
+  /** The p4p_upload_queue row being processed, named in the admin's alerts. */
+  queueId?: string | null;
 }
 
 /** What processBuffer() reports back to the caller on the upload path. */
