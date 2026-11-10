@@ -220,7 +220,9 @@
     const liveRound = (s) => s.rounds.find((r) => r.round_no === s.live) || null;
     const auditeeTurn = (s) => { const r = liveRound(s); return !r || r.status === "returned"; };
     const inputsInBuild = (s) => !!(s.inputs && s.build && Number(s.build.budget) === Number(s.inputs.budget) && Number(s.build.per_p4p) === Number(s.inputs.per_p4p));
-    const blocking = (s) => (s.build ? s.build.problems.filter((p) => p.blocking) : []);
+    // A build's blocking problems, but no_inputs: the empty fields and the
+    // send bar already say it (Pong, 2026-11-10: the box was unnecessary).
+    const blocking = (s) => (s.build ? s.build.problems.filter((p) => p.blocking && p.code !== "no_inputs") : []);
     const PROBLEM = {
         no_inputs: () => "ยังไม่ได้กรอกงบประมาณและ N",
         inputs_not_in_sheet: () => "งบประมาณหรือ per P4P ใน SK03 ไม่ตรงกับที่กรอก",
@@ -230,26 +232,38 @@
     };
     // ── Loading ──────────────────────────────────────────────────────────
     let monthRows = [];
-    async function loadMonths() {
+    // fresh (opening the tab): a month the side shown cannot open is left
+    // for the default. A later look keeps the month on screen. false: no
+    // month to show (none at all, none the auditee can open, or not installed).
+    async function loadMonths(fresh = false) {
         const r = await api("/dashboard/api/review/months");
         if (!r.installed) {
             renderNotInstalled();
             return false;
         }
         monthRows = r.months || [];
-        const pick = month && monthRows.some((m) => m.month === month) ? month : defaultMonth();
+        const keep = !!month && monthRows.some((m) => m.month === month && !(fresh && locked(m)));
+        const pick = keep ? month : defaultMonth();
         if (pick !== month) {
             month = pick;
             resetMonth();
         }
         drawTabs();
-        return monthRows.length > 0;
+        return month !== "";
     }
-    // The oldest month not approved yet, else the newest.
+    // A month the doctors have not all sent, with nothing sent to the
+    // auditor yet: the auditee side cannot open it (Pong, 2026-11-10).
+    const locked = (m) => role === "auditee" && !m.round && m.sent < m.total;
+    // The oldest month not approved yet, else the newest, of those the side
+    // shown can open.
     function defaultMonth() {
-        const m = monthRows.find((x) => !x.round || x.round.status !== "approved") || monthRows[monthRows.length - 1];
+        const can = monthRows.filter((x) => !locked(x));
+        const m = can.find((x) => !x.round || x.round.status !== "approved") || can[can.length - 1];
         return m ? m.month : "";
     }
+    const noMonthCard = () => monthRows.length
+        ? card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน")])
+        : card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")]);
     // One button per month, in time order; the status under it depends on
     // the side shown (redrawn on a role switch).
     function drawTabs() {
@@ -267,7 +281,16 @@
             b.append(el("span", "rv-mtab-m", shortMonth(m.month)), t);
             if (ms.sr)
                 b.append(el("span", "sr-only", " " + ms.sr));
-            b.addEventListener("click", () => pickMonth(m.month));
+            const off = locked(m);
+            if (off)
+                b.setAttribute("aria-disabled", "true");
+            b.addEventListener("click", () => {
+                if (off) {
+                    say(shortMonth(m.month) + " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ");
+                    return;
+                }
+                pickMonth(m.month);
+            });
             return b;
         }));
         if (had) {
@@ -332,7 +355,7 @@
             return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "ถึงคิวคุณ" };
         if (m.sent < m.total)
             return { kind: "wait", text: "ส่ง " + int(m.sent) + "/" + int(m.total), sr: "แพทย์ส่งแล้ว " + int(m.sent) + " จาก " + int(m.total) + " คน" };
-        return me ? { kind: "you", text: "ถึงคิวคุณ" } : { kind: "wait", text: "รอผู้จัดทำ" };
+        return me ? { kind: "you", text: "ตรวจสอบ" } : { kind: "wait", text: "รอผู้จัดทำ" };
     };
     // Only the newest load of the month picked may draw: a slower reply for
     // another month, or an older one for this month, is dropped. fromPoll:
@@ -455,9 +478,9 @@
     async function open() {
         loadingLine("กำลังโหลด…");
         try {
-            if (!(await loadMonths())) {
+            if (!(await loadMonths(true))) {
                 if (body.querySelector(".rv-loading"))
-                    body.replaceChildren(card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")]));
+                    body.replaceChildren(noMonthCard());
                 return;
             }
         }
@@ -479,8 +502,24 @@
                 localStorage.setItem(ROLE_KEY, role);
             }
             catch (e) { /* ignore */ }
-            drawTabs();
-            render();
+            // The auditee cannot stay on a month it cannot open; the auditor
+            // gets a month back after the auditee side had none to show.
+            const shown = monthRows.find((m) => m.month === month);
+            if (monthRows.length && (!shown || locked(shown))) {
+                const m = defaultMonth();
+                if (m)
+                    pickMonth(m);
+                else {
+                    month = "";
+                    resetMonth();
+                    drawTabs();
+                    body.replaceChildren(noMonthCard());
+                }
+            }
+            else {
+                drawTabs();
+                render();
+            }
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"));
         });
     }
@@ -862,8 +901,10 @@
         }
         else {
             const link = (text, id, url) => {
+                // No id: a build from before the file's id was kept, or the
+                // upload failed. The next build stores it.
                 if (!id)
-                    return el("span", "rv-hint", text + ": ไม่พบ");
+                    return el("span", "rv-hint", text + ": ยังไม่มีลิงก์");
                 const a = el("a", "rv-link", text + " ");
                 a.href = url(id);
                 a.target = "_blank";
@@ -944,8 +985,7 @@
             return out;
         const text = (p) => (PROBLEM[p.code] || (() => p.code))(p) +
             (p.names && p.names.length ? ": " + p.names.slice(0, 8).join(", ") + (p.names.length > 8 ? " และอีก " + int(p.names.length - 8) + " คน" : "") : "");
-        const blockers = b.problems.filter((p) => p.blocking);
-        // no_inputs: the send bar and the empty fields already say it.
+        const blockers = blocking(s);
         const notes2 = b.problems.filter((p) => !p.blocking && p.code !== "no_inputs");
         if (blockers.length || s.stale > 0) {
             const box = el("div", "rv-alert");

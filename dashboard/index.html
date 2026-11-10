@@ -836,6 +836,8 @@
         .rv-months { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; order: 3; }
         .rv-mtab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 48px; padding: 5px 14px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
         .rv-mtab:hover { background: var(--accent); }
+        .rv-mtab[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
+        .rv-mtab[aria-disabled="true"]:hover { background: #fff; }
         .rv-mtab[aria-pressed="true"] { border: 2px solid var(--primary); background: #F6EEE4; padding: 4px 13px; }
         .rv-mtab:focus-visible, .rv-flt:focus-visible, .rv-icon-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-mtab-m { font-weight: 700; }
