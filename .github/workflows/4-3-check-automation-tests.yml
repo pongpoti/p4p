@@ -4,10 +4,16 @@ on:
   push:
     paths:
       - "automation/**"
+      # automation/zip-guard.ts loads lib/p4p-score.ts at run time, and
+      # automation's tests read it, so a change there must run these tests.
+      - "lib/p4p-score.ts"
       - ".github/workflows/4-3-check-automation-tests.yml"
   pull_request:
     paths:
       - "automation/**"
+      # automation/zip-guard.ts loads lib/p4p-score.ts at run time, and
+      # automation's tests read it, so a change there must run these tests.
+      - "lib/p4p-score.ts"
       - ".github/workflows/4-3-check-automation-tests.yml"
 
 permissions:

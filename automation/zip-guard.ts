@@ -26,6 +26,12 @@ interface ZipSafetyModule {
 
 const require = createRequire(import.meta.url);
 const { checkZipSafety } = require("../lib/p4p-score.ts") as ZipSafetyModule;
+// zipProblem below turns every exception into ZIP_MALFORMED, so a renamed or
+// missing export would answer every workbook as "not a valid xlsx". Fail at
+// load instead, where the relay's start-up and the tests see it.
+if (typeof checkZipSafety !== "function") {
+  throw new Error("lib/p4p-score.ts no longer exports checkZipSafety; automation/zip-guard.ts needs it");
+}
 
 export interface ZipProblem {
   /** NOT_A_ZIP, ZIP_TOO_MANY_ENTRIES, ZIP_TOO_LARGE, ZIP64_UNSUPPORTED, ZIP_MALFORMED. */
