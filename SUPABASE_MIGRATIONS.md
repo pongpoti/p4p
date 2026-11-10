@@ -48,12 +48,17 @@ already-applied file is safe.
    are `authenticated`-only with zero `anon` policies. Running this before
    step 6 would leave newly-created tables unprotected until step 6 is
    applied.
-8. `scripts/list-all-physicians.sql` — `list_all_physicians()` RPC (feeds
-   the `/verify/` physician-name dropdown).
+8. ~~`scripts/list-all-physicians.sql`~~ — **superseded, nothing to add.**
+   It used to create `list_all_physicians()` and grant it to `anon` (every
+   roster name to anyone, for a `/verify/` dropdown that no longer exists).
+   The file now only revokes and drops that function, like step 24's PART 5,
+   so running it is harmless. Audit F10, 2026-11.
 9. `scripts/bind-line-user.sql` + `scripts/line-user-id-columns.sql` +
    `scripts/line-bind-gate.sql` — LINE userId binding
    (`bind_line_user_id`, `record_bind_failure`,
-   `get_line_bind_gate_status`) and the `line_bind_attempts` table.
+   `get_line_bind_gate_status`) and the `line_bind_attempts` table. Retired
+   (see below); they no longer grant `bind_line_user_id` or
+   `get_line_bind_gate_status` to anyone, and step 24 drops both.
 10. `scripts/line-binding-status-view.sql` — admin view of binding status.
 11. `scripts/email-sent-log-setup.sql` — `email_sent_log` table + RLS
     (score-tracker dedup).
@@ -204,6 +209,8 @@ already-applied file is safe.
       row `superseded` (new `archive_status` value) when a newer upload for
       the same email and month is done or archived, so it never replaces
       the newer file in Drive.
+    - PART 5 (F10): revokes and drops `list_all_physicians()`,
+      `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
     After it, check the `physicians` rows with `source = 'matched_sender'`
     (the query is at the end of the file): the old trigger added them with
     no admin step.
@@ -263,7 +270,8 @@ No need to run them on a fresh project; kept for history:
   service-role write), not a bearer token in `callback_data`
   (see SECURITY_ANALYSIS.md §2c).
 - `scripts/list-all-physicians.sql` — already unused by the app (see its own
-  in-file deprecation header); dropped in step 14's Block 6.
+  in-file deprecation header). It now only drops the function (step 8 above);
+  step 24's PART 5 does the same.
 
 ## Health check — catching this class of bug automatically
 

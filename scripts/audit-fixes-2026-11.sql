@@ -1,6 +1,6 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F01, F13, F09, F17).
+--  (findings F01, F13, F09, F17, F10).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -258,7 +258,40 @@ grant execute on function public.claim_p4p_archive() to service_role;
 commit;
 
 
+-- PART 5 — F10: drop the retired anon-reachable functions for good.
+--   list_all_physicians() returned every roster name to anon;
+--   get_line_bind_gate_status(text) and bind_line_user_id(text, text) are
+--   the retired LINE-bind gate. DATA_EXPOSURE_ANALYSIS.md section 5 records
+--   all three as already gone from the live project; this makes that true
+--   for any project built from these scripts too. If something still
+--   depends on one, it stays, but with no grants left.
+begin;
+
+do $$
+declare f text;
+begin
+  foreach f in array array['public.list_all_physicians()',
+                           'public.get_line_bind_gate_status(text)',
+                           'public.bind_line_user_id(text, text)'] loop
+    if to_regprocedure(f) is not null then
+      execute format('revoke all on function %s from public, anon, authenticated', f);
+      begin
+        execute format('drop function %s', f);
+      exception when dependent_objects_still_exist then
+        raise warning 'kept % because something depends on it; nobody can call it: %', f, sqlerrm;
+      end;
+    end if;
+  end loop;
+end $$;
+
+commit;
+
+
 -- Checks to run by hand afterwards:
+--   select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--    where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'EXECUTE')
+--    order by 1;
+--   -- expect no list_all_physicians, get_line_bind_gate_status, bind_line_user_id
 --   select email, full_name, created_at from public.physicians
 --    where source = 'matched_sender' order by created_at desc;
 --   -- rows the old trigger added by itself: confirm each address really

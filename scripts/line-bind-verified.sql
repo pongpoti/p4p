@@ -269,6 +269,9 @@ grant execute on function public.get_line_bind_gate_status_self() to authenticat
 --           bind_line_user_id() directly and would start failing every bind.
 -- ============================================================================
 --
+--   (UPDATE 2026-11: applied live out-of-band in 2026-08, see DATA_EXPOSURE_ANALYSIS.md
+--   section 5; scripts/audit-fixes-2026-11.sql PART 5 now runs it in source.)
+--
 --   revoke all on function public.bind_line_user_id(text, text)   from public, anon, authenticated;
 --   revoke all on function public.get_line_bind_gate_status(text) from public, anon, authenticated;
 --   drop function if exists public.bind_line_user_id(text, text);

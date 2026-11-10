@@ -1,9 +1,9 @@
 -- ============================================================================
 --  ⚠️  SUPERSEDED — the dropdown this backs was REMOVED. Do not reintroduce.
 -- ============================================================================
---  This function is a PII leak and is scheduled for DROP — see the tail of
---  scripts/security-hardening-2026-08.sql for the exact statement and the
---  ordering constraint (the app change must be DEPLOYED first).
+--  This function is a PII leak and is DROPPED: running this file now removes
+--  it (see the bottom of the file and scripts/audit-fixes-2026-11.sql PART 5).
+--  The app change it waited on is deployed: verify/ no longer calls it.
 --
 --  Why it was removed
 --  ------------------
@@ -43,38 +43,15 @@
 --  than guessing at Postgres ICU collation availability on this project.
 -- ============================================================================
 
-create or replace function public.list_all_physicians()
-returns table (full_name text)
-language plpgsql
-security definer
-stable
-set search_path = public
-as $$
-declare
-  t     text;
-  parts text[] := '{}';
-  sql   text;
+-- UPDATE 2026-11 (audit finding F10): this file used to create
+-- list_all_physicians() and grant it to anon, so pasting it again (or following an old copy
+-- of SUPABASE_MIGRATIONS.md, which listed it as step 8) re-published the
+-- whole roster. It now only removes it — the same statements as
+-- scripts/audit-fixes-2026-11.sql PART 5. The old body is in git history.
+do $$
 begin
-  for t in
-    select tablename from pg_tables
-    where schemaname = 'public'
-      and tablename ~ '^[0-9]{4}_[0-9]{2}$'
-  loop
-    parts := parts || format(
-      $f$select trim(both ' ' from coalesce(firstname, '') || ' ' || coalesce(lastname, '')) as full_name
-         from public.%I$f$,
-      t
-    );
-  end loop;
-
-  if array_length(parts, 1) is null then
-    return; -- no roster tables exist yet
+  if to_regprocedure('public.list_all_physicians()') is not null then
+    execute 'revoke all on function public.list_all_physicians() from public, anon, authenticated';
   end if;
-
-  sql := 'select distinct s.full_name from (' || array_to_string(parts, ' union all ') || ') s where s.full_name <> ''''';
-  return query execute sql;
-end;
-$$;
-
-revoke all on function public.list_all_physicians() from public;
-grant execute on function public.list_all_physicians() to anon, authenticated;
+end $$;
+drop function if exists public.list_all_physicians();

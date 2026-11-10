@@ -109,8 +109,12 @@ as $$
     coalesce((select a.attempts from public.line_bind_attempts a where a.email = lower(p_email)), 0) as attempts;
 $$;
 
-revoke all on function public.get_line_bind_gate_status(text) from public;
-grant execute on function public.get_line_bind_gate_status(text) to anon, authenticated;
+-- UPDATE 2026-11 (audit finding F10): retired and dropped (live per
+-- DATA_EXPOSURE_ANALYSIS.md section 5, in source by
+-- scripts/audit-fixes-2026-11.sql PART 5). The grant that stood here is
+-- removed, so pasting this retired file again leaves the function callable
+-- by nobody but the owner.
+revoke all on function public.get_line_bind_gate_status(text) from public, anon, authenticated;
 
 create or replace function public.bind_line_user_id(p_line_user_id text, p_line_display_name text default null)
 returns void
@@ -143,3 +147,10 @@ begin
   delete from public.line_bind_attempts where email = v_email;
 end;
 $$;
+
+-- UPDATE 2026-11 (audit finding F10): retired and dropped (live per
+-- DATA_EXPOSURE_ANALYSIS.md section 5, in source by
+-- scripts/audit-fixes-2026-11.sql PART 5). Revoked here so that pasting
+-- this retired file again leaves the function callable by nobody but the
+-- owner.
+revoke all on function public.bind_line_user_id(text, text) from public, anon, authenticated;

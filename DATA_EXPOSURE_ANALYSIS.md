@@ -258,6 +258,15 @@ Postgres row order.
 > `bind_line_user_id_verified` — `service_role` only (anon **and**
 > authenticated both false); `get_line_bind_gate_status_self` —
 > `authenticated` only.
+>
+> **Update (2026-11, audit finding F10).** The scripts now say the same
+> thing. `scripts/audit-fixes-2026-11.sql` PART 5 revokes and drops all
+> three functions (uncommented, safe to re-run); the grant lines that
+> re-published them are gone from `security-hardening-2026-08.sql`,
+> `bind-line-user.sql` and `line-bind-gate.sql` (which now revoke instead);
+> `list-all-physicians.sql` only drops the function; and
+> `SUPABASE_MIGRATIONS.md` no longer lists it as a step to run. A rebuild
+> that follows the ledger therefore cannot hand the roster to `anon` again.
 
 **Status — both fixed, 2026-08:**
 1. ✅ `create unique index line_user_bindings_line_user_id_key on

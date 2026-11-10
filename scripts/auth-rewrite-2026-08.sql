@@ -260,7 +260,9 @@ $$;
 --   alter table public.access_requests drop column if exists approve_token;
 --
 --   -- the PII-leaking dropdown feed — already unused, see
---   -- scripts/list-all-physicians.sql and SECURITY_ANALYSIS.md §2a
+--   -- scripts/list-all-physicians.sql and SECURITY_ANALYSIS.md §2a.
+--   -- Now done for real (with get_line_bind_gate_status and
+--   -- bind_line_user_id) by scripts/audit-fixes-2026-11.sql PART 5.
 --   drop function if exists public.list_all_physicians();
 --
 --   -- superseded by physicians (data already migrated in Block 2)
