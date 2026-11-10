@@ -5,7 +5,7 @@
  *   1. Duplicate uploads (two+ files sharing the same physician name in the
  *      same month folder) — keep the newest, trash the rest.
  *      This is what silently broke 2569_04: two files named
- *      "นิธินันท์ สร้อยอากาศ" made Drive report 192 files against 191
+ *      "สมชาย ใจดี" made Drive report 192 files against 191
  *      Supabase rows, so process.ts's listsMatch() rejected the whole month.
  *   2. Unrelated files — a Drive file whose name doesn't match any row
  *      (exact or substring) in that month's Supabase table. Skipped when the

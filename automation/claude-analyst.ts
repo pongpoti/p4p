@@ -619,7 +619,7 @@ const NON_NAME_THAI = new Set([
   "ชื่อแพทย์", "ชื่อ", "นามสกุล", "สกุล", "ชื่อสกุล", "กลุ่มงาน",
   // ── Department names (single-token) ──────────────────────────────────────
   // Senders sometimes put the department where the surname should go in the
-  // filename (e.g. "P4P วราวุธ อายุรกรรม เม.ย.69.xlsx").  These are department
+  // filename (e.g. "P4P วิชัย อายุรกรรม เม.ย.69.xlsx").  These are department
   // names, never lastnames — exclude so the firstname-only fallback fires.
   "อายุรกรรม", "ศัลยกรรม", "กุมารเวชกรรม", "จักษุวิทยา", "นิติเวช",
   "รังสีวิทยา", "วิสัญญีวิทยา", "เวชกรรมฟื้นฟู", "เวชกรรมสังคม",
@@ -718,7 +718,7 @@ function extractNameFromText(text: string | null | undefined): string | null {
     // keys, so "นพ,สมชาย" / "พญ,แพร" are a frequent slip.  Runs after the month
     // rules so "ม.ค." is already "มค" and cannot be mangled here.
     .replace(/(นพ|พญ|ทพญ|ทพ|ดร)\s*,\s*/g, "$1.")
-    // A title typed with no dot at all — "พญ นันทิกา", "นพ ไกรวุฒิ  RT" — is still
+    // A title typed with no dot at all — "พญ มานี", "นพ ไกรวุฒิ  RT" — is still
     // a title, not the first word of the name.  Only the whole word counts (a
     // space or the start of the text on each side, so "นพดล" is left alone) and
     // only when a Thai word follows it.
@@ -907,9 +907,9 @@ function bodyNameCandidates(body: string): string[] {
  * Used only when the filename/subject/body pre-scan produced a name that did
  * NOT match any physician in the database.  In practice the real name is still
  * written correctly inside the file even when the sender mis-named it:
- *   • a "ชื่อแพทย์ นพ. วราวุธ เมธีศิริวัฒน์" header cell, or
- *   • the worksheet tab name ("ปัทมิกา เจียรวุฒิสาร เมย.69").
- *   • a title banner in the top rows ("… นพ.อุกฤษ ชูชินปราการ"), for sheets with
+ *   • a "ชื่อแพทย์ นพ. วิชัย ศรีสุข" header cell, or
+ *   • the worksheet tab name ("สมหญิง รักงาน เมย.69").
+ *   • a title banner in the top rows ("… นพ.ประเสริฐ สุขใจ"), for sheets with
  *     no ชื่อแพทย์ label.
  *
  * Returns an ordered, de-duplicated list of "firstname lastname" candidates
@@ -943,12 +943,12 @@ export function resolvePhysicianNameFromSheet(rows: Row[] = [], sheetName: strin
     }
   }
 
-  // 2. Worksheet tab name (e.g. "ปัทมิกา เจียรวุฒิสาร เมย.69").
+  // 2. Worksheet tab name (e.g. "สมหญิง รักงาน เมย.69").
   add(extractNameFromText(sheetName ?? ""));
 
   // 3. A title banner with the name in it, on sheets that carry no ชื่อแพทย์
-  //    label at all — "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.อุกฤษ ชูชินปราการ",
-  //    "พ.ญ. นันทิกา วรรณทรัพย์ผล".  Last, so a labelled cell or the tab name still
+  //    label at all — "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.ประเสริฐ สุขใจ",
+  //    "พ.ญ. มานี ศรีสุข".  Last, so a labelled cell or the tab name still
   //    wins; only the top rows, where a banner sits (a signature line further
   //    down names someone else); and only a cell that carries a dotted title,
   //    so no ordinary heading becomes a candidate.

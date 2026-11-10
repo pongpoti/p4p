@@ -65,13 +65,13 @@ test("title prefix with firstname only and month discards month", () => {
 });
 
 // ── Department name in filename is not treated as a lastname ──────────────────
-// Real case: sender named the file "P4P วราวุธ อายุรกรรม เม.ย. 69.xlsx",
+// Real case: sender named the file "P4P วิชัย อายุรกรรม เม.ย. 69.xlsx",
 // putting the department ("อายุรกรรม") where the surname should go.
 
 test("department word after firstname returns firstname only", () => {
   assert.equal(
-    resolvePhysicianName("P4P วราวุธ อายุรกรรม เม.ย. 69.xlsx", "", ""),
-    "วราวุธ"
+    resolvePhysicianName("P4P วิชัย อายุรกรรม เม.ย. 69.xlsx", "", ""),
+    "วิชัย"
   );
 });
 
@@ -151,11 +151,11 @@ test("subject name is kept as a candidate when the filename differs", () => {
   // the subject spells the full name out.  Both must survive so the caller can
   // retry the second one when the first misses in the database.
   const got = resolvePhysicianNameCandidates(
-    "P4P วราวุธ อายุรกรรม เม.ย. 69.xlsx",
-    "P4P นพ.วราวุธ เมธีศิริวัฒน์ เมษายน 2569",
+    "P4P วิชัย อายุรกรรม เม.ย. 69.xlsx",
+    "P4P นพ.วิชัย ศรีสุข เมษายน 2569",
     ""
   );
-  assert.deepEqual(got, ["วราวุธ", "วราวุธ เมธีศิริวัฒน์"]);
+  assert.deepEqual(got, ["วิชัย", "วิชัย ศรีสุข"]);
 });
 
 test("candidates are de-duplicated and filename stays first", () => {
@@ -168,8 +168,8 @@ test("candidates are de-duplicated and filename stays first", () => {
 });
 
 test("resolvePhysicianName returns the first candidate", () => {
-  const filename = "P4P วราวุธ อายุรกรรม เม.ย. 69.xlsx";
-  const subject  = "P4P นพ.วราวุธ เมธีศิริวัฒน์ เมษายน 2569";
+  const filename = "P4P วิชัย อายุรกรรม เม.ย. 69.xlsx";
+  const subject  = "P4P นพ.วิชัย ศรีสุข เมษายน 2569";
   assert.equal(
     resolvePhysicianName(filename, subject, ""),
     resolvePhysicianNameCandidates(filename, subject, "")[0]
@@ -184,16 +184,16 @@ test("no name anywhere yields an empty candidate list", () => {
 
 test("recovers titled name from a ชื่อแพทย์ header cell", () => {
   // Real case: filename mis-named, but the cell holds the correct name.
-  const rows = [{ col_1: "ชื่อแพทย์ นพ. วราวุธ เมธีศิริวัฒน์" }];
+  const rows = [{ col_1: "ชื่อแพทย์ นพ. วิชัย ศรีสุข" }];
   const got = resolvePhysicianNameFromSheet(rows, "รายงานP4Pสำหรับแพทย์");
-  assert.ok(got.includes("วราวุธ เมธีศิริวัฒน์"), `got ${JSON.stringify(got)}`);
+  assert.ok(got.includes("วิชัย ศรีสุข"), `got ${JSON.stringify(got)}`);
 });
 
 test("recovers name from the worksheet tab name", () => {
   // Real case: cell label is just dotted placeholder; name is the sheet tab.
   const rows = [{ col_1: "ชื่อแพทย์........................." }];
-  const got = resolvePhysicianNameFromSheet(rows, "ปัทมิกา เจียรวุฒิสาร เมย.69");
-  assert.ok(got.includes("ปัทมิกา เจียรวุฒิสาร"), `got ${JSON.stringify(got)}`);
+  const got = resolvePhysicianNameFromSheet(rows, "สมหญิง รักงาน เมย.69");
+  assert.ok(got.includes("สมหญิง รักงาน"), `got ${JSON.stringify(got)}`);
 });
 
 test("dotted ชื่อแพทย์ placeholder yields no junk candidate", () => {
@@ -205,8 +205,8 @@ test("dotted ชื่อแพทย์ placeholder yields no junk candidate", 
 
 // ── Titles typed with no dot ─────────────────────────────────────────────────
 // Real case (run #811): an X-ray department sent 13 files named like
-// "P4P สค 69 พญ นันทิกา NM.xlsx" and "P4P สค 69 นพ ไกรวุฒิ  RT.xlsx".  The title
-// was read as the first word of the name ("พญ นันทิกา"), which matched no one.
+// "P4P สค 69 พญ มานี NM.xlsx" and "P4P สค 69 นพ ไกรวุฒิ  RT.xlsx".  The title
+// was read as the first word of the name ("พญ มานี"), which matched no one.
 
 test("a title with no dot is a title, not part of the name", () => {
   assert.equal(resolvePhysicianName("P4P สค 69 พญ สมศรี NM.xlsx", "", ""), "สมศรี");
