@@ -258,7 +258,10 @@
     const auditeeTurn = (s: State): boolean => { const r = liveRound(s); return !r || r.status === "returned" }
     const inputsInBuild = (s: State): boolean =>
         !!(s.inputs && s.build && Number(s.build.budget) === Number(s.inputs.budget) && Number(s.build.per_p4p) === Number(s.inputs.per_p4p))
-    const blocking = (s: State): Build["problems"] => (s.build ? s.build.problems.filter((p) => p.blocking) : [])
+    // A build's blocking problems, but no_inputs: the empty fields and the
+    // send bar already say it (Pong, 2026-11-10: the box was unnecessary).
+    const blocking = (s: State): Build["problems"] =>
+        (s.build ? s.build.problems.filter((p) => p.blocking && p.code !== "no_inputs") : [])
 
     const PROBLEM: Record<string, (p: Build["problems"][0]) => string> = {
         no_inputs: () => "ยังไม่ได้กรอกงบประมาณและ N",
@@ -270,19 +273,41 @@
 
     // ── Loading ──────────────────────────────────────────────────────────
     let monthRows: MonthRow[] = []
-    async function loadMonths(): Promise<boolean> {
+    // fresh (opening the tab): a month the side shown cannot open is left
+    // for the default. A later look keeps the month on screen. false: no
+    // month to show (none at all, none the auditee can open, or not installed).
+    async function loadMonths(fresh = false): Promise<boolean> {
         const r = await api<{ installed: boolean; months?: MonthRow[] }>("/dashboard/api/review/months")
         if (!r.installed) { renderNotInstalled(); return false }
         monthRows = r.months || []
-        const pick = month && monthRows.some((m) => m.month === month) ? month : defaultMonth()
+        const keep = !!month && monthRows.some((m) => m.month === month && !(fresh && locked(m)))
+        const pick = keep ? month : defaultMonth()
         if (pick !== month) { month = pick; resetMonth() }
         drawTabs()
-        return monthRows.length > 0
+        return month !== ""
     }
-    // The oldest month not approved yet, else the newest.
+    // The month list again, for the tabs only: the month shown stays.
+    async function refreshMonthRows(): Promise<void> {
+        const r = await api<{ installed: boolean; months?: MonthRow[] }>("/dashboard/api/review/months")
+        if (r.installed && r.months) { monthRows = r.months; drawTabs() }
+    }
+    // A month the doctors have not all sent, with nothing sent to the
+    // auditor yet: the auditee side cannot open it (Pong, 2026-11-10).
+    const locked = (m: MonthRow): boolean => role === "auditee" && !m.round && m.sent < m.total
+    // The oldest month not approved yet, else the newest, of those the side
+    // shown can open.
     function defaultMonth(): string {
-        const m = monthRows.find((x) => !x.round || x.round.status !== "approved") || monthRows[monthRows.length - 1]
+        const can = monthRows.filter((x) => !locked(x))
+        const m = can.find((x) => !x.round || x.round.status !== "approved") || can[can.length - 1]
         return m ? m.month : ""
+    }
+    function noMonthCard(): HTMLElement {
+        if (!monthRows.length) return card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")])
+        const again = el("button", "btn-ghost", "ดูอีกครั้ง")
+        again.type = "button"
+        again.id = "rv-months-again"
+        again.addEventListener("click", () => { void open() })
+        return card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน"), again])
     }
     // One button per month, in time order; the status under it depends on
     // the side shown (redrawn on a role switch).
@@ -299,7 +324,17 @@
             if (ms.sr) t.setAttribute("aria-hidden", "true")
             b.append(el("span", "rv-mtab-m", shortMonth(m.month)), t)
             if (ms.sr) b.append(el("span", "sr-only", " " + ms.sr))
-            b.addEventListener("click", () => pickMonth(m.month))
+            const off = locked(m)
+            if (off) b.setAttribute("aria-disabled", "true")
+            b.addEventListener("click", () => {
+                if (!off) { pickMonth(m.month); return }
+                // The list may be old: look again before saying no.
+                void refreshMonthRows().catch(() => undefined).then(() => {
+                    const now = monthRows.find((x) => x.month === m.month)
+                    if (now && !locked(now)) pickMonth(m.month)
+                    else say(shortMonth(m.month) + " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ")
+                })
+            })
             return b
         }))
         if (had) { const f = document.getElementById(had); if (f) f.focus() }
@@ -332,7 +367,7 @@
         if (r && r.status === "returned") return me ? { kind: "fix", text: "ต้องแก้ " + int(r.fix || 0) } : { kind: "wait", text: "รอผู้จัดทำ" }
         if (r) return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "ถึงคิวคุณ" }
         if (m.sent < m.total) return { kind: "wait", text: "ส่ง " + int(m.sent) + "/" + int(m.total), sr: "แพทย์ส่งแล้ว " + int(m.sent) + " จาก " + int(m.total) + " คน" }
-        return me ? { kind: "you", text: "ถึงคิวคุณ" } : { kind: "wait", text: "รอผู้จัดทำ" }
+        return me ? { kind: "you", text: "ตรวจสอบ" } : { kind: "wait", text: "รอผู้จัดทำ" }
     }
 
     // Only the newest load of the month picked may draw: a slower reply for
@@ -424,8 +459,8 @@
     async function open(): Promise<void> {
         loadingLine("กำลังโหลด…")
         try {
-            if (!(await loadMonths())) {
-                if (body.querySelector(".rv-loading")) body.replaceChildren(card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")]))
+            if (!(await loadMonths(true))) {
+                if (body.querySelector(".rv-loading")) body.replaceChildren(noMonthCard())
                 return
             }
         } catch (e) {
@@ -442,8 +477,18 @@
         b.addEventListener("click", () => {
             role = b.dataset.role === "auditor" ? "auditor" : "auditee"
             try { localStorage.setItem(ROLE_KEY, role) } catch (e) { /* ignore */ }
-            drawTabs()
-            render()
+            for (const x of roleBtns) x.setAttribute("aria-pressed", String(x.dataset.role === role))
+            // The auditee cannot stay on a month it cannot open; the auditor
+            // gets a month back after the auditee side had none to show.
+            const shown = monthRows.find((m) => m.month === month)
+            if (monthRows.length && (!shown || locked(shown))) {
+                const m = defaultMonth()
+                if (m) pickMonth(m)
+                else { month = ""; resetMonth(); drawTabs(); body.replaceChildren(noMonthCard()) }
+            } else {
+                drawTabs()
+                render()
+            }
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"))
         })
     }
@@ -767,7 +812,9 @@
             row.append(p)
         } else {
             const link = (text: string, id: string | undefined, url: (x: string) => string): HTMLElement => {
-                if (!id) return el("span", "rv-hint", text + ": ไม่พบ")
+                // No id: a build from before the file's id was kept, or the
+                // upload failed. The next build stores it.
+                if (!id) return el("span", "rv-hint", text + ": ยังไม่มีลิงก์" + (auditeeTurn(s) ? " (กดสร้างใหม่)" : ""))
                 const a = el("a", "rv-link", text + " ")
                 a.href = url(id)
                 a.target = "_blank"
@@ -842,8 +889,7 @@
         if (!b || openRequest(s)) return out
         const text = (p: Build["problems"][0]): string => (PROBLEM[p.code] || (() => p.code))(p) +
             (p.names && p.names.length ? ": " + p.names.slice(0, 8).join(", ") + (p.names.length > 8 ? " และอีก " + int(p.names.length - 8) + " คน" : "") : "")
-        const blockers = b.problems.filter((p) => p.blocking)
-        // no_inputs: the send bar and the empty fields already say it.
+        const blockers = blocking(s)
         const notes2 = b.problems.filter((p) => !p.blocking && p.code !== "no_inputs")
         if (blockers.length || s.stale > 0) {
             const box = el("div", "rv-alert")
@@ -1504,7 +1550,7 @@
         statedHow: string
         sheet: string | null
         pay: number | null
-        deptRow: number | null
+        deptRow?: number | null
         deptPay: number | null
         admin: number | null
         scoreCheck: "match" | "mismatch" | "missing"
@@ -1864,7 +1910,7 @@
         const fl = el("label", "rv-mini", "แสดง")
         const sel = el("select")
         sel.id = "rv-filter"
-        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ผลเทียบไม่ตรง"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
+        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ไม่ตรงหรือไม่พบ"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
             const o = el("option", undefined, t)
             o.value = v
             sel.append(o)
@@ -1895,7 +1941,8 @@
             const top = el("span", "rv-pname", p.name)
             const sub = el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + " · " + decisionText(p))
             b.append(top, sub)
-            if (!bothMatch(p)) b.append(chip("bad", "ผลเทียบไม่ตรง"))
+            if (p.scoreCheck === "mismatch" || p.moneyCheck === "mismatch") b.append(chip("bad", "ผลเทียบไม่ตรง"))
+            else if (!bothMatch(p)) b.append(chip("miss", "ไม่พบข้อมูล"))
             b.addEventListener("click", () => { selected = p.index; render(); const t = document.getElementById("rv-person-h"); if (t) t.focus() })
             li.append(b)
             ul.append(li)
@@ -1914,7 +1961,9 @@
         h.tabIndex = -1
         panel.setAttribute("aria-labelledby", h.id)
         panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + (p.sk03Row ? " · SK03 แถว " + p.sk03Row : "") + " · " + decisionText(p)))
-        if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + (WHY_TEXT[p.why] || p.why)))
+        // 'check': a check is not ตรงกัน in the new build; say which kind.
+        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why)
+        if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText))
         if (p.edit) panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")))
         if (p.prev && (p.prev.remark || p.prev.reply)) {
             const prev = el("div", "rv-prev")
@@ -1931,7 +1980,7 @@
             const th = el("th", undefined, label)
             th.scope = "row"
             const res = el("td")
-            res.append(chip(check === "match" ? "ok" : "bad", CHECK_TEXT[check]))
+            res.append(chip(check === "match" ? "ok" : check === "missing" ? "miss" : "bad", CHECK_TEXT[check]))
             tr.append(th, el("td", undefined, a), el("td", undefined, b), res)
             return tr
         }
@@ -1940,7 +1989,7 @@
         tbody.append(
             row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
                 : num(p.stated) + " ช่อง " + p.statedCell + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck),
-            row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน แถว " + p.deptRow + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck),
+            row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck),
         )
         t.append(cap, thead, tbody)
         panel.append(t)
@@ -2063,7 +2112,10 @@
 
     function decideBox(s: State, p: Person): HTMLElement {
         const box = el("div", "rv-decide")
-        const ok = bothMatch(p)
+        // Pay must be ตรงกัน. The score may be ตรงกัน, or ไม่พบ (the doctor's
+        // file has no saved total): then the auditor looks at the sheet and
+        // approves (Pong, 2026-11-10). ไม่ตรงกัน never approves.
+        const ok = p.moneyCheck === "match" && p.scoreCheck !== "mismatch"
         const spot = "decide-" + p.index
         const approve = el("button", "btn-primary", p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
         approve.type = "button"
@@ -2073,7 +2125,11 @@
         if (!ok) {
             approve.setAttribute("aria-disabled", "true")
             approve.setAttribute("aria-describedby", why.id)
-            why.textContent = "อนุมัติได้เมื่อเทียบคะแนนและเทียบเงินตรงกันทั้งคู่ คนนี้ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ"
+            why.textContent = (p.moneyCheck === "missing" && p.scoreCheck !== "mismatch" ? "ไม่พบเงินในชีตกลุ่มงาน" : "เทียบไม่ตรงกัน")
+                + " อนุมัติไม่ได้ ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ"
+        } else if (!bothMatch(p)) {
+            approve.setAttribute("aria-describedby", why.id)
+            why.textContent = "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข"
         }
         approve.addEventListener("click", () => {
             if (!ok) { say(why.textContent || ""); return }
