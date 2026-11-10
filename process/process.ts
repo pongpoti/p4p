@@ -401,16 +401,18 @@ function listsMatch(driveNames: string[], supabasePersons: SupabasePerson[]): bo
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
     const setSB    = new Set(normSB);
     const setDrive = new Set(normDrive);
-    normDrive.forEach(n => { if (!setSB.has(n))    log(`    ✗ Drive but not SB: "${n}"`, 'warn'); });
-    normSB.forEach(n   => { if (!setDrive.has(n)) log(`    ✗ SB but not Drive: "${n}"`, 'warn'); });
+    // Counts and roster row numbers only: this log is public, and a Drive
+    // file is named after its physician.
+    const driveOnly = normDrive.filter(n => !setSB.has(n)).length;
+    if (driveOnly) log(`    ✗ ${driveOnly} Drive file(s) match no roster row`, 'warn');
+    supabasePersons.forEach((p, i) => { if (!setDrive.has(normSB[i]!)) log(`    ✗ roster row #${p.index ?? '?'} has no Drive file`, 'warn'); });
     return false;
   }
   const s1 = [...normDrive].sort(), s2 = [...normSB].sort();
-  let ok = true;
-  for (let i = 0; i < s1.length; i++) {
-    if (s1[i] !== s2[i]) { log(`  [Compare] Mismatch: "${s1[i]}" ≠ "${s2[i]}"`, 'warn'); ok = false; }
-  }
-  return ok;
+  let mismatches = 0;
+  for (let i = 0; i < s1.length; i++) if (s1[i] !== s2[i]) mismatches++;
+  if (mismatches) log(`  [Compare] ${mismatches} name(s) differ between Drive and the roster`, 'warn');
+  return mismatches === 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -524,9 +526,15 @@ async function mergeAndUpload(
   }));
   filesWithName.sort((a, b) => sortByDeptThenName(a, b, deptMap));
 
-  log('\n  [Merge] Sorted order:');
-  filesWithName.forEach((f, i) =>
-    log(`    ${String(i+1).padStart(2)}. ${f.origName.padEnd(32)} [${deptMap[f.normName] ?? '?'}]`));
+  // Positions and departments only: this log is public, and each Drive file
+  // is named after its physician.
+  const perDept = new Map<string, number>();
+  for (const f of filesWithName) {
+    const d = deptMap[f.normName] ?? '?';
+    perDept.set(d, (perDept.get(d) ?? 0) + 1);
+  }
+  log(`\n  [Merge] ${filesWithName.length} file(s) in department order: ` +
+    [...perDept].map(([d, n]) => `${d} ${n}`).join(', '));
 
   // Create temp directory for this run
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p4p_merge_'));
@@ -543,8 +551,8 @@ async function mergeAndUpload(
     const docs = new Map<string, DocInfo>();
 
     // Download each file into the temp directory
-    for (const file of filesWithName) {
-      log(`\n  [Merge] ↓ ${file.origName}`);
+    for (const [i, file] of filesWithName.entries()) {
+      log(`\n  [Merge] ↓ file ${i + 1}/${filesWithName.length}`);
       const buffer   = await downloadFile(drive, file.id!);
       const filePath = path.join(tmpDir, `${file.id}.xlsx`);
       fs.writeFileSync(filePath, buffer);
@@ -569,7 +577,7 @@ async function mergeAndUpload(
           const a = await review.analyseDoctorFile(buffer);
           if (!docs.has(file.normName)) docs.set(file.normName, { sheetName, ...a });
         } catch (err: any) {
-          log(`  [Merge] ⚠ could not read "${file.origName}" for the review tab: ${err.message}`, 'warn');
+          log(`  [Merge] ⚠ could not read file ${i + 1} for the review tab: ${err.message}`, 'warn');
         }
       }
     }
@@ -584,7 +592,8 @@ async function mergeAndUpload(
     const outputPath   = path.join(tmpDir, 'merged.xlsx');
     fs.writeFileSync(manifestPath, JSON.stringify({ files: manifestEntries }, null, 2), 'utf8');
 
-    // Invoke Python merge script
+    // Invoke Python merge script. Its output names sheets by number, never
+    // by their (physician) names, so it can go to this public log.
     const scriptPath = path.join(__dirname, 'merge.py');
     log('\n  [Merge] Running Python/openpyxl merge…');
     const py = spawnSync(
@@ -1172,7 +1181,7 @@ async function buildDeptSheets(
       const rowNum  = rowNumMap[nameKey];
       const r       = D + i;
 
-      if (rowNum == null) { log(`  [SK03] ⚠ row_num missing for "${nameKey}"`, 'warn'); continue; }
+      if (rowNum == null) { log(`  [SK03] ⚠ row_num missing for roster row #${p.index ?? '?'}`, 'warn'); continue; }
 
       if (isInternDept) {
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });

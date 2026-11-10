@@ -158,7 +158,10 @@ def main():
     sheet_count = 0
     total_rows  = 0
 
-    for entry in manifest['files']:
+    # Sheets and files are named by number only: this output goes to the
+    # public Actions log, and a sheet (and its source file) is named after
+    # its physician.
+    for n, entry in enumerate(manifest['files'], 1):
         src_path   = entry['path']
         sheet_name = entry['sheet_name']
         tab_color  = entry.get('tab_color') or None
@@ -166,28 +169,28 @@ def main():
         try:
             src_wb = load_workbook(src_path, data_only=False)
         except Exception as e:
-            print(f"  WARNING: cannot open {src_path}: {e}", file=sys.stderr)
+            print(f"  WARNING: cannot open file {n}: {type(e).__name__}", file=sys.stderr)
             continue
 
         # Find first non-empty sheet
         target_ws = None
-        for ws in src_wb.worksheets:
+        for k, ws in enumerate(src_wb.worksheets, 1):
             if not is_sheet_empty(ws):
                 target_ws = ws
-                print(f"  -> using sheet \"{ws.title}\" from \"{src_path}\"")
+                print(f"  -> file {n}: using sheet {k}")
                 break
             else:
-                print(f"  -> sheet \"{ws.title}\" is empty, trying next")
+                print(f"  -> file {n}: sheet {k} is empty, trying next")
 
         if target_ws is None:
-            print(f"  WARNING: all sheets empty in {src_path} — skipped", file=sys.stderr)
+            print(f"  WARNING: all sheets empty in file {n} — skipped", file=sys.stderr)
             continue
 
         copy_sheet(target_ws, dst_wb, sheet_name, tab_color)
         row_count = target_ws.max_row or 0
         total_rows  += max(0, row_count - 1)
         sheet_count += 1
-        print(f"  OK {row_count} rows -> \"{sheet_name}\"")
+        print(f"  OK {row_count} rows -> merged sheet {sheet_count}")
 
     if sheet_count == 0:
         print("  ERROR: no sheets were copied", file=sys.stderr)

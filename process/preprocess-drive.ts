@@ -122,12 +122,13 @@ async function removeDuplicates(
 
   const kept: DriveFile[] = [];
   let removed = 0;
-  for (const [name, group] of byName) {
+  for (const group of byName.values()) {
     if (group.length === 1) { kept.push(group[0]); continue; }
     group.sort((a, b) => new Date(b.modifiedTime!).getTime() - new Date(a.modifiedTime!).getTime());
     const [newest, ...older] = group;
     kept.push(newest);
-    log(`  [Dedupe] "${name}" — ${group.length} copies, keeping ${newest.id} (${newest.modifiedTime})`, 'warn');
+    // The file name is the physician's name and this log is public: ids only.
+    log(`  [Dedupe] ${group.length} copies of one file name, keeping ${newest.id} (${newest.modifiedTime})`, 'warn');
     for (const dupe of older) {
       await drive.files.update({ fileId: dupe.id!, requestBody: { trashed: true } });
       log(`    ✗ trashed duplicate ${dupe.id} (${dupe.modifiedTime})`, 'warn');
