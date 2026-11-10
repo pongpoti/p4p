@@ -616,7 +616,9 @@ function resolveScore(rows: Row[]): ExtractResult {
 // tiers) is low-confidence and must go through the queued/Claude path.
 // Every guess or recalculation ("largest in sheet", weight × day-count,
 // summed sub-totals, daily cells × rate) and the sub-total pass stay out of
-// this set, as does any method string this file does not know.
+// this set, as does any method string this file does not know. The nightly
+// build's Step 4.5 (process/fill-score.ts) fills a missing score through the
+// same gate.
 const HIGH_CONFIDENCE_METHODS: Set<string> = new Set([
   "grand-total label row (all columns)",
   "free-text summary line",
@@ -876,6 +878,7 @@ async function parseWorkbookRowsSafely(buffer: Buffer, opts: { targetMonth?: num
   isHighConfidence,
   HIGH_CONFIDENCE_METHODS,
   checkZipSafety,
+  rowsFromWorksheet,
   parseWorkbookRows,
   parseWorkbookRowsSafely,
 }
