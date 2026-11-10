@@ -801,7 +801,8 @@
     }
     function wholeField(i, group, msg) {
         let prev = null;
-        i.addEventListener("beforeinput", () => { prev = i.value; });
+        // Only with a bare caret: a selected comma deleted is just that comma.
+        i.addEventListener("beforeinput", () => { prev = i.selectionStart === i.selectionEnd ? i.value : null; });
         i.addEventListener("input", (e) => {
             var _a;
             const ev = e;
@@ -986,13 +987,19 @@
         }
         // Saved: the fields show the saved numbers from the new state, or
         // keep what was typed if that state does not come.
-        const typed = ["rv-budget", "rv-doctors"].map((k) => [k, drafts.get(k)]);
+        const typed = ["rv-budget", "rv-doctors"].map((k) => [k, drafts.get(k), fieldErrs.get(k)]);
         forget(s, "rv-budget", "rv-doctors");
+        // A problem typed while saving belonged to that typing, not to the saved numbers.
+        fieldErrs.delete("rv-budget");
+        fieldErrs.delete("rv-doctors");
         await loadState(false).catch((e) => {
             if (s.month === month)
-                for (const [k, v] of typed)
+                for (const [k, v, fe] of typed) {
                     if (v !== undefined && !drafts.has(k))
                         drafts.set(k, v);
+                    if (fe !== undefined && !fieldErrs.has(k))
+                        fieldErrs.set(k, fe);
+                }
             loadFailed(e);
         });
         void loadMonths().catch(() => false);
