@@ -26,6 +26,19 @@ async function bomb(): Promise<Buffer> {
   return Buffer.from(await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } }));
 }
 
+/** The same bomb with both headers declaring 2000 bytes: the guard must count what it inflates to (audit F18). */
+async function lyingBomb(): Promise<Buffer> {
+  const buf = await bomb();
+  const cd = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  buf.writeUInt32LE(2000, cd + 24);
+  buf.writeUInt32LE(2000, 22);
+  return buf;
+}
+
+test("a bomb whose headers understate its size is refused too", async () => {
+  assert.equal(zipProblem(await lyingBomb())?.code, "ZIP_TOO_LARGE");
+});
+
 test("a real workbook passes", async () => {
   assert.equal(zipProblem(await workbook()), null);
 });

@@ -56,6 +56,7 @@ import { pathToFileURL } from "node:url";
 import { errForLog, redactForLog } from "../log-safe.js";
 import { ADMIN_REVIEW_ERROR_TYPE } from "../admin-review.js";
 import { RetryLaterError } from "../inbound-triage.js";
+import { zipProblem } from "../zip-guard.js";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -109,6 +110,11 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
   }
 
   const buffer   = await downloadObject(row.object_path);
+  // /upload/score ran the same zip guard before it scored this row, so this
+  // should never refuse; if it does, nothing is inflated, and the row backs
+  // off and shows in the stuck-archive alert.
+  const zip = zipProblem(buffer);
+  if (zip) throw new Error(`archive refused by the zip guard (${zip.code})`);
   const roster   = await resolveRoster(row);
   const name     = roster?.matchedName ?? row.full_name;
   // The tab for this month, the same one the score was read from.
@@ -148,10 +154,27 @@ export function scoreNotSaved(outcome: unknown, success: NotifyOkPayload | null)
   return outcome === true && success !== null && !success.scoreSaved;
 }
 
-async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
+/** Exported for the tests only. */
+export async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
   console.log(`│  🧮  Scoring queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.attempts}`);
 
   const buffer = await downloadObject(row.object_path);
+
+  // The zip-bomb guard before ExcelJS inflates anything, as on the email
+  // path (index.ts processAttachment): a crafted workbook would otherwise
+  // run this always-on runner out of memory, and the row would be claimed
+  // again by the next run. A refusal is final.
+  const zip = zipProblem(buffer);
+  if (zip) {
+    console.warn(`│      ⛔  Upload refused before parsing: ${zip.code}`);
+    const errorDetail = zip.code === "NOT_A_ZIP" || zip.code === "ZIP_MALFORMED" ? SENDER_DETAIL.notAZip : SENDER_DETAIL.zipTooBig;
+    await sendTelegram(formatErrorMessage(`Upload refused by the zip guard (${zip.code}): ${zip.message}`, row.filename, {
+      source: "LINE upload", accountName: row.full_name, email: row.email, monthKey: row.month_key, errorType: "other",
+    })).catch(() => {});
+    await rejectScored(row.id, { errorType: "other", errorDetail });
+    await finishFailedRow(row, "other", errorDetail);
+    return;
+  }
 
   // notify.* only RECORDS what happened; the queue semantics below are this
   // script's business, not the pipeline's.

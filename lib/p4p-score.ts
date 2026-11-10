@@ -619,17 +619,26 @@ function isHighConfidence(method: string): boolean {
 // ── Zip-entry / uncompressed-size guard (§7.7 rec 3, §11) ──────────────────
 //
 // A .xlsx is a zip. Before handing untrusted bytes to ExcelJS, walk the zip's
-// own central directory (no decompression — just reading declared entry
-// count and per-entry uncompressed-size fields) and reject anything with too
-// many entries or too large a declared uncompressed size. §11 says to do
-// this "with the JSZip dependency the pipeline already has" — true of
-// automation/, which already depends on it, but NOT of the root build (C8,
-// §7.7 rec 4: only `exceljs` is conceded into the root package.json). So
-// this is a small hand-rolled ZIP central-directory reader instead of a new
-// root dependency — the format is public and stable (APPNOTE.TXT), and all
-// this needs is fixed-width integer fields, not real decompression.
+// own central directory and reject anything with too many entries or too
+// large a declared uncompressed size. §11 says to do this "with the JSZip
+// dependency the pipeline already has" — true of automation/, which already
+// depends on it, but NOT of the root build (C8, §7.7 rec 4: only `exceljs`
+// is conceded into the root package.json). So this is a small hand-rolled
+// ZIP reader instead of a new root dependency — the format is public and
+// stable (APPNOTE.TXT).
+//
+// The declared sizes are only the sender's word: a crafted file can declare
+// 2 KB for an entry that inflates to 400 MB, and JSZip (inside ExcelJS)
+// inflates the whole entry before it compares the two (audit F18
+// follow-up). So every entry is then inflated here, with node:zlib's
+// maxOutputLength set to what is left of the budget: inflating stops at the
+// limit instead of running the process out of memory, and the real total is
+// what counts.
 const ZIP_EOCD_SIGNATURE = 0x06054b50
 const ZIP_CENTRAL_DIR_SIGNATURE = 0x02014b50
+const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50
+const ZIP_METHOD_STORED = 0
+const ZIP_METHOD_DEFLATE = 8
 const DEFAULT_MAX_ZIP_ENTRIES = 200
 const DEFAULT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 
@@ -673,15 +682,19 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
   let seen = 0
   let uncompressedTotal = 0
   const cdEnd = cdOffset + cdSize
+  const entries: { method: number; compressedSize: number; uncompressedSize: number; localOffset: number }[] = []
 
   while (pos < cdEnd && pos + 46 <= buf.length && seen < totalEntries) {
     const sig = buf.readUInt32LE(pos)
     if (sig !== ZIP_CENTRAL_DIR_SIGNATURE) break
 
+    const method = buf.readUInt16LE(pos + 10)
+    const compressedSize = buf.readUInt32LE(pos + 20)
     const uncompressedSize = buf.readUInt32LE(pos + 24)
     const nameLen = buf.readUInt16LE(pos + 28)
     const extraLen = buf.readUInt16LE(pos + 30)
     const commentLen = buf.readUInt16LE(pos + 32)
+    const localOffset = buf.readUInt32LE(pos + 42)
 
     // 0xFFFFFFFF marks a ZIP64 entry (real size lives in the extra field).
     // A genuine xlsx this small (bucket cap 5 MB) never needs ZIP64 — treat
@@ -699,6 +712,7 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
       throw err
     }
 
+    entries.push({ method, compressedSize, uncompressedSize, localOffset })
     pos += 46 + nameLen + extraLen + commentLen
     seen += 1
   }
@@ -709,7 +723,60 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     throw err
   }
 
-  return { entryCount: seen, uncompressedBytes: uncompressedTotal }
+  // The declared sizes passed; now count what the entries really inflate to.
+  let inflatedTotal = 0
+  for (const entry of entries) {
+    const size = inflatedEntrySize(buf, entry, maxUncompressed - inflatedTotal)
+    if (size !== entry.uncompressedSize) {
+      // JSZip refuses such an entry too, but only after inflating all of it.
+      throw zipError("ZIP_MALFORMED", "zip entry size does not match its header")
+    }
+    inflatedTotal += size
+  }
+
+  return { entryCount: seen, uncompressedBytes: inflatedTotal }
+}
+
+function zipError(code: string, message: string): CodedError {
+  const err = new Error(message) as CodedError
+  err.code = code
+  return err
+}
+
+/**
+ * How many bytes one entry really holds, inflating at most `budget` bytes.
+ * Throws ZIP_TOO_LARGE past the budget, ZIP_MALFORMED for a broken or
+ * unsupported entry (ExcelJS reads only stored and deflated entries).
+ */
+function inflatedEntrySize(buf: Buffer, entry: { method: number; compressedSize: number; localOffset: number }, budget: number): number {
+  const at = entry.localOffset
+  if (at + 30 > buf.length || buf.readUInt32LE(at) !== ZIP_LOCAL_HEADER_SIGNATURE) {
+    throw zipError("ZIP_MALFORMED", "zip local header is missing")
+  }
+  const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28)
+  const end = start + entry.compressedSize
+  if (end > buf.length) throw zipError("ZIP_MALFORMED", "zip entry runs past the end of the file")
+  const data = buf.subarray(start, end)
+
+  if (entry.method === ZIP_METHOD_STORED) {
+    if (data.length > budget) throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+    return data.length
+  }
+  if (entry.method !== ZIP_METHOD_DEFLATE) {
+    throw zipError("ZIP_MALFORMED", `zip compression method ${entry.method} is not supported`)
+  }
+  if (data.length === 0) return 0
+  const zlib = require("node:zlib") as typeof import("node:zlib")
+  let size: number
+  try {
+    // One byte over the budget is enough to know it is over.
+    size = zlib.inflateRawSync(data, { maxOutputLength: budget + 1 }).length
+  } catch (e: unknown) {
+    if ((e as { code?: unknown } | null)?.code === "ERR_BUFFER_TOO_LARGE") throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+    throw zipError("ZIP_MALFORMED", "zip entry does not inflate")
+  }
+  if (size > budget) throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+  return size
 }
 
 // ── Workbook -> rows (ExcelJS), with a parse timeout ───────────────────────

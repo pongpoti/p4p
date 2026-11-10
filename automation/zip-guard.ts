@@ -1,17 +1,19 @@
 /**
  * zip-guard.ts
  *
- * The email path's zip-bomb check, run on an attachment before ExcelJS (or
- * JSZip) inflates it. It is the same check the LINE upload path runs in
- * main.ts: lib/p4p-score.ts checkZipSafety, which reads the zip's central
- * directory (entry count and declared uncompressed sizes) without
- * decompressing anything.
+ * The worker's zip-bomb check, run on an emailed attachment and on a queued
+ * LINE upload (scripts/drain-uploads.ts) before ExcelJS (or JSZip) inflates
+ * it. It is the same check the LINE upload path runs in main.ts:
+ * lib/p4p-score.ts checkZipSafety, which reads the zip's central directory
+ * (entry count and declared uncompressed sizes), then inflates each entry
+ * with node:zlib under a byte budget, so a file whose headers understate its
+ * size is stopped at the limit rather than inflated in full.
  *
  * Loaded with require, not import: lib/p4p-score.ts is a CommonJS file of
  * the root project (it assigns module.exports), so it has no ES exports for
  * this ESM package to import, and keeping it out of this project's tsc
  * program means automation needs none of the root's node_modules. The check
- * itself uses no dependency at all, so the always-on workflow's
+ * itself uses only Node built-ins, so the always-on workflow's
  * `npm ci` in automation/ is enough; tsx loads the .ts file.
  */
 
