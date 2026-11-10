@@ -8,7 +8,10 @@
  *      "นิธินันท์ สร้อยอากาศ" made Drive report 192 files against 191
  *      Supabase rows, so process.ts's listsMatch() rejected the whole month.
  *   2. Unrelated files — a Drive file whose name doesn't match any row
- *      (exact or substring) in that month's Supabase table.
+ *      (exact or substring) in that month's Supabase table. Skipped when the
+ *      roster can't be read or has no rows, and refused (a warning, nothing
+ *      trashed) when more than 3 files or 20% of the folder would go: that
+ *      many misses means the roster read is wrong, not the files.
  *
  * Both cases only trash files (recoverable from Drive trash for ~30 days) —
  * nothing is permanently deleted by this script, since a name mismatch or
@@ -88,10 +91,16 @@ async function findMonthFolder(drive: drive_v3.Drive, { beYear, month }: MonthIn
   return monthFolders.find(f => candidates.includes(f.name!)) ?? null;
 }
 
-async function getSupabaseNames(supabase: SupabaseClient, tableKey: string): Promise<string[] | null> {
+/**
+ * The month's roster names, or null when they can't be judged against: the
+ * table is missing (an error), or the read came back with no rows — an
+ * emptied table, or a key that can no longer see the rows, reads as zero
+ * rows with no error, and would make every file look unrelated.
+ */
+export async function getSupabaseNames(supabase: Pick<SupabaseClient, 'from'>, tableKey: string): Promise<string[] | null> {
   const { data, error } = await supabase.from(tableKey).select('firstname, lastname');
-  if (error) return null; // table missing/empty — can't judge "unrelated", skip that check
-  return (data ?? []).map((r: any) => normLower(`${r.firstname ?? ''} ${r.lastname ?? ''}`));
+  if (error || !data || data.length === 0) return null;
+  return data.map((r: any) => normLower(`${r.firstname ?? ''} ${r.lastname ?? ''}`));
 }
 
 /** Exact match, then substring containment either way — mirrors automation/scripts/check-month.mjs. */
@@ -128,24 +137,35 @@ async function removeDuplicates(
   return { kept, removed };
 }
 
-async function trashUnrelated(
-  drive: drive_v3.Drive,
+// More unrelated files than this in one folder is a bad roster read, not
+// stray files: refuse and warn instead of trashing.
+const MAX_UNRELATED_FILES = 3;
+const MAX_UNRELATED_SHARE = 0.2;
+
+export async function trashUnrelated(
+  drive: Pick<drive_v3.Drive, 'files'>,
   files: DriveFile[],
   sbNames: string[] | null
 ): Promise<{ kept: DriveFile[]; trashed: number }> {
-  if (sbNames === null) return { kept: files, trashed: 0 }; // no Supabase data to compare against
+  if (sbNames === null || sbNames.length === 0) {
+    log('  [Unrelated] roster unreadable or has no rows — unrelated-file check skipped', 'warn');
+    return { kept: files, trashed: 0 };
+  }
 
-  const kept: DriveFile[] = [];
+  const unrelated = files.filter(f => !matchesAny(normLower(stripExt(f.name!)), sbNames));
+  if (unrelated.length > MAX_UNRELATED_FILES || unrelated.length > files.length * MAX_UNRELATED_SHARE) {
+    log(`  [Unrelated] ⚠ ${unrelated.length} of ${files.length} file(s) match no roster row — more than ` +
+      `${MAX_UNRELATED_FILES} or ${MAX_UNRELATED_SHARE * 100}% of the folder, so nothing was trashed. ` +
+      'Check the roster table and the folder by hand.', 'warn');
+    return { kept: files, trashed: 0 };
+  }
+
+  const kept: DriveFile[] = files.filter(f => !unrelated.includes(f));
   let trashed = 0;
-  for (const f of files) {
-    const normName = normLower(stripExt(f.name!));
-    if (matchesAny(normName, sbNames)) {
-      kept.push(f);
-    } else {
-      await drive.files.update({ fileId: f.id!, requestBody: { trashed: true } });
-      log(`  [Unrelated] ✗ trashed "${f.name}" (no matching Supabase row)`, 'warn');
-      trashed++;
-    }
+  for (const f of unrelated) {
+    await drive.files.update({ fileId: f.id!, requestBody: { trashed: true } });
+    log(`  [Unrelated] ✗ trashed "${f.name}" (no matching Supabase row)`, 'warn');
+    trashed++;
   }
   return { kept, trashed };
 }
@@ -206,7 +226,11 @@ async function main(): Promise<void> {
   console.log('');
 }
 
-main().catch((err: any) => {
-  console.error(`\n❌  Fatal: ${err.stack ?? err.message}`);
-  process.exit(1);
-});
+// Run only as a script, so lib/__tests__/preprocess-drive.test.mjs can load
+// the functions above without starting a run.
+if (require.main === module) {
+  main().catch((err: any) => {
+    console.error(`\n❌  Fatal: ${err.stack ?? err.message}`);
+    process.exit(1);
+  });
+}
