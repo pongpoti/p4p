@@ -52,6 +52,7 @@ import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
 import { reviewCheckDue, dispatchReviewBuild, dispatchReviewPdf } from "../review-dispatch.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
+import { errForLog, redactForLog } from "../log-safe.js";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -96,7 +97,8 @@ async function resolveRoster(row: ArchiveQueueRow): Promise<RosterMatch | null> 
 
 // ── 1. Archive ────────────────────────────────────────────────────────────
 async function handleArchive(row: ArchiveQueueRow): Promise<void> {
-  console.log(`│  📦  Archiving ${row.filename} (${row.month_key}) for ${row.full_name} — attempt ${row.archive_attempts}`);
+  // Queue id, month and roster row only: this log is public (log-safe.ts).
+  console.log(`│  📦  Archiving queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.archive_attempts}`);
   const drive = getDrive();
   if (!drive) {
     console.warn("│      ⚠️  P4P_FOLDER_ID not set — leaving archive_pending");
@@ -112,8 +114,8 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
   const oneSheet = await extractFirstSheetBuffer(buffer, monthTab);
   if (!oneSheet) throw new Error("first sheet is blank — nothing to archive");
 
-  const { fileName, replaced } = await drive.uploadFile(oneSheet, name, row.month_key);
-  console.log(`│      ✅  Drive: "${fileName}" (${replaced ? "replaced" : "new"})`);
+  const { replaced } = await drive.uploadFile(oneSheet, name, row.month_key);
+  console.log(`│      ✅  Drive: ${replaced ? "replaced" : "new"} file`);
 
   await markArchived(row.id);
   // The bucket is a drop box, not storage — the object goes as soon as the
@@ -139,7 +141,7 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
 
 // ── 2. Score fallback ─────────────────────────────────────────────────────
 async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
-  console.log(`│  🧮  Scoring ${row.filename} (${row.month_key}) for ${row.full_name} — attempt ${row.attempts}`);
+  console.log(`│  🧮  Scoring queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.attempts}`);
 
   const buffer = await downloadObject(row.object_path);
 
@@ -212,7 +214,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     // their chat from the ACK reply (§7.5 step ②), and tapping it costs the
     // OA nothing. Pushing here would spend quota to tell them something they
     // can already ask for.
-    console.log(`│      ✅  Scored ${Number(state.success.score).toFixed(2)} — receipt left for the physician to pull`);
+    console.log(`│      ✅  Scored — receipt left for the physician to pull`);
     return;
   }
 
@@ -229,7 +231,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     terminal = await failScored(row.id, { errorType, errorDetail, attempts: row.attempts });
   }
 
-  console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${errorDetail}${terminal ? " (terminal)" : " — will retry"}`);
+  console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${redactForLog(errorDetail)}${terminal ? " (terminal)" : " — will retry"}`);
   if (!terminal) return;
 
   // PUSH ON FAILURE: rare, and the one case where the physician has something
@@ -266,7 +268,7 @@ async function alertStuckArchives() {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️  stuck-archive alert failed: ${message}`);
+    console.warn(`⚠️  stuck-archive alert failed: ${errForLog(message)}`);
   }
 }
 
@@ -287,7 +289,7 @@ async function pollEmails(): Promise<void> {
     // owner. Here the loop must keep going (the next pass a minute later
     // usually succeeds), so the alert is one Telegram per run, not per minute.
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`│  ❌  Email pass failed (retrying next poll): ${message}`);
+    console.error(`│  ❌  Email pass failed (retrying next poll): ${errForLog(message)}`);
     if (!emailFailureReported) {
       emailFailureReported = true;
       await sendTelegram(`⚠️ P4P email reader failed in the drain relay: ${message}`).catch(() => {});
@@ -338,7 +340,7 @@ async function main() {
           // archive_attempts/archive_last_attempt_at, so the row simply
           // becomes eligible again on the backoff schedule.
           const message = err instanceof Error ? err.message : String(err);
-          console.error(`│      ❌  Archive failed (will retry on backoff): ${message}`);
+          console.error(`│      ❌  Archive failed (will retry on backoff): ${errForLog(message)}`);
         }
       }
     } catch (err) {
@@ -356,14 +358,14 @@ async function main() {
             await handleScoreFallback(scoreRow);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error(`│      ❌  Scoring crashed: ${message}`);
+            console.error(`│      ❌  Scoring crashed: ${errForLog(message)}`);
             // error_detail is shown to the physician (the LINE failure bubble);
             // the raw message goes to Telegram below, never to them.
             await failScored(scoreRow.id, {
               errorType: "other",
               errorDetail: SENDER_DETAIL.crashed,
               attempts: scoreRow.attempts,
-            }).catch((e: unknown) => console.error(`│      ❌  failScored failed too: ${e instanceof Error ? e.message : String(e)}`));
+            }).catch((e: unknown) => console.error(`│      ❌  failScored failed too: ${errForLog(e)}`));
             await sendTelegram(
               formatErrorMessage(message, scoreRow.filename, {
                 source: "LINE upload",
@@ -401,7 +403,7 @@ async function main() {
 // Only when run as the program, so the test can import emailPollDue().
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    console.error("drain-uploads failed:", err);
+    console.error("drain-uploads failed:", errForLog(err));
     process.exit(1);
   });
 }

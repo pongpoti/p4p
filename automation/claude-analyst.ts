@@ -1432,14 +1432,15 @@ export async function analyseJson(jsonData: AnalyseJsonInput, filename: string =
   const resolvedName = resolvePhysicianName(file, subject, body)
     ?? resolvePhysicianNameFromSheet(rows, sheetName)[0]
     ?? null;
-  console.log(`│        👤  JS name pre-scan: ${resolvedName ?? "null (will use AI)"}`);
+  // Whether, never what: the Actions log is public (log-safe.ts).
+  console.log(`│        👤  JS name pre-scan: ${resolvedName ? "found" : "null (will use AI)"}`);
 
   // Resolve score in JS first.
   // Use resolveScore (not extractScoreFromRows directly) so that files where
   // fix_p4p_score.py wrote uncached =SUM(...) formulas fall through the
   // two-tier fallback instead of returning the largest plain number (e.g. 2200).
   const { score: jsScore, method: jsMethod } = resolveScore(rows);
-  console.log(`│        🔢  JS score pre-scan: ${jsScore !== null ? jsScore.toFixed(2) : "null"} (${jsMethod})`);
+  console.log(`│        🔢  JS score pre-scan: ${jsScore !== null ? "found" : "null"} (${jsMethod})`);
 
   // The period is never in question here — dateKey is already the sender's
   // own stated period (or their explicit LIFF selection), resolved
@@ -1540,7 +1541,7 @@ ${rowsJson}`;
   }
   if (isNaN(numeric) || numeric <= 0) {
     if (jsScore !== null && jsScore > 0) {
-      console.log(`│        ⚠️  Claude returned "${rawScore}" — using JS score ${jsScore.toFixed(2)} (${jsMethod})`);
+      console.log(`│        ⚠️  Claude gave no usable score — using the JS score (${jsMethod})`);
       numeric = jsScore;
     } else {
       throw new Error(

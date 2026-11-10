@@ -20,6 +20,7 @@ import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
 import { zipProblem }                   from "./zip-guard.js";
+import { logTag, errForLog }            from "./log-safe.js";
 import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, anyOutcomeHandled, thrownPassExhausted, MAX_THROWN_PASSES, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
 import { decideStatedPeriod } from "./period-gate.js";
 import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
@@ -178,7 +179,7 @@ export async function firstSheetToRows(buffer: Buffer, { targetMonth = null, tar
     });
     matched = bestScore > 0;
     if (bestScore > 0 && wsIndex !== defaultIndex) {
-      console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet "${workbook.worksheets[wsIndex]!.name}" (index ${wsIndex}, match ${bestScore}) over default "${allSheets[defaultIndex]}"`);
+      console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet #${wsIndex + 1} (match ${bestScore}) over default #${defaultIndex + 1}`);
     }
   }
 
@@ -401,7 +402,7 @@ export async function extractFirstSheetBuffer(buffer: Buffer, keepName: string |
 
   if (named < 0 && firstCount < 3 && source.worksheets.length > 1) {
     const secondCount = nonNullCount(source.worksheets[1]!);
-    console.log(`│        ℹ️   First sheet "${source.worksheets[0]!.name}" has ${firstCount} cell(s) — using sheet 2 "${source.worksheets[1]!.name}" (${secondCount} cells) for upload.`);
+    console.log(`│        ℹ️   First sheet has ${firstCount} cell(s) — using sheet 2 (${secondCount} cells) for upload.`);
     if (secondCount < 3) {
       console.warn(`│        ⚠️  Second sheet also almost blank — upload aborted.`);
       return null;
@@ -494,7 +495,7 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
   // Nobody reads a reply to a no-reply address (Google's "shared with you" notice, a bounce).
   // The message is still handled by the caller; this line is the only trace of the skip.
   if (isAutomatedSender(replyTo)) {
-    console.log(`│        🤖  Alert reply [${errorType}] not sent: ${replyTo} is an automated no-reply address`);
+    console.log(`│        🤖  Alert reply [${errorType}] not sent: the sender is an automated no-reply address`);
     return true;
   }
   const subject  = ALERT_SUBJECTS[errorType] ?? ALERT_SUBJECTS.other!;
@@ -507,10 +508,10 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
       body            : `เรียนผู้ส่ง\n\nระบบไม่สามารถประมวลผลไฟล์ P4P ที่ท่านส่งมาได้\nกรุณาตรวจสอบและส่งใหม่อีกครั้ง`,
       replyToMessageId: messageId,
     });
-    console.log(`│        📧  Alert reply [${errorType}] sent to ${replyTo}`);
+    console.log(`│        📧  Alert reply [${errorType}] sent`);
     return true;
   } catch (replyErr) {
-    console.error(`│        ❌  Alert reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+    console.error(`│        ❌  Alert reply failed: ${errForLog(replyErr)}`);
     return false;
   }
 }
@@ -741,21 +742,21 @@ export async function processBuffer(buffer: Buffer, {
     if (!monthKey && targetMonth !== null && guessingBetweenTabs(filledSheets, matchedSheet)) {
       const report = pickReportBesideExample({ tabs, matched: matchedSheet, targetMonth, targetYear: targetYear ?? null, filename: filename ?? "" });
       if (report) {
-        console.log(`│        📋  Report tab "${report}" beside a template example tab; the file name confirms ${displayMonthKey(dateKey)} — reading "${report}"`);
+        console.log(`│        📋  Report tab #${allSheets.indexOf(report) + 1} beside a template example tab; the file name confirms ${displayMonthKey(dateKey)} — reading tab #${allSheets.indexOf(report) + 1}`);
         ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets, tabs } = await firstSheetToRows(buffer, { targetMonth, targetYear, onlySheet: report }));
         filledSheets = [report];   // the example tab is documentation, not a second candidate
       }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`│        ❌  Failed to parse workbook: ${message}`);
+    console.error(`│        ❌  Failed to parse workbook: ${errForLog(message)}`);
     await sendTelegram(formatErrorMessage(`Workbook parse failed: ${message}`, filename, tgError({ errorType: "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await otherReply(SENDER_DETAIL.unreadable);
     return "replied";
   }
 
-  console.log(`│        All sheets : ${allSheets.join(", ")}`);
-  console.log(`│        Using sheet: "${chosenSheet}"`);
+  console.log(`│        Sheets     : ${allSheets.length} (${filledSheets.length} with content)`);
+  console.log(`│        Using sheet: #${allSheets.indexOf(chosenSheet) + 1}`);
   console.log(`│        Rows       : ${rows.length}`);
 
   // ── Corruption checks ────────────────────────────────────────────────
@@ -818,7 +819,7 @@ export async function processBuffer(buffer: Buffer, {
   // tabs holding something count: an empty one leaves nothing to guess.
   if (!monthKey && guessingBetweenTabs(filledSheets, matchedSheet)) {
     const detail = `ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน ${displayMonthKey(dateKey)} กรุณาตั้งชื่อชีตให้ระบุเดือน หรือส่งเฉพาะชีตที่ต้องการ`;
-    console.error(`│        ❌  month_not_found: ${filledSheets.length} sheets with content (${filledSheets.join(", ")}), none identify ${dateKey}`);
+    console.error(`│        ❌  month_not_found: ${filledSheets.length} sheets with content, none identify ${dateKey}`);
     await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" }) as never))
       .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await notifyFailure("month_not_found", { detail });
@@ -851,14 +852,12 @@ export async function processBuffer(buffer: Buffer, {
   let analysis: { name: string; date: string; score: number };
   try {
     analysis = await analyseJson(intermediate, filename);
-    console.log(`│        ✅  Physician : ${analysis.name}`);
-    console.log(`│        ✅  Date      : ${analysis.date}`);
-    console.log(`│        ✅  Score     : ${analysis.score.toFixed(2)}`);
+    console.log(`│        ✅  Name and score read (month ${analysis.date})`);
     if (analysis.score <= 0) throw new Error("Score is 0 — cannot save a zero score.");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isZero = /score is 0/i.test(message);
-    console.error(`│        ❌  Analysis failed: ${message}`);
+    console.error(`│        ❌  Analysis failed: ${errForLog(message)}`);
     await sendTelegram(formatErrorMessage(message, filename, tgError({ errorType: isZero ? "zero_score" : "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     if (isZero) {
       await notifyFailure("zero_score", { detail: "ไม่พบคะแนนรวมในไฟล์" });
@@ -876,7 +875,7 @@ export async function processBuffer(buffer: Buffer, {
   // that statement, and its own rules cover the rest.
   if (monthKey && !matchedSheet) {
     const detail = `ไม่พบเดือน ${displayMonthKey(monthKey)} ในไฟล์นี้`;
-    console.error(`│        ❌  month_not_found: no sheet identifies ${monthKey} (sheets: ${allSheets.join(", ")})`);
+    console.error(`│        ❌  month_not_found: no sheet identifies ${monthKey} (${allSheets.length} sheets)`);
     await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" }) as never))
       .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await notifyFailure("month_not_found", { detail });
@@ -904,24 +903,24 @@ export async function processBuffer(buffer: Buffer, {
     try {
       if (identity!.rosterIndex !== null && identity!.rosterIndex !== undefined) {
         match = await getRosterRowByIndex(workMonth, identity!.rosterIndex);
-        if (match) console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (exact, from enqueue)`);
+        if (match) console.log(`│        ✅  Roster row #${match.index} (exact, from enqueue)`);
       }
       if (!match) {
         match = await matchName(identity!.fullName, workMonth);
         if (match) {
           if (uploadCtx) uploadCtx.rosterMatch = `fuzzy ${(match.similarity * 100).toFixed(0)}%`;
-          console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
+          console.log(`│        ✅  Roster row #${match.index} (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
         } else {
           if (uploadCtx) uploadCtx.rosterMatch = "none";
-          console.warn(`│        ⚠️  "${identity!.fullName}" is not in roster table "${workMonth}" — score cannot be written`);
+          console.warn(`│        ⚠️  The account is not in roster table "${workMonth}" — score cannot be written`);
         }
       }
       if (match && analysis.name && match.matchedName && analysis.name.trim() !== match.matchedName.trim()) {
-        console.warn(`│        ⚠️  Name in file "${analysis.name}" ≠ account "${match.matchedName}" — writing to the authenticated account (cross-check only)`);
+        console.warn(`│        ⚠️  Name in file ≠ account (roster row #${match.index}) — writing to the authenticated account (cross-check only)`);
       }
     } catch (dbErr) {
       const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
-      console.error(`│        ❌  Supabase match error: ${message}`);
+      console.error(`│        ❌  Supabase match error: ${errForLog(message)}`);
       await sendTelegram(formatErrorMessage(`Supabase match error: ${message}`, filename, tgError({ errorType: "other" }) as never))
         .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
       await otherReply(SENDER_DETAIL.rosterLookup);
@@ -933,13 +932,13 @@ export async function processBuffer(buffer: Buffer, {
   try {
     match = await matchName(analysis.name, analysis.date);
     if (match) {
-      console.log(`│        ✅  Best match : "${match.matchedName}" (${(match.similarity * 100).toFixed(0)}% similar)`);
+      console.log(`│        ✅  Best match : roster row #${match.index} (${(match.similarity * 100).toFixed(0)}% similar)`);
     } else {
       console.log(`│        ⚠️  No sufficiently similar name found.`);
     }
   } catch (dbErr) {
     const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
-    console.error(`│        ❌  Supabase match error: ${message}`);
+    console.error(`│        ❌  Supabase match error: ${errForLog(message)}`);
     const isTableMissing = /does not exist|undefined_table|42P01|schema cache/i.test(message);
     if (isTableMissing) {
       console.log(`│        📅  Table "${analysis.date}" not found — sending wrong_date reply`);
@@ -981,7 +980,7 @@ export async function processBuffer(buffer: Buffer, {
         alt = await matchName(candidate, analysis.date);
       } catch { continue; } // table/DB errors already surfaced by the primary match
       if (alt) {
-        console.log(`│        🔁  Name "${analysis.name}" missed — recovered "${candidate}" → matched "${alt.matchedName}" (${(alt.similarity * 100).toFixed(0)}%)`);
+        console.log(`│        🔁  First name missed — another source's name matched roster row #${alt.index} (${(alt.similarity * 100).toFixed(0)}%)`);
         analysis.name = candidate;
         match = alt;
         break;
@@ -1019,7 +1018,7 @@ export async function processBuffer(buffer: Buffer, {
         });
         alert.requestRecorded = true;
       } catch (err) {
-        console.warn(`│        ⚠️  sender_physician_match update failed: ${err instanceof Error ? err.message : err}`);
+        console.warn(`│        ⚠️  sender_physician_match update failed: ${errForLog(err)}`);
       }
       // The admin has to hear about a held file before the message is marked
       // handled: if Telegram fails this throws, nothing has gone to the
@@ -1038,7 +1037,7 @@ export async function processBuffer(buffer: Buffer, {
           await gmail!.sendMessage({ to: replyTo, subject: HOLD_REPLY_SUBJECT, body: holdReplyBody(), replyToMessageId: messageId });
           console.log(`│        📧  Hold notice sent to the sender`);
         } catch (err) {
-          console.error(`│        ❌  Hold notice failed: ${err instanceof Error ? err.message : err}`);
+          console.error(`│        ❌  Hold notice failed: ${errForLog(err)}`);
           if (receipt) receipt.answered = false;
         }
       }
@@ -1054,7 +1053,7 @@ export async function processBuffer(buffer: Buffer, {
       // the account is verified, it simply has no row in this month's roster
       // to hang a score on — an admin problem, not the physician's.
       const who = isUpload ? identity!.fullName : analysis.name;
-      console.warn(`│        ⚠️  No roster row — Drive upload skipped for "${who}".`);
+      console.warn(`│        ⚠️  No roster row — Drive upload skipped.`);
       await sendTelegram(
         formatErrorMessage(
           isUpload
@@ -1078,16 +1077,16 @@ export async function processBuffer(buffer: Buffer, {
           return "replied";
         }
 
-        console.log(`│        📤  Uploading as "${uploadName}"…`);
-        const { fileName, replaced } = await drive.uploadFile(
+        console.log(`│        📤  Uploading for roster row #${match.index}…`);
+        const { replaced } = await drive.uploadFile(
           uploadBuffer,
           uploadName,
           workMonth
         );
-        console.log(`│        ✅  Drive upload: "${fileName}" (${replaced ? "replaced existing" : "new file"})`);
+        console.log(`│        ✅  Drive upload done (${replaced ? "replaced existing" : "new file"})`);
       } catch (driveErr) {
         const message = driveErr instanceof Error ? driveErr.message : String(driveErr);
-        console.error(`│        ❌  Drive upload failed: ${message}`);
+        console.error(`│        ❌  Drive upload failed: ${errForLog(message)}`);
         await sendTelegram(
           formatErrorMessage(`Drive upload failed: ${message}`, filename ?? null)
         ).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
@@ -1111,9 +1110,9 @@ export async function processBuffer(buffer: Buffer, {
     try {
       await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
       scoreSaved = true;
-      console.log(`│        💾  Score ${analysis.score.toFixed(2)} saved → table "${workMonth}", row ${match.index}`);
+      console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
     } catch (dbErr) {
-      console.error(`│        ❌  Supabase save error: ${dbErr instanceof Error ? dbErr.message : dbErr}`);
+      console.error(`│        ❌  Supabase save error: ${errForLog(dbErr)}`);
       // The sender is still sent the receipt below, as before — but nothing was saved, so this workbook must
       // not count as "answered" when another message's alert is waiting on it (see settleHeldAlerts).
       if (receipt) receipt.answered = false;
@@ -1133,7 +1132,7 @@ export async function processBuffer(buffer: Buffer, {
       });
       console.log(`│        📊  Submission logged (punctuality)`);
     } catch (logErr) {
-      console.warn(`│        ⚠️  Submission log skipped (non-fatal): ${logErr instanceof Error ? logErr.message : logErr}`);
+      console.warn(`│        ⚠️  Submission log skipped (non-fatal): ${errForLog(logErr)}`);
     }
 
     // ── Record sender → physician match (feeds the Telegram approve message) ──
@@ -1155,7 +1154,7 @@ export async function processBuffer(buffer: Buffer, {
       senderRecorded = true;
       console.log(`│        🗂️   sender_physician_match updated`);
     } catch (matchLogErr) {
-      console.warn(`│        ⚠️  sender_physician_match update skipped (non-fatal): ${matchLogErr instanceof Error ? matchLogErr.message : matchLogErr}`);
+      console.warn(`│        ⚠️  sender_physician_match update skipped (non-fatal): ${errForLog(matchLogErr)}`);
     }
   }
 
@@ -1221,7 +1220,7 @@ export async function processBuffer(buffer: Buffer, {
       });
       if (!sent && receipt) receipt.answered = false;
     } else {
-      console.log(`│        📧  Sending auto-reply to ${replyTo}…`);
+      console.log(`│        📧  Sending auto-reply…`);
       try {
         await sendConfirmationEmail(gmail!, replyTo, {
           prefix     : match.prefix,
@@ -1231,9 +1230,9 @@ export async function processBuffer(buffer: Buffer, {
           score      : analysis.score,
           route      : "email",
         }, messageId);
-        console.log(`│        ✅  Auto-reply sent to ${replyTo}`);
+        console.log(`│        ✅  Auto-reply sent`);
       } catch (replyErr) {
-        console.error(`│        ❌  Auto-reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+        console.error(`│        ❌  Auto-reply failed: ${errForLog(replyErr)}`);
         if (receipt) receipt.answered = false;
       }
     }
@@ -1253,7 +1252,7 @@ export async function processAttachment(att: GmailAttachment, messageId: string,
   const excel = isExcelFile(att.mimeType, att.filename);
 
   console.log(`│`);
-  console.log(`│      • ${att.filename}`);
+  console.log(`│      • file ${logTag(att.filename)} (${path.extname(att.filename ?? "").toLowerCase() || "no extension"})`);
   console.log(`│        MIME type : ${att.mimeType}`);
   console.log(`│        Size      : ${formatSize(att.size)}`);
   console.log(`│        Excel?    : ${excel ? "✅  Yes" : "❌  No — skipping"}`);
@@ -1288,7 +1287,7 @@ export async function processAttachment(att: GmailAttachment, messageId: string,
   try {
     buffer = await gmail.downloadAttachment(messageId, att.attachmentId);
   } catch (err) {
-    console.error(`│        ❌  Download failed: ${err instanceof Error ? err.message : err}`);
+    console.error(`│        ❌  Download failed: ${errForLog(err)}`);
     await sendAlertReply({
       errorType   : "other",
       safeFilename: att.filename ?? "",
@@ -1504,11 +1503,12 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
     const fromNameMatch    = fromRaw.match(/^(.*?)\s*<([^>]+)>\s*$/);
     const fromDisplayName  = fromNameMatch ? fromNameMatch[1]!.trim().replace(/^"(.*)"$/, "$1") : "";
 
+    // Ids, sizes and a sender tag only: this log is public (see log-safe.ts).
     console.log(`┌─ [${i + 1}/${messages.length}] [${_sourceLabel}] ──────────────────────────────────────────`);
+    console.log(`│  Message:  ${id} (thread ${msg.threadId ?? "-"})`);
     console.log(`│  Date:     ${msg.date}`);
-    console.log(`│  From:     ${msg.from}`);
-    console.log(`│  Subject:  ${msg.subject}`);
-    console.log(`│  Body:     ${msgBody.slice(0, 120).replace(/\n/g, " ")}${msgBody.length > 120 ? "…" : ""}`);
+    console.log(`│  From:     sender ${logTag(fromEmail)}`);
+    console.log(`│  Subject:  ${(msg.subject ?? "").length} chars · Body: ${msgBody.length} chars`);
 
     if (SKIP_SENDERS.has(fromEmail)) {
       // Relay senders (e.g. sakhonmso@gmail.com) forward/reply to physician emails.
@@ -1524,7 +1524,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
             if (THREAD_RELAY_SENDERS.has(tmEmail)) continue; // skip other relay messages
             const xlsxInMsg = tm.attachments.filter((a) => isExcelFile(a.mimeType, a.filename));
             if (xlsxInMsg.length > 0) {
-              console.log(`│  📎  Found xlsx in thread — original sender: ${tm.msg.from}`);
+              console.log(`│  📎  Found xlsx in thread — message ${tm.msg.id}, original sender ${logTag(tmEmail)}`);
               const relayContext: Partial<ProcessBufferContext> = {
                 subject  : tm.msg.subject || msg.subject,
                 body     : tm.msg.body    || msgBody,
@@ -1545,7 +1545,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
               );
               results.forEach((r, idx) => {
                 if (r.status === "rejected") {
-                  console.error(`│      ❌  Relay attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+                  console.error(`│      ❌  Relay attachment[${idx}] threw: ${errForLog(r.reason)}`);
                 }
               });
               // Handled = processed OR already answered ("replied"/"rejected"),
@@ -1630,7 +1630,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
         );
         results.forEach((r, idx) => {
           if (r.status === "rejected") {
-            console.error(`│      ❌  Thread attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+            console.error(`│      ❌  Thread attachment[${idx}] threw: ${errForLog(r.reason)}`);
           }
         });
         if (processedAnyAttachment || handledOtherwise || await setAsideAfterThrows(id, results)) {
@@ -1654,7 +1654,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
         // Google's "spreadsheet shared with you" notice and its kin. Nobody reads a
         // reply to a no-reply address — but the message may be someone's submission, shared as a
         // link, so the admin chat is told once (plain text, no file contents).
-        console.log(`│  🤖  No xlsx — automated sender ${fromEmail}, not replying (message ${id})`);
+        console.log(`│  🤖  No xlsx — automated sender ${logTag(fromEmail)}, not replying (message ${id})`);
         // Only marked as handled once the admin has been told: otherwise it is looked at again next run.
         await sendTelegram(`🤖 ไม่ได้ตอบกลับ (ผู้ส่งเป็นที่อยู่ no-reply): ${fromEmail}\nหัวเรื่อง: ${msg.subject}\nอีเมลนี้มีลิงก์หรือไฟล์ที่ไม่ใช่ .xlsx — โปรดตรวจสอบว่าเป็นการส่งงาน P4P หรือไม่`)
           .catch((e) => { console.warn(`│  ⚠️   Telegram notify failed: ${e.message} — message left unmarked, to be retried`); alertSent = false; });
@@ -1676,7 +1676,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
           await sendAlertReply({ errorType: "file_link", safeFilename: "", replyTo: fromEmail, messageId: id, gmail });
         } else {
           // Sender attached a file but in the wrong format (.xls, .ods, …)
-          console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${otherNames} → sending wrong_extension alert`);
+          console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${otherAtts.map((a) => path.extname(a.filename ?? "").toLowerCase() || "none").join(", ")} → sending wrong_extension alert`);
           await sendAlertReply({ errorType: "wrong_extension", safeFilename: otherNames, replyTo: fromEmail, messageId: id, gmail });
         }
       }
@@ -1743,7 +1743,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
     );
     results.forEach((r, idx) => {
       if (r.status === "rejected") {
-        console.error(`│      ❌  Attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+        console.error(`│      ❌  Attachment[${idx}] threw: ${errForLog(r.reason)}`);
       }
     });
 

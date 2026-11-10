@@ -174,7 +174,8 @@ export async function listStuckArchives(hours = 1): Promise<StuckArchiveRow[]> {
 
 export async function downloadObject(objectPath: string): Promise<Buffer> {
   const { data, error } = await getSupabase().storage.from(BUCKET).download(objectPath);
-  if (error) throw new Error(`storage download error (${objectPath}): ${error.message}`);
+  // No object path in the message: it starts with the uploader's account id, and it reaches the public log.
+  if (error) throw new Error(`storage download error: ${error.message}`);
   return Buffer.from(await data.arrayBuffer());
 }
 
@@ -185,5 +186,5 @@ export async function downloadObject(objectPath: string): Promise<Buffer> {
  */
 export async function deleteObject(objectPath: string): Promise<void> {
   const { error } = await getSupabase().storage.from(BUCKET).remove([objectPath]);
-  if (error) console.warn(`│        ⚠️  storage delete failed (${objectPath}): ${error.message}`);
+  if (error) console.warn(`│        ⚠️  storage delete failed: ${error.message}`);
 }
