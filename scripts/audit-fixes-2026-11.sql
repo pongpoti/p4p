@@ -65,7 +65,7 @@ declare
   v_name  text := public.clean_request_text(p_name, 100);
   v_dept  text := public.clean_request_text(p_department, 100);
 begin
-  -- Basic shape, no backslashes: name@domain.tld in plain ASCII.
+  -- Basic shape, no backslashes: an address like name@example.com, plain ASCII.
   if length(v_email) > 254
      or v_email !~ '^[a-z0-9._%+-]+@[a-z0-9-]+([.][a-z0-9-]+)+$' then
     return;
