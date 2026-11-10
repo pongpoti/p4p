@@ -37,7 +37,11 @@ scorecard, alongside email. One row per submitted file, carrying two
 - `status` (scoring): `pending → processing → done | failed | rejected`.
   Usually cleared in ~1-2 s by `POST /upload/score` in `main.js`, which scores
   a confidence-gated subset of files synchronously; anything it will not
-  guess at stays `pending` for `claim_p4p_score_fallback()`.
+  guess at stays `pending` for `claim_p4p_score_fallback()`. A row left in
+  `processing` for over 30 minutes (the runner died mid-file) is claimed
+  again while it has attempts left (3 in all), and becomes `failed` with
+  `error_type = 'stuck_processing'` when it has none
+  (`scripts/audit-fixes-2026-11.sql`, audit F09).
 - `archive_status` (Drive copy): `NULL → archive_pending → archived`. No
   failure value on purpose — once the score is saved the physician has nothing
   left to fix, so this retries on a backoff indefinitely rather than ever

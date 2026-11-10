@@ -1,6 +1,6 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F01, F13).
+--  (findings F01, F13, F09).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -133,6 +133,56 @@ end;
 $$;
 revoke all on function public.log_access_request(text, text, text) from public;
 grant execute on function public.log_access_request(text, text, text) to anon, authenticated;
+
+commit;
+
+
+-- PART 3 — F09: reclaim upload-queue rows a dead runner left in 'processing'.
+--   The drain sets 'processing' when it claims a row. If the runner dies
+--   before it writes the outcome, the row used to stay 'processing' for
+--   good, and p4p_upload_queue_one_inflight then refused every new upload
+--   for that physician and month. Now a row claimed more than 30 minutes ago
+--   is claimed again while it has attempts left (the same 3 as before); with
+--   none left it becomes 'failed' (error_type 'stuck_processing'), which
+--   frees the month for a new upload and shows up for the admin.
+begin;
+
+create or replace function public.claim_p4p_score_fallback()
+returns setof public.p4p_upload_queue
+language plpgsql
+set search_path = public
+as $$
+begin
+  update public.p4p_upload_queue
+     set status       = 'failed',
+         error_type   = 'stuck_processing',
+         error_detail = 'ระบบประมวลผลไฟล์นี้ไม่เสร็จ กรุณาส่งไฟล์อีกครั้ง',
+         finished_at  = now()
+   where status = 'processing'
+     and attempts >= 3
+     and coalesce(claimed_at, received_at) < now() - interval '30 minutes';
+
+  -- The 30-second clause gives /upload/score its head start on rows it has
+  -- not looked at yet (see line-upload-2026-09.sql PART 5).
+  return query
+  update public.p4p_upload_queue q
+     set status = 'processing', attempts = q.attempts + 1, claimed_at = now()
+   where q.id = (
+     select id from public.p4p_upload_queue
+      where attempts < 3
+        and ((status = 'pending'
+              and (score_method is not null
+                   or received_at < now() - interval '30 seconds'))
+          or (status = 'processing'
+              and coalesce(claimed_at, received_at) < now() - interval '30 minutes'))
+      order by received_at
+      limit 1
+      for update skip locked)
+  returning q.*;
+end;
+$$;
+revoke all on function public.claim_p4p_score_fallback() from public, anon, authenticated;
+grant execute on function public.claim_p4p_score_fallback() to service_role;
 
 commit;
 

@@ -197,6 +197,9 @@ already-applied file is safe.
       at 100, ignores a blank name or a malformed address, never overwrites
       an open request's name or department, never reopens a resolved
       request, and writes nothing for an active physician's address.
+    - PART 3 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
+      `processing` for over 30 minutes while it has attempts left (cap 3),
+      and marks it `failed` / `stuck_processing` when it has none.
     After it, check the `physicians` rows with `source = 'matched_sender'`
     (the query is at the end of the file): the old trigger added them with
     no admin step.
