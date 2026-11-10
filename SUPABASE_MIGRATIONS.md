@@ -21,7 +21,9 @@ already-applied file is safe.
 3. `automation/sql/sender_physician_match.sql` — `sender_physician_match`
    table + RLS.
 4. `automation/sql/bump_sender_match.sql` — atomic increment RPC for
-   `sender_physician_match.email_count` (used by the live pipeline).
+   `sender_physician_match.email_count` (used by the live pipeline). Its
+   `matched = true` only means a roster name was matched; it is not proof of
+   who sent the file (see step 24).
 5. `automation/sql/management_stipends.sql` — `management_stipends` table +
    RLS + seed data. Replaces `process/process.js`'s previously-hardcoded
    `MANAGEMENT_DATA`/`DEPT_HEAD_SET` (real physician names + compensation
@@ -65,9 +67,12 @@ already-applied file is safe.
 14. `scripts/auth-rewrite-2026-08.sql` — **the current auth model**, replacing
     steps 6 (its `physician_directory`/`blocked_emails`/allow-list-union half)
     and 9-10 (the LINE-bind-as-second-factor machinery) with a single
-    `physicians` table (email, LINE binding, active flag, all in one row) and
-    a trigger that auto-provisions a row the moment the email-matching
-    pipeline confirms a submission sender. `is_sender_allowlisted` /
+    `physicians` table (email, LINE binding, active flag, all in one row).
+    (It used to add a trigger that made every matched email sender an active
+    physician; that let anyone who emailed a file with a physician's name
+    log in as that physician. Removed in 2026-11, audit F01: the trigger now
+    lives in step 24 and only opens an access request. The matched-sender
+    backfill in its Block 2 is gone for the same reason.) `is_sender_allowlisted` /
     `is_current_user_allowlisted` keep their names (so RLS policies and
     `provision_month` need no changes) but their bodies now read only
     `physicians`. Run AFTER step 6 and step 9-10 (it migrates data out of
@@ -174,6 +179,19 @@ already-applied file is safe.
     Until it runs, the tab says it is not set up, workflow 2.2 builds exactly
     as before (no copy for the tab, Y9/W9 stay 0) and the relay's build
     dispatcher stays off.
+24. `scripts/audit-fixes-2026-11.sql` — **not applied yet; paste it.**
+    The database half of the 2026-11-10 code audit. Needs steps 14, 15 and
+    18 (not the review-tab files). Each PART is its own transaction, so it
+    can also be pasted one PART at a time; no backslashes, so it pastes
+    through chat. Safe to re-run.
+    - PART 1 (F01): `sync_physician_from_match()` and its trigger. A matched
+      email sender is never inserted into `physicians` and a `physicians`
+      row is never renamed; an address with no `physicians` row gets an open
+      `access_requests` row (name = matched roster name, department) for an
+      admin to approve. Resolved requests are not reopened.
+    After it, check the `physicians` rows with `source = 'matched_sender'`
+    (the query is at the end of the file): the old trigger added them with
+    no admin step.
 
 ## Superseded — do NOT run
 

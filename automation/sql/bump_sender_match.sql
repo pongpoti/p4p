@@ -11,6 +11,13 @@
 -- database level regardless of how many callers race.
 --
 -- Run this in the Supabase SQL Editor after sender_physician_match.sql.
+--
+-- `matched = true` here only means the pipeline matched the file to a roster
+-- name. That name comes from the submitted file, so it is not proof that the
+-- sender is that physician. Since 2026-11 (audit finding F01) the trigger on
+-- sender_physician_match turns a sender address with no physicians row into
+-- an open access request for an admin to approve; it never adds or renames a
+-- physicians row (scripts/audit-fixes-2026-11.sql PART 1).
 
 create or replace function public.bump_sender_match(
   p_sender_email        text,
