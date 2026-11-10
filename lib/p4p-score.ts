@@ -393,20 +393,7 @@ function declaredScore(row: Row, scoreCol: string | null): number {
   return !isNaN(n) && n > 0 ? n : NaN
 }
 
-/**
- * Byte-faithful port of automation/claude-analyst.ts's extractScoreFromRows.
- *
- * The score is the total the doctor wrote on the LAST total row of the form,
- * even when they added it up wrong; it is never recalculated. So each
- * labelled pass (grand-total rows, then a total typed as text, then sub-total
- * rows) takes the bottom-most row that holds a number, never the largest
- * across rows: an earlier "รวมทั้งหมด" (last month's, or a section's) is not
- * the total, and neither is a bigger stray number elsewhere in the sheet (a
- * licence number, an ID). Within that one row the largest number still wins,
- * so a count beside the total ("รวม | 74 | 1940") is not taken for it. The
- * whole-sheet guesses below run only when no labelled row holds a number,
- * and isHighConfidence() never trusts them.
- */
+/** Byte-faithful port of automation/claude-analyst.ts's extractScoreFromRows. */
 function extractScoreFromRows(rows: Row[]): ExtractResult {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { score: null, method: "no rows" }
@@ -414,7 +401,7 @@ function extractScoreFromRows(rows: Row[]): ExtractResult {
 
   const scoreCol = findScoreColumn(rows)
 
-  let grandCandidates: number[] = []
+  const grandCandidates: number[] = []
   for (const row of rows) {
     const allValues = Object.values(row).map((v) => String(v ?? ""))
     const labelCells = allValues.filter((s) =>
@@ -423,29 +410,25 @@ function extractScoreFromRows(rows: Row[]): ExtractResult {
     if (labelCells.length > 0) {
       const declared = declaredScore(row, scoreCol)
       if (!isNaN(declared)) {
-        grandCandidates = [declared]
+        grandCandidates.push(declared)
         continue
       }
       const nonYearNums = collectCandidates([row], false)
       const nums = nonYearNums.length > 0 ? nonYearNums : collectCandidates([row], true)
       const embedded = labelCells.flatMap((s) => numsFromText(s, true))
-      if (nums.length + embedded.length > 0) grandCandidates = [...nums, ...embedded]
+      grandCandidates.push(...nums, ...embedded)
     }
   }
   if (grandCandidates.length > 0) {
     return { score: Math.max(...grandCandidates), method: "grand-total label row (all columns)" }
   }
 
-  let summaryCandidates: number[] = []
-  for (const row of rows) {
-    const stated = summaryTextCandidates([row])
-    if (stated.length > 0) summaryCandidates = stated
-  }
+  const summaryCandidates = summaryTextCandidates(rows)
   if (summaryCandidates.length > 0) {
     return { score: Math.max(...summaryCandidates), method: "free-text summary line" }
   }
 
-  let subCandidates: number[] = []
+  const subCandidates: number[] = []
   for (const row of rows) {
     const firstThree = ["col_1", "col_2", "col_3"].map((k) => String(row[k] ?? ""))
     const hasLabel = firstThree.some((s) =>
@@ -454,15 +437,21 @@ function extractScoreFromRows(rows: Row[]): ExtractResult {
     if (hasLabel) {
       const declared = declaredScore(row, scoreCol)
       if (!isNaN(declared)) {
-        subCandidates = [declared]
+        subCandidates.push(declared)
         continue
       }
       const nums = collectCandidates([row])
-      if (nums.length > 0) subCandidates = nums
+      subCandidates.push(...nums)
     }
   }
   if (subCandidates.length > 0) {
-    return { score: Math.max(...subCandidates), method: "sub-total label row (col_1-3)" }
+    const subMax = Math.max(...subCandidates)
+    const allNums = collectCandidates(rows)
+    const sheetMax = allNums.length > 0 ? Math.max(...allNums) : subMax
+    if (sheetMax > subMax) {
+      return { score: sheetMax, method: "largest in sheet (exceeds sub-total label rows)" }
+    }
+    return { score: subMax, method: "sub-total label row (col_1-3)" }
   }
 
   const all = collectCandidates(rows)
@@ -614,11 +603,6 @@ function resolveScore(rows: Row[]): ExtractResult {
 // the case where the workbook itself states the number. Every other method
 // string (sub-total sums, "largest in sheet", the uncached-formula fallback
 // tiers) is low-confidence and must go through the queued/Claude path.
-// Every guess or recalculation ("largest in sheet", weight × day-count,
-// summed sub-totals, daily cells × rate) and the sub-total pass stay out of
-// this set, as does any method string this file does not know. The nightly
-// build's Step 4.5 (process/fill-score.ts) fills a missing score through the
-// same gate.
 const HIGH_CONFIDENCE_METHODS: Set<string> = new Set([
   "grand-total label row (all columns)",
   "free-text summary line",
