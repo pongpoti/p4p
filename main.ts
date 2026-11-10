@@ -1393,39 +1393,59 @@ app.get("/admin/api/access-requests", requireAdmin, async (req: Request, res: Re
 })
 
 // Shared by /admin/ and the dashboard's รายชื่อ tab. Returns the request's
-// name (null when it had none) once the physician is allow-listed.
+// name (null when it had none) once the physician is allow-listed. Throws a
+// 404 StatusError when the email has no open request.
 async function approveAccessRequest(email: string): Promise<{ name: string | null; department: string | null }> {
   const reqRow = await axios.get(
-    SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name,department",
-    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
+    SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&email=eq." + encodeURIComponent(email) + "&select=name,department",
+    { headers: SERVICE_HEADERS(), timeout: 8000 }
   )
-  const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
-  const department = (reqRow.data && reqRow.data[0] && reqRow.data[0].department) || null
+  if (!reqRow.data || !reqRow.data[0]) {
+    const err = new Error("no open access request for " + email) as StatusError
+    err.status = 404
+    throw err
+  }
+  const name = (reqRow.data[0].name && String(reqRow.data[0].name).trim()) || null
+  const department = reqRow.data[0].department || null
 
-  // Upsert rather than insert: the email may already exist (e.g. a
-  // previously revoked physician re-requesting) — approving should
-  // re-activate that row, not fail on the primary key.
+  // The request's name is self-reported (log_access_request is open to
+  // anon, and anyone can rewrite a pending request's name), while
+  // physicians.full_name is what enqueue_p4p_upload and my_p4p_identity match
+  // against the roster. So it may name a NEW physician, but never replaces
+  // an existing one's: a tampered name on a re-request would send that
+  // account's uploads to someone else's roster row, and a request with no
+  // name would blank it. An existing row only has a blank name filled.
   //
-  // department is omitted from the body entirely when the request never
-  // captured one (a request logged before this field existed) — merge-
-  // duplicates only overwrites columns present in the payload, so leaving
-  // it out preserves whatever department the physicians row already has
-  // rather than clobbering it with null.
-  const upsertBody: Record<string, unknown> = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
-  if (department) upsertBody.department = department
-  await axios.post(
-    SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
-    upsertBody,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      },
-      timeout: 8000,
+  // department is left out entirely when the request never captured one (a
+  // request logged before this field existed), so an existing row keeps the
+  // department it has rather than being clobbered with null.
+  const headers = { ...SERVICE_HEADERS(), "Content-Type": "application/json" }
+  const byEmail = SUPABASE_URL + "/rest/v1/physicians?email=eq." + encodeURIComponent(email)
+  const changes: Record<string, unknown> = { source: "directory", active: true, updated_at: new Date().toISOString() }
+  if (department) changes.department = department
+  const reactivate = (fillBlankName: boolean) => {
+    const patch = { ...changes }
+    if (fillBlankName && name) patch.full_name = name
+    return axios.patch(byEmail, patch, { headers, timeout: 8000 })
+  }
+
+  const existing = await axios.get(byEmail + "&select=full_name", { headers: SERVICE_HEADERS(), timeout: 8000 })
+  if (existing.data && existing.data[0]) {
+    // e.g. a previously revoked physician re-requesting: re-activate the row.
+    await reactivate(!String(existing.data[0].full_name || "").trim())
+  } else {
+    const insertBody: Record<string, unknown> = { email, ...changes }
+    if (name) insertBody.full_name = name
+    try {
+      // A plain insert, not an upsert: a row that appears between the read
+      // above and this write must not be merged over.
+      await axios.post(SUPABASE_URL + "/rest/v1/physicians", insertBody, { headers, timeout: 8000 })
+    } catch (e: any) {
+      if (!(e.response && e.response.status === 409)) throw e
+      // Lost that race: the row exists now, and its name is not ours to set.
+      await reactivate(false)
     }
-  )
+  }
   await resolveAccessRequest(email)
   return { name, department }
 }
@@ -1445,6 +1465,8 @@ app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req: 
     await approveAccessRequest(email)
     res.json({ ok: true })
   } catch (e: any) {
+    // Already resolved (or never requested): nothing to approve.
+    if (e.status === 404) return res.status(404).json({ error: "no open request" })
     console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, "approve failed") })
   }
