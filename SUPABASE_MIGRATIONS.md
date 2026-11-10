@@ -14,6 +14,25 @@ are idempotent (`create or replace`, `create table if not exists`,
 `drop policy if exists` before `create policy`, etc.) — re-running an
 already-applied file is safe.
 
+## Before deploying the 2026-11 audit fixes (Vercel, not Supabase)
+
+Do this **before** the branch that removes the hard-coded owner LINE userId
+(audit F27) reaches production, or the owner is locked out:
+
+1. In Vercel → the p4p project → Settings → Environment Variables →
+   **Production**, check that `ADMIN_LINE_USER_ID` is set to the owner's
+   LINE userId (send "myid" to the bot to read it; it starts with "U").
+   The code no longer has a fallback: unset means the "admin" bot command
+   answers nobody, the dashboard's owner-only tabs (audit log, roster and
+   access requests, ตรวจสอบ) return 404, and nobody can sign in to
+   `/dashboard/`. The only sign is a `console.error` line in the Vercel logs.
+2. If more than the owner signs in to `/dashboard/`, check that
+   `DASHBOARD_LINE_USER_IDS` lists them all (comma-separated). Unset, it
+   falls back to `ADMIN_LINE_USER_ID` alone.
+3. Redeploy (a variable added after the last deployment only takes effect
+   on the next one), then send "admin" to the bot and open `/dashboard/` to
+   confirm both still work.
+
 ## Current, authoritative (run in this order)
 
 1. `automation/sql/p4p_submissions.sql` — `p4p_submissions` table + RLS.
@@ -203,7 +222,9 @@ already-applied file is safe.
     - PART 4 (F10): revokes and drops `list_all_physicians()`,
       `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
     After it, run the check query at the end of the file: anon must not be
-    able to execute any of the dropped functions.
+    able to execute any of the dropped functions. The same release needs
+    `ADMIN_LINE_USER_ID` set in Vercel first — see "Before deploying the
+    2026-11 audit fixes" at the top of this file.
 
 ## Superseded — do NOT run
 

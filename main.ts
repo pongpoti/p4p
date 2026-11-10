@@ -26,7 +26,9 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 // personal identifier, and this repository is public, so it lives only in
 // the environment. Unset means NO owner, not a default one: the "admin" bot
 // command answers nobody, the owner-only dashboard routes return 404, and
-// DASHBOARD_LINE_USER_IDS has nothing to fall back to.
+// DASHBOARD_LINE_USER_IDS has nothing to fall back to. Set it in Vercel
+// before deploying (SUPABASE_MIGRATIONS.md, "Before deploying the 2026-11
+// audit fixes").
 const ADMIN_LINE_USER_ID = (process.env.ADMIN_LINE_USER_ID || "").trim()
 if (!ADMIN_LINE_USER_ID) {
   console.error("[admin] ADMIN_LINE_USER_ID is not set — the \"admin\" login command and the " +
