@@ -78,6 +78,27 @@ scorecard, alongside email. One row per submitted file, carrying two
 - Migration: `scripts/line-upload-2026-09.sql`; the two claim functions and
   the `superseded` value: `scripts/audit-fixes-2026-11.sql`.
 
+## `p4p_score_saves`
+
+**Purpose:** Which submission's score is saved on each monthly roster row,
+so an older submission retried later never writes its score over a newer
+one, from any relay run or from `/upload/score`.
+
+- **Columns:** `month_key` (e.g. `2569_10`), `roster_index` (the roster
+  row's `index`, as text), `received_at` (when the submission whose score is
+  saved was received), `saved_at`. Primary key `(month_key, roster_index)`.
+  No names or scores.
+- Written only by `save_p4p_score(p_month_key, p_index, p_score,
+  p_received_at)`, which moves `received_at` on and writes the score in one
+  call, and only when this submission is not older than the saved one
+  (returns `false` and writes nothing otherwise). Called by
+  `automation/supabase-client.ts` `saveScore()` and by `/upload/score` in
+  `main.ts`. Read by the relay before it uploads to Drive, and by the LINE
+  archive step, which marks an older row `superseded` instead of replacing
+  the newer file in Drive.
+- **Access:** RLS on with no policies; `service_role` only.
+- Migration: `scripts/audit-fixes-2026-11.sql` PART 5.
+
 ## Storage bucket `p4p-uploads`
 
 **Purpose:** A write-only drop box for the same path — the browser PUTs the

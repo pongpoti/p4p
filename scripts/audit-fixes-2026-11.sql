@@ -1,6 +1,7 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F13, F09, F17, F10; F01 is left as it is, by the owner's choice).
+--  (findings F13, F09, F17, F10, and the stale-retry follow-up in PART 5;
+--  F01 is left as it is, by the owner's choice).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -260,8 +261,81 @@ end $$;
 commit;
 
 
+-- PART 5 — an older submission never writes its score over a newer one,
+--   from any run. The relay remembered which submission's score it had
+--   saved only for the life of one run (an hour), so a retry the next run
+--   picked up (an email that failed near the end of a run, or a LINE upload
+--   backing off) could still write an older score over a newer one.
+--   p4p_score_saves keeps, for each month and roster row, the receive time
+--   of the submission whose score is saved. save_p4p_score() writes a score
+--   only when its submission is not older than that one, and moves the
+--   time on in the same call; two saves for the same roster row take turns
+--   on that row's lock. The relay (saveScore), /upload/score and the LINE
+--   archive step all read or write it. Until this PART is in they fall back
+--   to the plain score update, as before.
+begin;
+
+create table if not exists public.p4p_score_saves (
+  month_key    text        not null,
+  roster_index text        not null,
+  received_at  timestamptz not null,
+  saved_at     timestamptz not null default now(),
+  primary key (month_key, roster_index)
+);
+alter table public.p4p_score_saves enable row level security;
+revoke all on table public.p4p_score_saves from public, anon, authenticated;
+grant select, insert, update, delete on table public.p4p_score_saves to service_role;
+
+create or replace function public.save_p4p_score(
+  p_month_key   text,
+  p_index       text,
+  p_score       double precision,
+  p_received_at timestamptz
+)
+returns boolean
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_rows integer;
+begin
+  if p_month_key !~ '^(2[4-7][0-9]{2})_(0[1-9]|1[0-2])$' then
+    raise exception 'save_p4p_score: invalid month key "%"', p_month_key;
+  end if;
+
+  -- Not older than the saved one (the same submission again is fine).
+  insert into public.p4p_score_saves as s (month_key, roster_index, received_at)
+  values (p_month_key, p_index, p_received_at)
+  on conflict (month_key, roster_index) do update
+     set received_at = excluded.received_at,
+         saved_at    = now()
+   where s.received_at <= excluded.received_at;
+  get diagnostics v_rows = row_count;
+  if v_rows = 0 then
+    return false;
+  end if;
+
+  -- index compared as text: the roster key is a uuid, as a string here.
+  execute format('update public.%I set score = $1 where index::text = $2', p_month_key)
+    using p_score, p_index;
+  get diagnostics v_rows = row_count;
+  if v_rows = 0 then
+    raise exception 'save_p4p_score: no row % in table %', p_index, p_month_key;
+  end if;
+  return true;
+end;
+$$;
+revoke all on function public.save_p4p_score(text, text, double precision, timestamptz) from public, anon, authenticated;
+grant execute on function public.save_p4p_score(text, text, double precision, timestamptz) to service_role;
+
+commit;
+
+
 -- Checks to run by hand afterwards:
 --   select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --    where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'EXECUTE')
 --    order by 1;
 --   -- expect no list_all_physicians, get_line_bind_gate_status, bind_line_user_id
+--   select has_table_privilege('anon', 'public.p4p_score_saves', 'select'),
+--          has_function_privilege('anon', 'public.save_p4p_score(text, text, double precision, timestamptz)', 'execute');
+--   -- expect false, false

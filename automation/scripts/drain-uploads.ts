@@ -39,12 +39,12 @@
 import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails, SENDER_DETAIL } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
-  markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
+  markArchived, markSuperseded, markNotified, listStuckArchives, downloadObject, deleteObject,
   listLeftoverObjects, removeLeftoverObjects,
   type ArchiveQueueRow, type ScoreFallbackQueueRow,
 } from "../upload-queue.js";
 import { createDriveClient, type DriveClient } from "../drive-client.js";
-import { getRosterRowByIndex, matchName } from "../supabase-client.js";
+import { getRosterRowByIndex, matchName, newerScoreSaved } from "../supabase-client.js";
 import { sendTelegram, formatErrorMessage } from "../telegram.js";
 import { pushLine } from "../line-push.js";
 import { createGmailClient, type GmailClient } from "../gmail-client.js";
@@ -100,10 +100,10 @@ async function resolveRoster(row: ArchiveQueueRow): Promise<RosterMatch | null> 
 }
 
 // ── 1. Archive ────────────────────────────────────────────────────────────
-async function handleArchive(row: ArchiveQueueRow): Promise<void> {
+/** Exported for the tests, which pass their own Drive client. */
+export async function handleArchive(row: ArchiveQueueRow, drive: DriveClient | null = getDrive()): Promise<void> {
   // Queue id, month and roster row only: this log is public (log-safe.ts).
   console.log(`│  📦  Archiving queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.archive_attempts}`);
-  const drive = getDrive();
   if (!drive) {
     console.warn("│      ⚠️  P4P_FOLDER_ID not set — leaving archive_pending");
     return;
@@ -117,6 +117,15 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
   if (zip) throw new Error(`archive refused by the zip guard (${zip.code})`);
   const roster   = await resolveRoster(row);
   const name     = roster?.matchedName ?? row.full_name;
+  // A row backing off here must not replace the Drive copy of a submission
+  // received after it whose score is saved since (an email, say: the claim
+  // only knows about newer uploads). A failed read throws, and the row
+  // retries on its backoff.
+  if (roster && await newerScoreSaved(row.month_key, roster.index, new Date(row.received_at).toISOString())) {
+    await markSuperseded(row.id);
+    console.log(`│      ⏭️  A newer submission's score is saved — superseded, Drive copy left as it is`);
+    return;
+  }
   // The tab for this month, the same one the score was read from.
   const [beYear, month] = row.month_key.split("_").map(Number);
   const { name: monthTab } = await monthSheet(buffer, month!, beYear!);

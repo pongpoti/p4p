@@ -226,8 +226,16 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
       stuck row.
     - PART 4 (F10): revokes and drops `list_all_physicians()`,
       `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
-    After it, run the check query at the end of the file: anon must not be
-    able to execute any of the dropped functions. The same release needs
+    - PART 5 (stale retry): new table `p4p_score_saves` (service_role only)
+      and `save_p4p_score(text, text, double precision, timestamptz)`, which
+      the relay and `/upload/score` save every score through. It writes a
+      score only when no submission received later already has its score
+      saved for that roster row, so a retry in a later relay run cannot
+      write an older score over a newer one. Until this PART is in, both
+      fall back to the plain score update.
+    After it, run the check queries at the end of the file: anon must not
+    be able to execute any of the dropped functions, or read
+    `p4p_score_saves` or run `save_p4p_score`. The same release needs
     `ADMIN_LINE_USER_ID` set in Vercel first — see "Before deploying the
     2026-11 audit fixes" at the top of this file.
 

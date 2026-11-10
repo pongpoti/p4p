@@ -150,6 +150,16 @@ export async function markArchived(id: string): Promise<void> {
   await patch(id, { archive_status: "archived", archived_at: new Date().toISOString() });
 }
 
+/**
+ * A newer submission's score is saved, so this row's file must not replace
+ * that one's in Drive: never claimed again, and sweepLeftoverObjects deletes
+ * its uploaded object (the same state claim_p4p_archive gives an older
+ * upload, audit F17).
+ */
+export async function markSuperseded(id: string): Promise<void> {
+  await patch(id, { archive_status: "superseded" });
+}
+
 export async function markNotified(id: string): Promise<void> {
   await patch(id, { notified_at: new Date().toISOString() });
 }

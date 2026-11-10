@@ -7,6 +7,7 @@
  *   matchName(name, date)       — the same, as { matchedName, index, similarity }
  *                                 or null (none or ambiguous)
  *   saveScore(date, index, score) — write score (float8) to the matched row
+ *                                 (false: a newer submission's score is saved)
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -359,18 +360,38 @@ export async function bumpSenderMatch({
   if (error) throw new Error(`bump_sender_match RPC error: ${error.message}`);
 }
 
+/** PostgREST's answer for a function that is not there (the SQL not pasted yet). */
+function functionMissing(error: { code?: string } | null): boolean {
+  return error?.code === "PGRST202";
+}
+
+/** PostgREST's or Postgres's answer for a table that is not there. */
+function tableMissing(error: { code?: string } | null): boolean {
+  return error?.code === "PGRST205" || error?.code === "42P01";
+}
+
+let saveFunctionMissingLogged = false;
+
 /**
  * Update the score column for a specific row identified by its primary key.
+ *
+ * With a submission time, the save goes through save_p4p_score()
+ * (scripts/audit-fixes-2026-11.sql PART 5): the score is written only when
+ * no NEWER submission's score is saved for that row, checked and written in
+ * one call that every relay run and /upload/score share. Returns false when
+ * a newer one is saved; then nothing is written, submitted_at included.
+ * Until that PART is pasted it falls back to the plain update.
  *
  * @param date          Table name, e.g. "2569_02"
  * @param index         Primary key value (column "index")
  * @param score         Score to save (float8)
- * @param submittedAt ISO timestamp. Only ever moves submitted_at EARLIER
+ * @param submittedAt ISO timestamp: when this submission was received. Only
+ *                                      ever moves submitted_at EARLIER
  *                                      (or fills it when empty) — see below. When
  *                                      omitted, submitted_at is left untouched
  *                                      (used by the score-only backfill).
  */
-export async function saveScore(date: string, index: number | string, score: number, submittedAt?: string): Promise<void> {
+export async function saveScore(date: string, index: number | string, score: number, submittedAt?: string): Promise<boolean> {
   if (!isValidDate(date)) {
     throw new Error(`Cannot save score — invalid date key: "${date}"`);
   }
@@ -382,6 +403,26 @@ export async function saveScore(date: string, index: number | string, score: num
   }
 
   const supabase = getSupabase();
+  if (submittedAt !== undefined) {
+    const { data: saved, error: rpcError } = await supabase.rpc("save_p4p_score", {
+      p_month_key  : date,
+      p_index      : String(index),
+      p_score      : score,
+      p_received_at: submittedAt,
+    });
+    if (!rpcError) {
+      if (saved === false) return false;
+      if (saved !== true) throw new Error(`save_p4p_score on table "${date}" answered ${JSON.stringify(saved)} — score was NOT saved`);
+      await keepEarliestSubmittedAt(date, index, submittedAt);
+      return true;
+    }
+    if (!functionMissing(rpcError)) throw new Error(`save_p4p_score error on table "${date}": ${rpcError.message}`);
+    if (!saveFunctionMissingLogged) {
+      saveFunctionMissingLogged = true;
+      console.warn("│        ⚠️  save_p4p_score is not installed (audit-fixes-2026-11.sql PART 5) — plain score update");
+    }
+  }
+
   const { data, error } = await supabase
     .from(date)
     .update({ score })
@@ -397,6 +438,28 @@ export async function saveScore(date: string, index: number | string, score: num
   }
 
   if (submittedAt !== undefined) await keepEarliestSubmittedAt(date, index, submittedAt);
+  return true;
+}
+
+/**
+ * Is a score saved for this roster row from a submission received after
+ * `sinceIso`? Read from p4p_score_saves, which save_p4p_score() keeps for
+ * every run of the relay and for /upload/score, so it holds across runs.
+ * False while that table is not there yet; throws on any other read error.
+ */
+export async function newerScoreSaved(monthKey: string, rosterIndex: number | string, sinceIso: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("p4p_score_saves")
+    .select("received_at")
+    .eq("month_key", monthKey)
+    .eq("roster_index", String(rosterIndex))
+    .gt("received_at", sinceIso)
+    .limit(1);
+  if (error) {
+    if (tableMissing(error)) return false;
+    throw new Error(`p4p_score_saves read error: ${error.message}`);
+  }
+  return (data ?? []).length > 0;
 }
 
 /**

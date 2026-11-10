@@ -1922,16 +1922,42 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   const submittedAt = new Date(row.received_at).toISOString()
 
   try {
-    // saveScore(): the score column on the month's roster row. `Prefer:
-    // return=representation` so a filter that matched nothing surfaces here
-    // rather than being reported to the physician as saved.
+    // saveScore(): the score column on the month's roster row, through
+    // save_p4p_score() (scripts/audit-fixes-2026-11.sql PART 5), the same
+    // call the relay saves with: it writes only when no submission received
+    // after this one already has its score saved, so an email the relay
+    // saved a moment ago is never overwritten by this older upload.
     const rowUrl = SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(String(row.roster_index))
-    const saved = await axios.patch(
-      rowUrl,
-      { score: value },
-      { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
-    )
-    if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+    let written: boolean | null = null
+    try {
+      const r = await axios.post(
+        SUPABASE_URL + "/rest/v1/rpc/save_p4p_score",
+        { p_month_key: monthKey, p_index: String(row.roster_index), p_score: value, p_received_at: submittedAt },
+        { headers: serviceHeaders({ "Content-Type": "application/json" }), timeout: 8000 }
+      )
+      if (r.data !== true && r.data !== false) throw new Error("save_p4p_score answered " + JSON.stringify(r.data))
+      written = r.data
+    } catch (e: any) {
+      // PGRST202: the function is not installed yet; the plain update below
+      // is what this route did before it.
+      if (!(e.response && e.response.data && e.response.data.code === "PGRST202")) throw e
+    }
+    if (written === false) {
+      // A newer submission is saved: the worker holds this one for the
+      // admin and tells the physician, as it does for a retried older email.
+      console.warn("[upload] a newer submission is already saved for queue row " + row.id + "; deferring")
+      return defer(method)
+    }
+    if (written === null) {
+      // `Prefer: return=representation` so a filter that matched nothing
+      // surfaces here rather than being reported to the physician as saved.
+      const saved = await axios.patch(
+        rowUrl,
+        { score: value },
+        { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
+      )
+      if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+    }
     // submitted_at is what the ranking reads for punctuality, so it keeps the
     // EARLIEST submission — same rule as automation's saveScore(). A re-upload
     // of a month updates the score above but never moves an on-time

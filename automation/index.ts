@@ -12,7 +12,7 @@
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveFilenameYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
-import { findRosterMatch, saveScore, keepEarliestSubmittedAt, newerUploadScored, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
+import { findRosterMatch, saveScore, keepEarliestSubmittedAt, newerUploadScored, newerScoreSaved, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
@@ -575,8 +575,11 @@ export interface ProcessBufferContext {
 /**
  * Roster row ("table#index") -> the receive time (ms) of the newest
  * submission whose score this process saved. Kept for the life of the
- * process (one relay run of up to an hour, which also runs the LINE drain),
- * like thrownPasses: a retried email is retried within that run.
+ * process (one relay run of up to an hour, which also runs the LINE drain).
+ * Only a fast path: a retry can come round in the next run (an email that
+ * failed near the end of a run, a LINE row backing off), so p4p_score_saves
+ * is what holds across runs, and save_p4p_score() checks it again as it
+ * writes (scripts/audit-fixes-2026-11.sql PART 5).
  */
 const savedSubmissionTimes = new Map<string, number>();
 const rosterRowKey = (table: string, index: number | string): string => `${table}#${index}`;
@@ -590,13 +593,20 @@ export function forgetSavedSubmissionTimes(): void {
  * Was a NEWER submission for this roster row already saved? A retried email
  * (its Drive upload or score save failed for a temporary reason, so it was
  * left unread) can come round again after a corrected file was saved, by
- * email in this run or by a LINE upload that /upload/score scored at once.
- * Writing the older score then would undo the newer one. A failed queue read
- * is not a reason to refuse a save, so it counts as "no".
+ * email in this run or an earlier one, or by a LINE upload that /upload/score
+ * scored at once. Writing the older score then would undo the newer one.
+ * A failed read is not a reason to refuse a save, so it counts as "no";
+ * save_p4p_score() still refuses an older score as it writes.
  */
 async function newerSubmissionSaved(table: string, index: number | string, ts: Date): Promise<boolean> {
   const seen = savedSubmissionTimes.get(rosterRowKey(table, index));
   if (seen !== undefined && seen > ts.getTime()) return true;
+  try {
+    if (await newerScoreSaved(table, index, ts.toISOString())) return true;
+  } catch (err) {
+    console.warn(`│        ⚠️  Newer-save check skipped: ${errForLog(err)}`);
+  }
+  // Scores /upload/score saved before save_p4p_score was installed.
   try {
     return await newerUploadScored(table, index, ts.toISOString());
   } catch (err) {
@@ -1043,12 +1053,13 @@ export async function processBuffer(buffer: Buffer, {
 
   /**
    * Hold a submission for the admin (admin-review.ts): nothing saved, no
-   * Drive file replaced. The admin is told first; if Telegram fails this
+   * Drive file replaced (except `driveReplaced`, a save that lost the race
+   * after its Drive upload). The admin is told first; if Telegram fails this
    * throws, nothing has gone to the sender yet, and the submission is retried
    * (bounded). Then the sender gets one polite notice per message (email), or
    * the queue row is closed with error_type admin_review (LINE).
    */
-  const holdForAdmin = async (held: Pick<AdminReviewAlertData, "reason" | "candidates" | "match" | "conflict">): Promise<ProcessOutcome> => {
+  const holdForAdmin = async (held: Pick<AdminReviewAlertData, "reason" | "candidates" | "match" | "conflict" | "driveReplaced">): Promise<ProcessOutcome> => {
     const alert = formatAdminReviewAlert({
       ...held,
       source     : isUpload ? "line-upload" : "email",
@@ -1067,7 +1078,7 @@ export async function processBuffer(buffer: Buffer, {
     } catch (err) {
       throw new RetryLaterError(`held for admin review (${held.reason}): admin alert not delivered (${err instanceof Error ? err.message : err})`);
     }
-    console.log(`│        ⏸️   Held for admin review (${held.reason}): score not saved, Drive file not replaced`);
+    console.log(`│        ⏸️   Held for admin review (${held.reason}): score not saved${held.driveReplaced ? "" : ", Drive file not replaced"}`);
     if (isUpload) {
       await notifyFailure(ADMIN_REVIEW_ERROR_TYPE, { detail: adminReviewDetail(held.reason) });
       return "rejected";
@@ -1181,12 +1192,9 @@ export async function processBuffer(buffer: Buffer, {
   // ── Save score to Supabase (only after Drive upload confirmed) ────────
   let scoreSaved = false;
   if (match) {
+    let saved: boolean;
     try {
-      await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
-      scoreSaved = true;
-      const key = rosterRowKey(workMonth, match.index);
-      savedSubmissionTimes.set(key, Math.max(savedSubmissionTimes.get(key) ?? -Infinity, ts.getTime()));
-      console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
+      saved = await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
     } catch (dbErr) {
       console.error(`│        ❌  Supabase save error: ${errForLog(dbErr)}`);
       // Nothing is sent to the sender: a confirmation would tell them a score
@@ -1198,6 +1206,21 @@ export async function processBuffer(buffer: Buffer, {
       const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
       throw new RetryLaterError(`score not saved (table "${workMonth}", roster row #${match.index}): ${message}`);
     }
+    if (!saved) {
+      // A newer submission's score was saved after the check above (by
+      // /upload/score, or another run): save_p4p_score wrote nothing. With
+      // Drive on, this file's copy went up first, so the admin is told that too.
+      try {
+        await keepEarliestSubmittedAt(workMonth, match.index, ts.toISOString());
+      } catch (err) {
+        throw new RetryLaterError(`submitted_at not saved (table "${workMonth}", roster row #${match.index}): ${err instanceof Error ? err.message : err}`);
+      }
+      return holdForAdmin({ reason: "older_than_saved", match, driveReplaced: Boolean(drive) });
+    }
+    scoreSaved = true;
+    const key = rosterRowKey(workMonth, match.index);
+    savedSubmissionTimes.set(key, Math.max(savedSubmissionTimes.get(key) ?? -Infinity, ts.getTime()));
+    console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
   }
 
   // ── Log submission for punctuality tracking ───────────────────────────

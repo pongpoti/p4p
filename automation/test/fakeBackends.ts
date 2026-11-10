@@ -9,7 +9,11 @@
  * Only what processBuffer's queries use is implemented: eq and gt filters
  * (gt compares strings, which is right for ISO times), limit, the one
  * `or=(submitted_at.is.null,submitted_at.gt."…")` filter saveScore sends,
- * PATCH, POST inserts and RPC calls.
+ * PATCH, POST inserts and RPC calls. save_p4p_score works as the SQL does
+ * (audit-fixes-2026-11.sql PART 5) when the test seeds a p4p_score_saves
+ * table; without one it answers as PostgREST does for a function that is
+ * not installed, so saveScore takes its plain-update fallback. Its score
+ * write is recorded in `patches`, like a plain update.
  */
 
 export const FAKE_SUPABASE_URL = "http://supabase.test";
@@ -60,6 +64,25 @@ function matches(row: FakeRow, params: URLSearchParams): boolean {
   return true;
 }
 
+/** save_p4p_score(p_month_key, p_index, p_score, p_received_at), as the SQL behaves. */
+function saveScoreRpc(state: FakeBackends, args: Record<string, unknown>): Response {
+  const saves = state.tables["p4p_score_saves"];
+  if (!saves) return json(404, { code: "PGRST202", message: "Could not find the function public.save_p4p_score in the schema cache" });
+  const table = String(args.p_month_key);
+  const index = String(args.p_index);
+  const at = new Date(String(args.p_received_at)).getTime();
+  if (state.failingWrites.has(table)) return json(503, { message: `fake failure writing ${table}`, code: "XX000" });
+  const prev = saves.find((r) => r.month_key === table && String(r.roster_index) === index);
+  if (prev && new Date(String(prev.received_at)).getTime() > at) return json(200, false);
+  const target = (state.tables[table] ?? []).find((r) => String(r.index) === index);
+  if (!target) return json(400, { code: "P0001", message: `save_p4p_score: no row ${index} in table ${table}` });
+  if (prev) prev.received_at = args.p_received_at;
+  else saves.push({ month_key: table, roster_index: index, received_at: args.p_received_at });
+  target.score = args.p_score;
+  state.patches.push({ table, body: { score: args.p_score }, query: `?index=eq.${index}` });
+  return json(200, true);
+}
+
 export function installFakeBackends(tables: Record<string, FakeRow[]> = {}): FakeBackends {
   const state: FakeBackends = { tables, patches: [], inserts: [], rpcs: [], telegrams: [], telegramDown: false, failingTables: new Set(), failingWrites: new Set() };
 
@@ -77,7 +100,10 @@ export function installFakeBackends(tables: Record<string, FakeRow[]> = {}): Fak
     if (url.origin === FAKE_SUPABASE_URL && url.pathname.startsWith("/rest/v1/")) {
       const path = decodeURIComponent(url.pathname.slice("/rest/v1/".length));
       if (path.startsWith("rpc/")) {
-        state.rpcs.push({ fn: path.slice(4), args: JSON.parse(bodyText || "{}") });
+        const fn = path.slice(4);
+        const args = JSON.parse(bodyText || "{}") as Record<string, unknown>;
+        state.rpcs.push({ fn, args });
+        if (fn === "save_p4p_score") return saveScoreRpc(state, args);
         return json(200, null);
       }
       if (state.failingTables.has(path)) return json(500, { message: `fake failure reading ${path}`, code: "XX000" });

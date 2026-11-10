@@ -18,7 +18,9 @@
  *                      not write its score over the newer one. Its receive
  *                      time still counts for submitted_at.
  *
- * Nothing is saved and no Drive file is replaced. The admin gets the details
+ * Nothing is saved and no Drive file is replaced (the one exception, said in
+ * the alert: an older_than_saved file whose Drive copy went up just before
+ * the newer score was saved). The admin gets the details
  * on Telegram (a private chat, so names and scores are fine there); the
  * sender gets a short, polite notice that names no physician and no score.
  * Pure text builders; index.ts sends them.
@@ -84,6 +86,8 @@ export interface AdminReviewAlertData {
   match?: RosterMatch | null;
   /** score_conflict: the two readings. */
   conflict?: { claudeScore: number; jsScore: number; jsMethod: string } | null;
+  /** older_than_saved: the newer score was saved only after this file's Drive copy went up, over the newer one's. */
+  driveReplaced?: boolean;
 }
 
 const row = (m: RosterMatch) => `#${m.index} ${m.matchedName}${m.department ? ` (${m.department})` : ""} — ${(m.similarity * 100).toFixed(0)}%`;
@@ -116,7 +120,9 @@ export function formatAdminReviewAlert(d: AdminReviewAlertData, labelName: strin
   }
   if (d.messageId) lines.push(`✉️ Gmail id : ${d.messageId}`);
   if (d.queueId)   lines.push(`🧾 Queue row: ${d.queueId}`);
-  lines.push(``, `ระบบไม่บันทึกคะแนนและไม่อัปโหลดไฟล์ไปที่ Drive ผู้ส่งได้รับแจ้งว่าไฟล์รอเจ้าหน้าที่ตรวจสอบ`);
+  lines.push(``, d.driveReplaced
+    ? `ระบบไม่บันทึกคะแนน แต่อัปโหลดไฟล์นี้ไปที่ Drive แทนไฟล์ที่ส่งภายหลังแล้ว ผู้ส่งได้รับแจ้งว่าไฟล์รอเจ้าหน้าที่ตรวจสอบ`
+    : `ระบบไม่บันทึกคะแนนและไม่อัปโหลดไฟล์ไปที่ Drive ผู้ส่งได้รับแจ้งว่าไฟล์รอเจ้าหน้าที่ตรวจสอบ`);
   lines.push(`วิธีดำเนินการ:`);
   if (d.reason === "ambiguous_name") {
     lines.push(`• ตรวจไฟล์ แล้วบันทึกคะแนนให้แถวที่ถูกต้องในตาราง ${d.monthKey} เอง`);
@@ -127,6 +133,7 @@ export function formatAdminReviewAlert(d: AdminReviewAlertData, labelName: strin
     }
   } else if (d.reason === "older_than_saved") {
     lines.push(`• คะแนนที่บันทึกอยู่มาจากไฟล์ที่ส่งภายหลัง ไม่ต้องทำอะไรถ้าไฟล์นั้นถูกต้อง`);
+    if (d.driveReplaced) lines.push(`• ไฟล์ใน Drive ตอนนี้เป็นฉบับที่ส่งก่อน ให้อัปโหลดไฟล์ที่ส่งภายหลังไปที่ Drive แทน`);
     lines.push(`• ถ้าไฟล์นี้ (ฉบับที่ส่งก่อน) เป็นฉบับที่ถูกต้อง ให้บันทึกคะแนนในตาราง ${d.monthKey} เอง`);
   } else {
     lines.push(`• เปิดไฟล์ตรวจคะแนนรวม แล้วบันทึกคะแนนที่ถูกต้องในตาราง ${d.monthKey} เอง`);
