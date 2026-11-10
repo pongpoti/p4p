@@ -30,6 +30,9 @@
  * TARGET_MONTH (e.g. 2569_10) builds only that month: the ตรวจสอบ tab's
  * "สร้างไฟล์ใหม่" button and a changed budget start such a run through the
  * always-on relay, with REVIEW_REQUEST_ID so the tab can show its progress.
+ * After the 2 months, the nightly run queues such a run for any older month
+ * still under review on the auditee's side whose newest build is out of
+ * date (review.queueOutdatedReviewMonths).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -1891,6 +1894,19 @@ async function main(): Promise<void> {
       console.log('└─ failed\n');
       // NOT a break/return — the other discovered complete month still runs.
     }
+  }
+
+  // ── Older months under review ────────────────────────────────────
+  // A month older than the ones built above whose ตรวจสอบ review is on the
+  // auditee's side (a doctor re-sent a file after it left the latest two,
+  // say) gets the tab's own one-month rebuild if its newest build is out of
+  // date. Queued, not built here: the relay starts it once this run ends,
+  // so this job stays inside the time a waiting tab request is given.
+  if (reviewOn && !targeted && completeMonths.length >= TARGET_COMPLETE_MONTHS) {
+    const oldest = completeMonths.reduce((a, m) => (m.key < a ? m.key : a), completeMonths[0].key);
+    console.log('┌─ ตรวจสอบ tab, older months ───────────────────────────');
+    await review.queueOutdatedReviewMonths(supabase, months.map((m) => m.key).filter((k) => k < oldest), reviewV2);
+    console.log('└─ done\n');
   }
 
   console.log('══════════════════════════════════════════════════════');
