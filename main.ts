@@ -1530,6 +1530,7 @@ interface ScoreModule {
   resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null): number | null
   resolveBeMonthFromRows(rows: Record<string, unknown>[]): number | null
   resolveFilenameMonth(filename?: string | null): number | null
+  resolveFilenameYear(filename?: string | null): number | null
   resolveBeYearFromRows(rows: Record<string, unknown>[]): number | null
   resolveScore(rows: Record<string, unknown>[]): ScoreExtractResult
   isHighConfidence(method: string): boolean
@@ -1778,7 +1779,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   // whatever month the physician last reused this file for.
   const inferredMonth = score.resolveFilenameMonth(row.filename) ||
     (singleSheet ? null : score.resolveBeMonthFromRows(rows))
-  const inferredYear = score.resolveBeYear(row.filename || "", "", "") ||
+  const inferredYear = score.resolveFilenameYear(row.filename) ||
     (singleSheet ? null : score.resolveBeYearFromRows(rows))
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")

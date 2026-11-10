@@ -220,6 +220,47 @@ export function resolveBeYearByPriority(filename?: string | null, subject?: stri
 }
 
 /**
+ * The year a filename states, for the LINE upload month_mismatch checks
+ * (mirrors lib/p4p-score.ts resolveFilenameYear, used by /upload/score).
+ * Both REJECT an upload on a different year, so this reads only what is
+ * plainly a year. resolveBeYear takes any lone two-digit number for one (43-99
+ * as 25xx, 00-42 as 20xx), which is fine for picking a sheet but turned a
+ * version, ward or day count ("_12", "v15", "เวร 30 วัน", a "(85)" copy
+ * suffix, "P4P 05") into a year and refused the doctor's file. Read here:
+ *   - a 4-digit BE (25xx) or CE (20xx) year: "2569", "P4P_9_2026";
+ *   - two digits right after a month name, with at most a few of space . _ -
+ *     / ' between them and an optional "ปี": "ต.ค.69", "ตุลาคม 69", "ตค69",
+ *     "Oct-69", "ตุลาคม ปี 69";
+ *   - a month number (after an optional day), "/" or "-", then a BE short
+ *     year (43-99): "10/69", "10-69", "31-10-69". Only BE here, so a day
+ *     range like "1-15" is not a year.
+ * Anything else is no year (null): an unstated year is not a mismatch.
+ */
+export function resolveFilenameYear(filename?: string | null): number | null {
+  const s = String(filename ?? "")
+  const be = s.match(/(?<!\d)(25\d{2})(?!\d)/)
+  if (be) return parseInt(be[1]!, 10)
+  const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/)
+  if (ce) return parseInt(ce[1]!, 10) + 543
+
+  const tail = "[\\s._'’/-]{0,3}(?:ปี\\s?)?(\\d{2})(?!\\d)"
+  for (const [token] of MONTH_TOKEN_MAP) {
+    const m = /^[A-Za-z]+$/.test(token)
+      ? s.match(new RegExp(`(?<![A-Za-z])${token}(?![A-Za-z])${tail}`, "i"))
+      : s.match(new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`))
+    if (m) return shortFileYearToBe(m[1]!)
+  }
+
+  const numeric = s.match(/(?<![\d./-])(?:(?:0?[1-9]|[12]\d|3[01])[/-])?(?:0?[1-9]|1[0-2])[/-](4[3-9]|[5-9]\d)(?![\d/-]|\.\d)/)
+  return numeric ? shortFileYearToBe(numeric[1]!) : null
+}
+
+function shortFileYearToBe(yy: string): number {
+  const n = parseInt(yy, 10)
+  return n >= 43 ? 2500 + n : 2000 + n + 543
+}
+
+/**
  * The period an email states, in the order that decides it: subject, then
  * body, then filename. This is the value a submission is ROUTED on and
  * rejected against, so it is read conservatively — a heuristic that is

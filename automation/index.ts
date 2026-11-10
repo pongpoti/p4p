@@ -11,7 +11,7 @@
 
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveFilenameYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
 import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
@@ -795,7 +795,7 @@ export async function processBuffer(buffer: Buffer, {
   // not a disagreement. Runs before Claude so a mismatch costs no API call.
   if (monthKey) {
     const fileMonth = resolveBeMonth(filename ?? "", "", "") ?? resolveBeMonthFromRows(rows);
-    const fileYear  = resolveBeYear(filename ?? "", "", "") ?? resolveBeYearFromRows(rows);
+    const fileYear  = resolveFilenameYear(filename) ?? resolveBeYearFromRows(rows);
     const selMonth  = parseInt(String(monthKey).slice(5), 10);
     const selYear   = parseInt(String(monthKey).slice(0, 4), 10);
     if ((fileMonth && fileMonth !== selMonth) || (fileYear && fileYear !== selYear)) {
