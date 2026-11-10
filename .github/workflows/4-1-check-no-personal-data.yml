@@ -1,6 +1,7 @@
 name: "4.1 Check: no personal data committed"
 
-# Fails a pull request that adds personal data to this PUBLIC repository.
+# Fails a pull request, or a push to main, that adds personal data to this
+# PUBLIC repository.
 #
 # History: 773 rows of physician name + department + score (csv_2569_01-04/)
 # and 18 department heads' personal email addresses (automation/sql/
@@ -8,12 +9,23 @@ name: "4.1 Check: no personal data committed"
 # specific filename at the time, so neither was caught. This is the backstop
 # that does not depend on remembering to update a denylist.
 #
-# Scope: files ADDED or MODIFIED by the PR, not the whole tree — the history
-# still contains the original leak, and failing every run on that helps nobody.
+# Scope: files ADDED, COPIED, MODIFIED, RENAMED or TYPE-CHANGED by the PR or
+# push, not the whole tree — the history still contains the original leak, and
+# failing every run on that helps nobody. Renames count: a roster pasted into
+# x.sql and then renamed to x-old.sql must not pass as "only renamed". So does
+# a symlink replaced by a real file.
+#
+# It only blocks a merge if branch protection lists it as a required check.
 
 on:
   pull_request:
     branches: [main]
+  # A direct push to main never opens a PR, so scan pushes too.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   scan:
@@ -27,17 +39,123 @@ jobs:
 
       - name: Scan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # PR: the PR's own changes. Push: what this push added to main.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
 
-          files=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA")
-          [ -z "$files" ] && { echo "No added/modified files."; exit 0; }
+          # NUL-separated names: plain --name-only prints a Thai file name
+          # quoted with octal escapes, which then fails the [ -f ] test below
+          # and is skipped without being scanned.
+          list=$(mktemp)
+          zero=0000000000000000000000000000000000000000
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero" ] \
+             || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            # A new branch, or a force push whose old tip is gone: nothing to
+            # diff against, so scan every tracked file.
+            echo "No usable base commit; scanning every tracked file."
+            git ls-files -z > "$list"
+          # Three dots: only what the PR (or push) itself changed, not files
+          # that main changed since the branch was cut.
+          elif ! git diff -z --name-only --diff-filter=ACMRT "$BASE_SHA...$HEAD_SHA" > "$list"; then
+            echo "::error::Could not list the changed files ($BASE_SHA...$HEAD_SHA)."
+            exit 1
+          fi
+          [ -s "$list" ] || { echo "No added/modified files."; exit 0; }
+
+          # Email addresses that are not personal data:
+          #  - reserved example domains (RFC 2606 / 6761): example.com, .net,
+          #    .org and anything under .example, .test, .invalid, .localhost;
+          #  - SYSTEM_MAILBOXES, the project's own accounts: the P4P inbox that
+          #    receives submissions and the Drive owner. They appear in
+          #    config, and flagging them would fail every PR that touches
+          #    automation/config.ts;
+          #  - Google Drive's no-reply sender, which the inbox filter and its
+          #    tests match on;
+          #  - fake placeholders already used in comments, tests and SQL
+          #    examples.
+          #  Add an exact address here only if it is not a person's.
+          email_ok='@(([a-z0-9-]+\.)*example\.(com|net|org)|([a-z0-9-]+\.)+(example|test|invalid|localhost))$'
+          email_ok="$email_ok"'|^(sakhonmso|p4pskh)@gmail\.com$'
+          email_ok="$email_ok"'|^drive-shares-dm-noreply@google\.com$'
+          email_ok="$email_ok"'|^(dr@hosp\.com|x@y\.com|a@b\.co|someone@else\.com|new@email\.com)$'
+
+          # npm copies package maintainers' contact addresses into the
+          # "deprecated" notices of package-lock.json. Those lines come from
+          # the npm registry, not from us: they are blanked (not dropped, so
+          # the line numbers printed below stay right) and the rest of the
+          # file is scanned. $1 is the path in the repo, $2 the text to read.
+          email_source() {
+            case "$1" in
+              package-lock.json|*/package-lock.json) sed 's/.*"deprecated":.*//' "$2" ;;
+              *) cat "$2" ;;
+            esac
+          }
+
+          # A PDF is checked through its text. pdftotext (poppler-utils) is
+          # installed on the first PDF if the runner lacks it; a PDF that
+          # still cannot be read fails the check instead of passing unread.
+          pdf_text() {
+            if ! command -v pdftotext >/dev/null 2>&1; then
+              echo "Installing poppler-utils to read PDFs..." >&2
+              { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; } >/dev/null 2>&1 || true
+            fi
+            pdftotext -q -enc UTF-8 "$1" -
+          }
+
+          # Rule 4's roster shapes, matched byte by byte (grep -P under
+          # LC_ALL=C) so the result does not depend on the runner's locale.
+          # The old rule used the range [ก-๙], which GNU grep 3.11 rejects
+          # in C.UTF-8 ("Invalid collation character"); the error went to
+          # 2>/dev/null and every file counted 0.
+          th='(?:\xE0[\xB8\xB9][\x80-\xBF])'      # one Thai character
+          qt="[\"']"
+          # A field starts and ends on a Thai character, so it cannot end in
+          # the spaces a separator starts with: when it could, a header padded
+          # with 16 or more spaces before each comma made grep backtrack until
+          # it gave up on the file, which then counted 0.
+          fld="$qt?$th(?:[. ]*$th)*$qt?"          # นพ.สมชาย, 'ใจดี', "โสต ศอ นาสิก"
+          sep='[ \t]*[,;|\t][ \t]*'
+          num="$sep$qt?[-+]?[0-9]"                # a field that starts with a digit (a score)
+          ttl="(?:$th{1,4}\.)+[ \t]*"              # a title: นพ. พญ. ศ.นพ. (a space after or not)
+          nm="(?:$ttl)?$th{2,}[ \t]+$th{2,}"       # "first last", titled or not
+          # a) a name at the start of a line, after an optional list or table
+          #    marker (- * + > |, "12." or "3)", <tr><td>) or quote: a pasted
+          #    list, a Markdown or HTML table, a YAML list, a JS array;
+          roster="^[ \t]*(?:[-*+>|][ \t]*|[0-9]{1,3}[.)][ \t]*|(?:<t[rdh][^>]*>[ \t]*)+)?[(\"']?$nm"
+          # b) a row of 2-4 Thai fields at the start of a line (CSV, TSV, SQL
+          #    VALUES, JSON arrays), ending the line or followed by a number;
+          roster="$roster|^[ \t]*[(\[{]?[ \t]*$fld(?:$sep$fld){1,3}(?:$num|[ \t]*[)\]}]?[ \t]*[,;]?[ \t\r]*\$)"
+          # c) the same row opened mid-line and followed by a number, so a
+          #    one-line VALUES (...),(...) dump counts every row;
+          roster="$roster|[(\[{][ \t]*$fld(?:$sep$fld){1,3}$num"
+          # d) a person-name key with a Thai value (JSON, YAML, Python dicts),
+          #    or a plain "name" key whose value is two Thai words.
+          roster="$roster|$qt?(?:(?:first|last|given|family)(?:_?name)?|(?:full|sur)_?name|ชื่อ(?:-?สกุล)?|นามสกุล)$qt?[ \t]*[:=][ \t]*$qt$th"
+          roster="$roster|$qt?name$qt?[ \t]*[:=][ \t]*$qt(?:$th|\.){2,}[ \t]+$th{2,}"
+          # e) a name alone in a table cell mid-line (| 1 | name | 85 |, <td>);
+          roster="$roster|(?:\|[ \t]*|<td[^>]*>[ \t]*)$nm[ \t]*(?:\||</td>)"
+          # f) a name as the whole quoted value of any key (physician: "...");
+          roster="$roster|[a-z_][a-z0-9_]*$qt?[ \t]*[:=][ \t]*$qt$nm$qt"
+          # g) a quoted name followed by a number, or a number followed by a
+          #    name that ends its field (SQL VALUES, CSV with a number first);
+          roster="$roster|$qt$nm$qt$num"
+          roster="$roster|[0-9]$sep$qt?$nm(?=$qt|$sep|[ \t]*\r?\$)"
+          # h) a quoted titled name in an array, and a titled name followed by
+          #    a number (one-line arrays, log lines).
+          roster="$roster|[\[,][ \t]*$qt(?:$ttl)$th{2,}[ \t]+$th{2,}$qt"
+          roster="$roster|(?:$ttl)$th{2,}[ \t]+$th{2,}(?=[ \t]*[:=,;|\t][ \t]*$qt?[-+]?[0-9])"
+          # If the pattern stops working here (no -P, a grep change), fail
+          # rather than let every roster through as 0 rows.
+          if ! printf 'ทดสอบ ตัวอย่าง\n' | LC_ALL=C grep -qaP "$roster"; then
+            echo "::error::The roster pattern does not match on this runner (grep -P under LC_ALL=C)."
+            exit 1
+          fi
 
           fail=0
 
-          while IFS= read -r f; do
+          while IFS= read -r -d '' f; do
             [ -f "$f" ] || continue
 
             # Skip this workflow and the docs that necessarily discuss the
@@ -47,34 +165,80 @@ jobs:
               DATA_EXPOSURE_ANALYSIS.md|SECURITY_ANALYSIS.md) continue ;;
             esac
 
-            # 1. Tabular data files have no business being added at all.
-            case "$f" in
-              *.csv|*.xlsx|*.xls)
+            # 1. Tabular data files have no business being added at all, in
+            #    any spreadsheet format and any case (ROSTER.XLSX).
+            case "${f,,}" in
+              *.csv|*.tsv|*.xlsx|*.xlsm|*.xlsb|*.xls|*.ods|*.numbers)
                 echo "::error file=$f::Spreadsheet/CSV added. Roster data belongs in Supabase, not in this public repo."
                 fail=1
                 continue
                 ;;
             esac
 
-            # Only scan text.
-            file --mime "$f" | grep -q 'charset=binary' && continue
+            # Only scan text: a PDF through its extracted text, UTF-16 or
+            # UTF-32 text (Excel's "Unicode Text" export) converted to UTF-8
+            # first, as every pattern below is UTF-8; any other binary file
+            # (an image) is skipped.
+            src=$f
+            mime=$(file -b --mime "$f")
+            case "$mime" in
+              application/pdf*)
+                src=$(mktemp)
+                if ! pdf_text "$f" > "$src"; then
+                  echo "::error file=$f::PDF whose text could not be read, so it was not checked for personal data. Reports and rosters belong in Drive or Supabase, not in this public repo."
+                  fail=1
+                  rm -f "$src"
+                  continue
+                fi
+                ;;
+              *charset=utf-16*|*charset=utf-32*)
+                src=$(mktemp)
+                # The byte-order mark goes too, or the first row would not
+                # start at the start of its line.
+                if ! iconv -f "${mime##*charset=}" -t UTF-8 "$f" 2>/dev/null \
+                     | LC_ALL=C sed '1s/^\xEF\xBB\xBF//' > "$src"; then
+                  echo "::error file=$f::${mime##*charset=} text that could not be converted, so it was not checked for personal data."
+                  fail=1
+                  rm -f "$src"
+                  continue
+                fi
+                ;;
+              *charset=binary*)
+                continue
+                ;;
+            esac
 
-            # 2. Real-looking personal email addresses. Consumer domains are
-            #    the tell — institutional aliases and example.com are fine.
-            #
-            #    SYSTEM_MAILBOXES are the project's own accounts, not personal
-            #    data: the P4P inbox that receives submissions and the Drive
-            #    owner. They appear legitimately in config, and flagging them
-            #    would fail every PR that touches automation/config.js.
-            hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null \
-                   | grep -viE '^(sakhonmso|p4pskh)@gmail\.com$' | sort -u || true)
+            # 2. Email addresses, any domain: hospital and .go.th addresses
+            #    are as personal as gmail ones. Allowed: email_ok above. As
+            #    for LINE ids, only the line number and the first characters
+            #    are printed, so the public log does not repeat the address.
+            hits=$(email_source "$f" "$src" 2>/dev/null \
+                   | grep -anoiE '[a-z0-9._%+-]+@([a-z0-9-]+\.)+[a-z]{2,}' \
+                   | tr '[:upper:]' '[:lower:]' \
+                   | while IFS=: read -r n addr; do
+                       printf '%s\n' "$addr" | grep -qE "$email_ok" && continue
+                       user=${addr%%@*}
+                       echo "    line $n: ${user:0:3}..."
+                     done || true)
             if [ -n "$hits" ]; then
-              echo "::error file=$f::Personal email address(es) found. These are also the login allow-list; keep them in the dept_heads table."
-              echo "$hits" | sed 's/^/    /'
+              echo "::error file=$f::Email address(es) found. Personal addresses belong in Supabase (the dept_heads table is also the login allow-list), not in this public repo."
+              echo "$hits"
               fail=1
             fi
 
-            # 3. A physician roster in any file format.
+            # 3. LINE user ids: U followed by 32 hex digits. Each one names a
+            #    person's LINE account, so it lives in env vars and Supabase.
+            #    Only the line number and the first characters are printed, so
+            #    the public log does not repeat the id.
+            ids=$(grep -anoE '\bU[0-9a-f]{32}\b' "$src" 2>/dev/null \
+                  | sed -E 's/^([0-9]+):(U[0-9a-f]{4}).*/    line \1: \2.../' || true)
+            if [ -n "$ids" ]; then
+              echo "::error file=$f::LINE user id(s) found. Keep them in env vars or Supabase, not in this public repo."
+              echo "$ids"
+              fail=1
+            fi
+
+            # 4. A physician roster in any file format.
             #
             #    DENSITY, not presence. The first version of this rule asked
             #    only "does the file contain two Thai words AND the word
@@ -83,21 +247,33 @@ jobs:
             #    contains spaces, so every file carrying the department list
             #    matched. That would have failed essentially every PR.
             #
-            #    A real roster has one name per LINE START (CSV, TSV, SQL
-            #    values, a pasted table). Source code has Thai strings embedded
-            #    mid-line inside quotes and almost never at column 0. Measured:
-            #    the leaked 2569_01.csv has 185 such lines; main.js,
-            #    departments.ts and automation/index.js each have 0.
-            #    `grep -c` prints "0" AND exits 1 when there is no match, so
-            #    `|| echo 0` would append a SECOND zero and make the numeric
-            #    test below blow up with "integer expression expected".
-            names=$(grep -acE '^[[:space:]]*[("'"'"']?[ก-๙]{2,}[[:space:]]+[ก-๙]{2,}' "$f" 2>/dev/null || true)
-            [ -z "$names" ] && names=0
-            if [ "$names" -ge 20 ]; then
+            #    So it counts name-shaped ROWS (the shapes a-h above), with
+            #    grep -o so a one-line JSON or SQL dump counts every row, not
+            #    1. Source code has Thai word lists (months, headers) that are
+            #    3+ fields long, end in a comma, or sit mid-line without a
+            #    number, and do not count. Measured over every tracked file:
+            #    at most 11 in any source or test file; 25-name rosters in
+            #    each shape (a plain or titled list, "นพ.first,last,dept,score",
+            #    a Markdown or HTML table, a bullet or numbered list, SQL
+            #    VALUES, JSON objects, a one-line list of {'name': ...}, log
+            #    lines) give 25-50 (lib/__tests__/workflows.test.mjs).
+            #
+            #    A grep that fails on the file (exit 2: a backtracking limit,
+            #    a read error) fails the file: it was not checked.
+            counted=$(mktemp)
+            rc=0
+            LC_ALL=C grep -aoiP "$roster" "$src" > "$counted" 2>/dev/null || rc=$?
+            names=$(wc -l < "$counted")
+            rm -f "$counted"
+            if [ "$rc" -gt 1 ]; then
+              echo "::error file=$f::The roster check could not finish on this file (grep exit $rc), so it was not checked for a roster."
+              fail=1
+            elif [ "$names" -ge 20 ]; then
               echo "::error file=$f::Looks like a physician roster — $names name-shaped rows. Roster data belongs in Supabase."
               fail=1
             fi
-          done <<< "$files"
+            [ "$src" = "$f" ] || rm -f "$src"
+          done < "$list"
 
           if [ "$fail" -ne 0 ]; then
             echo ""

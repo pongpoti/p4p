@@ -173,66 +173,71 @@ on conflict (email) do nothing;
 
 -- Used by /verify/ BEFORE login: "is this email allowed to request a code?"
 -- Returns only a boolean, so the email list is never exposed to the client.
-create or replace function public.is_sender_allowlisted(p_email text)
-returns boolean
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  -- Denylist wins over everything (revocation).
-  select not exists (
-    select 1 from public.blocked_emails b
-    where lower(b.email) = lower(p_email)
-  ) and (
-    exists (
-      select 1 from public.physician_directory d
-      where lower(d.email) = lower(p_email) and d.active
-    ) or exists (
-      -- MATCHED senders only: an unmatched sender is a stranger who emailed the
-      -- P4P inbox, not a verified physician, and must not be allow-listed.
-      select 1 from public.sender_physician_match m
-      where lower(m.sender_email) = lower(p_email) and m.matched
-    )
-  );
-$$;
-
 -- Used by the RLS policies AFTER login: "is the current session's email allowed?"
-create or replace function public.is_current_user_allowlisted()
-returns boolean
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  select public.is_sender_allowlisted(auth.jwt() ->> 'email');
-$$;
+--
+-- These are the FIRST versions, for a project that has no `physicians` table
+-- yet. scripts/auth-rewrite-2026-08.sql (SUPABASE_MIGRATIONS.md step 14)
+-- replaces both with the physicians-based ones (physicians.active, and
+-- signed-out sessions refused). So once `physicians` exists they are left as
+-- they are: pasting this file again after step 14 must not bring the old
+-- directory/match rules back.
+do $allowlist$
+begin
+  if to_regclass('public.physicians') is not null
+     and to_regprocedure('public.is_sender_allowlisted(text)') is not null
+     and to_regprocedure('public.is_current_user_allowlisted()') is not null then
+    raise notice 'physicians exists: is_sender_allowlisted and is_current_user_allowlisted are left as step 14 made them';
+    return;
+  end if;
 
--- Called by /verify/ when an email is NOT allow-listed: record the attempt (with
--- the self-reported name) so an admin knows WHO to add. Never reveals anything.
--- Dropped-and-recreated because the signature gained p_name.
+  create or replace function public.is_sender_allowlisted(p_email text)
+  returns boolean
+  language sql
+  security definer
+  stable
+  set search_path = public
+  as $fn$
+    -- Denylist wins over everything (revocation).
+    select not exists (
+      select 1 from public.blocked_emails b
+      where lower(b.email) = lower(p_email)
+    ) and (
+      exists (
+        select 1 from public.physician_directory d
+        where lower(d.email) = lower(p_email) and d.active
+      ) or exists (
+        -- MATCHED senders only: an unmatched sender is a stranger who emailed the
+        -- P4P inbox, not a verified physician, and must not be allow-listed.
+        select 1 from public.sender_physician_match m
+        where lower(m.sender_email) = lower(p_email) and m.matched
+      )
+    );
+  $fn$;
+
+  create or replace function public.is_current_user_allowlisted()
+  returns boolean
+  language sql
+  security definer
+  stable
+  set search_path = public
+  as $fn$
+    select public.is_sender_allowlisted(auth.jwt() ->> 'email');
+  $fn$;
+end
+$allowlist$;
+
+-- log_access_request: /verify/ calls it when an email is NOT allow-listed, to
+-- record the attempt so an admin knows WHO to add. The 2-argument version
+-- this file used to create let any anon caller rename anyone's open
+-- request (audit finding F13, 2026-11); the only version now is the
+-- 3-argument one in scripts/audit-fixes-2026-11.sql PART 1.
 drop function if exists public.log_access_request(text);
-create or replace function public.log_access_request(p_email text, p_name text default null)
-returns void
-language sql
-security definer
-set search_path = public
-as $$
-  insert into public.access_requests (email, name, requested_at, request_count, resolved)
-  values (lower(p_email), nullif(trim(p_name), ''), now(), 1, false)
-  on conflict (email) do update
-    set name          = coalesce(nullif(trim(excluded.name), ''), access_requests.name),
-        requested_at  = now(),
-        request_count = access_requests.request_count + 1,
-        resolved      = false;
-$$;
+drop function if exists public.log_access_request(text, text);
 
 revoke all on function public.is_sender_allowlisted(text)   from public;
 revoke all on function public.is_current_user_allowlisted() from public;
-revoke all on function public.log_access_request(text, text) from public;
 grant execute on function public.is_sender_allowlisted(text) to anon, authenticated;
 grant execute on function public.is_current_user_allowlisted() to authenticated;
-grant execute on function public.log_access_request(text, text) to anon, authenticated;
 
 
 -- ----------------------------------------------------------------------------

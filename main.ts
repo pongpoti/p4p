@@ -21,11 +21,24 @@ const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 // The single LINE userId allowed into /admin/ (the roster CRUD dashboard,
-// see servePage-adjacent routes below). Not a secret in itself — a LINE
-// userId only identifies an account, it can't be used to authenticate as
-// one — so a hardcoded fallback is fine; ADMIN_LINE_USER_ID lets it be
-// overridden per-deployment without a code change.
-const ADMIN_LINE_USER_ID = process.env.ADMIN_LINE_USER_ID || "Ub5c3e37b54e59f479fbf450e2df60d18"
+// see servePage-adjacent routes below) and the /dashboard/ owner. Not a
+// secret — a LINE userId cannot authenticate as its account — but it is a
+// personal identifier, and this repository is public, so it lives only in
+// the environment. Unset means NO owner, not a default one: the "admin" bot
+// command answers nobody, the owner-only dashboard routes return 404, and
+// DASHBOARD_LINE_USER_IDS has nothing to fall back to. Set it in Vercel
+// before deploying (SUPABASE_MIGRATIONS.md, "Before deploying the 2026-11
+// audit fixes").
+const ADMIN_LINE_USER_ID = (process.env.ADMIN_LINE_USER_ID || "").trim()
+if (!ADMIN_LINE_USER_ID) {
+  console.error("[admin] ADMIN_LINE_USER_ID is not set — the \"admin\" login command and the " +
+    "dashboard's owner-only features are DISABLED")
+}
+// Fails closed: with no owner configured, no userId (not even a missing one)
+// is the owner.
+function isOwnerLineUserId(userId: string | undefined | null): boolean {
+  return Boolean(ADMIN_LINE_USER_ID) && userId === ADMIN_LINE_USER_ID
+}
 // Base URL used to build the one-time admin login link sent over LINE DM
 // (the webhook has no `req` to read a Host header from).
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL || "https://p4p-sakhonmso.vercel.app"
@@ -66,8 +79,8 @@ const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
 // so the id lives in one place — the env var scripts/setup-richmenu.mts
 // already requires — rather than being hardcoded in two.
 const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
-// Hardcoded fallback for the same reason ADMIN_LINE_USER_ID and
-// ADMIN_BASE_URL have one: a LIFF id is not a secret. This exact string is
+// Hardcoded fallback for the same reason ADMIN_BASE_URL has one: a LIFF id
+// is not a secret. This exact string is
 // already public in the rich menu's own `uri` action and in every copy of
 // this page's HTML. Making it a required env var bought nothing and cost a
 // silent failure — with it unset, liff.init() never runs, so the chat
@@ -166,9 +179,11 @@ function readSessionCookie(req: Request): SessionCookie | null {
     return { at: null, rt: raw }
   }
 }
-// Read a JWT's payload without verifying it (the token itself was already
-// validated by Supabase at /auth/session or the refresh call below — this is
-// just for reading claims out of a token we already trust).
+// Read a JWT's payload WITHOUT verifying it. Fit only for deciding when to
+// refresh (jwtExp below), never for identity or access decisions: the
+// session cookie is unsigned, so a cached access token's claims are whatever
+// the browser sent. Identity comes from verifiedUserEmail(), which asks
+// Supabase Auth.
 function jwtPayload(token: string): Record<string, any> {
   try {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")
@@ -305,7 +320,12 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
   const sess = readSessionCookie(req)
   if (!sess) return { at: null, reason: "no_session" }
 
-  let at = sess.at
+  // The cookie is unsigned, so a cached token that is not even JWT-shaped
+  // (three base64url segments) is not used at all: it is dropped and the
+  // refresh below decides, exactly as for an expired one. Without this, a
+  // token holding a character Node refuses in a header (a %7F, say) failed
+  // inside axios before any request was sent, which looked like an outage.
+  let at = sess.at && isJwtShaped(sess.at) ? sess.at : null
   // Refresh only when the cached access token is missing or within 60s of
   // expiry — so a normal browsing session refreshes ~once an hour, not per page.
   if (!at || jwtExp(at) < Date.now() / 1000 + 60) {
@@ -316,7 +336,7 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
         { headers: { apikey: SUPABASE_ANON, "Content-Type": "application/json" }, timeout: 8000 }
       )
       at = r.data && r.data.access_token
-      if (!at) throw new Error("no access_token in refresh response")
+      if (!at || !isJwtShaped(at)) throw new Error("no access_token in refresh response")
       setSessionCookie(res, at, r.data.refresh_token || sess.rt)
     } catch (e) {
       clearSessionCookie(res)
@@ -326,27 +346,80 @@ async function resolveAccessToken(req: Request, res: Response): Promise<Resolved
   return { at, reason: null }
 }
 
-// Single boolean gate check: is this session's email still allowed to be
-// here — active in `physicians` and, as of auth-rewrite-2026-08.sql, not
-// sitting on a revoked Supabase session either. Called with the USER'S
-// access token, not the anon key, and the RPC reads the email from the
-// caller's own JWT rather than taking one as a parameter — there is nothing
-// here for an unauthenticated caller to enumerate.
-async function isCurrentUserAllowlisted(accessToken: string): Promise<boolean> {
+// A JWT's shape: three base64url segments, nothing else. Says nothing about
+// whether the token is valid (only Supabase can), only that it can be sent.
+function isJwtShaped(token: string): boolean {
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)
+}
+
+// Whether a failed Supabase call is an outage rather than an answer: a 5xx,
+// or a network error that left no response (connection refused or reset,
+// DNS, timeout). Any 4xx — above all the 401 for a token whose signature or
+// expiry does not check out — is Supabase rejecting the request, and must
+// never be mistaken for a hiccup. Nor is any other error with no response:
+// axios also throws locally, before sending anything, for a request it
+// cannot make (ERR_INVALID_CHAR for a header holding a forbidden
+// character), and a hand-made cookie must not be able to pass for an outage.
+function isTransientSupabaseError(e: any): boolean {
+  const status = e && e.response && typeof e.response.status === "number" ? e.response.status : 0
+  if (status) return status >= 500
+  // Node and axios codes for a request that got no answer: the connection
+  // failed, was cut or timed out, or the name did not resolve.
+  const networkCodes = [
+    "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ESOCKETTIMEDOUT",
+    "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EPIPE",
+    "ERR_NETWORK", "ERR_SOCKET_CONNECTION_TIMEOUT",
+  ]
+  return Boolean(e && typeof e.code === "string" && networkCodes.includes(e.code))
+}
+
+// The gate check: is this session's email still allowed to be here — active
+// in `physicians` and, as of auth-rewrite-2026-08.sql, not sitting on a
+// revoked Supabase session either. Called with the USER'S access token, not
+// the anon key, and the RPC reads the email from the caller's own JWT rather
+// than taking one as a parameter — there is nothing here for an
+// unauthenticated caller to enumerate.
+//
+// "allowed" / "blocked" is the RPC's own answer. "invalid" means Supabase
+// refused the token itself (forged, or no longer valid), which callers treat
+// like an expired session rather than a revoked account.
+type GateVerdict = "allowed" | "blocked" | "invalid"
+async function checkAllowlist(accessToken: string): Promise<GateVerdict> {
   try {
     const r = await axios.post(
       SUPABASE_URL + "/rest/v1/rpc/is_current_user_allowlisted",
       {},
       { headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, timeout: 8000 }
     )
-    return r.data === true
+    return r.data === true ? "allowed" : "blocked"
   } catch (e: any) {
     console.error("[gate] is_current_user_allowlisted failed:",
       e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
-    // Fail open on a transient Supabase hiccup rather than locking out a
-    // whole hospital over a network blip — the same trade the old gate made.
-    // RLS is still the real data barrier regardless of what this returns.
-    return true
+    // Fail open ONLY on a transient Supabase outage rather than locking out
+    // a whole hospital over a network blip — the same trade the old gate
+    // made. A 401/403 (or any 4xx) is not a blip: the session cookie is
+    // unsigned and its cached access token is reused until its claimed
+    // expiry, so treating a rejected token as a hiccup let a hand-written
+    // cookie through. RLS is still the real data barrier for the page.
+    return isTransientSupabaseError(e) ? "allowed" : "invalid"
+  }
+}
+
+// The caller's email as Supabase Auth itself reports it for this access
+// token. GET /auth/v1/user checks the token's signature, expiry and session
+// server-side, so this — not the token's own claims — is where the
+// service-role routes take identity from. `transient` is set when Supabase
+// could not be asked; otherwise a null email means the token was refused.
+async function verifiedUserEmail(accessToken: string): Promise<{ email: string | null; transient: boolean }> {
+  try {
+    const r = await axios.get(SUPABASE_URL + "/auth/v1/user", {
+      headers: { apikey: SUPABASE_ANON, Authorization: "Bearer " + accessToken }, timeout: 8000,
+    })
+    const email = r.data && typeof r.data.email === "string" ? r.data.email.trim().toLowerCase() : ""
+    return { email: email || null, transient: false }
+  } catch (e: any) {
+    console.error("[gate] /auth/v1/user failed:", e.response ? e.response.status : e.message)
+    return { email: null, transient: isTransientSupabaseError(e) }
   }
 }
 
@@ -382,8 +455,15 @@ function servePage(name: string) {
     const { at, reason } = await resolveAccessToken(req, res)
     if (!at) return res.redirect(302, "/verify/?return=" + ret + "&reason=" + reason + "#")
 
-    const allowed = await isCurrentUserAllowlisted(at)
-    if (!allowed) {
+    const verdict = await checkAllowlist(at)
+    if (verdict === "invalid") {
+      // The token itself was refused. Same as a lapsed session: back to
+      // /verify/ with the return target, where silent LINE reauth can still
+      // resume a real physician's session without an OTP.
+      clearSessionCookie(res)
+      return res.redirect(302, "/verify/?return=" + ret + "&reason=expired#")
+    }
+    if (verdict === "blocked") {
       clearSessionCookie(res)
       return res.redirect(302, "/verify/?reason=blocked#")
     }
@@ -535,7 +615,8 @@ app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
 // the /admin/ cookie: /admin/ is the phone page and stays as it is. Only the
 // LINE userIds in DASHBOARD_LINE_USER_IDS get a session. That list lives in
 // the environment rather than here because this repository is public; the
-// fallback is the single admin id that is already hardcoded above.
+// fallback is ADMIN_LINE_USER_ID (also env-only), so with neither set nobody
+// gets a session.
 //
 // The channel secret is env-only (LINE_LOGIN_CHANNEL_SECRET). Without it the
 // login route refuses to start rather than signing sessions with a
@@ -545,6 +626,9 @@ const LINE_LOGIN_CHANNEL_SECRET = process.env.LINE_LOGIN_CHANNEL_SECRET || ""
 const DASHBOARD_LINE_USER_IDS = new Set(
   (process.env.DASHBOARD_LINE_USER_IDS || ADMIN_LINE_USER_ID).split(",").map((s) => s.trim()).filter(Boolean),
 )
+if (DASHBOARD_LINE_USER_IDS.size === 0) {
+  console.error("[dashboard] neither DASHBOARD_LINE_USER_IDS nor ADMIN_LINE_USER_ID is set — no one can sign in to the dashboard")
+}
 if (!LINE_LOGIN_CHANNEL_SECRET) {
   console.error("[dashboard] LINE_LOGIN_CHANNEL_SECRET is not set — dashboard login is DISABLED")
 }
@@ -620,7 +704,7 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 // append-only), so an admin cannot skip or alter an entry. Only the owner
 // (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
 // dashboard admins never see the tab and get 404 from its API.
-const isDashOwner = (sub: string): boolean => sub === ADMIN_LINE_USER_ID
+const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -1163,7 +1247,7 @@ app.get("/dashboard/api/access-requests", async (req: Request, res: Response) =>
   }
 })
 
-app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request, res: Response) => {
+app.post("/dashboard/api/access-requests/:email/:decision", express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
@@ -1175,11 +1259,17 @@ app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request,
     const open = await axios.get(SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=name,department&email=eq." +
       encodeURIComponent(email), { headers: SERVICE_HEADERS(), timeout: 8000 })
     if (!open.data.length) return res.status(404).json({ error: "not found" })
-    if (decision === "approve") await approveAccessRequest(email)
+    const opts = approveOptionsFrom(req.body)
+    if (decision === "approve") await approveAccessRequest(email, opts)
     else await resolveAccessRequest(email)
-    await audit(req, s, "access." + decision, { email, name: open.data[0].name || "", department: open.data[0].department || "" })
+    await audit(req, s, "access." + decision, {
+      email, name: (decision === "approve" && opts.name) || open.data[0].name || "", department: open.data[0].department || "",
+      ...(decision === "approve" && opts.name && opts.name !== open.data[0].name ? { requested_name: open.data[0].name || "" } : {}),
+      ...(decision === "approve" && opts.sameNameConfirmed ? { same_name_confirmed: true } : {}),
+    })
     res.json({ ok: true })
   } catch (e: any) {
+    if (e.status === 409) return res.status(409).json({ error: "name_taken", name: e.name_taken })
     console.error("[dashboard] access-request " + decision + " failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, decision + " failed") })
   }
@@ -1333,40 +1423,109 @@ app.get("/admin/api/access-requests", requireAdmin, async (req: Request, res: Re
   }
 })
 
-// Shared by /admin/ and the dashboard's รายชื่อ tab. Returns the request's
-// name (null when it had none) once the physician is allow-listed.
-async function approveAccessRequest(email: string): Promise<{ name: string | null; department: string | null }> {
-  const reqRow = await axios.get(
-    SUPABASE_URL + "/rest/v1/access_requests?email=eq." + encodeURIComponent(email) + "&select=name,department",
-    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 }
-  )
-  const name = (reqRow.data && reqRow.data[0] && reqRow.data[0].name) || null
-  const department = (reqRow.data && reqRow.data[0] && reqRow.data[0].department) || null
+// The normalisation enqueue_p4p_upload and my_p4p_identity use to match a
+// physicians.full_name to a roster row (lower case, runs of space as one).
+function normalisePhysicianName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase()
+}
 
-  // Upsert rather than insert: the email may already exist (e.g. a
-  // previously revoked physician re-requesting) — approving should
-  // re-activate that row, not fail on the primary key.
-  //
-  // department is omitted from the body entirely when the request never
-  // captured one (a request logged before this field existed) — merge-
-  // duplicates only overwrites columns present in the payload, so leaving
-  // it out preserves whatever department the physicians row already has
-  // rather than clobbering it with null.
-  const upsertBody: Record<string, unknown> = { email: email, full_name: name, source: "directory", active: true, updated_at: new Date().toISOString() }
-  if (department) upsertBody.department = department
-  await axios.post(
-    SUPABASE_URL + "/rest/v1/physicians?on_conflict=email",
-    upsertBody,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      },
-      timeout: 8000,
-    }
+// A name the admin typed in place of the request's own when approving:
+// cleaned like log_access_request cleans a requested name (control, zero-width
+// and bidi characters out, whitespace collapsed, capped at 100).
+function cleanApprovalName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const s = Array.from(raw, (ch) => {
+    const c = ch.codePointAt(0)!
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029) return " "
+    if ((c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff) return ""
+    return ch
+  }).join("").replace(/\s+/g, " ").trim().slice(0, 100).trim()
+  return s || null
+}
+
+interface ApproveOptions {
+  // The admin's own spelling of the name, used instead of the request's.
+  name?: string | null
+  // The admin has seen that another physician already has this name and
+  // says this is a different person with the same name.
+  sameNameConfirmed?: boolean
+}
+
+// Shared by /admin/ and the dashboard's รายชื่อ tab. Returns the request's
+// name (null when it had none) once the physician is allow-listed. Throws a
+// 404 StatusError when the email has no open request, and a 409 (code
+// "name_taken") when the name it would write already belongs to another
+// physician and the admin has not confirmed it.
+async function approveAccessRequest(email: string, opts: ApproveOptions = {}): Promise<{ name: string | null; department: string | null }> {
+  const reqRow = await axios.get(
+    SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&email=eq." + encodeURIComponent(email) + "&select=name,department",
+    { headers: SERVICE_HEADERS(), timeout: 8000 }
   )
+  if (!reqRow.data || !reqRow.data[0]) {
+    const err = new Error("no open access request for " + email) as StatusError
+    err.status = 404
+    throw err
+  }
+  const name = cleanApprovalName(opts.name) || (reqRow.data[0].name && String(reqRow.data[0].name).trim()) || null
+  const department = reqRow.data[0].department || null
+
+  // The request's name is self-reported (log_access_request is open to
+  // anon, so whoever asks first for an address sets the name on its
+  // request), while physicians.full_name is what enqueue_p4p_upload and
+  // my_p4p_identity match against the roster. So it may name a NEW
+  // physician, but never replaces an existing one's: a tampered name on a
+  // re-request would send that account's uploads to someone else's roster
+  // row, and a request with no name would blank it. An existing row only has
+  // a blank name filled. And a name another physician already has is not
+  // written until the admin has looked (audit F13): either it was typed to
+  // borrow that physician's roster row, or two physicians share a name, and
+  // only the admin can tell which.
+  //
+  // department is left out entirely when the request never captured one (a
+  // request logged before this field existed), so an existing row keeps the
+  // department it has rather than being clobbered with null.
+  const headers = { ...SERVICE_HEADERS(), "Content-Type": "application/json" }
+  const byEmail = SUPABASE_URL + "/rest/v1/physicians?email=eq." + encodeURIComponent(email)
+  const changes: Record<string, unknown> = { source: "directory", active: true, updated_at: new Date().toISOString() }
+  if (department) changes.department = department
+  const reactivate = (fillBlankName: boolean) => {
+    const patch = { ...changes }
+    if (fillBlankName && name) patch.full_name = name
+    return axios.patch(byEmail, patch, { headers, timeout: 8000 })
+  }
+
+  const existing = await axios.get(byEmail + "&select=full_name", { headers: SERVICE_HEADERS(), timeout: 8000 })
+  const writesName = Boolean(name) && !(existing.data && existing.data[0] && String(existing.data[0].full_name || "").trim())
+  if (writesName && !opts.sameNameConfirmed) {
+    const others = await axios.get(
+      SUPABASE_URL + "/rest/v1/physicians?select=full_name&email=neq." + encodeURIComponent(email),
+      { headers: SERVICE_HEADERS(), timeout: 8000 }
+    )
+    const wanted = normalisePhysicianName(name!)
+    if ((others.data || []).some((p: { full_name?: string | null }) => p.full_name && normalisePhysicianName(p.full_name) === wanted)) {
+      const err = new Error("another physician already has the name " + name) as StatusError & { code?: string; name_taken?: string }
+      err.status = 409
+      err.code = "name_taken"
+      err.name_taken = name!
+      throw err
+    }
+  }
+  if (existing.data && existing.data[0]) {
+    // e.g. a previously revoked physician re-requesting: re-activate the row.
+    await reactivate(!String(existing.data[0].full_name || "").trim())
+  } else {
+    const insertBody: Record<string, unknown> = { email, ...changes }
+    if (name) insertBody.full_name = name
+    try {
+      // A plain insert, not an upsert: a row that appears between the read
+      // above and this write must not be merged over.
+      await axios.post(SUPABASE_URL + "/rest/v1/physicians", insertBody, { headers, timeout: 8000 })
+    } catch (e: any) {
+      if (!(e.response && e.response.status === 409)) throw e
+      // Lost that race: the row exists now, and its name is not ours to set.
+      await reactivate(false)
+    }
+  }
   await resolveAccessRequest(email)
   return { name, department }
 }
@@ -1379,13 +1538,22 @@ async function resolveAccessRequest(email: string): Promise<void> {
   )
 }
 
-app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req: Request, res: Response) => {
+// The approve routes' optional JSON body: { name, confirmSameName }.
+function approveOptionsFrom(body: unknown): ApproveOptions {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
+  return { name: cleanApprovalName(b.name), sameNameConfirmed: b.confirmSameName === true }
+}
+
+app.post("/admin/api/access-requests/:email/approve", requireAdmin, express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
-    await approveAccessRequest(email)
+    await approveAccessRequest(email, approveOptionsFrom(req.body))
     res.json({ ok: true })
   } catch (e: any) {
+    // Already resolved (or never requested): nothing to approve.
+    if (e.status === 404) return res.status(404).json({ error: "no open request" })
+    if (e.status === 409) return res.status(409).json({ error: "name_taken", name: e.name_taken })
     console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, "approve failed") })
   }
@@ -1449,6 +1617,7 @@ interface ScoreModule {
   resolveBeYear(filename?: string | null, subject?: string | null, body?: string | null): number | null
   resolveBeMonthFromRows(rows: Record<string, unknown>[]): number | null
   resolveFilenameMonth(filename?: string | null): number | null
+  resolveFilenameYear(filename?: string | null): number | null
   resolveBeYearFromRows(rows: Record<string, unknown>[]): number | null
   resolveScore(rows: Record<string, unknown>[]): ScoreExtractResult
   isHighConfidence(method: string): boolean
@@ -1545,11 +1714,25 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   // res.json(). A 401 with a JSON body lets the page decide.
   const { at, reason } = await resolveAccessToken(req, res)
   if (!at) return res.status(401).json({ error: "no_session", reason })
-  if (!(await isCurrentUserAllowlisted(at))) {
-    clearSessionCookie(res)
-    return res.status(401).json({ error: "blocked" })
+  // Everything below runs with the service role, so the caller's email must
+  // come from Supabase Auth, not from the cookie's (unsigned) cached token.
+  const caller = await verifiedUserEmail(at)
+  if (caller.transient) {
+    // Nothing can be checked while Supabase is unreachable. Touch nothing:
+    // the row stays pending as enqueue left it, the worker scores it, and
+    // the physician gets the result in chat.
+    return res.json({ pending: true })
   }
-  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+  if (!caller.email) {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: "no_session", reason: "invalid" })
+  }
+  const verdict = await checkAllowlist(at)
+  if (verdict !== "allowed") {
+    clearSessionCookie(res)
+    return res.status(401).json(verdict === "blocked" ? { error: "blocked" } : { error: "no_session", reason: "invalid" })
+  }
+  const callerEmail = caller.email
 
   let row: QueueRow | null
   try {
@@ -1561,7 +1744,8 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   if (!row) return res.status(404).json({ error: "not_found" })
   // The id is an opaque uuid the browser just received from its own enqueue
   // call, not a secret — THIS check is the access control, mirroring how
-  // object_path ownership is checked at enqueue time.
+  // object_path ownership is checked at enqueue time. It holds only because
+  // callerEmail came from Supabase Auth (verifiedUserEmail above).
   if (String(row.email).toLowerCase() !== callerEmail) {
     return res.status(403).json({ error: "forbidden" })
   }
@@ -1658,7 +1842,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   } catch (e: any) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
-    return reject("other", "ไม่สามารถอ่านไฟล์ได้: " + e.message)
+    return reject("other", "ไม่สามารถอ่านไฟล์ได้ กรุณาตรวจสอบว่าไฟล์เปิดได้ใน Microsoft Excel และบันทึกเป็น .xlsx แล้วส่งใหม่อีกครั้ง")
   }
 
   // The same two corruption checks processBuffer() already runs.
@@ -1682,7 +1866,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   // whatever month the physician last reused this file for.
   const inferredMonth = score.resolveFilenameMonth(row.filename) ||
     (singleSheet ? null : score.resolveBeMonthFromRows(rows))
-  const inferredYear = score.resolveBeYear(row.filename || "", "", "") ||
+  const inferredYear = score.resolveFilenameYear(row.filename) ||
     (singleSheet ? null : score.resolveBeYearFromRows(rows))
   if ((inferredMonth && inferredMonth !== monthNum) || (inferredYear && inferredYear !== beYear)) {
     const inferredKey = String(inferredYear || beYear) + "_" + String(inferredMonth || monthNum).padStart(2, "0")
@@ -1738,16 +1922,42 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   const submittedAt = new Date(row.received_at).toISOString()
 
   try {
-    // saveScore(): the score column on the month's roster row. `Prefer:
-    // return=representation` so a filter that matched nothing surfaces here
-    // rather than being reported to the physician as saved.
+    // saveScore(): the score column on the month's roster row, through
+    // save_p4p_score() (scripts/audit-fixes-2026-11.sql PART 5), the same
+    // call the relay saves with: it writes only when no submission received
+    // after this one already has its score saved, so an email the relay
+    // saved a moment ago is never overwritten by this older upload.
     const rowUrl = SUPABASE_URL + "/rest/v1/" + encodeURIComponent(monthKey) + "?index=eq." + encodeURIComponent(String(row.roster_index))
-    const saved = await axios.patch(
-      rowUrl,
-      { score: value },
-      { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
-    )
-    if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+    let written: boolean | null = null
+    try {
+      const r = await axios.post(
+        SUPABASE_URL + "/rest/v1/rpc/save_p4p_score",
+        { p_month_key: monthKey, p_index: String(row.roster_index), p_score: value, p_received_at: submittedAt },
+        { headers: serviceHeaders({ "Content-Type": "application/json" }), timeout: 8000 }
+      )
+      if (r.data !== true && r.data !== false) throw new Error("save_p4p_score answered " + JSON.stringify(r.data))
+      written = r.data
+    } catch (e: any) {
+      // PGRST202: the function is not installed yet; the plain update below
+      // is what this route did before it.
+      if (!(e.response && e.response.data && e.response.data.code === "PGRST202")) throw e
+    }
+    if (written === false) {
+      // A newer submission is saved: the worker holds this one for the
+      // admin and tells the physician, as it does for a retried older email.
+      console.warn("[upload] a newer submission is already saved for queue row " + row.id + "; deferring")
+      return defer(method)
+    }
+    if (written === null) {
+      // `Prefer: return=representation` so a filter that matched nothing
+      // surfaces here rather than being reported to the physician as saved.
+      const saved = await axios.patch(
+        rowUrl,
+        { score: value },
+        { headers: serviceHeaders({ "Content-Type": "application/json", Prefer: "return=representation" }), timeout: 8000 }
+      )
+      if (!saved.data || saved.data.length === 0) throw new Error("no roster row matched index " + row.roster_index)
+    }
     // submitted_at is what the ranking reads for punctuality, so it keeps the
     // EARLIEST submission — same rule as automation's saveScore(). A re-upload
     // of a month updates the score above but never moves an on-time
@@ -1858,11 +2068,20 @@ app.post("/upload/receipt", express.json({ limit: "4kb" }), async (req: Request,
   // Same gate and ownership check as /upload/score, for the same reasons.
   const { at, reason: authReason } = await resolveAccessToken(req, res)
   if (!at) return res.status(401).json({ error: "no_session", reason: authReason })
-  if (!(await isCurrentUserAllowlisted(at))) {
+  const caller = await verifiedUserEmail(at)
+  // The page ignores this route's answer, so an outage just means no stamp
+  // and no alert for this one receipt.
+  if (caller.transient) return res.status(503).json({ error: "auth_unavailable" })
+  if (!caller.email) {
     clearSessionCookie(res)
-    return res.status(401).json({ error: "blocked" })
+    return res.status(401).json({ error: "no_session", reason: "invalid" })
   }
-  const callerEmail = String(jwtPayload(at).email || "").toLowerCase()
+  const verdict = await checkAllowlist(at)
+  if (verdict !== "allowed") {
+    clearSessionCookie(res)
+    return res.status(401).json(verdict === "blocked" ? { error: "blocked" } : { error: "no_session", reason: "invalid" })
+  }
+  const callerEmail = caller.email
 
   let row: QueueRow | null
   try {
@@ -2025,7 +2244,7 @@ const handleEvent = async (event: LineWebhookEvent): Promise<unknown> => {
     // Silent no-op for anyone else — never confirm or deny that "admin" is a
     // recognized command, so this can't be used to probe for the admin's
     // userId.
-    if (event.source.userId !== ADMIN_LINE_USER_ID) return Promise.resolve(null)
+    if (!isOwnerLineUserId(event.source.userId)) return Promise.resolve(null)
     // signAdminToken throws when the signing secrets are missing. Report that
     // to the admin instead of letting it reject the whole webhook — the
     // handler's catch would turn one unusable command into a 500 for every
@@ -2132,10 +2351,17 @@ const createStatusList = () => {
   return object
 }
 
+// The current month (0-11) and Buddhist-era year in Asia/Bangkok. Vercel runs
+// in UTC, where 00:00-06:59 on the 1st is still last month; shifting by +7h
+// and reading the UTC fields is what /dashboard/api/overview does too
+// (Thailand has no daylight saving).
+function bangkokMonthAndBeYear(nowMs: number): { month: number; beYear: number } {
+  const bkk = new Date(nowMs + 7 * 3600 * 1000)
+  return { month: bkk.getUTCMonth(), beYear: bkk.getUTCFullYear() + 543 }
+}
+
 const createStatusSublist = (i: number) => {
-  const now = new Date()
-  const month = now.getMonth()
-  const year = now.getFullYear() + 543
+  const { month, beYear: year } = bangkokMonthAndBeYear(Date.now())
   const iterator = month_iterator[month]
   const name = month_array[iterator[i][0]] + " " + (year + iterator[i][1])
   const color_hex = color_array[iterator[i][0]][1]

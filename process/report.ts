@@ -36,6 +36,18 @@ const {
   createDriveClient, driveListAll, listFolders, listExcelFiles,
 } = require('./lib') as typeof import('./lib');
 
+/**
+ * Log who is missing as counts per department. This runs every minute in a
+ * public Actions log, so it never prints a physician's name (audit F02).
+ */
+function logMissingByDept(rows: { department: string }[]): void {
+  const byDept = new Map<string, number>();
+  for (const p of rows) byDept.set(p.department || '-', (byDept.get(p.department || '-') ?? 0) + 1);
+  for (const [dept, n] of [...byDept].sort((a, b) => a[0].localeCompare(b[0], 'th'))) {
+    log(`    • ${dept}: ${n}`);
+  }
+}
+
 /** Escape a value before interpolating it into the PNG-render HTML template. */
 function escHtml(s: unknown): string {
   return String(s ?? '')
@@ -388,7 +400,7 @@ async function uploadReport(drive: drive_v3.Drive, buffer: Buffer): Promise<driv
       await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate: ${d.id}`, 'warn');
     }
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    log(`  [Drive] Overwriting "${fileName}"`);
     const res = await withRetry(() => drive.files.update({
       fileId: first.id!,
       requestBody: { name: fileName },
@@ -598,7 +610,7 @@ async function uploadPng(drive: drive_v3.Drive, buffer: Buffer, fileName: string
     if (existing.length > 0) {
       const [first, ...dupes] = existing;
       for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id! }));
-      log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+      log(`  [Drive] Overwriting "${fileName}"`);
       const res = await withRetry(() => drive.files.update({
         fileId: first.id!,
         requestBody: { name: fileName },
@@ -680,7 +692,7 @@ async function main(): Promise<void> {
       const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
       monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
       totalMissing += rows.length;
-      rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
+      logMissingByDept(rows);
       continue;
     }
     log(`  [Drive] ${driveNames.size} files`);
@@ -696,7 +708,7 @@ async function main(): Promise<void> {
     // Sort missing by name ascending (Thai locale)
     const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
     log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
-    rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
+    logMissingByDept(rows);
     monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
     totalMissing += rows.length;
   }
@@ -712,7 +724,10 @@ async function main(): Promise<void> {
   const buffer   = await buildExcel(monthGroups, runTime, allDeptSet);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
-  log(`\n✓ Excel saved : ${uploaded.webViewLink}`);
+  // No link and no file id: this log is public, and the report folder is
+  // shared by link until GOING_PRIVATE.md step 5 is done, so either one would
+  // open the list of physicians who have not sent their file.
+  log(`\n✓ Excel saved`);
 
   // Remove all existing PNG files in report folder before uploading new ones
   log('\n[PNG] Clearing existing PNG files in report folder…');
@@ -735,7 +750,7 @@ async function main(): Promise<void> {
     const html      = buildHtml(group, runTime);
     const pngBuffer = await renderPng(html);
     const up        = await uploadPng(drive, pngBuffer, pngFileName);
-    log(`    ✓ ${up.webViewLink}`);
+    log(`    ✓ uploaded`);
   }
 }
 

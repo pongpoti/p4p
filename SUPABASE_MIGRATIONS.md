@@ -14,6 +14,25 @@ are idempotent (`create or replace`, `create table if not exists`,
 `drop policy if exists` before `create policy`, etc.) — re-running an
 already-applied file is safe.
 
+## Before deploying the 2026-11 audit fixes (Vercel, not Supabase)
+
+Do this **before** the branch that removes the hard-coded owner LINE userId
+(audit F27) reaches production, or the owner is locked out:
+
+1. In Vercel → the p4p project → Settings → Environment Variables →
+   **Production**, check that `ADMIN_LINE_USER_ID` is set to the owner's
+   LINE userId (send "myid" to the bot to read it; it starts with "U").
+   The code no longer has a fallback: unset means the "admin" bot command
+   answers nobody, the dashboard's owner-only tabs (audit log, roster and
+   access requests, ตรวจสอบ) return 404, and nobody can sign in to
+   `/dashboard/`. The only sign is a `console.error` line in the Vercel logs.
+2. If more than the owner signs in to `/dashboard/`, check that
+   `DASHBOARD_LINE_USER_IDS` lists them all (comma-separated). Unset, it
+   falls back to `ADMIN_LINE_USER_ID` alone.
+3. Redeploy (a variable added after the last deployment only takes effect
+   on the next one), then send "admin" to the bot and open `/dashboard/` to
+   confirm both still work.
+
 ## Current, authoritative (run in this order)
 
 1. `automation/sql/p4p_submissions.sql` — `p4p_submissions` table + RLS.
@@ -23,7 +42,8 @@ already-applied file is safe.
 4. `automation/sql/bump_sender_match.sql` — atomic increment RPC for
    `sender_physician_match.email_count` (used by the live pipeline).
 5. `automation/sql/management_stipends.sql` — `management_stipends` table +
-   RLS + seed data. Replaces `process/process.js`'s previously-hardcoded
+   RLS (no seed rows since 2026-11: the rows are personal pay data and are
+   kept only in the table). Replaces `process/process.js`'s previously-hardcoded
    `MANAGEMENT_DATA`/`DEPT_HEAD_SET` (real physician names + compensation
    figures baked into source). Read by `process/process.js`'s
    `loadManagementStipends()`, once per run.
@@ -33,9 +53,10 @@ already-applied file is safe.
    entirely, and installs the `trg_secure_new_roster` event trigger so any
    *future* `CREATE TABLE public."YYYY_MM"` is automatically locked down
    the same way. Also creates `physician_directory`, `access_requests`,
-   `blocked_emails`, and the allow-list functions
-   (`is_sender_allowlisted`, `is_current_user_allowlisted`,
-   `log_access_request`).
+   `blocked_emails`, and the first allow-list functions
+   (`is_sender_allowlisted`, `is_current_user_allowlisted`) — only while
+   `physicians` does not exist yet, so pasting it again after step 14 does not
+   undo step 14. It no longer creates `log_access_request` (step 24 does).
 7. `scripts/provision-month-function.sql` — `provision_month(p_new, p_old)`,
    the function `provision-next-month.mjs` calls every month to create the
    next roster table. **Must be run AFTER step 6** — it relies on
@@ -44,12 +65,17 @@ already-applied file is safe.
    are `authenticated`-only with zero `anon` policies. Running this before
    step 6 would leave newly-created tables unprotected until step 6 is
    applied.
-8. `scripts/list-all-physicians.sql` — `list_all_physicians()` RPC (feeds
-   the `/verify/` physician-name dropdown).
+8. ~~`scripts/list-all-physicians.sql`~~ — **superseded, nothing to add.**
+   It used to create `list_all_physicians()` and grant it to `anon` (every
+   roster name to anyone, for a `/verify/` dropdown that no longer exists).
+   The file now only revokes and drops that function, like step 24's PART 4,
+   so running it is harmless. Audit F10, 2026-11.
 9. `scripts/bind-line-user.sql` + `scripts/line-user-id-columns.sql` +
    `scripts/line-bind-gate.sql` — LINE userId binding
    (`bind_line_user_id`, `record_bind_failure`,
-   `get_line_bind_gate_status`) and the `line_bind_attempts` table.
+   `get_line_bind_gate_status`) and the `line_bind_attempts` table. Retired
+   (see below); they no longer grant `bind_line_user_id` or
+   `get_line_bind_gate_status` to anyone, and step 24 drops both.
 10. `scripts/line-binding-status-view.sql` — admin view of binding status.
 11. `scripts/email-sent-log-setup.sql` — `email_sent_log` table + RLS
     (score-tracker dedup).
@@ -76,7 +102,8 @@ already-applied file is safe.
     replaces `notify_access_request()` (drops the Telegram approve/reject
     buttons — approval now happens in the `/admin/` dashboard).
 15. `scripts/access-request-department-2026-08.sql` — adds `department` to
-    `access_requests` and to what `log_access_request()` accepts/stores,
+    `access_requests` (the 3-argument `log_access_request()` that stores it
+    is now defined in step 24, audit F13),
     closing a gap where an admin-approved physician (as opposed to one
     auto-provisioned from a matched submission) landed in `physicians` with
     no department at all — the request form never asked for one before this.
@@ -102,11 +129,11 @@ already-applied file is safe.
     (`UPLOAD_VIA_LINE_DESIGN.md`): the `p4p-uploads` storage bucket and its
     single INSERT policy, the `p4p_upload_queue` table (two independent
     lifecycles — `status` for scoring, `archive_status` for the Drive copy),
-    and five functions: `enqueue_p4p_upload()`, `my_p4p_identity()`,
+    and three functions: `enqueue_p4p_upload()`, `my_p4p_identity()`,
     `my_p4p_uploads()` (all `authenticated`, all self-scoped from
-    `auth.jwt()`), plus `claim_p4p_score_fallback()` and
-    `claim_p4p_archive()` (`service_role` only — they exist as RPCs because
-    `FOR UPDATE SKIP LOCKED` is not expressible through PostgREST).
+    `auth.jwt()`). The two worker claim functions it used to define,
+    `claim_p4p_score_fallback()` and `claim_p4p_archive()`, are now in step
+    24 (audit F09, F17).
     Depends on step 6's `is_current_user_allowlisted()` and step 14's
     `physicians` table. Idempotent like the rest; safe to re-run after a fix.
     Read the file's own header before running it — it records exactly what
@@ -174,6 +201,43 @@ already-applied file is safe.
     Until it runs, the tab says it is not set up, workflow 2.2 builds exactly
     as before (no copy for the tab, Y9/W9 stay 0) and the relay's build
     dispatcher stays off.
+24. `scripts/audit-fixes-2026-11.sql` — **not applied yet; paste it.**
+    The database half of the 2026-11-10 code audit. Needs steps 14, 15 and
+    18 (not the review-tab files). Each PART is its own transaction, so it
+    can also be pasted one PART at a time; no backslashes, so it pastes
+    through chat. Safe to re-run.
+    - PART 1 (F13): `log_access_request(text, text, text)`, the only
+      version (anon). Cleans control characters, caps name and department
+      at 100, ignores a blank name or a malformed address, never overwrites
+      an open request's name or department, and writes nothing for an
+      active physician's address. A resolved request is opened again, with
+      the name given then, so a rejected or deactivated physician can ask
+      again.
+    - PART 2 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
+      `processing` for over 30 minutes while it has attempts left (cap 3),
+      and marks it `failed` / `stuck_processing` when it has none. A row put
+      back to `pending` after a failed attempt waits 5 minutes per attempt
+      before it is claimed again.
+    - PART 3 (F17): `claim_p4p_archive()` marks an older `archive_pending`
+      row `superseded` (new `archive_status` value) when a newer upload for
+      the same email and month is done or archived, so it never replaces
+      the newer file in Drive. Adds `object_deleted_at`, which the drain
+      stamps once it has deleted the uploaded object of a superseded or
+      stuck row.
+    - PART 4 (F10): revokes and drops `list_all_physicians()`,
+      `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
+    - PART 5 (stale retry): new table `p4p_score_saves` (service_role only)
+      and `save_p4p_score(text, text, double precision, timestamptz)`, which
+      the relay and `/upload/score` save every score through. It writes a
+      score only when no submission received later already has its score
+      saved for that roster row, so a retry in a later relay run cannot
+      write an older score over a newer one. Until this PART is in, both
+      fall back to the plain score update.
+    After it, run the check queries at the end of the file: anon must not
+    be able to execute any of the dropped functions, or read
+    `p4p_score_saves` or run `save_p4p_score`. The same release needs
+    `ADMIN_LINE_USER_ID` set in Vercel first — see "Before deploying the
+    2026-11 audit fixes" at the top of this file.
 
 ## Superseded — do NOT run
 
@@ -230,7 +294,8 @@ No need to run them on a fresh project; kept for history:
   service-role write), not a bearer token in `callback_data`
   (see SECURITY_ANALYSIS.md §2c).
 - `scripts/list-all-physicians.sql` — already unused by the app (see its own
-  in-file deprecation header); dropped in step 14's Block 6.
+  in-file deprecation header). It now only drops the function (step 8 above);
+  step 24's PART 4 does the same.
 
 ## Health check — catching this class of bug automatically
 

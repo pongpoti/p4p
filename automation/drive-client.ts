@@ -48,9 +48,23 @@ export interface DriveClient {
   listMonthFiles(date: string): Promise<Map<string, string>>;
 }
 
-export function createDriveClient(): DriveClient {
-  const auth  = createAuthClient();
-  const drive = google.drive({ version: "v3", auth });
+/**
+ * Of several same-named files in one folder, the one that is kept: the oldest
+ * by createdTime, ties broken by the smaller id. Every writer computes the
+ * same answer from the same listing, so two that raced each other agree on
+ * which file survives.
+ */
+export function pickDriveWinner<F extends { id?: string | null; createdTime?: string | null }>(files: F[]): F | undefined {
+  const at = (f: F) => {
+    const ms = f.createdTime ? Date.parse(f.createdTime) : NaN;
+    return Number.isNaN(ms) ? Infinity : ms;
+  };
+  return [...files].sort((a, b) => (at(a) - at(b)) || String(a.id ?? "").localeCompare(String(b.id ?? "")))[0];
+}
+
+/** @param api a googleapis Drive v3 client to use instead of the env-configured one (tests). */
+export function createDriveClient(api?: drive_v3.Drive): DriveClient {
+  const drive = api ?? google.drive({ version: "v3", auth: createAuthClient() });
 
   /** Escape a string for use inside a Drive API query (single-quote safe). */
   function driveEscape(s: string): string {
@@ -117,16 +131,18 @@ export function createDriveClient(): DriveClient {
     const media    = { mimeType, body: bufferToReadable(buffer) };
     const metadata = { name: fileName, parents: [folderId] };
 
-    // Check for an existing file with the same name in that folder
+    // Check for an existing file with the same name in that folder. If an
+    // earlier race left more than one, the kept one (pickDriveWinner) is the
+    // one replaced, the same file every writer settles on below.
     const existing = await drive.files.list({
       q        : `name='${driveEscape(fileName)}' and '${folderId}' in parents and trashed=false`,
-      fields   : "files(id, modifiedTime)",
-      pageSize : 2,
+      fields   : "files(id, createdTime)",
+      pageSize : 10,
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
     });
 
-    const existingFile = existing.data.files?.[0];
+    const existingFile = pickDriveWinner(existing.data.files ?? []);
 
     if (existingFile) {
       const res = await drive.files.update({
@@ -141,33 +157,47 @@ export function createDriveClient(): DriveClient {
     const res = await drive.files.create({
       requestBody: { ...metadata },
       media,
-      fields: "id, name, modifiedTime",
+      fields: "id, name, createdTime",
       supportsAllDrives: true,
     });
+    const own = { id: res.data.id!, createdTime: res.data.createdTime ?? null };
 
     // The list-then-create above is a check-then-act race: two overlapping
-    // runs (e.g. a live email arriving mid-backfill) can both see "no
-    // existing file" and both create one, leaving two files with the same
-    // name. Re-check right after creating and clean up any duplicate that
-    // shows up — this can't close the race window entirely (Drive has no
-    // atomic create-if-absent), but it stops duplicates from persisting.
+    // writers (two attachments of one message, a manual run beside the relay)
+    // can both see "no existing file" and both create one. Drive has no
+    // atomic create-if-absent, so re-check right after creating. Every writer
+    // agrees on one winner (pickDriveWinner); only a writer whose own new file
+    // lost moves its content into the winner (last write wins, as on the
+    // update path) and then trashes its OWN file. Nobody touches another
+    // writer's file, and nothing is deleted outright: a trashed copy can be
+    // restored from Drive's trash.
     try {
       const dupCheck = await drive.files.list({
         q        : `name='${driveEscape(fileName)}' and '${folderId}' in parents and trashed=false`,
-        fields   : "files(id)",
+        fields   : "files(id, createdTime)",
         pageSize : 10,
         supportsAllDrives: true,
         includeItemsFromAllDrives: true,
       });
-      const dupes = (dupCheck.data.files ?? []).filter((f) => f.id !== res.data.id);
-      for (const d of dupes) {
-        await drive.files.delete({ fileId: d.id!, supportsAllDrives: true });
+      const listed = dupCheck.data.files ?? [];
+      const all = listed.some((f) => f.id === own.id) ? listed : [...listed, own];
+      const winner = pickDriveWinner(all);
+      if (winner?.id && winner.id !== own.id) {
+        await drive.files.update({
+          fileId  : winner.id,
+          media   : { mimeType, body: bufferToReadable(buffer) },
+          fields  : "id",
+          supportsAllDrives: true,
+        });
+        await drive.files.update({ fileId: own.id, requestBody: { trashed: true }, supportsAllDrives: true });
+        return { fileId: winner.id, fileName, replaced: true };
       }
     } catch {
-      // Best-effort cleanup — never fail the upload over this.
+      // Best-effort cleanup — never fail the upload over this. At worst two
+      // copies remain, never none.
     }
 
-    return { fileId: res.data.id!, fileName, replaced: false };
+    return { fileId: own.id, fileName, replaced: false };
   }
 
   /**
@@ -210,6 +240,51 @@ export function createDriveClient(): DriveClient {
   }
 
   return { uploadFile, listMonthFiles };
+}
+
+// ── Transient errors ──────────────────────────────────────────────────────
+// Network-level failures a later attempt can get past (connection reset,
+// DNS hiccup, timeout).
+const TRANSIENT_NET_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EPIPE",
+  "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+]);
+// Drive answers some rate limits with 403 instead of 429.
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded"]);
+
+interface ErrorLike {
+  status?: unknown;
+  code?: unknown;
+  errors?: { reason?: unknown }[];
+  response?: { status?: unknown; data?: { error?: { errors?: { reason?: unknown }[] } } };
+  cause?: unknown;
+  message?: unknown;
+}
+
+/**
+ * Is this Drive (googleapis/gaxios) error one that may succeed if simply tried
+ * again: HTTP 408, 429, 5xx, a 403 rate limit, or a network failure? Anything
+ * else (a 403 permission error, a 404, a missing month folder, a bad
+ * workbook) is not, and retrying it would only repeat it.
+ */
+export function isTransientDriveError(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== "object" || depth > 3) return false;
+  const e = err as ErrorLike;
+  const numeric = (v: unknown): number => (typeof v === "number" ? v : typeof v === "string" && /^\d{3}$/.test(v) ? Number(v) : NaN);
+  const status = [e.status, e.response?.status, e.code].map(numeric).find((n) => !Number.isNaN(n));
+  if (status !== undefined) {
+    if (status === 408 || status === 429 || (status >= 500 && status <= 599)) return true;
+    if (status === 403) {
+      const reasons = [...(e.errors ?? []), ...(e.response?.data?.error?.errors ?? [])].map((x) => x?.reason);
+      return reasons.some((r) => typeof r === "string" && RATE_LIMIT_REASONS.has(r));
+    }
+    return false;
+  }
+  if (typeof e.code === "string" && TRANSIENT_NET_CODES.has(e.code)) return true;
+  if (typeof e.message === "string" && /socket hang up|network timeout/i.test(e.message)) return true;
+  // fetch wraps the network error: TypeError("fetch failed", { cause })
+  return isTransientDriveError(e.cause, depth + 1);
 }
 
 // ── Helper: convert Buffer to a Node.js Readable stream ───────────────────

@@ -4,23 +4,65 @@ name: "3.1 Manual · Email: read submission emails (backup)"
 # 1-always-on-process-line-uploads-and-emails.yml (automation/scripts/drain-uploads.ts). This used
 # to run on an hourly cron, which GitHub delayed by 4-6 hours under load.
 #
-# Manual only, and only for when the relay is down: run while the relay is
-# alive and both can read the same unread message at once and process it
-# twice (two replies, two score writes).
+# Manual only, and only for when the relay is down: two inbox readers at once
+# can both pick up the same unread message and process it twice (two replies,
+# two score writes, two Drive uploads). Two guards enforce that:
+#
+#  1. relay-check refuses to go on while relay 1 has any run queued or
+#     running.
+#  2. process then joins relay 1's concurrency group (upload-drain), so a
+#     relay run that starts meanwhile (its cron restarts a broken chain)
+#     waits until this job ends instead of reading the inbox alongside it.
+#
+# Why both: GitHub keeps only ONE pending run per concurrency group, and a new
+# pending run cancels the older one. Joining upload-drain while the relay is
+# alive would therefore cancel the relay's queued next run (the one its
+# hand-over just started) and break the chain. Checking first means this job
+# only joins the group when the relay has nothing queued to displace.
 on:
   workflow_dispatch:
-
-concurrency:
-  group: extract-email
-  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  relay-check:
+    name: Check the always-on relay is stopped
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read           # list relay 1's runs
+    steps:
+      - name: Refuse while relay 1 is queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELAY: 1-always-on-process-line-uploads-and-emails.yml
+        run: |
+          set -euo pipefail
+          # Unfinished = queued, waiting its turn in upload-drain, or running.
+          if ! alive=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$RELAY" --limit 30 \
+              --json status,url --jq '[.[] | select(.status != "completed")]'); then
+            echo "::error::Could not list the runs of $RELAY, so it may still be reading the inbox. Not reading it here."
+            exit 1
+          fi
+          n=$(jq length <<< "$alive")
+          if [ "$n" -gt 0 ]; then
+            echo "::error::Relay 1 has $n run(s) queued or running, and it already reads the inbox every minute. Running this as well would process the same email twice."
+            jq -r '.[] | "    \(.status): \(.url)"' <<< "$alive"
+            echo "Use this only while the relay is stopped: disable workflow 1 in the Actions tab,"
+            echo "cancel its runs, run this again, then enable 1 and press Run workflow on it."
+            exit 1
+          fi
+          echo "Relay 1 has no run queued or running; reading the inbox once."
+
   process:
+    needs: relay-check
     runs-on: ubuntu-latest
     timeout-minutes: 30       # kill if stuck (safety net)
+    # Relay 1's group (see the top of this file).
+    concurrency:
+      group: upload-drain
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: automation

@@ -81,7 +81,8 @@
 --  The single largest data exposure — list_all_physicians() returning all 250
 --  physician names to any unauthenticated caller — is an APPLICATION change,
 --  not a grant change. It cannot be revoked, because /verify/ genuinely calls
---  it pre-login. See Appendix B.
+--  it pre-login. See Appendix B. (UPDATE 2026-11: done — the app no longer
+--  calls it and scripts/audit-fixes-2026-11.sql PART 4 drops it.)
 --
 --  Idempotent. Ordered so nothing is left half-open between blocks.
 --
@@ -295,9 +296,17 @@ revoke all on function public.reject_access_request(text)          from public, 
 revoke all on function public.rls_auto_enable()                    from public, anon, authenticated;
 revoke all on function public.secure_new_roster()                  from public, anon, authenticated;
 revoke all on function public.notify_access_request()              from public, anon, authenticated;
-revoke all on function public.bind_line_user_id(text, text)        from public, anon;
 revoke all on function public.record_bind_failure()                from public, anon;
 revoke all on function public.is_current_user_allowlisted()        from public, anon;
+-- bind_line_user_id is dropped by scripts/audit-fixes-2026-11.sql PART 4 (and
+-- is already gone live). REVOKE on a missing function is an error that would
+-- roll this whole file back, so it is revoked only while it still exists.
+do $revoke_bind$
+begin
+  if to_regprocedure('public.bind_line_user_id(text, text)') is not null then
+    revoke all on function public.bind_line_user_id(text, text) from public, anon;
+  end if;
+end $revoke_bind$;
 
 -- Re-assert the intended grants (revoking from a role the function was granted
 -- to via default privileges does not disturb service_role's own grant, but
@@ -305,16 +314,31 @@ revoke all on function public.is_current_user_allowlisted()        from public, 
 grant execute on function public.provision_month(text, text)   to service_role;
 grant execute on function public.approve_access_request(text)  to service_role;
 grant execute on function public.reject_access_request(text)   to service_role;
-grant execute on function public.bind_line_user_id(text, text) to authenticated;
 grant execute on function public.record_bind_failure()         to authenticated;
 
 -- The pre-login surface. These MUST keep anon EXECUTE or /verify/ breaks;
 -- stated explicitly so the intent survives Block 2's event trigger if any of
 -- them is ever recreated with CREATE OR REPLACE.
-grant execute on function public.is_sender_allowlisted(text)      to anon, authenticated;
-grant execute on function public.log_access_request(text, text)   to anon, authenticated;
-grant execute on function public.list_all_physicians()            to anon, authenticated;  -- see Appendix B
-grant execute on function public.get_line_bind_gate_status(text)  to anon, authenticated;  -- see Appendix A
+grant execute on function public.is_sender_allowlisted(text)            to anon, authenticated;
+-- log_access_request(text, text, text) exists only once audit-fixes-2026-11.sql
+-- PART 1 (step 24) has run, and that PART grants it the same way. Until then
+-- the grant is skipped, so this file can be pasted before or after step 24.
+do $grant_request$
+begin
+  if to_regprocedure('public.log_access_request(text, text, text)') is not null then
+    grant execute on function public.log_access_request(text, text, text) to anon, authenticated;
+  else
+    raise notice 'log_access_request(text, text, text) does not exist yet: audit-fixes-2026-11.sql PART 1 creates and grants it';
+  end if;
+end $grant_request$;
+
+-- UPDATE 2026-11 (audit finding F10): the grants that stood here for
+-- list_all_physicians() (anon, see Appendix B), get_line_bind_gate_status(text)
+-- (anon, see Appendix A) and bind_line_user_id(text, text) (authenticated)
+-- are removed. All three are dropped (live per DATA_EXPOSURE_ANALYSIS.md
+-- section 5, and in source by scripts/audit-fixes-2026-11.sql PART 4); never
+-- grant them again. log_access_request is the 3-argument version from that
+-- file's PART 1; the 2-argument one no longer exists.
 
 
 -- ----------------------------------------------------------------------------
@@ -555,6 +579,14 @@ where n.nspname = 'public' order by objtype, grantor;
 --    tabs/CRLF                 -> stripped, whitespace collapsed
 --    malformed email           -> row not created at all
 --    blank name                -> does not wipe a previously recorded name
+--
+--  UPDATE 2026-11 (audit findings F10, F13): the hardened log_access_request
+--  described above was never written back into the repo, so the source still
+--  had the old body. It now lives in scripts/audit-fixes-2026-11.sql PART 1
+--  (same cleaning, plus: an open request's name and department are never
+--  overwritten), and PART 4 of that file does the revoke + drop below,
+--  uncommented. The rest of this appendix
+--  is kept as the record of how it got there.
 --
 --  ⚠️  THE FUNCTION IS STILL PRESENT AND STILL ANON-CALLABLE, ON PURPOSE.
 --  Production serves `main`, and the currently deployed /verify/ still calls

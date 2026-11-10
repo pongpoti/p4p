@@ -191,31 +191,19 @@ revoke all on function public.is_current_user_allowlisted() from public;
 grant execute on function public.is_sender_allowlisted(text) to anon, authenticated;
 grant execute on function public.is_current_user_allowlisted() to authenticated;
 
--- log_access_request unchanged (same table, same signature) — still how
--- /verify/ records a name+email for an admin to see when the email isn't
--- allow-listed yet. approve_token generation is dropped: approval now
--- happens in the admin dashboard (authenticated, service_role write),
--- not an anon-callable token-guessing surface. The column is left in place
--- (harmless) rather than risking a DDL error on a column something else
--- might still reference.
+-- log_access_request is still how /verify/ records a name+email for an admin
+-- to see when the email isn't allow-listed yet. approve_token generation is
+-- dropped: approval now happens in the admin dashboard (authenticated,
+-- service_role write), not an anon-callable token-guessing surface. The
+-- column is left in place (harmless) rather than risking a DDL error on a
+-- column something else might still reference.
+--
+-- The 2-argument version this block used to create let any anon caller
+-- rename anyone's open request (audit finding F13, 2026-11). The only
+-- version now is the 3-argument one in scripts/audit-fixes-2026-11.sql
+-- PART 1; this just makes sure the old overloads are gone.
 drop function if exists public.log_access_request(text);
-create or replace function public.log_access_request(p_email text, p_name text default null)
-returns void
-language sql
-security definer
-set search_path = public
-as $$
-  insert into public.access_requests (email, name, requested_at, request_count, resolved)
-  values (lower(p_email), nullif(trim(p_name), ''), now(), 1, false)
-  on conflict (email) do update
-    set name          = coalesce(nullif(trim(excluded.name), ''), access_requests.name),
-        requested_at  = now(),
-        request_count = access_requests.request_count + 1,
-        resolved      = false;
-$$;
-
-revoke all on function public.log_access_request(text, text) from public;
-grant execute on function public.log_access_request(text, text) to anon, authenticated;
+drop function if exists public.log_access_request(text, text);
 
 
 -- ----------------------------------------------------------------------------
@@ -292,7 +280,9 @@ $$;
 --   alter table public.access_requests drop column if exists approve_token;
 --
 --   -- the PII-leaking dropdown feed — already unused, see
---   -- scripts/list-all-physicians.sql and SECURITY_ANALYSIS.md §2a
+--   -- scripts/list-all-physicians.sql and SECURITY_ANALYSIS.md §2a.
+--   -- Now done for real (with get_line_bind_gate_status and
+--   -- bind_line_user_id) by scripts/audit-fixes-2026-11.sql PART 4.
 --   drop function if exists public.list_all_physicians();
 --
 --   -- superseded by physicians (data already migrated in Block 2)

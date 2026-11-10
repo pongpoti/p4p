@@ -2,24 +2,35 @@ name: "2.5 Monthly: update LINE menu month picker"
 
 # ── Triggers ────────────────────────────────────────────────────────────────
 on:
-  # Target: 06:00 Bangkok time (UTC+7) on the 1st of every month, so the LINE
-  # rich menu's month picker includes the new month first thing in the
-  # morning, instead of waiting for someone to re-run the script by hand.
+  # Keeps the LINE rich menu's month picker on the current Bangkok month: it
+  # shows this month and the five before it, so from the 1st of a month it
+  # must be rebuilt to include the new month.
   #
-  # Cron has no "last day of month" field, and 06:00 Bangkok on the 1st is
-  # 23:00 UTC on the LAST day of the PREVIOUS month (28th–31st depending on
-  # the month) — so this fires at 23:00 UTC on days 27–31 every month, and
-  # the "Skip unless tomorrow is the 1st" step below filters out every day
-  # except the actual last day.
+  # Twice EVERY day, not once a month: GitHub delays scheduled runs by hours
+  # and sometimes drops them (see 1-always-on-process-line-uploads-and-emails.yml).
+  # The old schedule had one useful tick a month (23:00 UTC on the last day,
+  # kept only if it still started before UTC midnight), so one dropped or late
+  # tick left last month's menu up for a whole month. Now each run first reads
+  # the live menu and rebuilds it only when it does not offer the current
+  # Bangkok month yet, so the other runs of the month change nothing.
+  #
+  #   23:07 UTC = 06:07 Bangkok, the old target time on the 1st.
+  #   05:07 UTC = 12:07 Bangkok, in case the morning run was missed.
   schedule:
-    - cron: '0 23 27-31 * *'
+    - cron: '7 23 * * *'
+    - cron: '7 5 * * *'
 
   # Allow manual runs (useful for testing or catching up after an outage) —
-  # always runs immediately, bypassing the last-day-of-month check above.
+  # always rebuilds immediately, skipping the check below.
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# One rebuild at a time: each one deletes the menu the previous one made.
+concurrency:
+  group: line-month-picker
+  cancel-in-progress: false
 
 jobs:
   update-month-picker:
@@ -27,15 +38,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Skip unless tomorrow is the 1st
+      - name: Skip if the menu already offers this month
         id: guard
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          tomorrow_day=$(date -u -d '+1 day' +%d)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$tomorrow_day" = "01" ]; then
+          set -uo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-          else
+            echo "Manual run: rebuilding."
+            exit 0
+          fi
+
+          # Current Bangkok month as the menu's sheet key (Buddhist year _ month).
+          ym=$(TZ=Asia/Bangkok date +%Y_%m)
+          cur="$(( ${ym%_*} + 543 ))_${ym#*_}"
+
+          # The month-picker alias points at the live menu; each month area's
+          # URI carries ?sheetname=<key>& (scripts/update-month-picker.mts).
+          auth="Authorization: Bearer $LINE_TOKEN"
+          id=$(curl -fsS --max-time 30 -H "$auth" https://api.line.me/v2/bot/richmenu/alias/month-picker \
+               | jq -r '.richMenuId // empty') || id=""
+          if [[ "$id" =~ ^richmenu-[0-9A-Za-z]+$ ]] \
+             && curl -fsS --max-time 30 -H "$auth" "https://api.line.me/v2/bot/richmenu/$id" \
+                | jq -e --arg s "sheetname=$cur&" 'any(.areas[]?; (.action.uri // "") | contains($s))' > /dev/null; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Not the eve of a new month (tomorrow is day $tomorrow_day) — skipping."
+            echo "The month picker already offers $cur; nothing to do."
+          else
+            # Not offered yet, or the menu could not be read: rebuild, which
+            # also reports a bad token or a LINE outage as a failed run.
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "The month picker does not offer $cur (or could not be read); rebuilding."
           fi
 
       - name: Checkout

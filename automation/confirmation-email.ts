@@ -17,6 +17,7 @@
 import type { gmail_v1 } from "googleapis";
 import { buildHtmlReply } from "./templates/reply.js";
 import { P4P_LABEL_NAME, archiveSentToLabel, type GmailClient } from "./gmail-client.js";
+import { errForLog } from "./log-safe.js";
 
 const THAI_MONTHS = [
   "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน",
@@ -102,10 +103,10 @@ export async function sendUploadConfirmation(gmail: GmailClient, to: string, dat
   try {
     sent = await sendConfirmationEmail(gmail, to, data);
   } catch (err) {
-    console.error(`│      ❌  Confirmation email to ${to} failed: ${err instanceof Error ? err.message : err}`);
+    console.error(`│      ❌  Confirmation email failed: ${errForLog(err)}`);
     return false;
   }
-  console.log(`│      📧  Confirmation email sent to ${to}`);
+  console.log(`│      📧  Confirmation email sent`);
   await archiveSentToLabel(gmail, sent, P4P_LABEL_NAME);
   return true;
 }

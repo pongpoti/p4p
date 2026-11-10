@@ -48,7 +48,6 @@ const fs                = require('fs') as typeof import('fs');
 const os                = require('os') as typeof import('os');
 const path              = require('path') as typeof import('path');
 const { spawnSync }     = require('child_process') as typeof import('child_process');
-const ExcelJS           = require('exceljs') as typeof import('exceljs');
 const {
   log, sleep, withRetry, stripExt, normaliseName,
   createAuth, createDriveClient, driveListAll, listFolders, listExcelFiles,
@@ -60,6 +59,7 @@ const {
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
+const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
 type ReviewInput = import('./review-build').ReviewInput;
 type DocInfo = import('./review-build').DocInfo;
 
@@ -318,7 +318,7 @@ async function uploadFileToDrive(
       await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate id: ${d.id}`, 'warn');
     }
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    log(`  [Drive] Overwriting "${fileName}"`);
     const res = await withRetry(() => drive.files.update({
       fileId: first.id!,
       requestBody: { name: fileName },
@@ -404,220 +404,32 @@ function listsMatch(driveNames: string[], supabasePersons: SupabasePerson[]): bo
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
     const setSB    = new Set(normSB);
     const setDrive = new Set(normDrive);
-    normDrive.forEach(n => { if (!setSB.has(n))    log(`    ✗ Drive but not SB: "${n}"`, 'warn'); });
-    normSB.forEach(n   => { if (!setDrive.has(n)) log(`    ✗ SB but not Drive: "${n}"`, 'warn'); });
+    // Counts and roster row numbers only: this log is public, and a Drive
+    // file is named after its physician.
+    const driveOnly = normDrive.filter(n => !setSB.has(n)).length;
+    if (driveOnly) log(`    ✗ ${driveOnly} Drive file(s) match no roster row`, 'warn');
+    supabasePersons.forEach((p, i) => { if (!setDrive.has(normSB[i]!)) log(`    ✗ roster row #${p.index ?? '?'} has no Drive file`, 'warn'); });
     return false;
   }
   const s1 = [...normDrive].sort(), s2 = [...normSB].sort();
-  let ok = true;
-  for (let i = 0; i < s1.length; i++) {
-    if (s1[i] !== s2[i]) { log(`  [Compare] Mismatch: "${s1[i]}" ≠ "${s2[i]}"`, 'warn'); ok = false; }
-  }
-  return ok;
+  let mismatches = 0;
+  for (let i = 0; i < s1.length; i++) if (s1[i] !== s2[i]) mismatches++;
+  if (mismatches) log(`  [Compare] ${mismatches} name(s) differ between Drive and the roster`, 'warn');
+  return mismatches === 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 4.5 — Fill missing scores from Excel (ported from claude-analyst.js)
+//  STEP 4.5 — Fill missing scores from Excel
 // ═══════════════════════════════════════════════════════════════════
+// The score is read by the submission pipeline's own extractor
+// (lib/p4p-score.ts, via ./fill-score.ts), so a filled score is the one the
+// doctor's email would have saved.
 
-// ── Score extraction constants ────────────────────────────────────
-const GRAND_TOTAL_LABELS = [
-  'รวมแต้มทั้งหมด', 'รวมคะแนนทั้งหมด', 'รวมทั้งสิ้น', 'ยอดรวมทั้งหมด',
-  'รวมทั้งหมด', 'คะแนนรวมทั้งหมด',
-];
-const SUBTOTAL_LABELS = [
-  'รวมคะแนน', 'รวมแต้ม', 'คะแนนรวม', 'ผลรวม', 'รวม',
-];
-const TOTAL_LABELS = [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS];
-
-function isYearLike(n: number): boolean {
-  if (n >= 1900 && n <= 2099) return true;
-  if (n >= 2400 && n <= 2699 && Number.isInteger(n)) return true;
-  return false;
-}
-
-function toNum(val: unknown): number {
-  if (val === null || val === undefined || val === '') return NaN;
-  if (typeof val === 'number')  return val;
-  if (typeof val === 'boolean') return NaN;
-  const s = String(val).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return NaN;
-  return parseFloat(s.replace(/,/g, ''));
-}
-
-function numsFromText(val: unknown): number[] {
-  const s = String(val ?? '').replace(/,/g, '');
-  return [...s.matchAll(/\d+(?:\.\d+)?/g)]
-    .map(m => parseFloat(m[0]))
-    .filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
-}
-
-function collectScoreCandidates(rows: Record<string, unknown>[]): number[] {
-  const results: number[] = [];
-  for (const row of rows) {
-    for (const val of Object.values(row)) {
-      const n = toNum(val);
-      if (isNaN(n) || n <= 0 || isYearLike(n)) continue;
-      results.push(n);
-    }
-  }
-  return results;
-}
-
-interface ScoreResult {
-  score: number | null;
-  method: string;
-}
-
-function extractScoreFromRows(rows: Record<string, unknown>[]): ScoreResult {
-  if (!Array.isArray(rows) || rows.length === 0) return { score: null, method: 'no rows' };
-
-  // Pass 1: grand-total labels (search all columns — these never appear as column headers)
-  const grandCandidates: number[] = [];
-  for (const row of rows) {
-    const allValues = Object.values(row).map(v => String(v ?? ''));
-    const labelCells = allValues.filter(s => GRAND_TOTAL_LABELS.some(lbl => s.includes(lbl)));
-    if (labelCells.length > 0) {
-      grandCandidates.push(...collectScoreCandidates([row]));
-      grandCandidates.push(...labelCells.flatMap(s => numsFromText(s)));
-    }
-  }
-  if (grandCandidates.length > 0) {
-    return { score: Math.max(...grandCandidates), method: 'grand-total label row' };
-  }
-
-  // Pass 2: sub-total labels (first 3 columns only — avoids col-header false matches)
-  const subCandidates: number[] = [];
-  for (const row of rows) {
-    const firstThree = ['col_1', 'col_2', 'col_3'].map(k => String(row[k] ?? ''));
-    if (firstThree.some(s => SUBTOTAL_LABELS.some(lbl => s.includes(lbl)))) {
-      subCandidates.push(...collectScoreCandidates([row]));
-    }
-  }
-  if (subCandidates.length > 0) {
-    const subMax  = Math.max(...subCandidates);
-    const allNums = collectScoreCandidates(rows);
-    const sheetMax = allNums.length > 0 ? Math.max(...allNums) : subMax;
-    if (sheetMax > subMax) return { score: sheetMax, method: 'largest in sheet (exceeds sub-total rows)' };
-    return { score: subMax, method: 'sub-total label row' };
-  }
-
-  // Pass 3: largest valid number in the whole sheet
-  const all = collectScoreCandidates(rows);
-  if (all.length > 0) return { score: Math.max(...all), method: 'largest in sheet' };
-
-  // Pass 4: weight × day-count (last resort for formula-only sheets)
-  let computedTotal = 0;
-  for (const row of rows) {
-    const isLabel = ['col_1', 'col_2', 'col_3']
-      .some(k => TOTAL_LABELS.some(lbl => String(row[k] ?? '').includes(lbl)));
-    if (isLabel) continue;
-    const weightRaw = row['col_3'];
-    if (weightRaw == null) continue;
-    let weight = typeof weightRaw === 'number'
-      ? weightRaw
-      : parseFloat(String(weightRaw).replace(/,/g, '').match(/^(\d+\.?\d*)/)?.[1] ?? 'NaN');
-    if (isNaN(weight) || weight <= 0) continue;
-    let daySum = 0;
-    for (let d = 6; d <= 36; d++) {
-      const v = toNum(row[`col_${d}`]);
-      if (!isNaN(v) && v > 0) daySum += v;
-    }
-    if (daySum > 0) computedTotal += weight * daySum;
-  }
-  if (computedTotal > 0) return { score: computedTotal, method: 'weight × day-count' };
-
-  return { score: null, method: 'no candidates found' };
-}
-
-function resolveScore(rows: Record<string, unknown>[]): ScoreResult {
-  const { score: jsScore, method: jsMethod } = extractScoreFromRows(rows);
-
-  const isGrandRow = (row: Record<string, unknown>) =>
-    Object.values(row).some(v => GRAND_TOTAL_LABELS.some(lbl => String(v ?? '').includes(lbl)));
-  const isSubRow = (row: Record<string, unknown>) =>
-    ['col_1', 'col_2', 'col_3'].some(k => SUBTOTAL_LABELS.some(lbl => String(row[k] ?? '').includes(lbl)));
-  const rowNums = (row: Record<string, unknown>) =>
-    Object.values(row).map(toNum).filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
-
-  // Detect: grand-total label row present but holds no numbers (uncached formula)
-  const grandRowEmpty = rows.some(row => isGrandRow(row) && rowNums(row).length === 0);
-  if (!grandRowEmpty) return { score: jsScore, method: jsMethod };
-
-  const populated = rows.filter(r => isSubRow(r) && rowNums(r).length > 0);
-  const empty     = rows.filter(r => isSubRow(r) && rowNums(r).length === 0);
-
-  // Tier 1: sum max from each populated sub-total row
-  const subtotalSum = populated.reduce((s, r) => s + Math.max(...rowNums(r)), 0);
-
-  // Tier 2: when some sub-totals also uncached, sum score column from data rows
-  let dataRowSum = 0;
-  if (populated.length > 0 && empty.length > 0) {
-    let scoreColIndex = -1;
-    for (const row of populated) {
-      const indices = Object.keys(row)
-        .filter(k => /^col_\d+$/.test(k) && !isNaN(toNum(row[k])) && toNum(row[k]) > 0)
-        .map(k => parseInt(k.slice(4)));
-      if (indices.length > 0) scoreColIndex = Math.max(scoreColIndex, Math.max(...indices));
-    }
-    if (scoreColIndex > 0) {
-      const scoreColKey = `col_${scoreColIndex}`;
-      for (const row of rows) {
-        if (isSubRow(row) || isGrandRow(row)) continue;
-        const n = toNum(row[scoreColKey]);
-        if (!isNaN(n) && n > 0 && !isYearLike(n)) dataRowSum += n;
-      }
-    }
-  }
-
-  const best = Math.max(subtotalSum, dataRowSum);
-  if (best > 0 && best > (jsScore ?? 0)) {
-    const method = dataRowSum >= subtotalSum
-      ? 'sum of score-column data rows (sub-totals partially uncached)'
-      : 'sum of sub-total rows (grand-total formula uncached)';
-    return { score: best, method };
-  }
-  return { score: jsScore, method: jsMethod };
-}
-
-/** Convert an Excel buffer to the { col_1, col_2, … } row format used by resolveScore */
-async function excelToRows(buffer: Buffer): Promise<Record<string, unknown>[]> {
-  const wb = new ExcelJS.Workbook();
-  // exceljs's bundled types predate Node 22's generic `Buffer<ArrayBufferLike>`
-  // — a real Buffer at runtime, just a structural mismatch against the old type.
-  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
-  const ws = wb.worksheets[0];
-  if (!ws) return [];
-
-  const rows: Record<string, unknown>[] = [];
-  ws.eachRow({ includeEmpty: false }, row => {
-    const obj: Record<string, unknown> = {};
-    row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-      let val: unknown = cell.value;
-      if (val !== null && typeof val === 'object') {
-        const v = val as Record<string, unknown>;
-        if (val instanceof Date)           val = val.toISOString();
-        else if (v.richText)               val = (v.richText as { text: string }[]).map(r => r.text).join('');
-        else if (v.result !== undefined) {
-          val = v.result;
-          // result itself can be a Date (date formula) or error object {error:'#REF!'}
-          if (val instanceof Date)                          val = val.toISOString();
-          else if (val !== null && typeof val === 'object') val = null;
-        }
-        else if (v.formula !== undefined) val = null;  // formula with no cached result
-        else if (v.text !== undefined)    val = v.text;
-        else                               val = String(val);
-      }
-      obj[`col_${colNum}`] = val;
-    });
-    if (Object.values(obj).some(v => v !== null && v !== undefined && v !== '')) {
-      rows.push(obj);
-    }
-  });
-  return rows;
-}
-
-/** Step 4.5 — for each person with score=null, extract sum score from their Drive Excel */
+/**
+ * Step 4.5 — for each person with score=null, read the score from their
+ * Drive workbook with the pipeline's extractor and save it. Logged by roster
+ * index, never by name or score: these logs are public.
+ */
 async function fillMissingScores(
   drive: drive_v3.Drive,
   driveFiles: DriveFile[],
@@ -630,7 +442,7 @@ async function fillMissingScores(
     log('  [Score] All persons already have scores');
     return;
   }
-  log(`  [Score] ${nullScorePersons.length} person(s) with null score — extracting from Excel…`);
+  log(`  [Score] ${nullScorePersons.length} person(s) with null score — reading their Excel…`);
 
   const driveMap: Record<string, DriveFile> = {};
   for (const file of driveFiles) {
@@ -638,41 +450,46 @@ async function fillMissingScores(
   }
 
   let updated = 0;
+  const leftEmpty = (person: SupabasePerson, why: string): void =>
+    log(`  [Score] ⚠ row #${person.index ?? '?'}: score left empty for an admin — ${why}`, 'warn');
   for (const person of nullScorePersons) {
-    const normName = normaliseName(person.fullname);
-    const file = driveMap[normName];
+    const file = driveMap[normaliseName(person.fullname)];
     if (!file) {
-      log(`  [Score] ⚠ No Drive file for "${normName}" — skipping`, 'warn');
+      leftEmpty(person, 'no Drive file');
       continue;
     }
-    log(`  [Score] ↓ ${person.fullname}`);
+    if (person.index === null) {
+      leftEmpty(person, 'no roster index');
+      continue;
+    }
     try {
       const buffer = await downloadFile(drive, file.id!);
-      const rows   = await excelToRows(buffer);
-      const { score, method } = resolveScore(rows);
-      if (score === null || score <= 0) {
-        log(`  [Score] ⚠ "${normName}" — could not extract (${method})`, 'warn');
+      const { score, method, write } = await statedScoreFromWorkbook(buffer);
+      if (score === null) {
+        leftEmpty(person, `no score found (${method})`);
         continue;
       }
-      log(`  [Score]   → ${score.toFixed(2)}  (${method})`);
+      if (!write) {
+        leftEmpty(person, `not saved (${method})`);
+        continue;
+      }
 
-      if (person.index !== null) {
-        const { error } = await supabase
-          .from(monthKey)
-          .update({ [SB.score]: score })
-          .eq(SB.index, person.index);
-        if (error) {
-          log(`  [Score] ⚠ Supabase update failed for "${normName}": ${error.message}`, 'warn');
-        } else {
-          person.score = score;  // keep sbData consistent for Step 5+
-          updated++;
-        }
+      const { error } = await supabase
+        .from(monthKey)
+        .update({ [SB.score]: score })
+        .eq(SB.index, person.index);
+      if (error) {
+        log(`  [Score] ⚠ row #${person.index}: Supabase update failed: ${error.message}`, 'warn');
+      } else {
+        log(`  [Score] row #${person.index} → saved  (${method})`);
+        person.score = score;  // keep sbData consistent for Step 5+
+        updated++;
       }
     } catch (err: any) {
-      log(`  [Score] ⚠ Error for "${normName}": ${err.message}`, 'warn');
+      log(`  [Score] ⚠ row #${person.index}: ${err.message}`, 'warn');
     }
   }
-  log(`  [Score] ✓ ${updated}/${nullScorePersons.length} scores extracted and saved`);
+  log(`  [Score] ✓ ${updated}/${nullScorePersons.length} scores read and saved; ${nullScorePersons.length - updated} left empty`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -712,9 +529,15 @@ async function mergeAndUpload(
   }));
   filesWithName.sort((a, b) => sortByDeptThenName(a, b, deptMap));
 
-  log('\n  [Merge] Sorted order:');
-  filesWithName.forEach((f, i) =>
-    log(`    ${String(i+1).padStart(2)}. ${f.origName.padEnd(32)} [${deptMap[f.normName] ?? '?'}]`));
+  // Positions and departments only: this log is public, and each Drive file
+  // is named after its physician.
+  const perDept = new Map<string, number>();
+  for (const f of filesWithName) {
+    const d = deptMap[f.normName] ?? '?';
+    perDept.set(d, (perDept.get(d) ?? 0) + 1);
+  }
+  log(`\n  [Merge] ${filesWithName.length} file(s) in department order: ` +
+    [...perDept].map(([d, n]) => `${d} ${n}`).join(', '));
 
   // Create temp directory for this run
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p4p_merge_'));
@@ -731,8 +554,8 @@ async function mergeAndUpload(
     const docs = new Map<string, DocInfo>();
 
     // Download each file into the temp directory
-    for (const file of filesWithName) {
-      log(`\n  [Merge] ↓ ${file.origName}`);
+    for (const [i, file] of filesWithName.entries()) {
+      log(`\n  [Merge] ↓ file ${i + 1}/${filesWithName.length}`);
       const buffer   = await downloadFile(drive, file.id!);
       const filePath = path.join(tmpDir, `${file.id}.xlsx`);
       fs.writeFileSync(filePath, buffer);
@@ -757,7 +580,7 @@ async function mergeAndUpload(
           const a = await review.analyseDoctorFile(buffer);
           if (!docs.has(file.normName)) docs.set(file.normName, { sheetName, ...a });
         } catch (err: any) {
-          log(`  [Merge] ⚠ could not read "${file.origName}" for the review tab: ${err.message}`, 'warn');
+          log(`  [Merge] ⚠ could not read file ${i + 1} for the review tab: ${err.message}`, 'warn');
         }
       }
     }
@@ -772,7 +595,8 @@ async function mergeAndUpload(
     const outputPath   = path.join(tmpDir, 'merged.xlsx');
     fs.writeFileSync(manifestPath, JSON.stringify({ files: manifestEntries }, null, 2), 'utf8');
 
-    // Invoke Python merge script
+    // Invoke Python merge script. Its output names sheets by number, never
+    // by their (physician) names, so it can go to this public log.
     const scriptPath = path.join(__dirname, 'merge.py');
     log('\n  [Merge] Running Python/openpyxl merge…');
     const py = spawnSync(
@@ -790,7 +614,9 @@ async function mergeAndUpload(
     const sheetCnt = manifestEntries.length;
     log(`\n  [Merge] Uploading "${name}" — ${sheetCnt} sheets…`);
     const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
-    log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
+    // No link and no file id: this log is public and the folder may be
+    // shared by link, so either one would open every physician's sheet.
+    log(`  [Merge] ✓ uploaded`);
     return { uploaded, buffer: buf, docs };
 
   } finally {
@@ -1360,7 +1186,7 @@ async function buildDeptSheets(
       const rowNum  = rowNumMap[nameKey];
       const r       = D + i;
 
-      if (rowNum == null) { log(`  [SK03] ⚠ row_num missing for "${nameKey}"`, 'warn'); continue; }
+      if (rowNum == null) { log(`  [SK03] ⚠ row_num missing for roster row #${p.index ?? '?'}`, 'warn'); continue; }
 
       if (isInternDept) {
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });
@@ -1486,7 +1312,7 @@ async function createSK03(
     requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
     fields: 'id',
   }))).data.id!;
-  log(`  [SK03] id: ${ssId}`);
+  log(`  [SK03] created`);
 
   for (const old of existing) {
     await withRetry(() => drive.files.delete({ fileId: old.id! }));
@@ -1657,7 +1483,7 @@ async function createSK03(
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
-  log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
+  log(`  [SK03] ✓ Done`);
   return { ssId, staffSheetName, internSheetName };
 }
 
@@ -1845,7 +1671,7 @@ async function main(): Promise<void> {
       const nullAfterFill = sbData.filter(p => p.score === null && p.perf_score === 0);
       if (nullAfterFill.length > 0) {
         log(`  → ✗ ${nullAfterFill.length} person(s) still have no score after Step 4.5 — skipping merge & SK03`, 'warn');
-        nullAfterFill.forEach(p => log(`    • ${p.fullname}`, 'warn'));
+        nullAfterFill.forEach(p => log(`    • row #${p.index ?? '?'}`, 'warn'));
         if (targeted) await finishRequest('failed', null, `ยังมี ${nullAfterFill.length} คนที่ไม่มีคะแนน จึงยังสร้างไฟล์ไม่ได้`);
         results.skipped++; console.log('└─ skipped (null scores)\n'); continue;
       }

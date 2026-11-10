@@ -36,14 +36,15 @@
  *   node scripts/drain-uploads.mjs
  */
 
-import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails } from "../index.js";
+import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails, SENDER_DETAIL } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
-  markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
+  markArchived, markSuperseded, markNotified, listStuckArchives, downloadObject, deleteObject,
+  listLeftoverObjects, removeLeftoverObjects,
   type ArchiveQueueRow, type ScoreFallbackQueueRow,
 } from "../upload-queue.js";
 import { createDriveClient, type DriveClient } from "../drive-client.js";
-import { getRosterRowByIndex, matchName } from "../supabase-client.js";
+import { getRosterRowByIndex, matchName, newerScoreSaved } from "../supabase-client.js";
 import { sendTelegram, formatErrorMessage } from "../telegram.js";
 import { pushLine } from "../line-push.js";
 import { createGmailClient, type GmailClient } from "../gmail-client.js";
@@ -52,6 +53,10 @@ import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
 import { reviewCheckDue, dispatchReviewBuild, dispatchReviewPdf } from "../review-dispatch.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
+import { errForLog, redactForLog } from "../log-safe.js";
+import { ADMIN_REVIEW_ERROR_TYPE } from "../admin-review.js";
+import { RetryLaterError } from "../inbound-triage.js";
+import { zipProblem } from "../zip-guard.js";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -95,25 +100,40 @@ async function resolveRoster(row: ArchiveQueueRow): Promise<RosterMatch | null> 
 }
 
 // ── 1. Archive ────────────────────────────────────────────────────────────
-async function handleArchive(row: ArchiveQueueRow): Promise<void> {
-  console.log(`│  📦  Archiving ${row.filename} (${row.month_key}) for ${row.full_name} — attempt ${row.archive_attempts}`);
-  const drive = getDrive();
+/** Exported for the tests, which pass their own Drive client. */
+export async function handleArchive(row: ArchiveQueueRow, drive: DriveClient | null = getDrive()): Promise<void> {
+  // Queue id, month and roster row only: this log is public (log-safe.ts).
+  console.log(`│  📦  Archiving queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.archive_attempts}`);
   if (!drive) {
     console.warn("│      ⚠️  P4P_FOLDER_ID not set — leaving archive_pending");
     return;
   }
 
   const buffer   = await downloadObject(row.object_path);
+  // /upload/score ran the same zip guard before it scored this row, so this
+  // should never refuse; if it does, nothing is inflated, and the row backs
+  // off and shows in the stuck-archive alert.
+  const zip = zipProblem(buffer);
+  if (zip) throw new Error(`archive refused by the zip guard (${zip.code})`);
   const roster   = await resolveRoster(row);
   const name     = roster?.matchedName ?? row.full_name;
+  // A row backing off here must not replace the Drive copy of a submission
+  // received after it whose score is saved since (an email, say: the claim
+  // only knows about newer uploads). A failed read throws, and the row
+  // retries on its backoff.
+  if (roster && await newerScoreSaved(row.month_key, roster.index, new Date(row.received_at).toISOString())) {
+    await markSuperseded(row.id);
+    console.log(`│      ⏭️  A newer submission's score is saved — superseded, Drive copy left as it is`);
+    return;
+  }
   // The tab for this month, the same one the score was read from.
   const [beYear, month] = row.month_key.split("_").map(Number);
   const { name: monthTab } = await monthSheet(buffer, month!, beYear!);
   const oneSheet = await extractFirstSheetBuffer(buffer, monthTab);
   if (!oneSheet) throw new Error("first sheet is blank — nothing to archive");
 
-  const { fileName, replaced } = await drive.uploadFile(oneSheet, name, row.month_key);
-  console.log(`│      ✅  Drive: "${fileName}" (${replaced ? "replaced" : "new"})`);
+  const { replaced } = await drive.uploadFile(oneSheet, name, row.month_key);
+  console.log(`│      ✅  Drive: ${replaced ? "replaced" : "new"} file`);
 
   await markArchived(row.id);
   // The bucket is a drop box, not storage — the object goes as soon as the
@@ -138,10 +158,32 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
 }
 
 // ── 2. Score fallback ─────────────────────────────────────────────────────
-async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
-  console.log(`│  🧮  Scoring ${row.filename} (${row.month_key}) for ${row.full_name} — attempt ${row.attempts}`);
+/** A pass that reported success without the score row being written (pure, for the tests). */
+export function scoreNotSaved(outcome: unknown, success: NotifyOkPayload | null): boolean {
+  return outcome === true && success !== null && !success.scoreSaved;
+}
+
+/** Exported for the tests only. */
+export async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
+  console.log(`│  🧮  Scoring queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.attempts}`);
 
   const buffer = await downloadObject(row.object_path);
+
+  // The zip-bomb guard before ExcelJS inflates anything, as on the email
+  // path (index.ts processAttachment): a crafted workbook would otherwise
+  // run this always-on runner out of memory, and the row would be claimed
+  // again by the next run. A refusal is final.
+  const zip = zipProblem(buffer);
+  if (zip) {
+    console.warn(`│      ⛔  Upload refused before parsing: ${zip.code}`);
+    const errorDetail = zip.code === "NOT_A_ZIP" || zip.code === "ZIP_MALFORMED" ? SENDER_DETAIL.notAZip : SENDER_DETAIL.zipTooBig;
+    await sendTelegram(formatErrorMessage(`Upload refused by the zip guard (${zip.code}): ${zip.message}`, row.filename, {
+      source: "LINE upload", accountName: row.full_name, email: row.email, monthKey: row.month_key, errorType: "other",
+    })).catch(() => {});
+    await rejectScored(row.id, { errorType: "other", errorDetail });
+    await afterOutcome("the failure notice", () => finishFailedRow(row, "other", errorDetail));
+    return;
+  }
 
   // notify.* only RECORDS what happened; the queue semantics below are this
   // script's business, not the pipeline's.
@@ -178,9 +220,18 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
       rosterIndex: row.roster_index,
       lineUserId : row.line_user_id,
       attempt    : row.attempts,
+      queueId    : row.id,
     },
     notify,
   });
+
+  // Never close a row as done with a score that was not written: the
+  // physician's "ดูผลคะแนน" button would show it as saved. Thrown, the row
+  // goes back to pending through handleScoreCrash (failScored, three
+  // attempts in all) and its uploaded object is kept for that retry.
+  if (scoreNotSaved(outcome, state.success)) {
+    throw new Error(`score not saved for queue row ${row.id} — left for a retry`);
+  }
 
   if (outcome === true && state.success) {
     // processBuffer archived to Drive in the same pass, so both lifecycles
@@ -188,12 +239,15 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     // did NOT archive, and the row stays archive_pending — in which case the
     // object must survive, or claim_p4p_archive() would keep claiming a row
     // whose bytes are gone.
+    // The score (and Drive copy) are saved from here on: a failed write
+    // below must not fail the row or tell the physician to resend.
     const archived = Boolean(getDrive());
-    await completeScored(row.id, {
-      score: state.success.score,
+    const success = state.success;
+    await afterOutcome("closing the queue row", () => completeScored(row.id, {
+      score: success.score,
       scoreMethod: "claude (deferred tier)",
       archived,
-    });
+    }));
     if (archived) {
       await deleteObject(row.object_path);
       // Not archived means handleArchive() finishes this row later and sends
@@ -212,7 +266,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     // their chat from the ACK reply (§7.5 step ②), and tapping it costs the
     // OA nothing. Pushing here would spend quota to tell them something they
     // can already ask for.
-    console.log(`│      ✅  Scored ${Number(state.success.score).toFixed(2)} — receipt left for the physician to pull`);
+    console.log(`│      ✅  Scored — receipt left for the physician to pull`);
     return;
   }
 
@@ -229,12 +283,40 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     terminal = await failScored(row.id, { errorType, errorDetail, attempts: row.attempts });
   }
 
-  console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${errorDetail}${terminal ? " (terminal)" : " — will retry"}`);
+  console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${redactForLog(errorDetail)}${terminal ? " (terminal)" : " — will retry"}`);
   if (!terminal) return;
+  await afterOutcome("the failure notice", () => finishFailedRow(row, errorType, errorDetail));
+}
 
-  // PUSH ON FAILURE: rare, and the one case where the physician has something
-  // to do about it. A push that cannot be delivered leaves notified_at null
-  // rather than failing anything.
+/**
+ * A failure after the row's outcome was written: the score and Drive copy
+ * saved, or the refusal recorded and the physician told. handleScoreCrash
+ * only reports it; it must not put the row back, fail it, or push a second,
+ * contradicting failure bubble.
+ */
+export class AfterOutcomeError extends Error {
+  readonly step: string;
+  constructor(step: string, cause: unknown) {
+    super(`${step} failed after the outcome was saved: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "AfterOutcomeError";
+    this.step = step;
+  }
+}
+
+async function afterOutcome<T>(step: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new AfterOutcomeError(step, err);
+  }
+}
+
+/**
+ * A row that has just failed for good. PUSH ON FAILURE: rare, and the one
+ * case where the physician has something to do about it. A push that cannot
+ * be delivered leaves notified_at null rather than failing anything.
+ */
+async function finishFailedRow(row: ScoreFallbackQueueRow, errorType: string, errorDetail: string): Promise<void> {
   const pushed = await pushLine(row.line_user_id, [
     buildFailureBubble({
       monthKey: row.month_key,
@@ -243,8 +325,73 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
       uploadLiffUrl: UPLOAD_LIFF,
     }),
   ]);
-  if (pushed) await markNotified(row.id);
-  await deleteObject(row.object_path);
+  // The bubble is delivered either way; a failed stamp must not stop the
+  // delete below or be taken for a failed upload.
+  if (pushed) {
+    await markNotified(row.id)
+      .catch((e: unknown) => console.warn(`│      ⚠️  notified_at not stamped: ${errForLog(e)}`));
+  }
+  // A row held for the admin keeps its file: the admin's alert says how to
+  // run it again once the right roster row is set (admin-review.ts).
+  if (errorType !== ADMIN_REVIEW_ERROR_TYPE) await deleteObject(row.object_path);
+}
+
+/**
+ * handleScoreFallback threw. The row goes back to 'pending' (the claim
+ * waits 5 minutes per attempt before it is claimed again, audit-fixes
+ * PART 2), and at the third attempt it fails for good: the physician then
+ * gets the failure bubble and the uploaded object is deleted, the same as a
+ * failure processBuffer answered. A RetryLaterError (a temporary Drive or
+ * database error, or an admin-hold alert that was not delivered) tells the
+ * admin only when it gives up, as the email path does; any other crash on
+ * every attempt. Never throws.
+ */
+export async function handleScoreCrash(row: ScoreFallbackQueueRow, err: unknown): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof AfterOutcomeError) {
+    // The outcome stands, and the admin is told. A row left 'processing'
+    // (its close failed) is claimed again after 30 minutes while it has
+    // attempts left, and that pass saves the same score and closes it.
+    console.error(`│      ⚠️  ${errForLog(message)} — the outcome stands`);
+    await sendTelegram(formatErrorMessage(message, row.filename, {
+      source: "LINE upload",
+      accountName: row.full_name,
+      email: row.email,
+      monthKey: row.month_key,
+      errorType: "other",
+    })).catch(() => {});
+    return;
+  }
+  const temporary = err instanceof RetryLaterError;
+  console.error(`│      ❌  ${temporary ? "Temporary failure" : "Scoring crashed"}: ${errForLog(message)}`);
+  // error_detail is shown to the physician (the LINE failure bubble); the
+  // raw message goes to Telegram below, never to them.
+  const errorType = "other";
+  const errorDetail = SENDER_DETAIL.crashed;
+  let terminal: boolean | null = null;
+  try {
+    terminal = await failScored(row.id, { errorType, errorDetail, attempts: row.attempts });
+  } catch (e) {
+    // The row stays 'processing'; the claim takes it again after 30 minutes.
+    console.error(`│      ❌  failScored failed too: ${errForLog(e)}`);
+  }
+  if (!temporary || terminal !== false) {
+    await sendTelegram(
+      formatErrorMessage(temporary && terminal ? `Gave up after ${row.attempts} attempts: ${message}` : message, row.filename, {
+        source: "LINE upload",
+        accountName: row.full_name,
+        email: row.email,
+        monthKey: row.month_key,
+        errorType,
+        attempt: row.attempts,
+        maxAttempts: 3,
+      })
+    ).catch(() => {});
+  }
+  if (terminal) {
+    await finishFailedRow(row, errorType, errorDetail)
+      .catch((e: unknown) => console.error(`│      ❌  Failure notice failed: ${errForLog(e)}`));
+  }
 }
 
 // ── Stuck-archive alerting ────────────────────────────────────────────────
@@ -266,7 +413,28 @@ async function alertStuckArchives() {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️  stuck-archive alert failed: ${message}`);
+    console.warn(`⚠️  stuck-archive alert failed: ${errForLog(message)}`);
+  }
+}
+
+// ── Leftover objects ──────────────────────────────────────────────────────
+/**
+ * Delete the uploaded objects of rows the queue will never claim again
+ * (superseded, or failed as stuck in processing; see listLeftoverObjects).
+ * The bucket is a drop box (§11): those workbooks carry a physician's name
+ * and workload and must not stay in it for good. Once per run, beside the
+ * stuck-archive alert; up to 50 rows a pass. Never throws.
+ */
+export async function sweepLeftoverObjects(): Promise<number> {
+  try {
+    const rows = await listLeftoverObjects();
+    if (rows.length === 0) return 0;
+    await removeLeftoverObjects(rows);
+    console.log(`│  🧹  Deleted ${rows.length} uploaded file(s) of superseded or stuck queue rows`);
+    return rows.length;
+  } catch (err) {
+    console.warn(`⚠️  leftover-object sweep skipped: ${errForLog(err)}`);
+    return 0;
   }
 }
 
@@ -287,7 +455,7 @@ async function pollEmails(): Promise<void> {
     // owner. Here the loop must keep going (the next pass a minute later
     // usually succeeds), so the alert is one Telegram per run, not per minute.
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`│  ❌  Email pass failed (retrying next poll): ${message}`);
+    console.error(`│  ❌  Email pass failed (retrying next poll): ${errForLog(message)}`);
     if (!emailFailureReported) {
       emailFailureReported = true;
       await sendTelegram(`⚠️ P4P email reader failed in the drain relay: ${message}`).catch(() => {});
@@ -338,7 +506,7 @@ async function main() {
           // archive_attempts/archive_last_attempt_at, so the row simply
           // becomes eligible again on the backoff schedule.
           const message = err instanceof Error ? err.message : String(err);
-          console.error(`│      ❌  Archive failed (will retry on backoff): ${message}`);
+          console.error(`│      ❌  Archive failed (will retry on backoff): ${errForLog(message)}`);
         }
       }
     } catch (err) {
@@ -355,24 +523,7 @@ async function main() {
           try {
             await handleScoreFallback(scoreRow);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            console.error(`│      ❌  Scoring crashed: ${message}`);
-            await failScored(scoreRow.id, {
-              errorType: "other",
-              errorDetail: message,
-              attempts: scoreRow.attempts,
-            }).catch((e: unknown) => console.error(`│      ❌  failScored failed too: ${e instanceof Error ? e.message : String(e)}`));
-            await sendTelegram(
-              formatErrorMessage(message, scoreRow.filename, {
-                source: "LINE upload",
-                accountName: scoreRow.full_name,
-                email: scoreRow.email,
-                monthKey: scoreRow.month_key,
-                errorType: "other",
-                attempt: scoreRow.attempts,
-                maxAttempts: 3,
-              })
-            ).catch(() => {});
+            await handleScoreCrash(scoreRow, err);
           }
         }
       } catch (err) {
@@ -384,6 +535,7 @@ async function main() {
     if (!didWork && !alerted) {
       alerted = true;
       await alertStuckArchives();
+      await sweepLeftoverObjects();
     }
 
     // Only sleep when the queue was empty — a busy queue drains back to back.
@@ -391,7 +543,10 @@ async function main() {
   }
 
   // A run that never went idle still owes its one look.
-  if (!alerted) await alertStuckArchives();
+  if (!alerted) {
+    await alertStuckArchives();
+    await sweepLeftoverObjects();
+  }
 
   console.log(`└─ drain finished — ${handled} row(s) handled`);
 }
@@ -399,7 +554,7 @@ async function main() {
 // Only when run as the program, so the test can import emailPollDue().
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    console.error("drain-uploads failed:", err);
+    console.error("drain-uploads failed:", errForLog(err));
     process.exit(1);
   });
 }

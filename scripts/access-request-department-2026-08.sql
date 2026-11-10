@@ -16,7 +16,8 @@
 --  THE FIX
 --  -------
 --  access_requests gets a `department` column, log_access_request() takes a
---  third parameter to store it, and main.js's approve handler carries it into
+--  third parameter to store it (that function now lives in
+--  scripts/audit-fixes-2026-11.sql), and main.js's approve handler carries it into
 --  the physicians upsert. verify/app.js now asks for department alongside
 --  name — a fixed ~19-entry dropdown (assets/shared.js's new P4P.DEPARTMENTS),
 --  not free text, so it can't drift from the canonical spelling the rest of
@@ -26,33 +27,15 @@
 alter table public.access_requests add column if not exists department text;
 
 -- Same signature-replacement pattern as auth-rewrite-2026-08.sql: drop the
--- old 2-arg version explicitly rather than relying on create-or-replace,
--- which would otherwise leave BOTH signatures around as overloads and make
--- PostgREST's rpc/log_access_request ambiguous about which one a 2-key JSON
--- body resolves to.
+-- old 2-arg version explicitly, so PostgREST's rpc/log_access_request is never
+-- ambiguous about which overload a 2-key JSON body resolves to.
+--
+-- The 3-argument function this file used to create is now defined only in
+-- scripts/audit-fixes-2026-11.sql PART 1 (audit finding F13, 2026-11): this
+-- version let any anon caller overwrite the name and department on someone
+-- else's open request, and store text of any length. Not
+-- creating it here means pasting this file again cannot bring that back.
 drop function if exists public.log_access_request(text, text);
-create or replace function public.log_access_request(
-  p_email      text,
-  p_name       text default null,
-  p_department text default null
-)
-returns void
-language sql
-security definer
-set search_path = public
-as $$
-  insert into public.access_requests (email, name, department, requested_at, request_count, resolved)
-  values (lower(p_email), nullif(trim(p_name), ''), nullif(trim(p_department), ''), now(), 1, false)
-  on conflict (email) do update
-    set name          = coalesce(nullif(trim(excluded.name), ''), access_requests.name),
-        department    = coalesce(nullif(trim(excluded.department), ''), access_requests.department),
-        requested_at  = now(),
-        request_count = access_requests.request_count + 1,
-        resolved      = false;
-$$;
-
-revoke all on function public.log_access_request(text, text, text) from public;
-grant execute on function public.log_access_request(text, text, text) to anon, authenticated;
 
 -- One-off: nothing to backfill here automatically — a department that was
 -- never captured can't be recovered from this table. Already-approved

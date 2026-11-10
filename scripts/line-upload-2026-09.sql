@@ -96,6 +96,10 @@
 --  (IF NOT EXISTS / OR REPLACE / DROP ... IF EXISTS first) so a second run
 --  after a fix lands is a normal way to iterate, not a hazard.
 --
+--      UPDATE 2026-11: the two claim functions in Part 5 moved to
+--      scripts/audit-fixes-2026-11.sql (audit findings F09, F17), which must
+--      run after this file. See the note in Part 5.
+--
 --  WHAT IT DOES, IN ORDER
 --    Part 1 — the storage bucket + its one INSERT policy (§6.1).
 --    Part 2 — p4p_upload_queue: both lifecycles, both indexes (§6.2).
@@ -201,7 +205,9 @@ create table if not exists public.p4p_upload_queue (
   -- NULL until status='done'; then 'archive_pending' until Drive succeeds,
   -- then 'archived'. Deliberately NO failure value: once the score is
   -- saved the physician has nothing left to fix, so this backs off rather
-  -- than ever terminating (design §7.7 rec 2, §12).
+  -- than ever terminating (design §7.7 rec 2, §12). Since 2026-11 a third
+  -- value, 'superseded' (a newer upload for the same month won), is added
+  -- to this check by scripts/audit-fixes-2026-11.sql PART 3.
   archive_status          text
                 check (archive_status in ('archive_pending','archived')),
   archive_attempts        smallint    not null default 0,
@@ -550,48 +556,23 @@ grant execute on function public.my_p4p_uploads(integer) to authenticated;
 --  tier's own method string — useful data in its own right, and doubling as
 --  "the synchronous path has already looked at this row"), which makes such
 --  rows claimable immediately. Only rows nobody has looked at yet wait.
-create or replace function public.claim_p4p_score_fallback()
-returns setof public.p4p_upload_queue
-language sql
-as $$
-  update public.p4p_upload_queue q
-     set status = 'processing', attempts = attempts + 1, claimed_at = now()
-   where q.id = (
-     select id from public.p4p_upload_queue
-      where status = 'pending' and attempts < 3
-        and (score_method is not null
-             or received_at < now() - interval '30 seconds')
-      order by received_at
-      limit 1
-      for update skip locked)
-  returning q.*;
-$$;
-
-revoke all on function public.claim_p4p_score_fallback() from public;
-grant execute on function public.claim_p4p_score_fallback() to service_role;
-
-
-create or replace function public.claim_p4p_archive()
-returns setof public.p4p_upload_queue
-language sql
-as $$
-  update public.p4p_upload_queue q
-     set archive_attempts = archive_attempts + 1,
-         archive_last_attempt_at = now()
-   where q.id = (
-     select id from public.p4p_upload_queue
-      where archive_status = 'archive_pending'
-        and (archive_last_attempt_at is null
-             or archive_last_attempt_at
-                < now() - make_interval(hours => least(24, 2 ^ greatest(0, archive_attempts - 1))::int))
-      order by received_at
-      limit 1
-      for update skip locked)
-  returning q.*;
-$$;
-
-revoke all on function public.claim_p4p_archive() from public;
-grant execute on function public.claim_p4p_archive() to service_role;
+-- UPDATE 2026-11 (audit findings F09, F17): claim_p4p_score_fallback() and
+-- claim_p4p_archive() are now defined only in scripts/audit-fixes-2026-11.sql
+-- (PART 2 and PART 3), so pasting this file again cannot bring back the two
+-- bugs the old versions had:
+--   * F09: a row stayed 'processing' for good when the runner died between
+--     the claim and writing the outcome, and the one-in-flight index then
+--     refused every new upload for that physician and month. The new
+--     version claims such a row again after 30 minutes while it has
+--     attempts left, and marks it 'failed' (error_type 'stuck_processing')
+--     when it has none.
+--   * F17: an older upload whose Drive copy failed and was backing off
+--     could be archived after a newer upload for the same physician and
+--     month, replacing the newer file in Drive. The new version marks such
+--     a row archive_status = 'superseded' instead.
+-- The head-start rule above (score_method / 30 seconds), the 3-attempt cap,
+-- the archive backoff (1h, 2h, 4h ... 24h), `returns setof` and the
+-- service_role-only grants are unchanged there.
 
 
 -- ============================================================================

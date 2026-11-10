@@ -3,6 +3,7 @@ import assert   from "node:assert/strict";
 import {
   isAutomatedSender, decideNoXlsx, isHandled, normalizeSubject,
   isSupersededBy, findSupersedingPeer, shouldSendHeldAlert, distinctiveRemainder, settleHeldAlerts, messageRanToCompletion, withRetry, type TriageMessage,
+  anyOutcomeHandled, thrownPassExhausted, MAX_THROWN_PASSES,
 } from "../inbound-triage.js";
 
 // Everything here can only REMOVE an alert reply. The cases worth pinning are
@@ -276,4 +277,26 @@ test("settleHeldAlerts: drop for a completed peer, resend otherwise, mark what w
   const reports: string[] = [];
   await settleHeldAlerts(held.slice(0, 1), completed, { resend: async () => true, mark: async () => false, log: () => {}, report: async (l) => { reports.push(l); } });
   assert.equal(reports.length, 1);
+});
+
+// ── what counts as handled, and the bounded retry for a thrown pass ──────────
+
+const ok = (value: unknown): PromiseSettledResult<unknown> => ({ status: "fulfilled", value });
+const threw: PromiseSettledResult<unknown> = { status: "rejected", reason: new Error("boom") };
+
+test("processed, replied and rejected all count as handled; a skipped file or a throw does not", () => {
+  assert.equal(anyOutcomeHandled([ok(true)]), true);
+  assert.equal(anyOutcomeHandled([ok("replied")]), true, "an alert already went out");
+  assert.equal(anyOutcomeHandled([ok("rejected")]), true, "an alert already went out");
+  assert.equal(anyOutcomeHandled([threw, ok("replied")]), true);
+  assert.equal(anyOutcomeHandled([ok(false)]), false, "not a workbook");
+  assert.equal(anyOutcomeHandled([threw]), false);
+  assert.equal(anyOutcomeHandled([]), false);
+});
+
+test("a message that keeps throwing is retried MAX_THROWN_PASSES times, then set aside", () => {
+  const counts = new Map<string, number>();
+  for (let i = 1; i < MAX_THROWN_PASSES; i++) assert.equal(thrownPassExhausted(counts, "m1"), false, `pass ${i}`);
+  assert.equal(thrownPassExhausted(counts, "m1"), true);
+  assert.equal(thrownPassExhausted(counts, "m2"), false, "counted per message");
 });

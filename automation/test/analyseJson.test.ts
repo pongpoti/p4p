@@ -28,7 +28,7 @@ test("a submission fully resolved by JS (name + score both pre-scanned) never ca
   // No ANTHROPIC_API_KEY is set in this test environment — a call that
   // actually reached the AI would throw "Missing ANTHROPIC_API_KEY", not
   // return. Getting a result back at all proves the AI was skipped.
-  assert.deepEqual(result, { name: "ศุภศรัณย์", date: "2569_01", score: 11011.5 });
+  assert.deepEqual(result, { name: "ศุภศรัณย์", date: "2569_01", score: 11011.5, scoreMethod: "grand-total label row (all columns)" });
 });
 
 test("the date on a fully-resolved submission is exactly the caller-supplied key, not re-derived", async () => {

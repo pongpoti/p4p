@@ -37,11 +37,17 @@ scorecard, alongside email. One row per submitted file, carrying two
 - `status` (scoring): `pending → processing → done | failed | rejected`.
   Usually cleared in ~1-2 s by `POST /upload/score` in `main.js`, which scores
   a confidence-gated subset of files synchronously; anything it will not
-  guess at stays `pending` for `claim_p4p_score_fallback()`.
-- `archive_status` (Drive copy): `NULL → archive_pending → archived`. No
-  failure value on purpose — once the score is saved the physician has nothing
-  left to fix, so this retries on a backoff indefinitely rather than ever
-  becoming terminal.
+  guess at stays `pending` for `claim_p4p_score_fallback()`. A row left in
+  `processing` for over 30 minutes (the runner died mid-file) is claimed
+  again while it has attempts left (3 in all), and becomes `failed` with
+  `error_type = 'stuck_processing'` when it has none
+  (`scripts/audit-fixes-2026-11.sql`, audit F09).
+- `archive_status` (Drive copy): `NULL → archive_pending → archived`, or
+  `superseded` when a newer upload for the same email and month is already
+  done or archived (so the older file never replaces the newer one in Drive;
+  audit F17). No failure value on purpose — once the score is saved the
+  physician has nothing left to fix, so this retries on a backoff
+  indefinitely rather than ever becoming terminal.
 
 - **Columns:** identity snapshotted at enqueue (`email` FK → `physicians`,
   `full_name`, `department`, `line_user_id`, `roster_index`), the submission
@@ -49,7 +55,9 @@ scorecard, alongside email. One row per submitted file, carrying two
   the scoring lifecycle (`status`, `attempts`, `claimed_at`, `finished_at`,
   `error_type`, `error_detail`, `score`, `score_method`, `notified_at`) and
   the archive lifecycle (`archive_status`, `archive_attempts`,
-  `archive_last_attempt_at`, `archived_at`), and the chat-receipt outcome
+  `archive_last_attempt_at`, `archived_at`), `object_deleted_at` (set when
+  the drain deleted the object of a superseded or stuck row), and the
+  chat-receipt outcome
   (`receipt_status`, `receipt_context`, `receipt_error`, `receipt_reported_at`)
   — the browser sends the receipt itself via `liff.sendMessages()`, so it
   reports back through `POST /upload/receipt` whether the send actually
@@ -67,7 +75,29 @@ scorecard, alongside email. One row per submitted file, carrying two
   (`claim_p4p_score_fallback()`, `claim_p4p_archive()`) are granted to
   `service_role` only; they exist as RPCs because `FOR UPDATE SKIP LOCKED` is
   not expressible through PostgREST.
-- Migration: `scripts/line-upload-2026-09.sql`.
+- Migration: `scripts/line-upload-2026-09.sql`; the two claim functions and
+  the `superseded` value: `scripts/audit-fixes-2026-11.sql`.
+
+## `p4p_score_saves`
+
+**Purpose:** Which submission's score is saved on each monthly roster row,
+so an older submission retried later never writes its score over a newer
+one, from any relay run or from `/upload/score`.
+
+- **Columns:** `month_key` (e.g. `2569_10`), `roster_index` (the roster
+  row's `index`, as text), `received_at` (when the submission whose score is
+  saved was received), `saved_at`. Primary key `(month_key, roster_index)`.
+  No names or scores.
+- Written only by `save_p4p_score(p_month_key, p_index, p_score,
+  p_received_at)`, which moves `received_at` on and writes the score in one
+  call, and only when this submission is not older than the saved one
+  (returns `false` and writes nothing otherwise). Called by
+  `automation/supabase-client.ts` `saveScore()` and by `/upload/score` in
+  `main.ts`. Read by the relay before it uploads to Drive, and by the LINE
+  archive step, which marks an older row `superseded` instead of replacing
+  the newer file in Drive.
+- **Access:** RLS on with no policies; `service_role` only.
+- Migration: `scripts/audit-fixes-2026-11.sql` PART 5.
 
 ## Storage bucket `p4p-uploads`
 
@@ -82,7 +112,10 @@ scorecard, alongside email. One row per submitted file, carrying two
   physician can drop a file in and can never read one back, their own
   included. Only `service_role` (the worker, and `/upload/score`) reads.
 - **Transient by design:** the object is deleted once `archive_status =
-  'archived'`, so the raw file lives here for minutes, not indefinitely.
+  'archived'`, so the raw file lives here for minutes, not indefinitely. The
+  object of a row nothing will claim again (`superseded`, or `failed` with
+  `stuck_processing`) is deleted by the drain once a run, which then stamps
+  `object_deleted_at` (`scripts/drain-uploads.ts` `sweepLeftoverObjects`).
 
 ## `dept_heads`
 
@@ -158,7 +191,14 @@ not an approval gate).
   `scripts/auth-rewrite-2026-08.sql` — approval no longer travels through
   Telegram `callback_data`.)
 - Written via the `log_access_request()` RPC, called from `/verify/` when a
-  user's email fails the allow-list check. `department` is required on the
+  user's email fails the allow-list check. It is anon-callable with any
+  address, so it never overwrites an open request's `name`/`department`,
+  writes nothing for an active physician, and cleans its input (control
+  characters out, 100-character caps, blank name or malformed address
+  ignored). A resolved request (rejected, or approved and later
+  deactivated) is opened again as a new request with the name given then,
+  so that person can ask again — `scripts/audit-fixes-2026-11.sql` PART 1,
+  audit F13. `department` is required on the
   form (`assets/shared.js`'s `P4P.DEPARTMENTS`, the same fixed ~19-entry list
   `status/app.js`/`admin/app.js` use) so it can't drift from the canonical
   spelling the rest of the app groups by — added in
@@ -176,7 +216,9 @@ not an approval gate).
 - **Access:** RLS, no anon/authenticated SELECT — insert-only via the RPC;
   the admin panel reads/writes it via `service_role`.
 - Migration: `scripts/security-rls-auth.sql` (Block 0a),
-  `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`).
+  `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`),
+  `scripts/access-request-department-2026-08.sql` (`department`),
+  `scripts/audit-fixes-2026-11.sql` (`log_access_request`, the trigger).
 
 ## `liff_access_log`
 

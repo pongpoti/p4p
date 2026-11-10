@@ -179,6 +179,52 @@ function resolveFilenameMonth(filename?: string | null): number | null {
   return m ? parseInt(m[1]!, 10) : null
 }
 
+/** Two digits as a BE year, the way resolveBeYear reads them: 43-99 → 25xx, 00-42 → 20xx. */
+function shortYearToBe(yy: string): number {
+  const n = parseInt(yy, 10)
+  return n >= 43 ? 2500 + n : 2000 + n + 543
+}
+
+/**
+ * The year a filename states, for the LINE upload path: the month_mismatch
+ * cross-check and the single-sheet `matched` test (mirrored exactly by
+ * automation/claude-analyst.ts for the worker's copy of the same check). Both REJECT an upload on a different year, so this reads only what is
+ * plainly a year. resolveBeYear takes any lone two-digit number for one (43-99
+ * as 25xx, 00-42 as 20xx), which is fine for picking a sheet but turned a
+ * version, ward or day count ("_12", "v15", "เวร 30 วัน", a "(85)" copy
+ * suffix, "P4P 05") into a year and refused the doctor's file. Read here:
+ *   - a 4-digit BE (25xx) or CE (20xx) year: "2569", "P4P_9_2026";
+ *   - a BE short year (43-99) right after a month name, with at most a few
+ *     of space . _ - / ' between them and an optional "ปี": "ต.ค.69",
+ *     "ตุลาคม 69", "ตค69", "Oct-69", "ตุลาคม ปี 69". Not 00-42 (a day or a
+ *     count: "ตุลาคม 30 วัน", "มกราคม 15"), and not when วัน, เวร, shift or
+ *     day follows ("Oct 45 days");
+ *   - a month number (after an optional day), "/" or "-", then a BE short
+ *     year (43-99): "10/69", "10-69", "31-10-69". Only BE here, so a day
+ *     range like "1-15" is not a year.
+ * Anything else is no year (null): an unstated year is not a mismatch.
+ */
+function resolveFilenameYear(filename?: string | null): number | null {
+  const s = String(filename ?? "")
+  const be = s.match(/(?<!\d)(25\d{2})(?!\d)/)
+  if (be) return parseInt(be[1]!, 10)
+  const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/)
+  if (ce) return parseInt(ce[1]!, 10) + 543
+
+  // A BE short year only (43-99), and not a count: "ตุลาคม 30 วัน", "ต.ค. 31วัน",
+  // "Oct 15 shifts" and "มกราคม 15" state no year.
+  const tail = "[\\s._'’/-]{0,3}(?:ปี\\s?)?(4[3-9]|[5-9]\\d)(?!\\d)(?!\\s*(?:วัน|เวร|shifts?|days?))"
+  for (const [token] of MONTH_TOKEN_MAP) {
+    const m = /^[A-Za-z]+$/.test(token)
+      ? s.match(new RegExp(`(?<![A-Za-z])${token}(?![A-Za-z])${tail}`, "i"))
+      : s.match(new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`, "i"))
+    if (m) return shortYearToBe(m[1]!)
+  }
+
+  const numeric = s.match(/(?<![\d./-])(?:(?:0?[1-9]|[12]\d|3[01])[/-])?(?:0?[1-9]|1[0-2])[/-](4[3-9]|[5-9]\d)(?![\d/-]|\.\d)/)
+  return numeric ? shortYearToBe(numeric[1]!) : null
+}
+
 /**
  * Mirrors automation/claude-analyst.ts's monthFromCellText exactly — see
  * there for why cell text needs a stricter matcher than resolveBeMonth.
@@ -573,27 +619,38 @@ function isHighConfidence(method: string): boolean {
 // ── Zip-entry / uncompressed-size guard (§7.7 rec 3, §11) ──────────────────
 //
 // A .xlsx is a zip. Before handing untrusted bytes to ExcelJS, walk the zip's
-// own central directory (no decompression — just reading declared entry
-// count and per-entry uncompressed-size fields) and reject anything with too
-// many entries or too large a declared uncompressed size. §11 says to do
-// this "with the JSZip dependency the pipeline already has" — true of
-// automation/, which already depends on it, but NOT of the root build (C8,
-// §7.7 rec 4: only `exceljs` is conceded into the root package.json). So
-// this is a small hand-rolled ZIP central-directory reader instead of a new
-// root dependency — the format is public and stable (APPNOTE.TXT), and all
-// this needs is fixed-width integer fields, not real decompression.
+// own central directory and reject anything with too many entries or too
+// large a declared uncompressed size. §11 says to do this "with the JSZip
+// dependency the pipeline already has" — true of automation/, which already
+// depends on it, but NOT of the root build (C8, §7.7 rec 4: only `exceljs`
+// is conceded into the root package.json). So this is a small hand-rolled
+// ZIP reader instead of a new root dependency — the format is public and
+// stable (APPNOTE.TXT).
+//
+// The declared sizes are only the sender's word: a crafted file can declare
+// 2 KB for an entry that inflates to 400 MB, and JSZip (inside ExcelJS)
+// inflates the whole entry before it compares the two (audit F18
+// follow-up). So every entry is then inflated here, with node:zlib's
+// maxOutputLength set to what is left of the budget: inflating stops at the
+// limit instead of running the process out of memory, and the real total is
+// what counts.
 const ZIP_EOCD_SIGNATURE = 0x06054b50
 const ZIP_CENTRAL_DIR_SIGNATURE = 0x02014b50
+const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50
+const ZIP_METHOD_STORED = 0
+const ZIP_METHOD_DEFLATE = 8
 const DEFAULT_MAX_ZIP_ENTRIES = 200
 const DEFAULT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 
 function findEndOfCentralDirectory(buf: Buffer): number {
   // EOCD is 22 bytes plus an optional comment of up to 65535 bytes — scan
   // backward from the end for the signature rather than assuming a fixed
-  // offset.
+  // offset. The scan starts 4 bytes from the end, as JSZip's does, so both
+  // settle on the same record: a signature too close to the end to hold a
+  // whole record is refused here, where JSZip would fail on it.
   const minPos = Math.max(0, buf.length - 22 - 65535)
-  for (let i = buf.length - 22; i >= minPos; i--) {
-    if (buf.readUInt32LE(i) === ZIP_EOCD_SIGNATURE) return i
+  for (let i = buf.length - 4; i >= minPos; i--) {
+    if (buf.readUInt32LE(i) === ZIP_EOCD_SIGNATURE) return i + 22 <= buf.length ? i : -1
   }
   return -1
 }
@@ -613,9 +670,30 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     throw err
   }
 
+  const diskNumber = buf.readUInt16LE(eocdPos + 4)
+  const centralDirDisk = buf.readUInt16LE(eocdPos + 6)
+  const entriesOnDisk = buf.readUInt16LE(eocdPos + 8)
   const totalEntries = buf.readUInt16LE(eocdPos + 10)
   const cdSize = buf.readUInt32LE(eocdPos + 12)
   const cdOffset = buf.readUInt32LE(eocdPos + 16)
+
+  // What this guard counts must be exactly what JSZip (inside ExcelJS) will
+  // inflate, or a crafted file shows the guard one small entry and hands
+  // JSZip another, huge one (audit F18 follow-up). JSZip reads the zip
+  // differently from the plain reading below in three ways, so each is
+  // refused here rather than followed:
+  // - any end-record field at its maximum sends JSZip to a ZIP64 record
+  //   elsewhere in the file, with its own central directory;
+  // - a gap between the central directory and the end record makes JSZip
+  //   take the gap for prepended data and shift every offset by it;
+  // - JSZip reads every central-directory record in a row, however many the
+  //   end record says there are.
+  if (
+    diskNumber === 0xffff || centralDirDisk === 0xffff || entriesOnDisk === 0xffff || totalEntries === 0xffff ||
+    cdSize === 0xffffffff || cdOffset === 0xffffffff
+  ) {
+    throw zipError("ZIP64_UNSUPPORTED", "zip64 archives are not supported")
+  }
 
   if (totalEntries > maxEntries) {
     const err = new Error(`too many zip entries: ${totalEntries} > ${maxEntries}`) as CodedError
@@ -623,27 +701,43 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     throw err
   }
 
+  const cdEnd = cdOffset + cdSize
+  if (cdEnd !== eocdPos) {
+    throw zipError("ZIP_MALFORMED", "zip central directory does not end where the end record starts")
+  }
+
   let pos = cdOffset
   let seen = 0
   let uncompressedTotal = 0
-  const cdEnd = cdOffset + cdSize
+  const entries: { method: number; compressedSize: number; uncompressedSize: number; localOffset: number }[] = []
 
-  while (pos < cdEnd && pos + 46 <= buf.length && seen < totalEntries) {
-    const sig = buf.readUInt32LE(pos)
-    if (sig !== ZIP_CENTRAL_DIR_SIGNATURE) break
+  // Every record up to the end record is read, the way JSZip reads them, so
+  // a record the end record leaves out of its count is still seen (and the
+  // mismatch refused below).
+  while (pos < cdEnd) {
+    if (pos + 46 > cdEnd || buf.readUInt32LE(pos) !== ZIP_CENTRAL_DIR_SIGNATURE) break
 
+    const method = buf.readUInt16LE(pos + 10)
+    const compressedSize = buf.readUInt32LE(pos + 20)
     const uncompressedSize = buf.readUInt32LE(pos + 24)
     const nameLen = buf.readUInt16LE(pos + 28)
     const extraLen = buf.readUInt16LE(pos + 30)
     const commentLen = buf.readUInt16LE(pos + 32)
+    const localOffset = buf.readUInt32LE(pos + 42)
 
-    // 0xFFFFFFFF marks a ZIP64 entry (real size lives in the extra field).
-    // A genuine xlsx this small (bucket cap 5 MB) never needs ZIP64 — treat
-    // it as suspicious rather than parse the extra field.
-    if (uncompressedSize === 0xffffffff) {
+    // 0xFFFFFFFF marks a ZIP64 entry (the real value lives in the extra
+    // field, which JSZip then reads). A genuine xlsx this small (bucket cap
+    // 5 MB) never needs ZIP64 — treat it as suspicious rather than parse
+    // the extra field.
+    if (uncompressedSize === 0xffffffff || compressedSize === 0xffffffff || localOffset === 0xffffffff) {
       const err = new Error("zip64 entries are not supported") as CodedError
       err.code = "ZIP64_UNSUPPORTED"
       throw err
+    }
+
+    seen += 1
+    if (seen > maxEntries) {
+      throw zipError("ZIP_TOO_MANY_ENTRIES", `too many zip entries: more than ${maxEntries}`)
     }
 
     uncompressedTotal += uncompressedSize
@@ -653,17 +747,70 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
       throw err
     }
 
+    entries.push({ method, compressedSize, uncompressedSize, localOffset })
     pos += 46 + nameLen + extraLen + commentLen
-    seen += 1
   }
 
-  if (seen !== totalEntries) {
+  if (pos !== cdEnd || seen !== totalEntries) {
     const err = new Error("zip central directory is malformed") as CodedError
     err.code = "ZIP_MALFORMED"
     throw err
   }
 
-  return { entryCount: seen, uncompressedBytes: uncompressedTotal }
+  // The declared sizes passed; now count what the entries really inflate to.
+  let inflatedTotal = 0
+  for (const entry of entries) {
+    const size = inflatedEntrySize(buf, entry, maxUncompressed - inflatedTotal)
+    if (size !== entry.uncompressedSize) {
+      // JSZip refuses such an entry too, but only after inflating all of it.
+      throw zipError("ZIP_MALFORMED", "zip entry size does not match its header")
+    }
+    inflatedTotal += size
+  }
+
+  return { entryCount: seen, uncompressedBytes: inflatedTotal }
+}
+
+function zipError(code: string, message: string): CodedError {
+  const err = new Error(message) as CodedError
+  err.code = code
+  return err
+}
+
+/**
+ * How many bytes one entry really holds, inflating at most `budget` bytes.
+ * Throws ZIP_TOO_LARGE past the budget, ZIP_MALFORMED for a broken or
+ * unsupported entry (ExcelJS reads only stored and deflated entries).
+ */
+function inflatedEntrySize(buf: Buffer, entry: { method: number; compressedSize: number; localOffset: number }, budget: number): number {
+  const at = entry.localOffset
+  if (at + 30 > buf.length || buf.readUInt32LE(at) !== ZIP_LOCAL_HEADER_SIGNATURE) {
+    throw zipError("ZIP_MALFORMED", "zip local header is missing")
+  }
+  const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28)
+  const end = start + entry.compressedSize
+  if (end > buf.length) throw zipError("ZIP_MALFORMED", "zip entry runs past the end of the file")
+  const data = buf.subarray(start, end)
+
+  if (entry.method === ZIP_METHOD_STORED) {
+    if (data.length > budget) throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+    return data.length
+  }
+  if (entry.method !== ZIP_METHOD_DEFLATE) {
+    throw zipError("ZIP_MALFORMED", `zip compression method ${entry.method} is not supported`)
+  }
+  if (data.length === 0) return 0
+  const zlib = require("node:zlib") as typeof import("node:zlib")
+  let size: number
+  try {
+    // One byte over the budget is enough to know it is over.
+    size = zlib.inflateRawSync(data, { maxOutputLength: budget + 1 }).length
+  } catch (e: unknown) {
+    if ((e as { code?: unknown } | null)?.code === "ERR_BUFFER_TOO_LARGE") throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+    throw zipError("ZIP_MALFORMED", "zip entry does not inflate")
+  }
+  if (size > budget) throw zipError("ZIP_TOO_LARGE", "uncompressed size exceeds the limit")
+  return size
 }
 
 // ── Workbook -> rows (ExcelJS), with a parse timeout ───────────────────────
@@ -751,7 +898,7 @@ async function parseWorkbookRows(buffer: Buffer, opts: { targetMonth?: number | 
     idx = nonEmptyIdx[0]
     if (targetMonth) {
       const fileMonth = resolveFilenameMonth(opts.filename)
-      const fileYear = resolveBeYear(opts.filename || "", "", "")
+      const fileYear = resolveFilenameYear(opts.filename)
       matched = fileMonth === targetMonth && (!targetYear || !fileYear || fileYear === targetYear)
     }
   } else if (targetMonth) {
@@ -810,6 +957,7 @@ async function parseWorkbookRowsSafely(buffer: Buffer, opts: { targetMonth?: num
   resolveBeMonth,
   resolveBeMonthFromRows,
   resolveFilenameMonth,
+  resolveFilenameYear,
   monthFromCellText,
   monthYearFromText,
   monthYearFromRows,
@@ -819,6 +967,7 @@ async function parseWorkbookRowsSafely(buffer: Buffer, opts: { targetMonth?: num
   isHighConfidence,
   HIGH_CONFIDENCE_METHODS,
   checkZipSafety,
+  rowsFromWorksheet,
   parseWorkbookRows,
   parseWorkbookRowsSafely,
 }

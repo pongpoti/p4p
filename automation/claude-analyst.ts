@@ -220,6 +220,51 @@ export function resolveBeYearByPriority(filename?: string | null, subject?: stri
 }
 
 /**
+ * The year a filename states, for the LINE upload month_mismatch checks
+ * (mirrors lib/p4p-score.ts resolveFilenameYear, used by /upload/score).
+ * Both REJECT an upload on a different year, so this reads only what is
+ * plainly a year. resolveBeYear takes any lone two-digit number for one (43-99
+ * as 25xx, 00-42 as 20xx), which is fine for picking a sheet but turned a
+ * version, ward or day count ("_12", "v15", "เวร 30 วัน", a "(85)" copy
+ * suffix, "P4P 05") into a year and refused the doctor's file. Read here:
+ *   - a 4-digit BE (25xx) or CE (20xx) year: "2569", "P4P_9_2026";
+ *   - a BE short year (43-99) right after a month name, with at most a few
+ *     of space . _ - / ' between them and an optional "ปี": "ต.ค.69",
+ *     "ตุลาคม 69", "ตค69", "Oct-69", "ตุลาคม ปี 69". Not 00-42 (a day or a
+ *     count: "ตุลาคม 30 วัน", "มกราคม 15"), and not when วัน, เวร, shift or
+ *     day follows ("Oct 45 days");
+ *   - a month number (after an optional day), "/" or "-", then a BE short
+ *     year (43-99): "10/69", "10-69", "31-10-69". Only BE here, so a day
+ *     range like "1-15" is not a year.
+ * Anything else is no year (null): an unstated year is not a mismatch.
+ */
+export function resolveFilenameYear(filename?: string | null): number | null {
+  const s = String(filename ?? "")
+  const be = s.match(/(?<!\d)(25\d{2})(?!\d)/)
+  if (be) return parseInt(be[1]!, 10)
+  const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/)
+  if (ce) return parseInt(ce[1]!, 10) + 543
+
+  // A BE short year only (43-99), and not a count: "ตุลาคม 30 วัน", "ต.ค. 31วัน",
+  // "Oct 15 shifts" and "มกราคม 15" state no year.
+  const tail = "[\\s._'’/-]{0,3}(?:ปี\\s?)?(4[3-9]|[5-9]\\d)(?!\\d)(?!\\s*(?:วัน|เวร|shifts?|days?))"
+  for (const [token] of MONTH_TOKEN_MAP) {
+    const m = /^[A-Za-z]+$/.test(token)
+      ? s.match(new RegExp(`(?<![A-Za-z])${token}(?![A-Za-z])${tail}`, "i"))
+      : s.match(new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`, "i"))
+    if (m) return shortFileYearToBe(m[1]!)
+  }
+
+  const numeric = s.match(/(?<![\d./-])(?:(?:0?[1-9]|[12]\d|3[01])[/-])?(?:0?[1-9]|1[0-2])[/-](4[3-9]|[5-9]\d)(?![\d/-]|\.\d)/)
+  return numeric ? shortFileYearToBe(numeric[1]!) : null
+}
+
+function shortFileYearToBe(yy: string): number {
+  const n = parseInt(yy, 10)
+  return n >= 43 ? 2500 + n : 2000 + n + 543
+}
+
+/**
  * The period an email states, in the order that decides it: subject, then
  * body, then filename. This is the value a submission is ROUTED on and
  * rejected against, so it is read conservatively — a heuristic that is
@@ -574,7 +619,7 @@ const NON_NAME_THAI = new Set([
   "ชื่อแพทย์", "ชื่อ", "นามสกุล", "สกุล", "ชื่อสกุล", "กลุ่มงาน",
   // ── Department names (single-token) ──────────────────────────────────────
   // Senders sometimes put the department where the surname should go in the
-  // filename (e.g. "P4P วราวุธ อายุรกรรม เม.ย.69.xlsx").  These are department
+  // filename (e.g. "P4P วิชัย อายุรกรรม เม.ย.69.xlsx").  These are department
   // names, never lastnames — exclude so the firstname-only fallback fires.
   "อายุรกรรม", "ศัลยกรรม", "กุมารเวชกรรม", "จักษุวิทยา", "นิติเวช",
   "รังสีวิทยา", "วิสัญญีวิทยา", "เวชกรรมฟื้นฟู", "เวชกรรมสังคม",
@@ -673,7 +718,7 @@ function extractNameFromText(text: string | null | undefined): string | null {
     // keys, so "นพ,สมชาย" / "พญ,แพร" are a frequent slip.  Runs after the month
     // rules so "ม.ค." is already "มค" and cannot be mangled here.
     .replace(/(นพ|พญ|ทพญ|ทพ|ดร)\s*,\s*/g, "$1.")
-    // A title typed with no dot at all — "พญ นันทิกา", "นพ ไกรวุฒิ  RT" — is still
+    // A title typed with no dot at all — "พญ มานี", "นพ ไกรวุฒิ  RT" — is still
     // a title, not the first word of the name.  Only the whole word counts (a
     // space or the start of the text on each side, so "นพดล" is left alone) and
     // only when a Thai word follows it.
@@ -862,9 +907,9 @@ function bodyNameCandidates(body: string): string[] {
  * Used only when the filename/subject/body pre-scan produced a name that did
  * NOT match any physician in the database.  In practice the real name is still
  * written correctly inside the file even when the sender mis-named it:
- *   • a "ชื่อแพทย์ นพ. วราวุธ เมธีศิริวัฒน์" header cell, or
- *   • the worksheet tab name ("ปัทมิกา เจียรวุฒิสาร เมย.69").
- *   • a title banner in the top rows ("… นพ.อุกฤษ ชูชินปราการ"), for sheets with
+ *   • a "ชื่อแพทย์ นพ. วิชัย ศรีสุข" header cell, or
+ *   • the worksheet tab name ("สมหญิง รักงาน เมย.69").
+ *   • a title banner in the top rows ("… นพ.ประเสริฐ สุขใจ"), for sheets with
  *     no ชื่อแพทย์ label.
  *
  * Returns an ordered, de-duplicated list of "firstname lastname" candidates
@@ -898,12 +943,12 @@ export function resolvePhysicianNameFromSheet(rows: Row[] = [], sheetName: strin
     }
   }
 
-  // 2. Worksheet tab name (e.g. "ปัทมิกา เจียรวุฒิสาร เมย.69").
+  // 2. Worksheet tab name (e.g. "สมหญิง รักงาน เมย.69").
   add(extractNameFromText(sheetName ?? ""));
 
   // 3. A title banner with the name in it, on sheets that carry no ชื่อแพทย์
-  //    label at all — "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.อุกฤษ ชูชินปราการ",
-  //    "พ.ญ. นันทิกา วรรณทรัพย์ผล".  Last, so a labelled cell or the tab name still
+  //    label at all — "ตารางเก็บคะแนน P4P แพทย์รังสีรักษา นพ.ประเสริฐ สุขใจ",
+  //    "พ.ญ. มานี ศรีสุข".  Last, so a labelled cell or the tab name still
   //    wins; only the top rows, where a banner sits (a signature line further
   //    down names someone else); and only a cell that carries a dotted title,
   //    so no ordinary heading becomes a candidate.
@@ -1400,6 +1445,53 @@ export function resolveScore(rows: Row[]): ScoreResult {
   return { score: jsScore, method: jsMethod };
 }
 
+// ── Which score to trust ───────────────────────────────────────────────────
+
+/**
+ * The resolveScore() methods trusted on their own: a total the sheet itself
+ * labels as the grand total. The same set /upload/score gates on
+ * (lib/p4p-score.ts HIGH_CONFIDENCE_METHODS; test/scoreChoice.test.ts keeps
+ * the two equal). Every other method (sub-total sums, "largest in sheet",
+ * the day-count and reconstruction tiers) is a guess an admin should see.
+ */
+export const HIGH_CONFIDENCE_METHODS: ReadonlySet<string> = new Set([
+  "grand-total label row (all columns)",
+  "free-text summary line",
+]);
+
+export function isHighConfidence(method: string | null | undefined): boolean {
+  return typeof method === "string" && HIGH_CONFIDENCE_METHODS.has(method);
+}
+
+/** The method recorded when the score is Claude's alone (JS found none). Never high-confidence. */
+export const CLAUDE_SCORE_METHOD = "claude (no JS score)";
+
+/** Two readings of one total this close are the same number: Claude answers to two decimals. */
+export const SCORE_TOLERANCE = 0.01;
+
+export type ScoreChoice =
+  | { kind: "score"; score: number; method: string }
+  | { kind: "conflict"; claudeScore: number; jsScore: number; jsMethod: string }
+  | { kind: "none" };
+
+/**
+ * The score to save once Claude has answered. Claude's number is never
+ * preferred over the deterministic one: a misread, a sub-total, or text in a
+ * cell telling the model what to answer would otherwise become the pay.
+ *   • JS has a score, Claude agrees (within SCORE_TOLERANCE) or has none → JS
+ *   • they disagree and the JS method is high-confidence                  → JS
+ *   • they disagree and it is not                → conflict (an admin decides)
+ *   • JS has none                                → Claude's, as CLAUDE_SCORE_METHOD
+ */
+export function chooseScore(claudeScore: number | null, jsScore: number | null, jsMethod: string): ScoreChoice {
+  const claude = claudeScore !== null && Number.isFinite(claudeScore) && claudeScore > 0 ? claudeScore : null;
+  const js = jsScore !== null && Number.isFinite(jsScore) && jsScore > 0 ? jsScore : null;
+  if (js === null) return claude === null ? { kind: "none" } : { kind: "score", score: claude, method: CLAUDE_SCORE_METHOD };
+  if (claude === null || Math.abs(claude - js) <= SCORE_TOLERANCE + 1e-9) return { kind: "score", score: js, method: jsMethod };
+  if (isHighConfidence(jsMethod)) return { kind: "score", score: js, method: jsMethod };
+  return { kind: "conflict", claudeScore: claude, jsScore: js, jsMethod };
+}
+
 /** Shape of the object analyseJson() is called with. */
 export interface AnalyseJsonInput {
   _email_subject?: string;
@@ -1432,14 +1524,15 @@ export async function analyseJson(jsonData: AnalyseJsonInput, filename: string =
   const resolvedName = resolvePhysicianName(file, subject, body)
     ?? resolvePhysicianNameFromSheet(rows, sheetName)[0]
     ?? null;
-  console.log(`│        👤  JS name pre-scan: ${resolvedName ?? "null (will use AI)"}`);
+  // Whether, never what: the Actions log is public (log-safe.ts).
+  console.log(`│        👤  JS name pre-scan: ${resolvedName ? "found" : "null (will use AI)"}`);
 
   // Resolve score in JS first.
   // Use resolveScore (not extractScoreFromRows directly) so that files where
   // fix_p4p_score.py wrote uncached =SUM(...) formulas fall through the
   // two-tier fallback instead of returning the largest plain number (e.g. 2200).
   const { score: jsScore, method: jsMethod } = resolveScore(rows);
-  console.log(`│        🔢  JS score pre-scan: ${jsScore !== null ? jsScore.toFixed(2) : "null"} (${jsMethod})`);
+  console.log(`│        🔢  JS score pre-scan: ${jsScore !== null ? "found" : "null"} (${jsMethod})`);
 
   // The period is never in question here — dateKey is already the sender's
   // own stated period (or their explicit LIFF selection), resolved
@@ -1453,7 +1546,7 @@ export async function analyseJson(jsonData: AnalyseJsonInput, filename: string =
   // month than the one actually stated.
   if (resolvedName && jsScore !== null) {
     console.log(`│        ⚡  Resolved without AI: name + score both pre-scanned`);
-    return { name: resolvedName, date: dateKey, score: jsScore };
+    return { name: resolvedName, date: dateKey, score: jsScore, scoreMethod: jsMethod };
   }
 
   const client = getClient();
@@ -1530,28 +1623,35 @@ ${rowsJson}`;
     throw new Error(`Missing or empty "name": ${raw}`);
   }
 
-  // Score: prefer Claude's answer; fall back to JS if Claude returns 0/null
+  // Score: the deterministic JS reading wins whenever there is one; Claude's
+  // answer only fills a gap or flags a disagreement (see chooseScore).
   const rawScore = parsed?.score;
-  let numeric = 0;
+  let numeric = NaN;
   if (rawScore !== undefined && rawScore !== null && rawScore !== "null") {
     numeric = typeof rawScore === "number"
       ? rawScore
       : parseFloat(String(rawScore).replace(/,/g, ""));
   }
-  if (isNaN(numeric) || numeric <= 0) {
-    if (jsScore !== null && jsScore > 0) {
-      console.log(`│        ⚠️  Claude returned "${rawScore}" — using JS score ${jsScore.toFixed(2)} (${jsMethod})`);
-      numeric = jsScore;
-    } else {
-      throw new Error(
-        `Could not determine score. Claude: "${rawScore}", JS scan: null (${jsMethod}). ` +
-        `Row count: ${rows.length}. Sample values: ${
-          rows.slice(0, 3).map(r => JSON.stringify(Object.values(r).slice(0, 4))).join(" | ")
-        }`
-      );
-    }
+  const choice = chooseScore(Number.isFinite(numeric) ? numeric : null, jsScore, jsMethod);
+  if (choice.kind === "none") {
+    throw new Error(
+      `Could not determine score. Claude: "${rawScore}", JS scan: null (${jsMethod}). ` +
+      `Row count: ${rows.length}. Sample values: ${
+        rows.slice(0, 3).map(r => JSON.stringify(Object.values(r).slice(0, 4))).join(" | ")
+      }`
+    );
+  }
+  if (choice.kind === "conflict") {
+    // Numbers stay out of the public log (log-safe.ts); the admin's alert has them.
+    console.warn(`│        ⚠️  Claude's score disagrees with the JS score (${jsMethod}, not a high-confidence method) — held for the admin`);
+    return { name: name.trim(), date: dateKey, score: choice.jsScore, scoreMethod: jsMethod, scoreConflict: { claudeScore: choice.claudeScore, jsScore: choice.jsScore, jsMethod } };
+  }
+  if (choice.method === CLAUDE_SCORE_METHOD) {
+    console.log(`│        🤖  No JS score — using Claude's`);
+  } else if (Number.isFinite(numeric) && numeric > 0 && Math.abs(numeric - choice.score) > SCORE_TOLERANCE + 1e-9) {
+    console.warn(`│        ⚠️  Claude's score disagrees with a high-confidence JS score (${jsMethod}) — using the JS score`);
   }
 
   // Return score as a number — callers format with .toFixed(2) for display
-  return { name: name.trim(), date: dateKey, score: numeric };
+  return { name: name.trim(), date: dateKey, score: choice.score, scoreMethod: choice.method };
 }

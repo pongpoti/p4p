@@ -89,7 +89,7 @@ test("a report beside the template's example tab is read only when the file name
   const mail = { subject: "P4P สิงหาคม 2569", body: "" };
   const ok = await run(reportPlusExample, { ...mail, filename: "P4P-Aug.xlsx" });
   assert.doesNotMatch(ok.text, /month_not_found:/);
-  assert.match(ok.text, /Report tab "Form-Intern" beside a template example tab/);
+  assert.match(ok.text, /Report tab #1 beside a template example tab/);   // "Form-Intern" (the log names tabs by position only)
   for (const filename of ["P4P.xlsx", "P4P-Sep.xlsx"]) {
     const r = await run(reportPlusExample, { ...mail, filename });
     assert.equal(r.outcome, "rejected", filename);
@@ -118,21 +118,22 @@ const exampleFirst = await book([
   { name: "Ex-Placeholder", cells: [["A1", "เดือน มกราคม พ.ศ. 2568"], ...body(900)] },
   { name: "Form-Intern", cells: body(10) },
 ]);
-const usedSheet = (text: string) => text.match(/Using sheet: "([^"]*)"/)?.[1];
+// The log names a tab by its position only (tab names can carry a physician's name; see log-safe.ts).
+const usedSheet = (text: string) => text.match(/Using sheet: #(\d+)/)?.[1];
 
 test("the month a file's own name gives is the month whose tab is read", async () => {
   const mail = { subject: "ส่ง P4P เดือนสิงหาคม กันยายน Intern", body: "", workbookCount: 2 };
   const sib = ["P4P-Intern_sep_X.xlsx", "P4P-Intern_aug_X.xlsx"];
   const sep = await run(twoMonths, { ...mail, filename: sib[0], siblingFilenames: sib });
-  assert.equal(usedSheet(sep.text), "ก.ย. 2569", "the September file reads September's tab");
+  assert.equal(usedSheet(sep.text), "2", "the September file reads September's tab (ก.ย. 2569)");
   const aug = await run(twoMonths, { ...mail, filename: sib[1], siblingFilenames: sib });
-  assert.equal(usedSheet(aug.text), "ส.ค. 2569", "the August file reads August's tab");
+  assert.equal(usedSheet(aug.text), "1", "the August file reads August's tab (ส.ค. 2569)");
 });
 
 test("the example tab is never the one read, whatever its position", async () => {
   const r = await run(exampleFirst, { subject: "P4P สิงหาคม 2569", body: "", filename: "P4P-Aug.xlsx" });
-  assert.equal(usedSheet(r.text), "Form-Intern");
-  assert.match(r.text, /reading "Form-Intern"/);
+  assert.equal(usedSheet(r.text), "2", "Form-Intern, the second tab");
+  assert.match(r.text, /reading tab #2/);
 });
 
 test("one mail-wide month does not carry a file whose name says another month", async () => {
@@ -147,5 +148,5 @@ test("one mail-wide month does not carry a file whose name says another month", 
   const quiet = ["สมชาย.xlsx", "สมหญิง.xlsx"];
   const ok = await run(twoMonths, { ...mail, filename: quiet[0], siblingFilenames: quiet });
   assert.doesNotMatch(ok.text, REFUSAL);
-  assert.equal(usedSheet(ok.text), "ส.ค. 2569");
+  assert.equal(usedSheet(ok.text), "1", "ส.ค. 2569");
 });

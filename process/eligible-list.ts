@@ -406,7 +406,7 @@ async function uploadPdf(drive: drive_v3.Drive, buffer: Uint8Array, fileName: st
       await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate: ${d.id}`, 'warn');
     }
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    log(`  [Drive] Overwriting "${fileName}"`);
     const res = await withRetry(() => drive.files.update({
       fileId: first.id!,
       requestBody: { name: fileName },
@@ -449,7 +449,9 @@ async function main(): Promise<void> {
 
   const drive  = createDriveClient();
   const result = await uploadPdf(drive, pdfBuffer, target.fileName);
-  log(`Done: ${result.name} (${result.id})`);
+  // No file id: this log is public, and the folder is shared by link until
+  // GOING_PRIVATE.md step 5 is done.
+  log(`Done: ${result.name}`);
 }
 
 if (require.main === module) {

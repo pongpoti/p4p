@@ -56,5 +56,9 @@ begin
 end;
 $$;
 
-revoke all on function public.bind_line_user_id(text, text) from public;
-grant execute on function public.bind_line_user_id(text, text) to authenticated;
+-- UPDATE 2026-11 (audit finding F10): retired and dropped (live per
+-- DATA_EXPOSURE_ANALYSIS.md section 5, in source by
+-- scripts/audit-fixes-2026-11.sql PART 4). The grant that stood here is
+-- removed, so pasting this retired file again leaves the function callable
+-- by nobody but the owner.
+revoke all on function public.bind_line_user_id(text, text) from public, anon, authenticated;

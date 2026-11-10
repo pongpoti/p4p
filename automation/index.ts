@@ -10,15 +10,18 @@
  */
 
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
-import { createDriveClient }             from "./drive-client.js";
-import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
-import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
+import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveFilenameYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
+import { findRosterMatch, saveScore, keepEarliestSubmittedAt, newerUploadScored, newerScoreSaved, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
+import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
-import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
+import { zipProblem }                   from "./zip-guard.js";
+import { logTag, errForLog }            from "./log-safe.js";
+import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, anyOutcomeHandled, thrownPassExhausted, thrownReasons, RetryLaterError, MAX_THROWN_PASSES, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
 import { decideStatedPeriod } from "./period-gate.js";
 import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
@@ -26,7 +29,7 @@ import log                              from "./logger.js";
 import * as path                        from "path";
 import { pathToFileURL }                from "url";
 import ExcelJS from "exceljs";
-import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, UploadIdentity, NotifyHooks, ProcessOutcome } from "./types.js";
+import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, RosterLookup, UploadIdentity, NotifyHooks, ProcessOutcome, AnalysisResult } from "./types.js";
 // override:true ensures .env values win over stale system-level env vars
 // (e.g. ANTHROPIC_API_KEY="" set at OS level would otherwise shadow the real key)
 import { config as dotenvConfig } from "dotenv";
@@ -176,7 +179,7 @@ export async function firstSheetToRows(buffer: Buffer, { targetMonth = null, tar
     });
     matched = bestScore > 0;
     if (bestScore > 0 && wsIndex !== defaultIndex) {
-      console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet "${workbook.worksheets[wsIndex]!.name}" (index ${wsIndex}, match ${bestScore}) over default "${allSheets[defaultIndex]}"`);
+      console.log(`│        📋  Multi-sheet workbook: target ${targetMonth}/${targetYear ?? "?"} → sheet #${wsIndex + 1} (match ${bestScore}) over default #${defaultIndex + 1}`);
     }
   }
 
@@ -399,7 +402,7 @@ export async function extractFirstSheetBuffer(buffer: Buffer, keepName: string |
 
   if (named < 0 && firstCount < 3 && source.worksheets.length > 1) {
     const secondCount = nonNullCount(source.worksheets[1]!);
-    console.log(`│        ℹ️   First sheet "${source.worksheets[0]!.name}" has ${firstCount} cell(s) — using sheet 2 "${source.worksheets[1]!.name}" (${secondCount} cells) for upload.`);
+    console.log(`│        ℹ️   First sheet has ${firstCount} cell(s) — using sheet 2 (${secondCount} cells) for upload.`);
     if (secondCount < 3) {
       console.warn(`│        ⚠️  Second sheet also almost blank — upload aborted.`);
       return null;
@@ -439,6 +442,22 @@ const ALERT_SUBJECTS: Record<string, string> = {
   other           : "[แจ้งข้อผิดพลาด] ไม่สามารถประมวลผลไฟล์ P4P ได้",
 };
 
+/**
+ * The only "detail" text a failure ever shows the sender (email reply, LINE
+ * bubble, the upload queue's error_detail) when the cause is an internal
+ * error. Raw exception text (ExcelJS, Claude, Supabase, Drive) can carry model
+ * output, cell values or schema names, so it goes to Telegram only.
+ */
+export const SENDER_DETAIL = {
+  unreadable  : "ไม่สามารถอ่านไฟล์ได้ กรุณาตรวจสอบว่าไฟล์เปิดได้ใน Microsoft Excel และบันทึกเป็น .xlsx แล้วส่งใหม่อีกครั้ง",
+  analysis    : "ระบบอ่านชื่อแพทย์หรือคะแนนรวมจากไฟล์ไม่ได้ กรุณาตรวจสอบว่าไฟล์มีชื่อแพทย์และแถวคะแนนรวม แล้วส่งใหม่อีกครั้ง",
+  blankSheet  : "ชีตที่ใช้ส่งไม่มีข้อมูล กรุณาตรวจสอบไฟล์แล้วส่งใหม่อีกครั้ง",
+  rosterLookup: "ระบบขัดข้องชั่วคราวระหว่างค้นหารายชื่อแพทย์ กรุณาส่งใหม่อีกครั้งภายหลัง",
+  crashed     : "ระบบขัดข้องระหว่างประมวลผลไฟล์ กรุณาส่งใหม่อีกครั้ง หากยังพบปัญหา กรุณาติดต่อเจ้าหน้าที่องค์กรแพทย์",
+  notAZip     : "ไฟล์นี้ไม่ใช่ไฟล์ .xlsx ที่ถูกต้อง หรือไฟล์เสียหาย กรุณาเปิดไฟล์ใน Microsoft Excel แล้วบันทึกเป็น .xlsx ก่อนส่งใหม่อีกครั้ง",
+  zipTooBig   : "ไฟล์มีขนาดข้อมูลภายในใหญ่ผิดปกติ ระบบจึงไม่เปิดอ่าน กรุณาส่งเฉพาะชีตของเดือนที่ต้องการ หรือบันทึกไฟล์ใหม่แล้วส่งอีกครั้ง",
+} as const;
+
 interface SendAlertReplyOpts {
   errorType?: string;
   safeFilename?: string;
@@ -476,7 +495,7 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
   // Nobody reads a reply to a no-reply address (Google's "shared with you" notice, a bounce).
   // The message is still handled by the caller; this line is the only trace of the skip.
   if (isAutomatedSender(replyTo)) {
-    console.log(`│        🤖  Alert reply [${errorType}] not sent: ${replyTo} is an automated no-reply address`);
+    console.log(`│        🤖  Alert reply [${errorType}] not sent: the sender is an automated no-reply address`);
     return true;
   }
   const subject  = ALERT_SUBJECTS[errorType] ?? ALERT_SUBJECTS.other!;
@@ -489,15 +508,30 @@ async function sendAlertReply({ errorType = "other", safeFilename = "", detected
       body            : `เรียนผู้ส่ง\n\nระบบไม่สามารถประมวลผลไฟล์ P4P ที่ท่านส่งมาได้\nกรุณาตรวจสอบและส่งใหม่อีกครั้ง`,
       replyToMessageId: messageId,
     });
-    console.log(`│        📧  Alert reply [${errorType}] sent to ${replyTo}`);
+    console.log(`│        📧  Alert reply [${errorType}] sent`);
     return true;
   } catch (replyErr) {
-    console.error(`│        ❌  Alert reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+    console.error(`│        ❌  Alert reply failed: ${errForLog(replyErr)}`);
     return false;
   }
 }
 
 // ── Processing pipeline ───────────────────────────────────────────────────
+
+/**
+ * The time a submission counts as received: Gmail's own receive time when it
+ * has a usable one, else the fallback (the Date header on the email path, the
+ * queue's received_at on the LINE path), else now.
+ */
+export function submissionTime(gmailReceivedAt: string | null | undefined, fallback: string | null | undefined, now: Date = new Date()): Date {
+  for (const candidate of [gmailReceivedAt, fallback]) {
+    if (!candidate) continue;
+    const d = new Date(candidate);
+    if (!isNaN(d.getTime())) return d;
+    console.warn(`│        ⚠️  Unparseable submission time "${candidate}" — trying the next source`);
+  }
+  return now;
+}
 
 export interface ProcessBufferContext {
   subject?: string;
@@ -526,13 +560,66 @@ export interface ProcessBufferContext {
   textDate?: string | null;
   /** When Gmail received the message whose words the gate reads (its own clock). A Date header days away from it is not trusted. */
   receivedDate?: string | null;
+  /**
+   * When Gmail received the message this submission is timed by (its internalDate, the server's clock):
+   * the punctuality timestamp saved as submitted_at. `emailDate` (the sender-written Date header, or the
+   * LINE path's server-side received_at) is only the fallback when this is missing.
+   */
+  gmailReceivedAt?: string | null;
   /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
-  receipt?: { answered: boolean };
+  receipt?: { answered: boolean; reviewNoticeSent?: boolean };
+  /** A Drive client to use instead of the one P4P_FOLDER_ID configures (tests); null means no Drive. */
+  drive?: DriveClient | null;
+}
+
+/**
+ * Roster row ("table#index") -> the receive time (ms) of the newest
+ * submission whose score this process saved. Kept for the life of the
+ * process (one relay run of up to an hour, which also runs the LINE drain).
+ * Only a fast path: a retry can come round in the next run (an email that
+ * failed near the end of a run, a LINE row backing off), so p4p_score_saves
+ * is what holds across runs, and save_p4p_score() checks it again as it
+ * writes (scripts/audit-fixes-2026-11.sql PART 5).
+ */
+const savedSubmissionTimes = new Map<string, number>();
+const rosterRowKey = (table: string, index: number | string): string => `${table}#${index}`;
+
+/** Tests only: forget the saved times, so one test's saves do not decide another's. */
+export function forgetSavedSubmissionTimes(): void {
+  savedSubmissionTimes.clear();
+}
+
+/**
+ * Was a NEWER submission for this roster row already saved? A retried email
+ * (its Drive upload or score save failed for a temporary reason, so it was
+ * left unread) can come round again after a corrected file was saved, by
+ * email in this run or an earlier one, or by a LINE upload that /upload/score
+ * scored at once. Writing the older score then would undo the newer one.
+ * A failed read is not a reason to refuse a save, so it counts as "no";
+ * save_p4p_score() still refuses an older score as it writes.
+ */
+async function newerSubmissionSaved(table: string, index: number | string, ts: Date): Promise<boolean> {
+  const seen = savedSubmissionTimes.get(rosterRowKey(table, index));
+  if (seen !== undefined && seen > ts.getTime()) return true;
+  try {
+    if (await newerScoreSaved(table, index, ts.toISOString())) return true;
+  } catch (err) {
+    console.warn(`│        ⚠️  Newer-save check skipped: ${errForLog(err)}`);
+  }
+  // Scores /upload/score saved before save_p4p_score was installed.
+  try {
+    return await newerUploadScored(table, index, ts.toISOString());
+  } catch (err) {
+    console.warn(`│        ⚠️  Newer-upload check skipped: ${errForLog(err)}`);
+    return false;
+  }
 }
 
 /**
  * Process a single xlsx buffer through Claude → Supabase → Telegram → Drive.
  * Returns true if the full pipeline completed (Claude succeeded), false otherwise.
+ * Throws (RetryLaterError for a temporary cause) when nothing may be answered
+ * yet: the caller leaves the submission for a bounded retry.
  *
  * ONE pipeline, two callers. The email path (identity === null) behaves
  * exactly as it always has, byte for byte. The LINE-upload path
@@ -559,7 +646,7 @@ export interface ProcessBufferContext {
  *   when identity is set. The pipeline stops knowing which channel it is.
  */
 export async function processBuffer(buffer: Buffer, {
-  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, receipt = undefined,
+  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, gmailReceivedAt = null, receipt = undefined, drive: driveOverride,
 }: ProcessBufferContext): Promise<ProcessOutcome> {
   const isUpload = identity !== null;
 
@@ -702,21 +789,21 @@ export async function processBuffer(buffer: Buffer, {
     if (!monthKey && targetMonth !== null && guessingBetweenTabs(filledSheets, matchedSheet)) {
       const report = pickReportBesideExample({ tabs, matched: matchedSheet, targetMonth, targetYear: targetYear ?? null, filename: filename ?? "" });
       if (report) {
-        console.log(`│        📋  Report tab "${report}" beside a template example tab; the file name confirms ${displayMonthKey(dateKey)} — reading "${report}"`);
+        console.log(`│        📋  Report tab #${allSheets.indexOf(report) + 1} beside a template example tab; the file name confirms ${displayMonthKey(dateKey)} — reading tab #${allSheets.indexOf(report) + 1}`);
         ({ rows, allSheets, chosenSheet, matched: matchedSheet, filled: filledSheets, tabs } = await firstSheetToRows(buffer, { targetMonth, targetYear, onlySheet: report }));
         filledSheets = [report];   // the example tab is documentation, not a second candidate
       }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`│        ❌  Failed to parse workbook: ${message}`);
+    console.error(`│        ❌  Failed to parse workbook: ${errForLog(message)}`);
     await sendTelegram(formatErrorMessage(`Workbook parse failed: ${message}`, filename, tgError({ errorType: "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    await otherReply(`ไม่สามารถอ่านไฟล์ได้: ${message}`);
+    await otherReply(SENDER_DETAIL.unreadable);
     return "replied";
   }
 
-  console.log(`│        All sheets : ${allSheets.join(", ")}`);
-  console.log(`│        Using sheet: "${chosenSheet}"`);
+  console.log(`│        Sheets     : ${allSheets.length} (${filledSheets.length} with content)`);
+  console.log(`│        Using sheet: #${allSheets.indexOf(chosenSheet) + 1}`);
   console.log(`│        Rows       : ${rows.length}`);
 
   // ── Corruption checks ────────────────────────────────────────────────
@@ -751,7 +838,7 @@ export async function processBuffer(buffer: Buffer, {
   // not a disagreement. Runs before Claude so a mismatch costs no API call.
   if (monthKey) {
     const fileMonth = resolveBeMonth(filename ?? "", "", "") ?? resolveBeMonthFromRows(rows);
-    const fileYear  = resolveBeYear(filename ?? "", "", "") ?? resolveBeYearFromRows(rows);
+    const fileYear  = resolveFilenameYear(filename) ?? resolveBeYearFromRows(rows);
     const selMonth  = parseInt(String(monthKey).slice(5), 10);
     const selYear   = parseInt(String(monthKey).slice(0, 4), 10);
     if ((fileMonth && fileMonth !== selMonth) || (fileYear && fileYear !== selYear)) {
@@ -779,7 +866,7 @@ export async function processBuffer(buffer: Buffer, {
   // tabs holding something count: an empty one leaves nothing to guess.
   if (!monthKey && guessingBetweenTabs(filledSheets, matchedSheet)) {
     const detail = `ไฟล์มีหลายชีต แต่ไม่มีชีตใดระบุเดือน ${displayMonthKey(dateKey)} กรุณาตั้งชื่อชีตให้ระบุเดือน หรือส่งเฉพาะชีตที่ต้องการ`;
-    console.error(`│        ❌  month_not_found: ${filledSheets.length} sheets with content (${filledSheets.join(", ")}), none identify ${dateKey}`);
+    console.error(`│        ❌  month_not_found: ${filledSheets.length} sheets with content, none identify ${dateKey}`);
     await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" }) as never))
       .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await notifyFailure("month_not_found", { detail });
@@ -809,22 +896,20 @@ export async function processBuffer(buffer: Buffer, {
   // "name+month+year" subject and answered a different month than the one
   // actually stated anywhere.
   console.log(`│        🤖  Resolving physician + score…`);
-  let analysis: { name: string; date: string; score: number };
+  let analysis: AnalysisResult;
   try {
     analysis = await analyseJson(intermediate, filename);
-    console.log(`│        ✅  Physician : ${analysis.name}`);
-    console.log(`│        ✅  Date      : ${analysis.date}`);
-    console.log(`│        ✅  Score     : ${analysis.score.toFixed(2)}`);
+    console.log(`│        ✅  Name and score read (month ${analysis.date})`);
     if (analysis.score <= 0) throw new Error("Score is 0 — cannot save a zero score.");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isZero = /score is 0/i.test(message);
-    console.error(`│        ❌  Analysis failed: ${message}`);
+    console.error(`│        ❌  Analysis failed: ${errForLog(message)}`);
     await sendTelegram(formatErrorMessage(message, filename, tgError({ errorType: isZero ? "zero_score" : "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     if (isZero) {
       await notifyFailure("zero_score", { detail: "ไม่พบคะแนนรวมในไฟล์" });
     } else {
-      await otherReply(message);
+      await otherReply(SENDER_DETAIL.analysis);
     }
     return "replied";
   }
@@ -837,7 +922,7 @@ export async function processBuffer(buffer: Buffer, {
   // that statement, and its own rules cover the rest.
   if (monthKey && !matchedSheet) {
     const detail = `ไม่พบเดือน ${displayMonthKey(monthKey)} ในไฟล์นี้`;
-    console.error(`│        ❌  month_not_found: no sheet identifies ${monthKey} (sheets: ${allSheets.join(", ")})`);
+    console.error(`│        ❌  month_not_found: no sheet identifies ${monthKey} (${allSheets.length} sheets)`);
     await sendTelegram(formatErrorMessage(detail, filename, tgError({ errorType: "month_not_found" }) as never))
       .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
     await notifyFailure("month_not_found", { detail });
@@ -854,53 +939,64 @@ export async function processBuffer(buffer: Buffer, {
   // match. The row comes from the exact match enqueue_p4p_upload() already
   // made, or — when that deferred (a name spelled differently in `physicians`
   // than in the roster, or two physicians sharing a name) — from ONE
-  // matchName() call against the authenticated name. Claude's name output is
+  // findRosterMatch() call against the authenticated name; rows that fit it
+  // equally well go to the admin, never the first. Claude's name output is
   // compared and reported, never routed on: a physician can legitimately
   // submit a workbook whose header carries a colleague's name if they copied
   // a template, and the score still belongs to the account that uploaded it.
   // `physician_not_found` is therefore structurally impossible here (§8).
   let match: RosterMatch | null = null;
+  // Two or more roster rows fit the name equally well: no row is chosen, the
+  // admin is (see admin-review.ts).
+  let ambiguous: Extract<RosterLookup, { kind: "ambiguous" }> | null = null;
   if (isUpload) {
     if (uploadCtx) uploadCtx.nameInFile = analysis.name ?? null;
     try {
       if (identity!.rosterIndex !== null && identity!.rosterIndex !== undefined) {
         match = await getRosterRowByIndex(workMonth, identity!.rosterIndex);
-        if (match) console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (exact, from enqueue)`);
+        if (match) console.log(`│        ✅  Roster row #${match.index} (exact, from enqueue)`);
       }
       if (!match) {
-        match = await matchName(identity!.fullName, workMonth);
-        if (match) {
+        const lookup = await findRosterMatch(identity!.fullName, workMonth);
+        if (lookup.kind === "match") {
+          match = lookup.match;
           if (uploadCtx) uploadCtx.rosterMatch = `fuzzy ${(match.similarity * 100).toFixed(0)}%`;
-          console.log(`│        ✅  Roster row #${match.index} — "${match.matchedName}" (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
+          console.log(`│        ✅  Roster row #${match.index} (fuzzy ${(match.similarity * 100).toFixed(0)}%)`);
+        } else if (lookup.kind === "ambiguous") {
+          ambiguous = lookup;
+          if (uploadCtx) uploadCtx.rosterMatch = `ambiguous (${lookup.candidates.length} rows)`;
         } else {
           if (uploadCtx) uploadCtx.rosterMatch = "none";
-          console.warn(`│        ⚠️  "${identity!.fullName}" is not in roster table "${workMonth}" — score cannot be written`);
+          console.warn(`│        ⚠️  The account is not in roster table "${workMonth}" — score cannot be written`);
         }
       }
       if (match && analysis.name && match.matchedName && analysis.name.trim() !== match.matchedName.trim()) {
-        console.warn(`│        ⚠️  Name in file "${analysis.name}" ≠ account "${match.matchedName}" — writing to the authenticated account (cross-check only)`);
+        console.warn(`│        ⚠️  Name in file ≠ account (roster row #${match.index}) — writing to the authenticated account (cross-check only)`);
       }
     } catch (dbErr) {
       const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
-      console.error(`│        ❌  Supabase match error: ${message}`);
+      console.error(`│        ❌  Supabase match error: ${errForLog(message)}`);
       await sendTelegram(formatErrorMessage(`Supabase match error: ${message}`, filename, tgError({ errorType: "other" }) as never))
         .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-      await otherReply(message);
+      await otherReply(SENDER_DETAIL.rosterLookup);
       return "replied";
     }
   } else {
   // ── Fuzzy name match (lookup only — score saved after Drive succeeds) ──
   console.log(`│        🔍  Fuzzy-matching name in Supabase table "${analysis.date}"…`);
   try {
-    match = await matchName(analysis.name, analysis.date);
-    if (match) {
-      console.log(`│        ✅  Best match : "${match.matchedName}" (${(match.similarity * 100).toFixed(0)}% similar)`);
+    const lookup = await findRosterMatch(analysis.name, analysis.date);
+    if (lookup.kind === "match") {
+      match = lookup.match;
+      console.log(`│        ✅  Best match : roster row #${match.index} (${(match.similarity * 100).toFixed(0)}% similar)`);
+    } else if (lookup.kind === "ambiguous") {
+      ambiguous = lookup;
     } else {
       console.log(`│        ⚠️  No sufficiently similar name found.`);
     }
   } catch (dbErr) {
     const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
-    console.error(`│        ❌  Supabase match error: ${message}`);
+    console.error(`│        ❌  Supabase match error: ${errForLog(message)}`);
     const isTableMissing = /does not exist|undefined_table|42P01|schema cache/i.test(message);
     if (isTableMissing) {
       console.log(`│        📅  Table "${analysis.date}" not found — sending wrong_date reply`);
@@ -930,6 +1026,9 @@ export async function processBuffer(buffer: Buffer, {
   // produced — the subject and body first (the sender spelled those out
   // deliberately), then the workbook itself (a ชื่อแพทย์ header cell or the
   // sheet tab, which usually carry the correct name even when the file does not).
+  // An ambiguous name is retried the same way: a fuller name elsewhere (the
+  // sheet's ชื่อแพทย์ cell, say) can settle which of the rows it is. Only a
+  // single-row match counts; if none comes, the ambiguity stands.
   if (!match) {
     const fallbackNames = [...new Set([
       ...resolvePhysicianNameCandidates(filename ?? "", subject, body),
@@ -937,29 +1036,109 @@ export async function processBuffer(buffer: Buffer, {
     ])];
     for (const candidate of fallbackNames) {
       if (candidate === analysis.name) continue;
-      let alt: RosterMatch | null;
+      let alt: RosterLookup;
       try {
-        alt = await matchName(candidate, analysis.date);
+        alt = await findRosterMatch(candidate, analysis.date);
       } catch { continue; } // table/DB errors already surfaced by the primary match
-      if (alt) {
-        console.log(`│        🔁  Name "${analysis.name}" missed — recovered "${candidate}" → matched "${alt.matchedName}" (${(alt.similarity * 100).toFixed(0)}%)`);
+      if (alt.kind === "ambiguous") { ambiguous ??= alt; continue; }
+      if (alt.kind === "match") {
+        console.log(`│        🔁  First name missed — another source's name matched roster row #${alt.match.index} (${(alt.match.similarity * 100).toFixed(0)}%)`);
         analysis.name = candidate;
-        match = alt;
+        match = alt.match;
         break;
       }
     }
   }
   } // end email-only identity resolution
 
+  /**
+   * Hold a submission for the admin (admin-review.ts): nothing saved, no
+   * Drive file replaced (except `driveReplaced`, a save that lost the race
+   * after its Drive upload). The admin is told first; if Telegram fails this
+   * throws, nothing has gone to the sender yet, and the submission is retried
+   * (bounded). Then the sender gets one polite notice per message (email), or
+   * the queue row is closed with error_type admin_review (LINE).
+   */
+  const holdForAdmin = async (held: Pick<AdminReviewAlertData, "reason" | "candidates" | "match" | "conflict" | "driveReplaced">): Promise<ProcessOutcome> => {
+    const alert = formatAdminReviewAlert({
+      ...held,
+      source     : isUpload ? "line-upload" : "email",
+      sender     : isUpload ? identity!.email ?? "" : replyTo,
+      accountName: isUpload ? identity!.fullName : null,
+      nameInFile : analysis.name ?? null,
+      monthKey   : workMonth,
+      score      : analysis.score,
+      scoreMethod: analysis.scoreMethod ?? null,
+      filename   : filename ?? null,
+      messageId  : isUpload ? null : messageId,
+      queueId    : isUpload ? identity!.queueId ?? null : null,
+    }, P4P_LABEL_NAME);
+    try {
+      await sendTelegram(alert);
+    } catch (err) {
+      throw new RetryLaterError(`held for admin review (${held.reason}): admin alert not delivered (${err instanceof Error ? err.message : err})`);
+    }
+    console.log(`│        ⏸️   Held for admin review (${held.reason}): score not saved${held.driveReplaced ? "" : ", Drive file not replaced"}`);
+    if (isUpload) {
+      await notifyFailure(ADMIN_REVIEW_ERROR_TYPE, { detail: adminReviewDetail(held.reason) });
+      return "rejected";
+    }
+    const owed = Boolean(replyTo && messageId && SEND_ERROR_REPLIES && !isAutomatedSender(replyTo) && !receipt?.reviewNoticeSent);
+    if (owed) {
+      if (receipt) receipt.reviewNoticeSent = true;
+      try {
+        await gmail!.sendMessage({ to: replyTo, subject: ADMIN_REVIEW_REPLY_SUBJECT, body: adminReviewReplyBody(held.reason), replyToMessageId: messageId });
+        console.log(`│        📧  Admin-review notice sent to the sender`);
+      } catch (err) {
+        console.error(`│        ❌  Admin-review notice failed: ${errForLog(err)}`);
+        if (receipt) receipt.answered = false;
+      }
+    }
+    return "replied";
+  };
+
+  // ── Ambiguous name: the admin picks the row, never "the first one" ──────
+  if (!match && ambiguous) {
+    return holdForAdmin({ reason: "ambiguous_name", candidates: ambiguous.candidates });
+  }
+
+  // ── Claude and the JS score disagree: the admin reads the total ────────
+  // Only when the JS method is not trusted on its own (claude-analyst.ts
+  // chooseScore); a high-confidence JS score has already won outright.
+  if (match && analysis.scoreConflict) {
+    return holdForAdmin({ reason: "score_conflict", match, conflict: analysis.scoreConflict });
+  }
+
+  // The punctuality timestamp is Gmail's receive time, not the Date header:
+  // the header is whatever the sender's client wrote (a wrong clock, or set
+  // on purpose), and saveScore only ever moves submitted_at EARLIER, so a
+  // backdated header would pin an on-time stamp for good. The header is the
+  // fallback only when Gmail gave no time; the LINE path passes its own
+  // server-side received_at as emailDate.
+  const ts = submissionTime(gmailReceivedAt, emailDate);
+
+  // ── A newer submission is already saved: never write this one over it ──
+  // Checked before Drive too, so this file does not replace the newer one
+  // there either. The receive time still counts: the physician did hand a
+  // file in then, so submitted_at may still move earlier.
+  if (match && await newerSubmissionSaved(workMonth, match.index, ts)) {
+    try {
+      await keepEarliestSubmittedAt(workMonth, match.index, ts.toISOString());
+    } catch (err) {
+      throw new RetryLaterError(`submitted_at not saved (table "${workMonth}", roster row #${match.index}): ${err instanceof Error ? err.message : err}`);
+    }
+    return holdForAdmin({ reason: "older_than_saved", match });
+  }
+
   // ── Upload to Google Drive (must succeed before saving score / archiving) ─
-  const drive = getDrive();
+  const drive = driveOverride !== undefined ? driveOverride : getDrive();
   if (drive) {
     if (!match) {
       // On the upload path this is `not_in_roster`, not a name mismatch:
       // the account is verified, it simply has no row in this month's roster
       // to hang a score on — an admin problem, not the physician's.
       const who = isUpload ? identity!.fullName : analysis.name;
-      console.warn(`│        ⚠️  No roster row — Drive upload skipped for "${who}".`);
+      console.warn(`│        ⚠️  No roster row — Drive upload skipped.`);
       await sendTelegram(
         formatErrorMessage(
           isUpload
@@ -979,47 +1158,69 @@ export async function processBuffer(buffer: Buffer, {
           const msg = "First sheet is blank — Drive upload aborted.";
           console.warn(`│        ⚠️  ${msg}`);
           await sendTelegram(formatErrorMessage(msg, filename, tgError({ errorType: "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-          await otherReply(msg);
+          await otherReply(SENDER_DETAIL.blankSheet);
           return "replied";
         }
 
-        console.log(`│        📤  Uploading as "${uploadName}"…`);
-        const { fileName, replaced } = await drive.uploadFile(
+        console.log(`│        📤  Uploading for roster row #${match.index}…`);
+        const { replaced } = await drive.uploadFile(
           uploadBuffer,
           uploadName,
           workMonth
         );
-        console.log(`│        ✅  Drive upload: "${fileName}" (${replaced ? "replaced existing" : "new file"})`);
+        console.log(`│        ✅  Drive upload done (${replaced ? "replaced existing" : "new file"})`);
       } catch (driveErr) {
         const message = driveErr instanceof Error ? driveErr.message : String(driveErr);
-        console.error(`│        ❌  Drive upload failed: ${message}`);
+        console.error(`│        ❌  Drive upload failed: ${errForLog(message)}`);
+        // A 5xx, 429 or network error says nothing about the file: the next
+        // poll may well get through. Nothing has been saved or sent yet, so
+        // the throw leaves the email unread for the bounded retry (the admin
+        // is told if it gives up) instead of answering and archiving it for
+        // good. On the LINE path the drain retries the queue row.
+        if (isTransientDriveError(driveErr)) {
+          throw new RetryLaterError(`Drive upload failed (temporary): ${message}`);
+        }
         await sendTelegram(
           formatErrorMessage(`Drive upload failed: ${message}`, filename ?? null)
         ).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
         await otherReply();
-        return "replied";  // ← do not archive, do not save score
+        return "replied";  // answered; the score is not saved
       }
     }
   }
 
   // ── Save score to Supabase (only after Drive upload confirmed) ────────
-  let ts = emailDate ? new Date(emailDate) : new Date();
-  if (isNaN(ts.getTime())) {
-    console.warn(`│        ⚠️  Unparseable email date "${emailDate}" — falling back to now`);
-    ts = new Date();
-  }
   let scoreSaved = false;
   if (match) {
+    let saved: boolean;
     try {
-      await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
-      scoreSaved = true;
-      console.log(`│        💾  Score ${analysis.score.toFixed(2)} saved → table "${workMonth}", row ${match.index}`);
+      saved = await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
     } catch (dbErr) {
-      console.error(`│        ❌  Supabase save error: ${dbErr instanceof Error ? dbErr.message : dbErr}`);
-      // The sender is still sent the receipt below, as before — but nothing was saved, so this workbook must
-      // not count as "answered" when another message's alert is waiting on it (see settleHeldAlerts).
-      if (receipt) receipt.answered = false;
+      console.error(`│        ❌  Supabase save error: ${errForLog(dbErr)}`);
+      // Nothing is sent to the sender: a confirmation would tell them a score
+      // is recorded when it is not. The throw leaves the email unread for the
+      // bounded retry (setAsideAfterThrows tells the admin when it gives up),
+      // and on the LINE path the drain puts the queue row back for a retry
+      // instead of marking it done with this score. The Drive copy above is
+      // simply replaced again on the next pass.
+      const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      throw new RetryLaterError(`score not saved (table "${workMonth}", roster row #${match.index}): ${message}`);
     }
+    if (!saved) {
+      // A newer submission's score was saved after the check above (by
+      // /upload/score, or another run): save_p4p_score wrote nothing. With
+      // Drive on, this file's copy went up first, so the admin is told that too.
+      try {
+        await keepEarliestSubmittedAt(workMonth, match.index, ts.toISOString());
+      } catch (err) {
+        throw new RetryLaterError(`submitted_at not saved (table "${workMonth}", roster row #${match.index}): ${err instanceof Error ? err.message : err}`);
+      }
+      return holdForAdmin({ reason: "older_than_saved", match, driveReplaced: Boolean(drive) });
+    }
+    scoreSaved = true;
+    const key = rosterRowKey(workMonth, match.index);
+    savedSubmissionTimes.set(key, Math.max(savedSubmissionTimes.get(key) ?? -Infinity, ts.getTime()));
+    console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
   }
 
   // ── Log submission for punctuality tracking ───────────────────────────
@@ -1035,7 +1236,7 @@ export async function processBuffer(buffer: Buffer, {
       });
       console.log(`│        📊  Submission logged (punctuality)`);
     } catch (logErr) {
-      console.warn(`│        ⚠️  Submission log skipped (non-fatal): ${logErr instanceof Error ? logErr.message : logErr}`);
+      console.warn(`│        ⚠️  Submission log skipped (non-fatal): ${errForLog(logErr)}`);
     }
 
     // ── Record sender → physician match (feeds the Telegram approve message) ──
@@ -1054,7 +1255,7 @@ export async function processBuffer(buffer: Buffer, {
       });
       console.log(`│        🗂️   sender_physician_match updated`);
     } catch (matchLogErr) {
-      console.warn(`│        ⚠️  sender_physician_match update skipped (non-fatal): ${matchLogErr instanceof Error ? matchLogErr.message : matchLogErr}`);
+      console.warn(`│        ⚠️  sender_physician_match update skipped (non-fatal): ${errForLog(matchLogErr)}`);
     }
   }
 
@@ -1111,7 +1312,7 @@ export async function processBuffer(buffer: Buffer, {
       });
       if (!sent && receipt) receipt.answered = false;
     } else {
-      console.log(`│        📧  Sending auto-reply to ${replyTo}…`);
+      console.log(`│        📧  Sending auto-reply…`);
       try {
         await sendConfirmationEmail(gmail!, replyTo, {
           prefix     : match.prefix,
@@ -1121,9 +1322,9 @@ export async function processBuffer(buffer: Buffer, {
           score      : analysis.score,
           route      : "email",
         }, messageId);
-        console.log(`│        ✅  Auto-reply sent to ${replyTo}`);
+        console.log(`│        ✅  Auto-reply sent`);
       } catch (replyErr) {
-        console.error(`│        ❌  Auto-reply failed: ${replyErr instanceof Error ? replyErr.message : replyErr}`);
+        console.error(`│        ❌  Auto-reply failed: ${errForLog(replyErr)}`);
         if (receipt) receipt.answered = false;
       }
     }
@@ -1137,12 +1338,13 @@ export async function processBuffer(buffer: Buffer, {
 /**
  * Download and process a single Excel attachment through the full pipeline.
  * Extracted so multiple attachments can be processed in parallel via Promise.allSettled.
+ * Exported for the tests only.
  */
-async function processAttachment(att: GmailAttachment, messageId: string, context: Partial<ProcessBufferContext>, gmail: GmailClient, workbookCount: number = 1): Promise<ProcessOutcome | false> {
+export async function processAttachment(att: GmailAttachment, messageId: string, context: Partial<ProcessBufferContext>, gmail: GmailClient, workbookCount: number = 1): Promise<ProcessOutcome | false> {
   const excel = isExcelFile(att.mimeType, att.filename);
 
   console.log(`│`);
-  console.log(`│      • ${att.filename}`);
+  console.log(`│      • file ${logTag(att.filename)} (${path.extname(att.filename ?? "").toLowerCase() || "no extension"})`);
   console.log(`│        MIME type : ${att.mimeType}`);
   console.log(`│        Size      : ${formatSize(att.size)}`);
   console.log(`│        Excel?    : ${excel ? "✅  Yes" : "❌  No — skipping"}`);
@@ -1177,7 +1379,7 @@ async function processAttachment(att: GmailAttachment, messageId: string, contex
   try {
     buffer = await gmail.downloadAttachment(messageId, att.attachmentId);
   } catch (err) {
-    console.error(`│        ❌  Download failed: ${err instanceof Error ? err.message : err}`);
+    console.error(`│        ❌  Download failed: ${errForLog(err)}`);
     await sendAlertReply({
       errorType   : "other",
       safeFilename: att.filename ?? "",
@@ -1188,8 +1390,37 @@ async function processAttachment(att: GmailAttachment, messageId: string, contex
     return "replied";
   }
 
+  // Zip-bomb guard before ExcelJS or JSZip inflates anything: the size check
+  // above is on the compressed bytes only, and a small attachment can inflate
+  // to gigabytes, which kills the always-on runner outright (no catch stops
+  // an out-of-memory abort) and leaves the message unread to do it again.
+  // A refusal is answered once and the message is marked handled ("replied").
+  const zip = zipProblem(buffer);
+  if (zip) {
+    console.warn(`│        ⛔  Attachment refused before parsing: ${zip.code}`);
+    await sendTelegram(formatErrorMessage(`Attachment refused by the zip guard (${zip.code}): ${zip.message}`, att.filename ?? null))
+      .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    const sent = await sendAlertReply({
+      errorType   : "other",
+      safeFilename: att.filename ?? "",
+      detail      : zip.code === "NOT_A_ZIP" || zip.code === "ZIP_MALFORMED" ? SENDER_DETAIL.notAZip : SENDER_DETAIL.zipTooBig,
+      replyTo     : context.replyTo ?? "",
+      messageId,
+      gmail,
+    });
+    if (!sent && context.receipt) context.receipt.answered = false;
+    return "replied";
+  }
+
   return processBuffer(buffer, { ...context, filename: att.filename, gmail, workbookCount } as ProcessBufferContext);
 }
+
+/**
+ * Message id -> polls in a row on which its processing threw and nothing was
+ * handled (see thrownPassExhausted). Kept for the life of the process, which
+ * on the always-on relay is one run of up to an hour.
+ */
+const thrownPasses = new Map<string, number>();
 
 /**
  * One pass over the inbox: read every new submission email, score it, reply,
@@ -1197,15 +1428,17 @@ async function processAttachment(att: GmailAttachment, messageId: string, contex
  * workflow), and once a minute by the drain relay (scripts/drain-uploads.ts),
  * which is what makes submissions land within a minute or two instead of
  * waiting on an hourly cron that GitHub can delay by hours.
+ *
+ * @param deps.gmail  a Gmail client to use instead of creating one (tests)
  */
-export async function readSubmissionEmails(): Promise<void> {
+export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): Promise<void> {
   // Fail fast if any required env var is missing
   const { absentOptional } = checkEnv();
   if (absentOptional.length > 0) {
     log.info(`Optional env vars not set: ${absentOptional.join(", ")}`);
   }
 
-  const gmail = createGmailClient();
+  const gmail = deps.gmail ?? createGmailClient();
 
   // ── Resolve "เอกสาร P4P" label ID once ───────────────────────────────
   // Used to tag processed messages. If the label doesn't exist yet,
@@ -1257,6 +1490,64 @@ export async function readSubmissionEmails(): Promise<void> {
     console.log(`\n✅  Done.`);
     return;
   }
+
+  /** Mark a message read, archived and labelled, so no later poll fetches it again. */
+  const markHandled = async (msgId: string, sourceLabel: "INBOX" | "SPAM"): Promise<void> => {
+    const addLabels    = p4pLabelId ? [p4pLabelId] : [];
+    const removeLabels = ["UNREAD", sourceLabel];
+    try {
+      await gmail.modifyMessage(msgId, addLabels, removeLabels);
+      console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
+    } catch (err) {
+      console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  /**
+   * After a pass on which nothing was handled and a workbook threw: true once
+   * the message has used up its passes AND the admin has been told, so the
+   * caller marks it handled. Until then (or while Telegram is down) it stays
+   * unread and is tried again on the next poll.
+   */
+  const setAsideAfterThrows = async (msgId: string, results: PromiseSettledResult<unknown>[]): Promise<boolean> => {
+    if (anyOutcomeHandled(results) || !results.some((r) => r.status === "rejected")) return false;
+    if (!thrownPassExhausted(thrownPasses, msgId)) {
+      console.warn(`│  ⏳  Processing threw — tried again on the next poll (${thrownPasses.get(msgId)}/${MAX_THROWN_PASSES})`);
+      return false;
+    }
+    try {
+      await sendTelegram(
+        `⚠️ P4P: อีเมล ${msgId} ประมวลผลไม่สำเร็จ ${MAX_THROWN_PASSES} รอบติดต่อกัน (ข้อผิดพลาดภายใน ดู log ของ workflow รอบนี้)\n` +
+        thrownReasons(results).map((r) => `สาเหตุ: ${r}\n`).join("") +
+        `ระบบทำเครื่องหมายว่าจัดการแล้วเพื่อหยุดการลองซ้ำทุกนาที ยังไม่ได้บันทึกคะแนนและยังไม่ได้ตอบผู้ส่ง\n` +
+        `เมื่อแก้ไขแล้ว หากต้องการให้ระบบอ่านใหม่: ย้ายอีเมลกลับเข้า Inbox เอาป้าย "${P4P_LABEL_NAME}" ออก และทำเครื่องหมายว่ายังไม่อ่าน`
+      );
+    } catch (err) {
+      console.warn(`│  ⚠️   Telegram notify failed: ${err instanceof Error ? err.message : err} — message left unmarked, to be retried`);
+      return false;
+    }
+    console.warn(`│  🛑  Processing threw ${MAX_THROWN_PASSES} polls in a row — set aside, admin told`);
+    return true;
+  };
+
+  /**
+   * Whether to mark a message handled after its workbooks ran. Handled when any workbook was processed or
+   * answered; otherwise only once setAsideAfterThrows gives up on it. A message marked handled while another
+   * of its workbooks threw is never read again, so that workbook would be lost without a word (a score that
+   * was not saved, a Drive upload that failed): the admin is told which.
+   */
+  const shouldMarkHandled = async (msgId: string, results: PromiseSettledResult<unknown>[]): Promise<boolean> => {
+    if (!anyOutcomeHandled(results)) return setAsideAfterThrows(msgId, results);
+    const lost = thrownReasons(results);
+    if (lost.length > 0) {
+      await sendTelegram(
+        `⚠️ P4P: อีเมล ${msgId} มีไฟล์ที่ประมวลผลไม่สำเร็จ ${lost.length} ไฟล์ แต่ไฟล์อื่นในอีเมลเดียวกันจัดการแล้ว ระบบจึงไม่ลองไฟล์นี้ใหม่\n` +
+        lost.map((r) => `สาเหตุ: ${r}\n`).join("") +
+        `ไฟล์นี้ยังไม่ได้บันทึกคะแนนและยังไม่ได้ตอบผู้ส่ง หากต้องการให้ระบบอ่านใหม่: ย้ายอีเมลกลับเข้า Inbox เอาป้าย "${P4P_LABEL_NAME}" ออก และทำเครื่องหมายว่ายังไม่อ่าน`
+      ).catch((e) => console.warn(`│  ⚠️   Telegram notify failed: ${e instanceof Error ? e.message : e}`));
+    }
+    return true;
+  };
 
   console.log(`\n📬  ${messages.length} message(s) found (${inboxMessages.length} inbox, ${spamMessages.length} spam/junk):\n`);
 
@@ -1324,18 +1615,19 @@ export async function readSubmissionEmails(): Promise<void> {
     const fromNameMatch    = fromRaw.match(/^(.*?)\s*<([^>]+)>\s*$/);
     const fromDisplayName  = fromNameMatch ? fromNameMatch[1]!.trim().replace(/^"(.*)"$/, "$1") : "";
 
+    // Ids, sizes and a sender tag only: this log is public (see log-safe.ts).
     console.log(`┌─ [${i + 1}/${messages.length}] [${_sourceLabel}] ──────────────────────────────────────────`);
+    console.log(`│  Message:  ${id} (thread ${msg.threadId ?? "-"})`);
     console.log(`│  Date:     ${msg.date}`);
-    console.log(`│  From:     ${msg.from}`);
-    console.log(`│  Subject:  ${msg.subject}`);
-    console.log(`│  Body:     ${msgBody.slice(0, 120).replace(/\n/g, " ")}${msgBody.length > 120 ? "…" : ""}`);
+    console.log(`│  From:     sender ${logTag(fromEmail)}`);
+    console.log(`│  Subject:  ${(msg.subject ?? "").length} chars · Body: ${msgBody.length} chars`);
 
     if (SKIP_SENDERS.has(fromEmail)) {
       // Relay senders (e.g. sakhonmso@gmail.com) forward/reply to physician emails.
       // Instead of skipping, search the thread for an xlsx from the original sender.
       if (THREAD_RELAY_SENDERS.has(fromEmail) && msg.threadId) {
         console.log(`│  🔄  Relay sender — searching thread for xlsx from original messages…`);
-        let relayProcessed = false;
+        let relayFound = false;
         try {
           const threadMsgs = await gmail.getThreadMessages(msg.threadId);
           for (const tm of [...threadMsgs].reverse()) {
@@ -1344,37 +1636,34 @@ export async function readSubmissionEmails(): Promise<void> {
             if (THREAD_RELAY_SENDERS.has(tmEmail)) continue; // skip other relay messages
             const xlsxInMsg = tm.attachments.filter((a) => isExcelFile(a.mimeType, a.filename));
             if (xlsxInMsg.length > 0) {
-              console.log(`│  📎  Found xlsx in thread — original sender: ${tm.msg.from}`);
+              console.log(`│  📎  Found xlsx in thread — message ${tm.msg.id}, original sender ${logTag(tmEmail)}`);
               const relayContext: Partial<ProcessBufferContext> = {
                 subject  : tm.msg.subject || msg.subject,
                 body     : tm.msg.body    || msgBody,
                 replyTo  : tmEmail,   // reply to the original physician, not the relay
                 messageId: id,        // thread-link to the current (relay) message
                 emailDate: msg.date,
+                gmailReceivedAt: msg.receivedAt,
                 // the words come from the original message when it has any, else from the relay
                 textDate    : tm.msg.body ? tm.msg.date : msg.date,
                 receivedDate: tm.msg.body ? tm.msg.receivedAt : msg.receivedAt,
                 threadId : msg.threadId,
                 siblingFilenames: xlsxInMsg.map((a) => a.filename),
               };
+              relayFound = true;
               const results = await Promise.allSettled(
                 xlsxInMsg.map((att) => processAttachment(att, tm.msg.id, relayContext, gmail, xlsxInMsg.length))
               );
-              relayProcessed = results.some((r) => r.status === "fulfilled" && r.value === true);
               results.forEach((r, idx) => {
                 if (r.status === "rejected") {
-                  console.error(`│      ❌  Relay attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+                  console.error(`│      ❌  Relay attachment[${idx}] threw: ${errForLog(r.reason)}`);
                 }
               });
-              if (relayProcessed) {
-                const addLabels    = p4pLabelId ? [p4pLabelId] : [];
-                const removeLabels = ["UNREAD", _sourceLabel];
-                try {
-                  await gmail.modifyMessage(id, addLabels, removeLabels);
-                  console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
-                } catch (err) {
-                  console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
-                }
+              // Handled = processed OR already answered ("replied"/"rejected"),
+              // as on the other two paths: an answered relay message left
+              // unread was re-analysed and re-answered every minute.
+              if (await shouldMarkHandled(id, results)) {
+                await markHandled(id, _sourceLabel);
               }
               break;
             }
@@ -1382,7 +1671,7 @@ export async function readSubmissionEmails(): Promise<void> {
         } catch (err) {
           console.warn(`│  ⚠️   Relay thread search failed: ${err instanceof Error ? err.message : err}`);
         }
-        if (!relayProcessed) {
+        if (!relayFound) {
           console.log(`│  📭  No xlsx found in thread from original sender — skipping`);
         }
       } else {
@@ -1432,28 +1721,23 @@ export async function readSubmissionEmails(): Promise<void> {
           messageId: id,
           emailDate: msg.date,
           receivedDate: msg.receivedAt,
+          gmailReceivedAt: msg.receivedAt,
           threadId : msg.threadId,
           siblingFilenames: threadXlsx.atts.map((a) => a.filename),
         };
         const results = await Promise.allSettled(
           threadXlsx.atts.map((att) => processAttachment(att, threadXlsx!.messageId, context, gmail, threadXlsx!.atts.length))
         );
-        processedAnyAttachment = results.some(
-          (r) => r.status === "fulfilled" && r.value === true
-        );
-        // "replied" (a validation alert was already sent) and "rejected"
-        // (ditto, on the reject-without-guessing paths) both count as this
-        // message having been handled — otherwise it stays unread/unstarred
-        // and the next hourly run re-fetches and re-alerts on it forever.
-        const handledOtherwise = results.some(
-          (r) => r.status === "fulfilled" && (r.value === "replied" || r.value === "rejected")
-        );
         results.forEach((r, idx) => {
           if (r.status === "rejected") {
-            console.error(`│      ❌  Thread attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+            console.error(`│      ❌  Thread attachment[${idx}] threw: ${errForLog(r.reason)}`);
           }
         });
-        if (processedAnyAttachment || handledOtherwise) {
+        // "replied" (a validation alert was already sent) and "rejected"
+        // (ditto, on the reject-without-guessing paths) count as handled as
+        // well as a processed file — otherwise the message stays unread and
+        // the next run re-fetches and re-alerts on it forever.
+        if (await shouldMarkHandled(id, results)) {
           const addLabels    = p4pLabelId ? [p4pLabelId] : [];
           const removeLabels = ["UNREAD", _sourceLabel];
           try {
@@ -1474,7 +1758,7 @@ export async function readSubmissionEmails(): Promise<void> {
         // Google's "spreadsheet shared with you" notice and its kin. Nobody reads a
         // reply to a no-reply address — but the message may be someone's submission, shared as a
         // link, so the admin chat is told once (plain text, no file contents).
-        console.log(`│  🤖  No xlsx — automated sender ${fromEmail}, not replying (message ${id})`);
+        console.log(`│  🤖  No xlsx — automated sender ${logTag(fromEmail)}, not replying (message ${id})`);
         // Only marked as handled once the admin has been told: otherwise it is looked at again next run.
         await sendTelegram(`🤖 ไม่ได้ตอบกลับ (ผู้ส่งเป็นที่อยู่ no-reply): ${fromEmail}\nหัวเรื่อง: ${msg.subject}\nอีเมลนี้มีลิงก์หรือไฟล์ที่ไม่ใช่ .xlsx — โปรดตรวจสอบว่าเป็นการส่งงาน P4P หรือไม่`)
           .catch((e) => { console.warn(`│  ⚠️   Telegram notify failed: ${e.message} — message left unmarked, to be retried`); alertSent = false; });
@@ -1496,7 +1780,7 @@ export async function readSubmissionEmails(): Promise<void> {
           await sendAlertReply({ errorType: "file_link", safeFilename: "", replyTo: fromEmail, messageId: id, gmail });
         } else {
           // Sender attached a file but in the wrong format (.xls, .ods, …)
-          console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${otherNames} → sending wrong_extension alert`);
+          console.log(`│  ⚠️   No xlsx found — wrong extension(s): ${otherAtts.map((a) => path.extname(a.filename ?? "").toLowerCase() || "none").join(", ")} → sending wrong_extension alert`);
           await sendAlertReply({ errorType: "wrong_extension", safeFilename: otherNames, replyTo: fromEmail, messageId: id, gmail });
         }
       }
@@ -1529,6 +1813,7 @@ export async function readSubmissionEmails(): Promise<void> {
       messageId: id,
       emailDate: msg.date,
       receivedDate: msg.receivedAt,
+      gmailReceivedAt: msg.receivedAt,
       threadId : msg.threadId,
       siblingFilenames: attachments.filter((a) => isExcelFile(a.mimeType, a.filename)).map((a) => a.filename),
       receipt,
@@ -1550,25 +1835,18 @@ export async function readSubmissionEmails(): Promise<void> {
         ? [{ outcome: results[i]!.status === "fulfilled" ? (results[i] as PromiseFulfilledResult<unknown>).value : "threw" }]
         : []),
     }));
-    const repliedToAny = results.some(
-      (r) => r.status === "fulfilled" && r.value === "replied"
-    );
-    // A "rejected" outcome (no_period, ambiguous_period, month_mismatch,
-    // month_not_found) already sent the sender an alert reply — it must count
-    // as handled too, or this message stays unread/unstarred and the next
-    // hourly run re-fetches it and sends the same alert again indefinitely.
-    const rejectedAny = results.some(
-      (r) => r.status === "fulfilled" && r.value === "rejected"
-    );
     results.forEach((r, idx) => {
       if (r.status === "rejected") {
-        console.error(`│      ❌  Attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
+        console.error(`│      ❌  Attachment[${idx}] threw: ${errForLog(r.reason)}`);
       }
     });
 
     // ── Mark message: read + starred + labeled ────────────────────────
-    // Applied after a successful processing OR after an alert reply was sent.
-    if (processedAnyAttachment || repliedToAny || rejectedAny) {
+    // Applied after a successful processing OR after an alert reply was sent:
+    // a "replied" or "rejected" outcome (no_period, ambiguous_period,
+    // month_mismatch, month_not_found, …) already answered the sender, and
+    // left unread the message would be re-fetched and re-answered every run.
+    if (await shouldMarkHandled(id, results)) {
       const addLabels    = p4pLabelId ? [p4pLabelId] : [];
       const removeLabels = ["UNREAD", _sourceLabel];
       try {
