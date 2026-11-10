@@ -2186,7 +2186,55 @@ interface LineWebhookEvent {
   source: { userId?: string }
 }
 
+// The line the upload page sends as the physician to earn a free reply (§7.5
+// step ②). It is not something they typed, and the upload's own result alert
+// already reaches Telegram, so it is not forwarded.
+const UPLOAD_TRIGGER_PREFIX = "ส่งไฟล์ p4p"
+
+// The sender's LINE display name, or "" when LINE will not give it (the user
+// blocked the bot, a network error, a timeout). Never throws.
+async function lineDisplayName(userId: string): Promise<string> {
+  try {
+    const r = await axios.get("https://api.line.me/v2/bot/profile/" + encodeURIComponent(userId), {
+      headers: headers,
+      timeout: 5000,
+    })
+    return String((r.data && r.data.displayName) || "").trim()
+  } catch (e: any) {
+    console.warn("[line] profile lookup failed: " + (e.response ? "HTTP " + e.response.status : e.message))
+    return ""
+  }
+}
+
+// Pong asked (2026-11-10) for every text a user types to the bot to show up
+// in the Telegram admin chat as two plain messages: the display name, then
+// the LINE userId. Only who wrote, never what they wrote. Sent one after the
+// other so the name always lands above its id. sendTelegram() swallows its
+// own failures, so this never breaks the reply.
+async function forwardTextSender(event: LineWebhookEvent): Promise<void> {
+  const userId = event.source.userId
+  if (!userId) return
+  const name = await lineDisplayName(userId)
+  await tg.sendTelegram(name || "(ไม่ทราบชื่อ LINE)")
+  await tg.sendTelegram(userId)
+}
+
+function isForwardedText(event: LineWebhookEvent): boolean {
+  if (event.type !== "message" || !event.message || event.message.type !== "text") return false
+  const text = (event.message.text || "").trim().toLowerCase()
+  return !text.startsWith(UPLOAD_TRIGGER_PREFIX)
+}
+
+// Runs the forward alongside the normal reply and waits for both: on Vercel
+// the function can be frozen once the response is sent, so a fire-and-forget
+// alert could be lost. The reply itself is not held back by Telegram.
 const handleEvent = async (event: LineWebhookEvent): Promise<unknown> => {
+  if (!isForwardedText(event)) return replyToEvent(event)
+  const [result] = await Promise.all([replyToEvent(event), forwardTextSender(event)])
+  return result
+}
+
+const replyToEvent = async (event: LineWebhookEvent): Promise<unknown> => {
   // ── Upload result, pulled rather than pushed (§7.5) ──────────────────────
   // The bot cannot put a button in the chat without spending a push, so the
   // upload page makes the physician "say" a trigger line (free, sent as
@@ -2267,7 +2315,7 @@ const handleEvent = async (event: LineWebhookEvent): Promise<unknown> => {
   // row is resolved from source.userId, never from what the message says. A
   // physician who types it by hand gets the same answer, so this doubles as
   // a free status command.
-  if (message.startsWith("ส่งไฟล์ p4p") || message === "ดูผลคะแนน" || message === "ผลคะแนน") {
+  if (message.startsWith(UPLOAD_TRIGGER_PREFIX) || message === "ดูผลคะแนน" || message === "ผลคะแนน") {
     let row: QueueRow | null = null
     try {
       row = await fetchQueueRow(
