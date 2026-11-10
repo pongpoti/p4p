@@ -9,10 +9,11 @@ name: "4.1 Check: no personal data committed"
 # specific filename at the time, so neither was caught. This is the backstop
 # that does not depend on remembering to update a denylist.
 #
-# Scope: files ADDED, COPIED, MODIFIED or RENAMED by the PR or push, not the
-# whole tree — the history still contains the original leak, and failing every
-# run on that helps nobody. Renames count: a roster pasted into x.sql and then
-# renamed to x-old.sql must not pass as "only renamed".
+# Scope: files ADDED, COPIED, MODIFIED, RENAMED or TYPE-CHANGED by the PR or
+# push, not the whole tree — the history still contains the original leak, and
+# failing every run on that helps nobody. Renames count: a roster pasted into
+# x.sql and then renamed to x-old.sql must not pass as "only renamed". So does
+# a symlink replaced by a real file.
 #
 # It only blocks a merge if branch protection lists it as a required check.
 
@@ -57,7 +58,7 @@ jobs:
             git ls-files -z > "$list"
           # Three dots: only what the PR (or push) itself changed, not files
           # that main changed since the branch was cut.
-          elif ! git diff -z --name-only --diff-filter=ACMR "$BASE_SHA...$HEAD_SHA" > "$list"; then
+          elif ! git diff -z --name-only --diff-filter=ACMRT "$BASE_SHA...$HEAD_SHA" > "$list"; then
             echo "::error::Could not list the changed files ($BASE_SHA...$HEAD_SHA)."
             exit 1
           fi
@@ -110,11 +111,19 @@ jobs:
           # 2>/dev/null and every file counted 0.
           th='(?:\xE0[\xB8\xB9][\x80-\xBF])'      # one Thai character
           qt="[\"']"
-          fld="$qt?$th(?:$th|[. ])*$qt?"          # นพ.สมชาย, 'ใจดี', "โสต ศอ นาสิก"
+          # A field starts and ends on a Thai character, so it cannot end in
+          # the spaces a separator starts with: when it could, a header padded
+          # with 16 or more spaces before each comma made grep backtrack until
+          # it gave up on the file, which then counted 0.
+          fld="$qt?$th(?:[. ]*$th)*$qt?"          # นพ.สมชาย, 'ใจดี', "โสต ศอ นาสิก"
           sep='[ \t]*[,;|\t][ \t]*'
           num="$sep$qt?[-+]?[0-9]"                # a field that starts with a digit (a score)
-          # a) "first last" at the start of a line (a pasted list or table);
-          roster="^[ \t]*[(\"']?$th{2,}[ \t]+$th{2,}"
+          ttl="(?:$th{1,4}\.)+[ \t]*"              # a title: นพ. พญ. ศ.นพ. (a space after or not)
+          nm="(?:$ttl)?$th{2,}[ \t]+$th{2,}"       # "first last", titled or not
+          # a) a name at the start of a line, after an optional list or table
+          #    marker (- * + > |, "12." or "3)", <tr><td>) or quote: a pasted
+          #    list, a Markdown or HTML table, a YAML list, a JS array;
+          roster="^[ \t]*(?:[-*+>|][ \t]*|[0-9]{1,3}[.)][ \t]*|(?:<t[rdh][^>]*>[ \t]*)+)?[(\"']?$nm"
           # b) a row of 2-4 Thai fields at the start of a line (CSV, TSV, SQL
           #    VALUES, JSON arrays), ending the line or followed by a number;
           roster="$roster|^[ \t]*[(\[{]?[ \t]*$fld(?:$sep$fld){1,3}(?:$num|[ \t]*[)\]}]?[ \t]*[,;]?[ \t\r]*\$)"
@@ -125,6 +134,18 @@ jobs:
           #    or a plain "name" key whose value is two Thai words.
           roster="$roster|$qt?(?:(?:first|last|given|family)(?:_?name)?|(?:full|sur)_?name|ชื่อ(?:-?สกุล)?|นามสกุล)$qt?[ \t]*[:=][ \t]*$qt$th"
           roster="$roster|$qt?name$qt?[ \t]*[:=][ \t]*$qt(?:$th|\.){2,}[ \t]+$th{2,}"
+          # e) a name alone in a table cell mid-line (| 1 | name | 85 |, <td>);
+          roster="$roster|(?:\|[ \t]*|<td[^>]*>[ \t]*)$nm[ \t]*(?:\||</td>)"
+          # f) a name as the whole quoted value of any key (physician: "...");
+          roster="$roster|[a-z_][a-z0-9_]*$qt?[ \t]*[:=][ \t]*$qt$nm$qt"
+          # g) a quoted name followed by a number, or a number followed by a
+          #    name that ends its field (SQL VALUES, CSV with a number first);
+          roster="$roster|$qt$nm$qt$num"
+          roster="$roster|[0-9]$sep$qt?$nm(?=$qt|$sep|[ \t]*\r?\$)"
+          # h) a quoted titled name in an array, and a titled name followed by
+          #    a number (one-line arrays, log lines).
+          roster="$roster|[\[,][ \t]*$qt(?:$ttl)$th{2,}[ \t]+$th{2,}$qt"
+          roster="$roster|(?:$ttl)$th{2,}[ \t]+$th{2,}(?=[ \t]*[:=,;|\t][ \t]*$qt?[-+]?[0-9])"
           # If the pattern stops working here (no -P, a grep change), fail
           # rather than let every roster through as 0 rows.
           if ! printf 'ทดสอบ ตัวอย่าง\n' | LC_ALL=C grep -qaP "$roster"; then
@@ -144,29 +165,48 @@ jobs:
               DATA_EXPOSURE_ANALYSIS.md|SECURITY_ANALYSIS.md) continue ;;
             esac
 
-            # 1. Tabular data files have no business being added at all.
-            case "$f" in
-              *.csv|*.xlsx|*.xls)
+            # 1. Tabular data files have no business being added at all, in
+            #    any spreadsheet format and any case (ROSTER.XLSX).
+            case "${f,,}" in
+              *.csv|*.tsv|*.xlsx|*.xlsm|*.xlsb|*.xls|*.ods|*.numbers)
                 echo "::error file=$f::Spreadsheet/CSV added. Roster data belongs in Supabase, not in this public repo."
                 fail=1
                 continue
                 ;;
             esac
 
-            # Only scan text: a PDF through its extracted text, any other
-            # binary file (an image) is skipped.
+            # Only scan text: a PDF through its extracted text, UTF-16 or
+            # UTF-32 text (Excel's "Unicode Text" export) converted to UTF-8
+            # first, as every pattern below is UTF-8; any other binary file
+            # (an image) is skipped.
             src=$f
-            if [ "$(file -b --mime-type "$f")" = application/pdf ]; then
-              src=$(mktemp)
-              if ! pdf_text "$f" > "$src"; then
-                echo "::error file=$f::PDF whose text could not be read, so it was not checked for personal data. Reports and rosters belong in Drive or Supabase, not in this public repo."
-                fail=1
-                rm -f "$src"
+            mime=$(file -b --mime "$f")
+            case "$mime" in
+              application/pdf*)
+                src=$(mktemp)
+                if ! pdf_text "$f" > "$src"; then
+                  echo "::error file=$f::PDF whose text could not be read, so it was not checked for personal data. Reports and rosters belong in Drive or Supabase, not in this public repo."
+                  fail=1
+                  rm -f "$src"
+                  continue
+                fi
+                ;;
+              *charset=utf-16*|*charset=utf-32*)
+                src=$(mktemp)
+                # The byte-order mark goes too, or the first row would not
+                # start at the start of its line.
+                if ! iconv -f "${mime##*charset=}" -t UTF-8 "$f" 2>/dev/null \
+                     | LC_ALL=C sed '1s/^\xEF\xBB\xBF//' > "$src"; then
+                  echo "::error file=$f::${mime##*charset=} text that could not be converted, so it was not checked for personal data."
+                  fail=1
+                  rm -f "$src"
+                  continue
+                fi
+                ;;
+              *charset=binary*)
                 continue
-              fi
-            elif file --mime "$f" | grep -q 'charset=binary'; then
-              continue
-            fi
+                ;;
+            esac
 
             # 2. Email addresses, any domain: hospital and .go.th addresses
             #    are as personal as gmail ones. Allowed: email_ok above. As
@@ -207,17 +247,28 @@ jobs:
             #    contains spaces, so every file carrying the department list
             #    matched. That would have failed essentially every PR.
             #
-            #    So it counts name-shaped ROWS (the shapes a-d above), with
+            #    So it counts name-shaped ROWS (the shapes a-h above), with
             #    grep -o so a one-line JSON or SQL dump counts every row, not
             #    1. Source code has Thai word lists (months, headers) that are
             #    3+ fields long, end in a comma, or sit mid-line without a
             #    number, and do not count. Measured over every tracked file:
-            #    at most 9 in any source or test file; 25-name rosters in each
-            #    shape (plain list, "นพ.first,last,dept,score", SQL VALUES,
-            #    JSON objects, a one-line list of {'name': ...}) give 25-50.
-            names=$(LC_ALL=C grep -aoiP "$roster" "$src" 2>/dev/null | wc -l || true)
-            [ -z "$names" ] && names=0
-            if [ "$names" -ge 20 ]; then
+            #    at most 11 in any source or test file; 25-name rosters in
+            #    each shape (a plain or titled list, "นพ.first,last,dept,score",
+            #    a Markdown or HTML table, a bullet or numbered list, SQL
+            #    VALUES, JSON objects, a one-line list of {'name': ...}, log
+            #    lines) give 25-50 (lib/__tests__/workflows.test.mjs).
+            #
+            #    A grep that fails on the file (exit 2: a backtracking limit,
+            #    a read error) fails the file: it was not checked.
+            counted=$(mktemp)
+            rc=0
+            LC_ALL=C grep -aoiP "$roster" "$src" > "$counted" 2>/dev/null || rc=$?
+            names=$(wc -l < "$counted")
+            rm -f "$counted"
+            if [ "$rc" -gt 1 ]; then
+              echo "::error file=$f::The roster check could not finish on this file (grep exit $rc), so it was not checked for a roster."
+              fail=1
+            elif [ "$names" -ge 20 ]; then
               echo "::error file=$f::Looks like a physician roster — $names name-shaped rows. Roster data belongs in Supabase."
               fail=1
             fi
