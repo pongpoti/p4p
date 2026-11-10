@@ -2237,10 +2237,17 @@ const createStatusList = () => {
   return object
 }
 
+// The current month (0-11) and Buddhist-era year in Asia/Bangkok. Vercel runs
+// in UTC, where 00:00-06:59 on the 1st is still last month; shifting by +7h
+// and reading the UTC fields is what /dashboard/api/overview does too
+// (Thailand has no daylight saving).
+function bangkokMonthAndBeYear(nowMs: number): { month: number; beYear: number } {
+  const bkk = new Date(nowMs + 7 * 3600 * 1000)
+  return { month: bkk.getUTCMonth(), beYear: bkk.getUTCFullYear() + 543 }
+}
+
 const createStatusSublist = (i: number) => {
-  const now = new Date()
-  const month = now.getMonth()
-  const year = now.getFullYear() + 543
+  const { month, beYear: year } = bangkokMonthAndBeYear(Date.now())
   const iterator = month_iterator[month]
   const name = month_array[iterator[i][0]] + " " + (year + iterator[i][1])
   const color_hex = color_array[iterator[i][0]][1]
