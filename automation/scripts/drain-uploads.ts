@@ -36,7 +36,7 @@
  *   node scripts/drain-uploads.mjs
  */
 
-import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails } from "../index.js";
+import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmails, SENDER_DETAIL } from "../index.js";
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
   markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
@@ -357,9 +357,11 @@ async function main() {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`│      ❌  Scoring crashed: ${message}`);
+            // error_detail is shown to the physician (the LINE failure bubble);
+            // the raw message goes to Telegram below, never to them.
             await failScored(scoreRow.id, {
               errorType: "other",
-              errorDetail: message,
+              errorDetail: SENDER_DETAIL.crashed,
               attempts: scoreRow.attempts,
             }).catch((e: unknown) => console.error(`│      ❌  failScored failed too: ${e instanceof Error ? e.message : String(e)}`));
             await sendTelegram(

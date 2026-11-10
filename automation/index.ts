@@ -439,6 +439,20 @@ const ALERT_SUBJECTS: Record<string, string> = {
   other           : "[แจ้งข้อผิดพลาด] ไม่สามารถประมวลผลไฟล์ P4P ได้",
 };
 
+/**
+ * The only "detail" text a failure ever shows the sender (email reply, LINE
+ * bubble, the upload queue's error_detail) when the cause is an internal
+ * error. Raw exception text (ExcelJS, Claude, Supabase, Drive) can carry model
+ * output, cell values or schema names, so it goes to Telegram only.
+ */
+export const SENDER_DETAIL = {
+  unreadable  : "ไม่สามารถอ่านไฟล์ได้ กรุณาตรวจสอบว่าไฟล์เปิดได้ใน Microsoft Excel และบันทึกเป็น .xlsx แล้วส่งใหม่อีกครั้ง",
+  analysis    : "ระบบอ่านชื่อแพทย์หรือคะแนนรวมจากไฟล์ไม่ได้ กรุณาตรวจสอบว่าไฟล์มีชื่อแพทย์และแถวคะแนนรวม แล้วส่งใหม่อีกครั้ง",
+  blankSheet  : "ชีตที่ใช้ส่งไม่มีข้อมูล กรุณาตรวจสอบไฟล์แล้วส่งใหม่อีกครั้ง",
+  rosterLookup: "ระบบขัดข้องชั่วคราวระหว่างค้นหารายชื่อแพทย์ กรุณาส่งใหม่อีกครั้งภายหลัง",
+  crashed     : "ระบบขัดข้องระหว่างประมวลผลไฟล์ กรุณาส่งใหม่อีกครั้ง หากยังพบปัญหา กรุณาติดต่อเจ้าหน้าที่องค์กรแพทย์",
+} as const;
+
 interface SendAlertReplyOpts {
   errorType?: string;
   safeFilename?: string;
@@ -711,7 +725,7 @@ export async function processBuffer(buffer: Buffer, {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`│        ❌  Failed to parse workbook: ${message}`);
     await sendTelegram(formatErrorMessage(`Workbook parse failed: ${message}`, filename, tgError({ errorType: "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-    await otherReply(`ไม่สามารถอ่านไฟล์ได้: ${message}`);
+    await otherReply(SENDER_DETAIL.unreadable);
     return "replied";
   }
 
@@ -824,7 +838,7 @@ export async function processBuffer(buffer: Buffer, {
     if (isZero) {
       await notifyFailure("zero_score", { detail: "ไม่พบคะแนนรวมในไฟล์" });
     } else {
-      await otherReply(message);
+      await otherReply(SENDER_DETAIL.analysis);
     }
     return "replied";
   }
@@ -885,7 +899,7 @@ export async function processBuffer(buffer: Buffer, {
       console.error(`│        ❌  Supabase match error: ${message}`);
       await sendTelegram(formatErrorMessage(`Supabase match error: ${message}`, filename, tgError({ errorType: "other" }) as never))
         .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-      await otherReply(message);
+      await otherReply(SENDER_DETAIL.rosterLookup);
       return "replied";
     }
   } else {
@@ -979,7 +993,7 @@ export async function processBuffer(buffer: Buffer, {
           const msg = "First sheet is blank — Drive upload aborted.";
           console.warn(`│        ⚠️  ${msg}`);
           await sendTelegram(formatErrorMessage(msg, filename, tgError({ errorType: "other" }) as never)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
-          await otherReply(msg);
+          await otherReply(SENDER_DETAIL.blankSheet);
           return "replied";
         }
 
