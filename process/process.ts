@@ -8,10 +8,11 @@
  * Step 5  — Merge individual Excel files → one workbook per person sheet
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  *           Pay uses the new formula (./sk03-formula.ts): interns first, then
- *           staff by department budget (sheet งบรายสาขา). Each month two
- *           inputs are typed once in the dashboard's ตรวจสอบ tab
- *           (review_inputs): total budget → staff Y9, per P4P per intern →
- *           intern W9 (=W10×rate). Until then all pay shows 0.
+ *           staff by department budget (sheet งบรายสาขา). Each month the
+ *           dashboard's ตรวจสอบ tab gives two numbers (review_inputs): the
+ *           total budget → staff Y9, and per P4P (budget ÷ N, N typed in the
+ *           tab) per intern → intern W9 (=W10×rate). Until then all pay
+ *           shows 0.
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -1726,8 +1727,14 @@ async function main(): Promise<void> {
   // ตรวจสอบ tab (./review-build.ts): off until its tables exist, and never
   // allowed to stop the SK03 build itself.
   let reviewOn = false;
-  try { reviewOn = await review.reviewReady(supabase); }
-  catch (err: any) { log(`[Review] ⚠ ${err.message} — building without the review copy`, 'warn'); }
+  let reviewV2 = false;
+  try {
+    reviewOn = await review.reviewReady(supabase);
+    reviewV2 = reviewOn && await review.reviewV2(supabase);
+  } catch (err: any) {
+    // reviewV2 failing leaves reviewOn as found: the copy is still made.
+    log(`[Review] ⚠ ${err.message} — ${reviewOn ? 'no Drive id for รวมค่าคะแนน this run' : 'building without the review copy'}`, 'warn');
+  }
   const requestId = reviewOn && targeted ? (parseInt(process.env.REVIEW_REQUEST_ID ?? '', 10) || null) : null;
   reviewRequest = requestId ? { supabase, id: requestId } : null;
   await review.markRequest(supabase, requestId, { status: 'running', started_at: new Date().toISOString(), run_url: review.runUrl() });
@@ -1862,6 +1869,7 @@ async function main(): Promise<void> {
           const built = await review.packageReviewBuild({
             drive, sheets, supabase, monthKey: key, ...sk03,
             persons: sbData, docs: merged.docs, mergedBuffer: merged.buffer,
+            mergedFileId: merged.uploaded.id ?? '', v2: reviewV2,
             input, requestId,
           });
           if (targeted) await finishRequest('done', built.id, '');

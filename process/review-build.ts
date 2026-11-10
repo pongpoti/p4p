@@ -18,16 +18,20 @@
  *      with a snapshot of the doctor's sheet for the viewer);
  *   4. drops old builds no round refers to (keeps the newest three).
  *
- * The auditee's upload in the tab is accepted only when it is byte-for-byte
- * the newest build's file (scripts/review-tab-2026-11.sql), which is why the
- * exact exported bytes are kept here.
+ * The auditee sends the newest build as it is (no download or upload since
+ * scripts/review-tab-2026-11-auditee.sql): the copies kept here are the
+ * record of exactly what was checked. The tab links the files in Drive, so
+ * every run also stores the Drive ids of the SK03 (a new Google Sheet each
+ * run) and the รวมค่าคะแนน file on the newest build, kept or not.
  *
- * Also: the month's budget and per P4P typed in the tab (review_inputs),
- * which createSK03 writes into staff Y9 and intern W9, and the status of a
- * "build this month now" request from the tab (review_requests).
+ * Also: the month's budget and per P4P from the tab (review_inputs; per
+ * P4P = budget ÷ N), which createSK03 writes into staff Y9 and intern W9,
+ * and the status of a "build this month now" request from the tab
+ * (review_requests).
  *
  * Until scripts/review-tab-2026-11.sql has been run, reviewReady() is false
- * and 2.2 builds exactly as before.
+ * and 2.2 builds exactly as before; until the second file has been run,
+ * reviewV2() is false and the Drive id of the รวมค่าคะแนน file is not kept.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -101,7 +105,21 @@ export async function reviewReady(supabase: SupabaseClient): Promise<boolean> {
   throw new Error(`review_builds read error: ${error.message}`);
 }
 
-/** The month's budget and per P4P as typed in the tab, or null. */
+/**
+ * True once scripts/review-tab-2026-11-auditee.sql is in the database too
+ * (review_builds.merged_file_id exists). A passing outage is an error.
+ */
+export async function reviewV2(supabase: SupabaseClient): Promise<boolean> {
+  const { error } = await supabase.from('review_builds').select('merged_file_id').limit(1);
+  if (!error) return true;
+  if (error.code === '42703' || error.code === 'PGRST204' || (!error.code && /column .* does not exist/i.test(error.message ?? ''))) {
+    log('  [Review] second review SQL file not run yet (scripts/review-tab-2026-11-auditee.sql) — no Drive id for รวมค่าคะแนน', 'warn');
+    return false;
+  }
+  throw new Error(`review_builds read error: ${error.message}`);
+}
+
+/** The month's budget and per P4P from the tab, or null. */
 export async function loadReviewInput(supabase: SupabaseClient, monthKey: string): Promise<ReviewInput | null> {
   const { data, error } = await supabase.from('review_inputs').select('budget, per_p4p').eq('month', monthKey).maybeSingle();
   if (error) {
@@ -270,6 +288,10 @@ export interface PackageOptions {
   persons: ReviewPerson[];
   docs: Map<string, DocInfo>;
   mergedBuffer: Buffer;
+  /** The รวมค่าคะแนน file on Drive (merged_YYYY_MM.xlsx). */
+  mergedFileId: string;
+  /** scripts/review-tab-2026-11-auditee.sql has been run (reviewV2). */
+  v2: boolean;
   input: ReviewInput | null;
   requestId: number | null;
 }
@@ -372,8 +394,8 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
   }));
   // The fingerprint reads people in roster_index order: the roster is read
   // with select('*') and no ORDER BY, and the same month in another order
-  // must not make a new newest build (the auditee's downloaded files would
-  // turn "older" and their upload be refused).
+  // must not make a new newest build (a round being prepared would look out
+  // of date for nothing).
   const byIndex = [...people].sort((a, b) => (a.roster_index < b.roster_index ? -1 : a.roster_index > b.roster_index ? 1 : 0));
   const contentSha = crypto.createHash('sha256').update(JSON.stringify({
     v: 2, input: o.input, sheetBudget, w9: str(w9), people: byIndex, depts: deptsJson, problems,
@@ -384,6 +406,12 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
   if (lastErr) throw new Error(`review_builds read: ${lastErr.message}`);
   if (last && last.content_sha256 === contentSha) {
     log(`  [Review] ✓ nothing changed since build ${last.id} — keeping it as the newest`);
+    // This run made a new SK03 Sheet (the old one is gone): the tab links
+    // the build's ids, so they follow the files.
+    const ids: Record<string, string> = { sk03_file_id: ssId };
+    if (o.v2) ids.merged_file_id = o.mergedFileId;
+    const { error: idErr } = await supabase.from('review_builds').update(ids).eq('id', last.id);
+    if (idErr) throw new Error(`review_builds file ids: ${idErr.message}`);
     return { id: last.id as string, reused: true };
   }
 
@@ -406,6 +434,7 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
   try {
     const { error } = await supabase.from('review_builds').insert({
       id, month: monthKey, request_id: o.requestId, run_url: runUrl(), sk03_file_id: ssId,
+      ...(o.v2 ? { merged_file_id: o.mergedFileId } : {}),
       sk03_path: sk03Path, sk03_sha256: sha256(sk03Buffer), sk03_bytes: sk03Buffer.length,
       merged_path: mergedPath, merged_sha256: sha256(o.mergedBuffer), merged_bytes: o.mergedBuffer.length,
       content_sha256: contentSha,

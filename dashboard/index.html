@@ -718,8 +718,7 @@
         #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: flex; flex-direction: column; gap: 14px; }
         .rv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 18px; border-radius: var(--radius); }
         .rv-title { font-size: 1.15rem; margin-right: auto; }
-        .rv-month { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
-        .rv-month select, .rv-field input { height: 44px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); }
+        .rv-field input { height: 44px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); }
         .rv-role { display: inline-flex; border: 1px solid rgba(63, 47, 36, .35); border-radius: 10px; overflow: hidden; background: #fff; }
         .rv-role button { height: 44px; padding: 0 16px; border: 0; background: transparent; font: inherit; font-weight: 600; color: var(--foreground); cursor: pointer; }
         .rv-role button[aria-pressed="true"] { background: var(--primary); color: #fff; }
@@ -833,6 +832,73 @@
         .rv-dialog { width: min(640px, 94vw); }
         .rv-dialog-in { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
         .rv-dialog h2 { font-size: 1.1rem; }
+        /* layout v5: month tabs, the auditee's card, list and send bar */
+        .rv-months { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; order: 3; }
+        .rv-mtab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 48px; padding: 5px 14px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
+        .rv-mtab:hover { background: var(--accent); }
+        .rv-mtab[aria-pressed="true"] { border: 2px solid var(--primary); background: #F6EEE4; padding: 4px 13px; }
+        .rv-mtab:focus-visible, .rv-flt:focus-visible, .rv-icon-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+        .rv-mtab-m { font-weight: 700; }
+        .rv-mtab-s { font-size: .8rem; font-weight: 600; color: var(--muted-foreground); }
+        .rv-ms-you { color: #1D4ED8; } .rv-ms-ok { color: #0B5E2B; } .rv-ms-fix { color: #9A3412; }
+        .rv-chip-miss { color: #7A4700; background: #FBEBD0; }
+        .rv-chip-edit { color: #1D4ED8; background: #E3EDFF; }
+        .rv-chip-warn { color: #9A3412; background: #FFEDD5; }
+        .rv-spread { justify-content: space-between; }
+        .rv-label { font-weight: 600; }
+        .rv-inputs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 18px; align-items: start; }
+        .rv-rate { display: flex; align-items: center; min-height: 44px; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .rv-save { justify-content: flex-start; padding-top: 26px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+        .rv-save .btn-primary { height: 44px; }
+        .rv-files { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+        .rv-alert { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(192, 57, 43, .25); border-left: 4px solid #B42318; background: #FDECEA; color: #8A1C12; }
+        .rv-alert > strong { font-weight: 700; }
+        .rv-alert ul { flex-basis: 100%; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
+        .rv-alert .rv-actions { flex-basis: 100%; }
+        .rv-alert-soft { border-color: rgba(150, 88, 0, .25); border-left-color: var(--warning); background: var(--warning-bg); color: #5C3A00; }
+        .rv-warnbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 10px; border-left: 4px solid #C2410C; background: #FFEDD5; color: #7C2D12; }
+        .rv-warnbar .btn-ghost { margin-left: auto; height: 36px; }
+        .rv-list-head { gap: 8px 14px; }
+        .rv-list-head .rv-card-h { margin-right: auto; }
+        .rv-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+        .rv-flt { min-height: 36px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 999px; background: #fff; font: inherit; font-size: .9rem; font-weight: 600; color: var(--foreground); cursor: pointer; }
+        .rv-flt[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
+        .rv-search input { height: 38px; width: min(260px, 100%); padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
+        .rv-table-box { position: relative; overflow: auto; max-height: 62vh; border: 1px solid rgba(63, 47, 36, .18); border-radius: 10px; background: #fff; }
+        .rv-table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+        .rv-table th, .rv-table td { padding: 7px 10px; border-bottom: 1px solid rgba(63, 47, 36, .1); text-align: left; vertical-align: top; }
+        .rv-table thead th { position: sticky; top: 0; z-index: 1; background: #F3EBE1; font-size: .88rem; }
+        .rv-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .rv-table td > .rv-chip { margin: 0 4px 2px 0; }
+        .rv-table tr.on td { background: #EFF5FF; }
+        .rv-edit-cell { text-align: right; white-space: nowrap; }
+        .rv-flagged { color: #9A3412; font-weight: 700; }
+        .rv-old { display: block; font-size: .8rem; color: var(--muted-foreground); }
+        .rv-ok-mark { color: #0B5E2B; font-weight: 700; }
+        .rv-icon-btn { min-height: 34px; padding: 0 10px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 8px; background: #fff; font: inherit; font-size: .88rem; font-weight: 600; color: #1D4ED8; cursor: pointer; }
+        .rv-icon-btn:hover { background: #EFF5FF; }
+        .rv-score-in { width: 9.5em; height: 36px; padding: 0 8px; border: 1px solid rgba(63, 47, 36, .45); border-radius: 8px; font: inherit; text-align: right; font-variant-numeric: tabular-nums; }
+        .rv-score-in[aria-invalid="true"] { border: 2px solid #B42318; }
+        .rv-warn-text { color: #9A3412; font-size: .82rem; font-weight: 600; white-space: normal; }
+        .rv-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+        .rv-edit-actions .btn-primary, .rv-edit-actions .btn-ghost { height: 36px; padding: 0 14px; }
+        .rv-note-in, .rv-answer input { flex: 1 1 240px; height: 36px; padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
+        .rv-sendbar { position: sticky; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 16px; padding: 10px 18px; border-radius: var(--radius); }
+        .rv-sendbar .rv-hint { margin-right: auto; }
+        .rv-kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
+        .rv-kv { display: flex; flex-direction: column; gap: 1px; }
+        .rv-kv span { font-size: .85rem; color: var(--muted-foreground); }
+        .rv-kv b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+        .rv-bar { height: 10px; border-radius: 999px; background: #EFE9E2; overflow: hidden; }
+        .rv-bar > div { height: 100%; background: var(--primary); }
+        .rv-fix { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 2fr) auto; gap: 6px 16px; align-items: start; padding: 10px 0; border-top: 1px solid var(--border); }
+        .rv-fix h3 { font-size: 1rem; }
+        .rv-fix .rv-edit-actions, .rv-fix .rv-answer, .rv-fix .rv-note { grid-column: 1 / -1; }
+        .rv-remark { color: #8A1C12; }
+        .rv-fix-score { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+        .rv-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+        .rv-answer .btn-ghost { height: 36px; }
+        @media (max-width: 720px) { .rv-fix { grid-template-columns: 1fr; } .rv-fix-score { align-items: flex-start; } .rv-save { padding-top: 0; } }
     </style>
 </head>
 
@@ -966,9 +1032,7 @@
         <section id="review-view" class="hidden" aria-labelledby="review-title">
             <div class="rv-head glass">
                 <h2 id="review-title" class="rv-title">ตรวจสอบ SK03 ก่อนเบิกจ่าย</h2>
-                <label class="rv-month">เดือนที่ตรวจ
-                    <select id="review-month"></select>
-                </label>
+                <div id="review-months" class="rv-months" role="group" aria-label="เดือน"></div>
                 <div id="review-role" class="rv-role" role="group" aria-label="มุมมอง">
                     <button type="button" data-role="auditee" aria-pressed="true">ผู้จัดทำ</button>
                     <button type="button" data-role="auditor" aria-pressed="false">ผู้ตรวจสอบ</button>

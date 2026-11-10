@@ -602,7 +602,7 @@
         "access.approve": "อนุมัติคำขอเข้าใช้งาน",
         "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
         "view.review": "เปิดแท็บตรวจสอบ",
-        "review.inputs": "บันทึกงบประมาณและ per P4P",
+        "review.inputs": "บันทึกงบประมาณและ N",
         "review.rebuild": "ขอสร้าง SK03 ใหม่",
         "review.download": "ดาวน์โหลดไฟล์ตรวจสอบ",
         "review.upload": "อัปโหลดไฟล์ตรวจสอบ",
@@ -695,6 +695,11 @@
                 for (const [k, v] of Object.entries((t.changes || {}))) {
                     add((FIELD_LABEL[k] || k) + " " + auditValue(k, v[0]) + " → " + auditValue(k, v[1]));
                 }
+                // Edited from the ตรวจสอบ tab, with the auditee's note.
+                if (t.via === "review")
+                    add("จากแท็บตรวจสอบ");
+                if (t.note)
+                    add(t.note);
                 break;
             case "access.approve":
             case "access.reject":
@@ -708,7 +713,7 @@
                 break;
             case "review.inputs":
                 add(monthLabel(t.month));
-                add("งบประมาณ " + auditValue("", t.budget) + " · per P4P " + auditValue("", t.per_p4p));
+                add("งบประมาณ " + auditValue("", t.budget) + (t.doctors ? " · N " + auditValue("", t.doctors) : "") + " · per P4P " + auditValue("", t.per_p4p));
                 break;
             case "review.download":
                 add(monthLabel(t.month));

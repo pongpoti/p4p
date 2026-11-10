@@ -62,6 +62,8 @@ export interface PdfData {
   reopenReason: string;
   budget: number;
   perP4P: number;
+  /** N (จำนวนแพทย์): per P4P = budget ÷ N. Null for a round sent before N was asked for. */
+  doctors: number | null;
   builtAt: string;
   sk03File: string;
   mergedFile: string;
@@ -228,10 +230,10 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 <div class="two"><table>${summaryHead}<tbody>${left}</tbody></table><table>${summaryHead}<tbody>${right}</tbody></table></div>
 <h2>ข้อมูลที่ใช้คำนวณและผลการตรวจสอบ</h2>
 <table class="info"><tbody>
-<tr><th>งบประมาณทั้งหมด</th><td>${money(d.budget)} บาท</td><th>per P4P (อินเทิร์น)</th><td>${money(d.perP4P)} บาท/คน</td></tr>
+<tr><th>งบประมาณทั้งหมด</th><td>${money(d.budget)} บาท</td><th>per P4P (อินเทิร์น)</th><td>${money(d.perP4P)} บาท/คน${d.doctors ? ` (งบประมาณ ÷ N ${d.doctors.toLocaleString('en-US')})` : ''}</td></tr>
 <tr><th>P4P ที่จ่าย (ไม่รวมค่าบริหาร)</th><td>${money(pay)} บาท (${balance})</td><th>ค่าตอบแทนบริหาร (นอกงบ P4P)</th><td>${money(admin)} บาท</td></tr>
 <tr><th>รวมจ่ายตามชีตกลุ่มงาน</th><td>${money(total)} บาท</td><th>ผลการตรวจสอบ</th><td>อนุมัติ ${d.approvedPeople.toLocaleString('en-US')} / ${d.people.toLocaleString('en-US')} คน ใน ${d.rounds} รอบ</td></tr>
-<tr><th>ไฟล์ที่ใช้</th><td colspan="3">ไฟล์ที่ผู้จัดทำส่งรอบที่ ${d.roundNo}: ${esc(d.sk03File || 'SK03')} · ${esc(d.mergedFile || 'ไฟล์รวมคะแนนรายคน')} (ระบบสร้าง ${esc(thaiDateTime(d.builtAt, true))})</td></tr>
+<tr><th>ไฟล์ที่ใช้</th><td colspan="3">ผู้จัดทำส่งรอบที่ ${d.roundNo}: ${esc(d.sk03File || 'SK03')} · ${esc(d.mergedFile || 'รวมค่าคะแนน')} (ระบบสร้าง ${esc(thaiDateTime(d.builtAt, true))})</td></tr>
 <tr><th>ลำดับเหตุการณ์</th><td colspan="3">${timeline}</td></tr>
 </tbody></table>
 </div>${footer(1, pages, stamp)}</section>`;
@@ -345,19 +347,24 @@ export async function loadPdfData(db: SupabaseClient, roundId: number): Promise<
   };
   const r = await one(db.from('review_rounds').select('*').eq('id', roundId).maybeSingle(), 'round') as Record<string, any>;
   const b = await one(db.from('review_builds').select('built_at, depts').eq('id', r.build_id).maybeSingle(), 'build') as Record<string, any>;
-  const ups = await one(db.from('review_uploads').select('id, file_name').in('id', [r.sk03_upload, r.merged_upload]), 'uploads') as { id: string; file_name: string }[];
+  // Rounds sent since the second SQL file have no uploads: the build's own files.
+  const upIds = [r.sk03_upload, r.merged_upload].filter(Boolean) as string[];
+  const ups = upIds.length
+    ? await one(db.from('review_uploads').select('id, file_name').in('id', upIds), 'uploads') as { id: string; file_name: string }[]
+    : [];
   const decisions = await one(db.from('review_decisions').select('decision').eq('round_id', roundId), 'decisions') as { decision: string | null }[];
   const { count: rounds, error: e5 } = await db.from('review_rounds').select('id', { count: 'exact', head: true }).eq('month', r.month);
   if (e5) throw new Error(`rounds: ${e5.message}`);
-  const name = (id: string): string => ups.find((u) => u.id === id)?.file_name ?? '';
+  const name = (id: string | null, built: string): string => (id && ups.find((u) => u.id === id)?.file_name) || built;
   return {
     month: r.month, roundNo: r.round_no, rounds: rounds ?? r.round_no,
     approvedAt: r.approved_at, approvedBy: r.approved_by,
     approvedPeople: decisions.filter((x) => x.decision === 'approve').length, people: decisions.length,
     submittedAt: r.submitted_at, submittedBy: r.submitted_by,
     reopenedAt: r.reopened_at ?? null, reopenedBy: r.reopened_by ?? '', reopenReason: r.reopen_reason ?? '',
-    budget: Number(r.budget), perP4P: Number(r.per_p4p), builtAt: b.built_at,
-    sk03File: name(r.sk03_upload), mergedFile: name(r.merged_upload),
+    budget: Number(r.budget), perP4P: Number(r.per_p4p),
+    doctors: r.doctors === null || r.doctors === undefined ? null : Number(r.doctors), builtAt: b.built_at,
+    sk03File: name(r.sk03_upload, `SK03_${r.month}.xlsx`), mergedFile: name(r.merged_upload, `merged_${r.month}.xlsx`),
     depts: (b.depts ?? []) as PdfDept[],
   };
 }

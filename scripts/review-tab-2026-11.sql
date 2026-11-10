@@ -30,7 +30,12 @@
 --  these with the service key behind the dashboard session (owner only);
 --  process/ and automation/ use the same key in GitHub Actions.
 --
---  Idempotent: safe to re-run.
+--  Then run scripts/review-tab-2026-11-auditee.sql: the auditee side as
+--  redesigned on 2026-11-09 (budget and N, no uploads, score edits). It
+--  holds review_request_build, review_submit_round, review_state,
+--  review_months and review_people, so they are not in this file.
+--
+--  Idempotent: safe to re-run, also after the second file.
 -- ============================================================================
 
 create table if not exists public.review_inputs (
@@ -249,35 +254,6 @@ as $$
   end;
 $$;
 
--- Queue one build of p_month, or return the one already open. A changed
--- budget / per P4P ('inputs') while a build is already running queues one
--- more, since the running build read the old numbers. A request past its
--- deadline (above) is given up first, so a stuck one never blocks a retry.
-create or replace function public.review_request_build(p_month text, p_reason text, p_actor text)
-returns public.review_requests
-language plpgsql
-set search_path = ''
-as $$
-declare
-  r public.review_requests;
-begin
-  if p_month !~ '^[0-9]{4}_[0-9]{2}$' then raise exception 'review: bad month'; end if;
-  update public.review_requests q
-     set status = 'failed', finished_at = public.review_request_deadline(q), error = 'timed out'
-   where q.month = p_month and public.review_request_deadline(q) < now();
-  select * into r from public.review_requests
-   where month = p_month
-     and status in ('queued', 'dispatched', 'running')
-     and (p_reason <> 'inputs' or status = 'queued')
-   order by (status = 'queued') desc, id desc limit 1;
-  if found then return r; end if;
-  insert into public.review_requests (month, reason, requested_by)
-  values (p_month, p_reason, coalesce(p_actor, ''))
-  returning * into r;
-  return r;
-end;
-$$;
-
 -- The relay's claim: the oldest queued request, marked dispatched. One the
 -- tab already shows as timed out is closed first and never started.
 create or replace function public.claim_review_request()
@@ -297,88 +273,6 @@ as $$
 $$;
 
 -- ── Rounds ──────────────────────────────────────────────────────────────────
--- The auditee sends round N. Both uploads must be the newest build's own
--- files, that build must have no blocking problem and carry the typed budget
--- and per P4P, and it must be the auditee's turn. From round 2 on, a person
--- the auditor approved keeps that result unless their own score, department
--- or name changed, or one of their checks no longer matches; everyone else
--- is checked again (recheck_why says why). Other doctors' pay moving because
--- one score changed does not on its own mean a re-check.
-create or replace function public.review_submit_round(p_month text, p_sk03 uuid, p_merged uuid, p_actor text)
-returns public.review_rounds
-language plpgsql
-set search_path = ''
-as $$
-declare
-  v_inputs public.review_inputs;
-  v_build  public.review_builds;
-  v_prev   public.review_rounds;
-  v_round  public.review_rounds;
-  v_no     int;
-begin
-  perform pg_advisory_xact_lock(hashtext('review:' || p_month));
-  select * into v_inputs from public.review_inputs where month = p_month;
-  if not found then raise exception 'review: no budget yet'; end if;
-  select * into v_build from public.review_builds where month = p_month order by built_at desc limit 1;
-  if not found then raise exception 'review: no build yet'; end if;
-  if not exists (select 1 from public.review_uploads where id = p_sk03 and month = p_month and kind = 'sk03'
-                   and result = 'latest' and build_id = v_build.id)
-     or not exists (select 1 from public.review_uploads where id = p_merged and month = p_month and kind = 'merged'
-                   and result = 'latest' and build_id = v_build.id) then
-    raise exception 'review: files are not the latest build';
-  end if;
-  if exists (select 1 from jsonb_array_elements(v_build.problems) e where (e->>'blocking')::boolean) then
-    raise exception 'review: the build has a blocking problem';
-  end if;
-  if v_build.budget is distinct from v_inputs.budget or v_build.per_p4p is distinct from v_inputs.per_p4p then
-    raise exception 'review: the build does not carry the typed numbers';
-  end if;
-  select * into v_prev from public.review_rounds
-   where month = p_month and status in ('submitted', 'returned', 'approved') for update;
-  if found and v_prev.status <> 'returned' then raise exception 'review: not the auditee''s turn'; end if;
-
-  select coalesce(max(round_no), 0) + 1 into v_no from public.review_rounds where month = p_month;
-  if v_prev.id is not null then
-    update public.review_rounds set status = 'superseded' where id = v_prev.id;
-  end if;
-  insert into public.review_rounds (month, round_no, build_id, sk03_upload, merged_upload, budget, per_p4p, submitted_by)
-  values (p_month, v_no, v_build.id, p_sk03, p_merged, v_inputs.budget, v_inputs.per_p4p, coalesce(p_actor, ''))
-  returning * into v_round;
-
-  insert into public.review_decisions (round_id, roster_index, decision, carried, recheck_why, decided_at, decided_by)
-  select v_round.id, x.roster_index,
-         case when x.why = 'keep' then 'approve' end,
-         x.why = 'keep',
-         case when x.why = 'keep' then '' else x.why end,
-         case when x.why = 'keep' then x.decided_at end,
-         case when x.why = 'keep' then x.decided_by else '' end
-    from (
-      select p.roster_index, d.decided_at, d.decided_by,
-             case
-               when v_prev.id is null then ''
-               when d.roster_index is null then 'new'
-               when d.decision is distinct from 'approve' then 'fix'
-               when q.roster_index is null then 'new'
-               when q.sk03_score is distinct from p.sk03_score then 'score'
-               when q.department is distinct from p.department then 'department'
-               when q.name is distinct from p.name then 'name'
-               when p.score_check <> 'match' or p.money_check <> 'match' then 'check'
-               else 'keep'
-             end as why
-        from public.review_build_people p
-        left join public.review_decisions d on d.round_id = v_prev.id and d.roster_index = p.roster_index
-        left join public.review_build_people q on q.build_id = v_prev.build_id and q.roster_index = p.roster_index
-       where p.build_id = v_build.id
-    ) x;
-
-  -- The auditee's answers to other issues go with this round.
-  update public.review_issue_replies r set round_no = v_no
-    from public.review_issues i
-   where r.issue_id = i.id and i.month = p_month and r.role = 'auditee' and r.round_no is null;
-  return v_round;
-end;
-$$;
-
 -- The auditee takes back a round the auditor has not opened yet.
 create or replace function public.review_withdraw_round(p_month text, p_actor text)
 returns int
@@ -401,118 +295,6 @@ begin
   return r.round_no;
 end;
 $$;
-
--- ── The tab's view of one month ─────────────────────────────────────────────
-create or replace function public.review_state(p_month text)
-returns jsonb
-language plpgsql
-stable
-set search_path = ''
-as $$
-declare
-  v_total int := 0;
-  v_sent  int := 0;
-  v_live  public.review_rounds;
-  v_build uuid;
-begin
-  if p_month !~ '^[0-9]{4}_[0-9]{2}$' then raise exception 'review: bad month'; end if;
-  if to_regclass(format('public.%I', p_month)) is not null then
-    execute format('select count(*), count(submitted_at) from public.%I', p_month) into v_total, v_sent;
-  end if;
-  select * into v_live from public.review_rounds
-   where month = p_month and status in ('submitted', 'returned', 'approved');
-  select id into v_build from public.review_builds where month = p_month order by built_at desc limit 1;
-  return jsonb_build_object(
-    'month', p_month,
-    'roster', jsonb_build_object('total', v_total, 'sent', v_sent, 'exists', to_regclass(format('public.%I', p_month)) is not null),
-    'inputs', (select to_jsonb(i) from public.review_inputs i where i.month = p_month),
-    'build', (select to_jsonb(b) - 'depts' from public.review_builds b where b.id = v_build),
-    'buildChecks', (select jsonb_build_object(
-        'scoreMismatch', count(*) filter (where score_check = 'mismatch'),
-        'scoreMissing',  count(*) filter (where score_check = 'missing'),
-        'moneyMismatch', count(*) filter (where money_check = 'mismatch'),
-        'moneyMissing',  count(*) filter (where money_check = 'missing'))
-      from public.review_build_people where build_id = v_build),
-    'builds', (select count(*) from public.review_builds where month = p_month),
-    -- A request past its deadline reads as failed, so the tab never waits on a dead run.
-    'request', (select case when public.review_request_deadline(q) < now()
-                  then to_jsonb(q) || jsonb_build_object('status', 'failed', 'error', 'timed out',
-                                                         'finished_at', public.review_request_deadline(q))
-                  else to_jsonb(q) end
-                  from public.review_requests q where q.month = p_month order by q.id desc limit 1),
-    'uploads', (select coalesce(jsonb_object_agg(u.kind, to_jsonb(u) - 'path'), '{}'::jsonb) from (
-        select distinct on (kind) * from public.review_uploads
-         where month = p_month and verified_at is not null order by kind, created_at desc) u),
-    'rounds', (select coalesce(jsonb_agg(jsonb_build_object(
-        'id', r.id, 'round_no', r.round_no, 'status', r.status, 'build_id', r.build_id,
-        'budget', r.budget, 'per_p4p', r.per_p4p,
-        'submitted_at', r.submitted_at, 'submitted_by', r.submitted_by,
-        'auditor_opened_at', r.auditor_opened_at, 'returned_at', r.returned_at,
-        'auditee_opened_at', r.auditee_opened_at, 'approved_at', r.approved_at,
-        'pdf_status', r.pdf_status, 'pdf_bytes', r.pdf_bytes, 'pdf_pages', r.pdf_pages,
-        'pdf_error', r.pdf_error, 'pdf_built_at', r.pdf_built_at, 'approved_by', r.approved_by,
-        'returned_by', r.returned_by, 'reopened_at', r.reopened_at, 'reopened_by', r.reopened_by,
-        'reopen_reason', r.reopen_reason,
-        'counts', (select jsonb_build_object(
-            'approve', count(*) filter (where d.decision = 'approve'),
-            'fix', count(*) filter (where d.decision = 'fix'),
-            'waiting', count(*) filter (where d.decision is null),
-            'carried', count(*) filter (where d.carried))
-          from public.review_decisions d where d.round_id = r.id)
-      ) order by r.round_no), '[]'::jsonb) from public.review_rounds r where r.month = p_month),
-    'live', case when v_live.id is null then null else v_live.round_no end,
-    'issues', (select jsonb_build_object(
-        'open', count(*) filter (where status = 'open'),
-        'closed', count(*) filter (where status = 'closed'))
-      from public.review_issues where month = p_month)
-  );
-end;
-$$;
-
--- Months for the month picker: each roster table's counts and review state.
-create or replace function public.review_months(p_months text[])
-returns jsonb
-language plpgsql
-stable
-set search_path = ''
-as $$
-declare
-  m text;
-  v_total int;
-  v_sent int;
-  out jsonb := '[]'::jsonb;
-begin
-  foreach m in array p_months loop
-    continue when m !~ '^[0-9]{4}_[0-9]{2}$';
-    v_total := 0; v_sent := 0;
-    if to_regclass(format('public.%I', m)) is not null then
-      execute format('select count(*), count(submitted_at) from public.%I', m) into v_total, v_sent;
-    else
-      continue;
-    end if;
-    out := out || jsonb_build_object(
-      'month', m, 'total', v_total, 'sent', v_sent,
-      'builtAt', (select max(built_at) from public.review_builds where month = m),
-      'round', (select jsonb_build_object('round_no', round_no, 'status', status, 'pdf_status', pdf_status)
-                  from public.review_rounds where month = m and status in ('submitted', 'returned', 'approved')),
-      'hasInputs', exists (select 1 from public.review_inputs where month = m));
-  end loop;
-  return out;
-end;
-$$;
-
-revoke all on function public.review_request_build(text, text, text) from public, anon, authenticated;
-revoke all on function public.claim_review_request() from public, anon, authenticated;
-revoke all on function public.review_submit_round(text, uuid, uuid, text) from public, anon, authenticated;
-revoke all on function public.review_withdraw_round(text, text) from public, anon, authenticated;
-revoke all on function public.review_state(text) from public, anon, authenticated;
-revoke all on function public.review_months(text[]) from public, anon, authenticated;
-grant execute on function public.review_request_build(text, text, text) to service_role;
-grant execute on function public.claim_review_request() to service_role;
-grant execute on function public.review_submit_round(text, uuid, uuid, text) to service_role;
-grant execute on function public.review_withdraw_round(text, text) to service_role;
-grant execute on function public.review_state(text) to service_role;
-grant execute on function public.review_months(text[]) to service_role;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- The auditor's side (part 2). Safe to re-run like everything above.
@@ -722,42 +504,6 @@ begin
   returning * into i;
   if not found then raise exception 'review: not in this round'; end if;
   return i;
-end;
-$$;
-
--- Everyone in a round, with both checks, the decision and the previous
--- round's decision, remark and reply. p_round null: the live round.
-create or replace function public.review_people(p_month text, p_round int)
-returns jsonb
-language plpgsql
-stable
-set search_path = ''
-as $$
-declare
-  r public.review_rounds;
-  v_prev bigint;
-begin
-  select * into r from public.review_rounds
-   where month = p_month and (round_no = p_round or (p_round is null and status in ('submitted', 'returned', 'approved')))
-   order by round_no desc limit 1;
-  if not found then return jsonb_build_object('round', null, 'people', '[]'::jsonb); end if;
-  select id into v_prev from public.review_rounds where month = p_month and round_no = r.round_no - 1;
-  return jsonb_build_object(
-    'round', jsonb_build_object('id', r.id, 'round_no', r.round_no, 'status', r.status, 'build_id', r.build_id),
-    'people', coalesce((select jsonb_agg(jsonb_build_object(
-        'index', p.roster_index, 'name', p.name, 'department', p.department, 'intern', p.is_intern,
-        'sk03Row', p.sk03_row, 'score', p.sk03_score, 'stated', p.stated_total, 'statedCell', p.stated_cell,
-        'statedHow', p.stated_how, 'sheet', p.merged_sheet, 'pay', p.sk03_pay, 'deptRow', p.dept_row,
-        'deptPay', p.dept_pay, 'admin', p.dept_admin, 'scoreCheck', p.score_check, 'moneyCheck', p.money_check,
-        'decision', d.decision, 'remark', d.remark, 'carried', d.carried, 'why', d.recheck_why,
-        'decidedAt', d.decided_at, 'reply', d.reply,
-        'prev', case when pd.roster_index is null then null else
-          jsonb_build_object('decision', pd.decision, 'remark', pd.remark, 'reply', pd.reply) end
-      ) order by p.is_intern, p.department, p.name)
-      from public.review_build_people p
-      left join public.review_decisions d on d.round_id = r.id and d.roster_index = p.roster_index
-      left join public.review_decisions pd on pd.round_id = v_prev and pd.roster_index = p.roster_index
-     where p.build_id = r.build_id), '[]'::jsonb));
 end;
 $$;
 
