@@ -164,7 +164,12 @@ sender addresses waiting for an admin to approve them (written by the
   `scripts/auth-rewrite-2026-08.sql` — approval no longer travels through
   Telegram `callback_data`.)
 - Written via the `log_access_request()` RPC, called from `/verify/` when a
-  user's email fails the allow-list check. `department` is required on the
+  user's email fails the allow-list check. It is anon-callable with any
+  address, so it never overwrites an open request's `name`/`department`,
+  never reopens a resolved one, writes nothing for an active physician, and
+  cleans its input (control characters out, 100-character caps, blank name
+  or malformed address ignored) — `scripts/audit-fixes-2026-11.sql` PART 2,
+  audit F13. `department` is required on the
   form (`assets/shared.js`'s `P4P.DEPARTMENTS`, the same fixed ~19-entry list
   `status/app.js`/`admin/app.js` use) so it can't drift from the canonical
   spelling the rest of the app groups by — added in
@@ -182,7 +187,9 @@ sender addresses waiting for an admin to approve them (written by the
 - **Access:** RLS, no anon/authenticated SELECT — insert-only via the RPC;
   the admin panel reads/writes it via `service_role`.
 - Migration: `scripts/security-rls-auth.sql` (Block 0a),
-  `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`).
+  `scripts/auth-rewrite-2026-08.sql` (drops `approve_token`),
+  `scripts/access-request-department-2026-08.sql` (`department`),
+  `scripts/audit-fixes-2026-11.sql` (`log_access_request`, the trigger).
 
 ## `liff_access_log`
 

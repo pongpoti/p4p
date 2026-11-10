@@ -35,9 +35,11 @@ already-applied file is safe.
    entirely, and installs the `trg_secure_new_roster` event trigger so any
    *future* `CREATE TABLE public."YYYY_MM"` is automatically locked down
    the same way. Also creates `physician_directory`, `access_requests`,
-   `blocked_emails`, and the allow-list functions
-   (`is_sender_allowlisted`, `is_current_user_allowlisted`,
-   `log_access_request`).
+   `blocked_emails`, and the first allow-list functions
+   (`is_sender_allowlisted`, `is_current_user_allowlisted`) — only while
+   `physicians` does not exist yet, so pasting it again after step 14 does not
+   undo step 14. It no longer creates `log_access_request` (step 24 does) nor
+   seeds `physician_directory` from matched senders (audit F01, 2026-11).
 7. `scripts/provision-month-function.sql` — `provision_month(p_new, p_old)`,
    the function `provision-next-month.mjs` calls every month to create the
    next roster table. **Must be run AFTER step 6** — it relies on
@@ -81,7 +83,8 @@ already-applied file is safe.
     replaces `notify_access_request()` (drops the Telegram approve/reject
     buttons — approval now happens in the `/admin/` dashboard).
 15. `scripts/access-request-department-2026-08.sql` — adds `department` to
-    `access_requests` and to what `log_access_request()` accepts/stores,
+    `access_requests` (the 3-argument `log_access_request()` that stores it
+    is now defined in step 24, audit F13),
     closing a gap where an admin-approved physician (as opposed to one
     auto-provisioned from a matched submission) landed in `physicians` with
     no department at all — the request form never asked for one before this.
@@ -189,6 +192,11 @@ already-applied file is safe.
       row is never renamed; an address with no `physicians` row gets an open
       `access_requests` row (name = matched roster name, department) for an
       admin to approve. Resolved requests are not reopened.
+    - PART 2 (F13): `log_access_request(text, text, text)`, the only
+      version (anon). Cleans control characters, caps name and department
+      at 100, ignores a blank name or a malformed address, never overwrites
+      an open request's name or department, never reopens a resolved
+      request, and writes nothing for an active physician's address.
     After it, check the `physicians` rows with `source = 'matched_sender'`
     (the query is at the end of the file): the old trigger added them with
     no admin step.

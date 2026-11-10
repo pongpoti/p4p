@@ -221,31 +221,18 @@ begin
   $fn$;
 end $guard$;
 
--- Called by /verify/ when an email is NOT allow-listed: record the attempt (with
--- the self-reported name) so an admin knows WHO to add. Never reveals anything.
--- Dropped-and-recreated because the signature gained p_name.
+-- log_access_request: /verify/ calls it when an email is NOT allow-listed, to
+-- record the attempt so an admin knows WHO to add. The 2-argument version
+-- this file used to create let any anon caller rename or reopen anyone's
+-- request (audit finding F13, 2026-11); the only version now is the
+-- 3-argument one in scripts/audit-fixes-2026-11.sql PART 2.
 drop function if exists public.log_access_request(text);
-create or replace function public.log_access_request(p_email text, p_name text default null)
-returns void
-language sql
-security definer
-set search_path = public
-as $$
-  insert into public.access_requests (email, name, requested_at, request_count, resolved)
-  values (lower(p_email), nullif(trim(p_name), ''), now(), 1, false)
-  on conflict (email) do update
-    set name          = coalesce(nullif(trim(excluded.name), ''), access_requests.name),
-        requested_at  = now(),
-        request_count = access_requests.request_count + 1,
-        resolved      = false;
-$$;
+drop function if exists public.log_access_request(text, text);
 
 revoke all on function public.is_sender_allowlisted(text)   from public;
 revoke all on function public.is_current_user_allowlisted() from public;
-revoke all on function public.log_access_request(text, text) from public;
 grant execute on function public.is_sender_allowlisted(text) to anon, authenticated;
 grant execute on function public.is_current_user_allowlisted() to authenticated;
-grant execute on function public.log_access_request(text, text) to anon, authenticated;
 
 
 -- ----------------------------------------------------------------------------

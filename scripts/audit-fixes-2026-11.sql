@@ -1,6 +1,6 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F01).
+--  (findings F01, F13).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -79,6 +79,60 @@ drop trigger if exists trg_sync_physician_from_match on public.sender_physician_
 create trigger trg_sync_physician_from_match
   after insert or update on public.sender_physician_match
   for each row execute function public.sync_physician_from_match();
+
+commit;
+
+
+-- PART 2 — F13: log_access_request (anon, called by /verify/ before login).
+--   It takes any address, so it must not let a caller rename or reopen
+--   someone else's request: an open request keeps its name and department
+--   (only requested_at and request_count move), a resolved one is not
+--   touched, and an active physician gets no request at all. Input is
+--   cleaned as the 2026-08-07 live hardening did (security-hardening
+--   Appendix B): control characters out, whitespace collapsed, name and
+--   department capped at 100, a blank name or a malformed address writes
+--   nothing.
+begin;
+
+drop function if exists public.log_access_request(text);
+drop function if exists public.log_access_request(text, text);
+
+create or replace function public.log_access_request(
+  p_email      text,
+  p_name       text default null,
+  p_department text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := lower(trim(coalesce(p_email, '')));
+  v_name  text := public.clean_request_text(p_name, 100);
+  v_dept  text := public.clean_request_text(p_department, 100);
+begin
+  -- Basic shape, no backslashes: name@domain.tld in plain ASCII.
+  if length(v_email) > 254
+     or v_email !~ '^[a-z0-9._%+-]+@[a-z0-9-]+([.][a-z0-9-]+)+$' then
+    return;
+  end if;
+  if v_name is null then
+    return;
+  end if;
+  if exists (select 1 from public.physicians p where p.email = v_email and p.active) then
+    return;
+  end if;
+  insert into public.access_requests (email, name, department, requested_at, request_count, resolved)
+  values (v_email, v_name, v_dept, now(), 1, false)
+  on conflict (email) do update
+    set requested_at  = now(),
+        request_count = public.access_requests.request_count + 1
+    where not public.access_requests.resolved;
+end;
+$$;
+revoke all on function public.log_access_request(text, text, text) from public;
+grant execute on function public.log_access_request(text, text, text) to anon, authenticated;
 
 commit;
 
