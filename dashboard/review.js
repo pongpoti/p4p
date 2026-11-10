@@ -226,7 +226,7 @@
     // send bar already say it (Pong, 2026-11-10: the box was unnecessary).
     const blocking = (s) => (s.build ? s.build.problems.filter((p) => p.blocking && p.code !== "no_inputs") : []);
     const PROBLEM = {
-        no_inputs: () => "ยังไม่ได้กรอกงบประมาณและ N",
+        no_inputs: () => "ยังไม่ได้กรอกงบประมาณและจำนวนแพทย์",
         inputs_not_in_sheet: () => "งบประมาณหรือ per P4P ใน SK03 ไม่ตรงกับที่กรอก",
         not_in_sk03: (p) => "SK03 ไม่มีชื่อ " + int(p.count || 0) + " คนตามรายชื่อเดือนนี้",
         no_doctor_sheet: (p) => "ไม่พบชีตของแพทย์ " + int(p.count || 0) + " คนในไฟล์รวม",
@@ -1538,7 +1538,7 @@
         if (s.roster.sent < s.roster.total)
             why.push("รอแพทย์ส่งครบ");
         if (!s.inputs || !s.inputs.doctors)
-            why.push("กรอกงบประมาณและ N");
+            why.push("กรอกงบประมาณและจำนวนแพทย์");
         if (openRequest(s))
             why.push("รอสร้างไฟล์ใหม่เสร็จ");
         else if (!s.build)

@@ -616,7 +616,7 @@
         "access.approve": "อนุมัติคำขอเข้าใช้งาน",
         "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
         "view.review": "เปิดแท็บตรวจสอบ",
-        "review.inputs": "บันทึกงบประมาณและ N",
+        "review.inputs": "บันทึกงบประมาณและจำนวนแพทย์",
         "review.rebuild": "ขอสร้าง SK03 ใหม่",
         "review.download": "ดาวน์โหลดไฟล์ตรวจสอบ",
         "review.upload": "อัปโหลดไฟล์ตรวจสอบ",
