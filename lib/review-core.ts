@@ -10,10 +10,12 @@
  *                 submission pipeline's rule (lib/p4p-score.ts
  *                 extractScoreFromRows, the rule that put the score in SK03
  *                 K): grand-total label rows, then a free-text summary line,
- *                 then sub-total label rows. Only the passes that read a
- *                 number the doctor wrote: never the pipeline's guesses or
- *                 recalculations, and a total formula with no saved value is
- *                 reported as uncached, not rebuilt from the days.
+ *                 then sub-total label rows, each read from the bottom-most
+ *                 row that holds a number (the total on the last row). Only
+ *                 the passes that read a number the doctor wrote: never the
+ *                 pipeline's guesses or recalculations, and a total formula
+ *                 with no saved value is reported as uncached, not rebuilt
+ *                 from the days.
  *   scoreCheck    SK03 score (staff/intern sheet K) vs that stated total
  *   moneyCheck    staff/intern pay (N) vs the department sheet (F, ตามสัดส่วนวิชาชีพ)
  *   w9Rate        the per P4P written into the intern W9 formula (=W10*rate)
@@ -86,7 +88,7 @@ function cellName(r: number, c: number): string {
 export interface StatedTotal {
   value: number | null
   cell: string | null
-  /** grand-total · free-text · sub-total · largest-over-sub-total · uncached · none */
+  /** grand-total · free-text · sub-total · uncached · none */
   how: string
 }
 
@@ -123,13 +125,17 @@ function findScoreColumn(grid: unknown[][]): number | null {
  * column's number, else the row's non-year numbers (its year-like ones only
  * when it has no other), plus numbers inside the label cell; (2) a total
  * typed as text; (3) sub-total labels in the first three columns (declared
- * column first), where a bigger number anywhere in the sheet wins, as it
- * does in the pipeline. The largest of a pass is the total; `cell` is where
- * it is (for text, the cell holding the text).
+ * column first). A pass's total is on the bottom-most row it found a number
+ * on, never the largest across rows: an earlier, bigger total row or a stray
+ * big number elsewhere is not what the doctor wrote last. Within that row
+ * the largest number is the total, as in the pipeline; `cell` is where it
+ * is (for text, the cell holding the text).
  */
 function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): StatedTotal {
-  const best = (cands: Candidate[]): Candidate =>
-    cands.reduce((a, b) => (b.n > a.n || (b.n === a.n && b.r > a.r) ? b : a))
+  const best = (cands: Candidate[]): Candidate => {
+    const last = Math.max(...cands.map((x) => x.r))
+    return cands.filter((x) => x.r === last).reduce((a, b) => (b.n > a.n ? b : a))
+  }
   const found = (b: Candidate, how: string): StatedTotal => ({ value: b.n, cell: cellName(b.r, b.c), how })
   const rowNums = (row: unknown[], r: number, skipYearFilter = false): Candidate[] => {
     const out: Candidate[] = []
@@ -198,14 +204,7 @@ function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): Stat
     if (d) sub.push(d)
     else sub.push(...rowNums(row, r))
   })
-  if (sub.length) {
-    const s = best(sub)
-    const all: Candidate[] = []
-    grid.forEach((row, r) => { if (row) all.push(...rowNums(row, r)) })
-    const m = all.length ? best(all) : s
-    if (m.n > s.n) return found(m, "largest-over-sub-total")
-    return found(s, "sub-total")
-  }
+  if (sub.length) return found(best(sub), "sub-total")
   return { value: null, cell: null, how: "none" }
 }
 
