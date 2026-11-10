@@ -42,10 +42,12 @@ scorecard, alongside email. One row per submitted file, carrying two
   again while it has attempts left (3 in all), and becomes `failed` with
   `error_type = 'stuck_processing'` when it has none
   (`scripts/audit-fixes-2026-11.sql`, audit F09).
-- `archive_status` (Drive copy): `NULL → archive_pending → archived`. No
-  failure value on purpose — once the score is saved the physician has nothing
-  left to fix, so this retries on a backoff indefinitely rather than ever
-  becoming terminal.
+- `archive_status` (Drive copy): `NULL → archive_pending → archived`, or
+  `superseded` when a newer upload for the same email and month is already
+  done or archived (so the older file never replaces the newer one in Drive;
+  audit F17). No failure value on purpose — once the score is saved the
+  physician has nothing left to fix, so this retries on a backoff
+  indefinitely rather than ever becoming terminal.
 
 - **Columns:** identity snapshotted at enqueue (`email` FK → `physicians`,
   `full_name`, `department`, `line_user_id`, `roster_index`), the submission
@@ -71,7 +73,8 @@ scorecard, alongside email. One row per submitted file, carrying two
   (`claim_p4p_score_fallback()`, `claim_p4p_archive()`) are granted to
   `service_role` only; they exist as RPCs because `FOR UPDATE SKIP LOCKED` is
   not expressible through PostgREST.
-- Migration: `scripts/line-upload-2026-09.sql`.
+- Migration: `scripts/line-upload-2026-09.sql`; the two claim functions and
+  the `superseded` value: `scripts/audit-fixes-2026-11.sql`.
 
 ## Storage bucket `p4p-uploads`
 
@@ -86,7 +89,8 @@ scorecard, alongside email. One row per submitted file, carrying two
   physician can drop a file in and can never read one back, their own
   included. Only `service_role` (the worker, and `/upload/score`) reads.
 - **Transient by design:** the object is deleted once `archive_status =
-  'archived'`, so the raw file lives here for minutes, not indefinitely.
+  'archived'`, so the raw file lives here for minutes, not indefinitely. A
+  `superseded` row's object is not deleted by anything yet.
 
 ## `dept_heads`
 

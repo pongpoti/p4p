@@ -110,11 +110,11 @@ already-applied file is safe.
     (`UPLOAD_VIA_LINE_DESIGN.md`): the `p4p-uploads` storage bucket and its
     single INSERT policy, the `p4p_upload_queue` table (two independent
     lifecycles — `status` for scoring, `archive_status` for the Drive copy),
-    and five functions: `enqueue_p4p_upload()`, `my_p4p_identity()`,
+    and three functions: `enqueue_p4p_upload()`, `my_p4p_identity()`,
     `my_p4p_uploads()` (all `authenticated`, all self-scoped from
-    `auth.jwt()`), plus `claim_p4p_score_fallback()` and
-    `claim_p4p_archive()` (`service_role` only — they exist as RPCs because
-    `FOR UPDATE SKIP LOCKED` is not expressible through PostgREST).
+    `auth.jwt()`). The two worker claim functions it used to define,
+    `claim_p4p_score_fallback()` and `claim_p4p_archive()`, are now in step
+    24 (audit F09, F17).
     Depends on step 6's `is_current_user_allowlisted()` and step 14's
     `physicians` table. Idempotent like the rest; safe to re-run after a fix.
     Read the file's own header before running it — it records exactly what
@@ -200,6 +200,10 @@ already-applied file is safe.
     - PART 3 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
       `processing` for over 30 minutes while it has attempts left (cap 3),
       and marks it `failed` / `stuck_processing` when it has none.
+    - PART 4 (F17): `claim_p4p_archive()` marks an older `archive_pending`
+      row `superseded` (new `archive_status` value) when a newer upload for
+      the same email and month is done or archived, so it never replaces
+      the newer file in Drive.
     After it, check the `physicians` rows with `source = 'matched_sender'`
     (the query is at the end of the file): the old trigger added them with
     no admin step.

@@ -1,6 +1,6 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F01, F13, F09).
+--  (findings F01, F13, F09, F17).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -183,6 +183,77 @@ end;
 $$;
 revoke all on function public.claim_p4p_score_fallback() from public, anon, authenticated;
 grant execute on function public.claim_p4p_score_fallback() to service_role;
+
+commit;
+
+
+-- PART 4 — F17: an older upload never overwrites a newer one in Drive.
+--   Drive keeps one file per physician and month, replaced by name. An
+--   older row whose archive failed and is backing off must not be archived
+--   once a newer upload for the same email and month is scored or archived:
+--   it gets archive_status 'superseded' instead (a new value, added to the
+--   check constraint here) and is never claimed again.
+begin;
+
+do $$
+declare r record;
+begin
+  for r in
+    select c.conname from pg_constraint c
+     where c.conrelid = 'public.p4p_upload_queue'::regclass and c.contype = 'c'
+       and pg_get_constraintdef(c.oid) like '%archive_status%'
+       and pg_get_constraintdef(c.oid) not like '%superseded%'
+  loop
+    execute format('alter table public.p4p_upload_queue drop constraint %I', r.conname);
+  end loop;
+  if not exists (
+    select 1 from pg_constraint c
+     where c.conrelid = 'public.p4p_upload_queue'::regclass and c.contype = 'c'
+       and pg_get_constraintdef(c.oid) like '%archive_status%'
+  ) then
+    alter table public.p4p_upload_queue add constraint p4p_upload_queue_archive_status_check
+      check (archive_status in ('archive_pending', 'archived', 'superseded'));
+  end if;
+end $$;
+
+create or replace function public.claim_p4p_archive()
+returns setof public.p4p_upload_queue
+language plpgsql
+set search_path = public
+as $$
+begin
+  update public.p4p_upload_queue o
+     set archive_status = 'superseded'
+   where o.id in (
+     select o2.id from public.p4p_upload_queue o2
+      where o2.archive_status = 'archive_pending'
+        and exists (
+          select 1 from public.p4p_upload_queue n
+           where n.email = o2.email
+             and n.month_key = o2.month_key
+             and n.received_at > o2.received_at
+             and (n.status = 'done' or n.archive_status = 'archived'))
+      for update of o2 skip locked);
+
+  -- Backoff 1h, 2h, 4h ... capped at 24h (line-upload-2026-09.sql PART 5).
+  return query
+  update public.p4p_upload_queue q
+     set archive_attempts = q.archive_attempts + 1,
+         archive_last_attempt_at = now()
+   where q.id = (
+     select id from public.p4p_upload_queue
+      where archive_status = 'archive_pending'
+        and (archive_last_attempt_at is null
+             or archive_last_attempt_at
+                < now() - make_interval(hours => least(24, 2 ^ greatest(0, archive_attempts - 1))::int))
+      order by received_at
+      limit 1
+      for update skip locked)
+  returning q.*;
+end;
+$$;
+revoke all on function public.claim_p4p_archive() from public, anon, authenticated;
+grant execute on function public.claim_p4p_archive() to service_role;
 
 commit;
 
