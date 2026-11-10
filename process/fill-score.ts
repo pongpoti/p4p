@@ -4,17 +4,13 @@
  * Step 4.5 of the nightly build (process.ts fillMissingScores): the score a
  * doctor's Drive workbook states, read by the same extractor the submission
  * pipeline uses (lib/p4p-score.ts resolveScore, the vendored copy of
- * automation/claude-analyst.ts, with its rowsFromWorksheet cell reading), and
- * whether it is safe to write to the roster with nobody checking it.
+ * automation/claude-analyst.ts, with its rowsFromWorksheet cell reading).
  *
- * The roster score is what SK03 column J pays on, and the rule is that a
- * doctor's score is the total they wrote on the last row of their form,
- * never a recalculation. So only a total the workbook itself states is
- * written: a grand-total row or a total typed as text (isHighConfidence, the
- * same gate /upload/score uses). A sub-total, a whole-sheet guess or a
- * recalculation is left empty for an admin, and so is a workbook with more
- * than one sheet holding data, where which month's sheet holds the score is
- * not something this step can tell.
+ * It accepts what the email pipeline accepts (any score above 0), so a score
+ * filled here is the score the doctor's email would have saved. Which totals
+ * to trust is a rule of the shared extractor, not of this step. The first
+ * sheet holding data is read, as the old copy in process.ts read the first
+ * sheet; Drive copies are single-sheet uploads in practice.
  *
  * Kept out of process.ts so the root tests can load it (process.ts runs its
  * pipeline on import): lib/__tests__/fill-score.test.mjs.
@@ -29,7 +25,6 @@ const ExcelJS = require('exceljs') as typeof import('exceljs');
 // not pull the root's lib/ (and its own exceljs) into the program.
 const p4p = require('../lib/p4p-score') as {
   resolveScore(rows: Row[]): { score: number | null; method: string };
-  isHighConfidence(method: string): boolean;
   rowsFromWorksheet(ws: Worksheet): Row[];
 };
 
@@ -38,7 +33,7 @@ export interface StatedScore {
   score: number | null;
   /** How it was read, or why nothing was. */
   method: string;
-  /** True only for a stated total that may be saved without a person. */
+  /** True when the score may be written to the roster (score above 0). */
   write: boolean;
 }
 
@@ -60,9 +55,8 @@ export async function statedScoreFromWorkbook(buffer: Buffer): Promise<StatedSco
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   const sheets = wb.worksheets.filter((ws) => nonNullCount(ws) >= 3);
   if (sheets.length === 0) return { score: null, method: 'no sheet with data', write: false };
-  if (sheets.length > 1) return { score: null, method: `${sheets.length} sheets with data`, write: false };
 
   const { score, method } = p4p.resolveScore(p4p.rowsFromWorksheet(sheets[0]));
   if (score === null || !(score > 0)) return { score: null, method, write: false };
-  return { score, method, write: p4p.isHighConfidence(method) };
+  return { score, method, write: true };
 }

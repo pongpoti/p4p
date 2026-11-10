@@ -417,15 +417,13 @@ function listsMatch(driveNames: string[], supabasePersons: SupabasePerson[]): bo
 //  STEP 4.5 — Fill missing scores from Excel
 // ═══════════════════════════════════════════════════════════════════
 // The score is read by the submission pipeline's own extractor
-// (lib/p4p-score.ts, via ./fill-score.ts), and only a total the workbook
-// states is written: anything else stays empty for an admin to fill.
+// (lib/p4p-score.ts, via ./fill-score.ts), so a filled score is the one the
+// doctor's email would have saved.
 
 /**
- * Step 4.5 — for each person with score=null, read the total their Drive
- * workbook states and save it. Only a stated total (a grand-total row or a
- * total typed as text) is saved; a sub-total, a guess or a recalculation is
- * left empty for an admin. Logged by roster index, never by name: these logs
- * are public.
+ * Step 4.5 — for each person with score=null, read the score from their
+ * Drive workbook with the pipeline's extractor and save it. Logged by roster
+ * index, never by name or score: these logs are public.
  */
 async function fillMissingScores(
   drive: drive_v3.Drive,
@@ -467,7 +465,7 @@ async function fillMissingScores(
         continue;
       }
       if (!write) {
-        leftEmpty(person, `${score.toFixed(2)} is not a stated total (${method})`);
+        leftEmpty(person, `not saved (${method})`);
         continue;
       }
 
@@ -478,7 +476,7 @@ async function fillMissingScores(
       if (error) {
         log(`  [Score] ⚠ row #${person.index}: Supabase update failed: ${error.message}`, 'warn');
       } else {
-        log(`  [Score] row #${person.index} → ${score.toFixed(2)}  (${method})`);
+        log(`  [Score] row #${person.index} → saved  (${method})`);
         person.score = score;  // keep sbData consistent for Step 5+
         updated++;
       }
