@@ -12,9 +12,8 @@
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
-import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex, getPhysicianByEmail, getRosterScore } from "./supabase-client.js";
+import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
-import { decideSenderGate, formatHoldAlert, formatNewSenderAlert, HOLD_REPLY_SUBJECT, holdReplyBody, type SenderGateResult } from "./sender-gate.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
@@ -568,7 +567,7 @@ export interface ProcessBufferContext {
    */
   gmailReceivedAt?: string | null;
   /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
-  receipt?: { answered: boolean; holdNoticeSent?: boolean; reviewNoticeSent?: boolean };
+  receipt?: { answered: boolean; reviewNoticeSent?: boolean };
   /** A Drive client to use instead of the one P4P_FOLDER_ID configures (tests); null means no Drive. */
   drive?: DriveClient | null;
 }
@@ -1059,62 +1058,6 @@ export async function processBuffer(buffer: Buffer, {
     return holdForAdmin({ reason: "ambiguous_name", candidates: ambiguous.candidates });
   }
 
-  // ── Sender check (email path) ────────────────────────────────────────────
-  // The physician was named by text the sender controls, so the name alone
-  // proves nothing: see sender-gate.ts. Decided before Drive, because a held
-  // submission must not replace the physician's file either. A failed lookup
-  // throws: the message stays unread and is tried again on the next poll
-  // (bounded, see setAsideAfterThrows) instead of being guessed either way.
-  let gate: SenderGateResult | null = null;
-  if (!isUpload && match) {
-    gate = await decideSenderGate(replyTo, match.matchedName, workMonth, match.index, {
-      lookupAccount: getPhysicianByEmail,
-      lookupScore  : getRosterScore,
-      relaySenders : new Set([...SKIP_SENDERS, ...THREAD_RELAY_SENDERS]),
-    });
-    console.log(`│        🔐  Sender check: ${gate.gate}`);
-
-    if (gate.gate === "hold") {
-      const alert = {
-        senderEmail: replyTo, account: gate.account, physicianName: match.matchedName, department: match.department,
-        monthKey: workMonth, score: analysis.score, filename: filename ?? null, messageId, requestRecorded: false,
-      };
-      // The access request the admin approves to release this file is made
-      // from this row (the database trigger on sender_physician_match).
-      try {
-        await bumpSenderMatch({
-          senderEmail: replyTo, senderDisplayName, extractedName: analysis.name,
-          matchedPhysician: match.matchedName, department: match.department, similarity: match.similarity,
-        });
-        alert.requestRecorded = true;
-      } catch (err) {
-        console.warn(`│        ⚠️  sender_physician_match update failed: ${errForLog(err)}`);
-      }
-      // The admin has to hear about a held file before the message is marked
-      // handled: if Telegram fails this throws, nothing has gone to the
-      // sender yet, and the next poll tries again.
-      try {
-        await sendTelegram(formatHoldAlert(alert, gate.rosterScore, P4P_LABEL_NAME));
-      } catch (err) {
-        throw new Error(`held submission: admin alert not delivered (${err instanceof Error ? err.message : err})`);
-      }
-      console.log(`│        ⏸️   Held for the admin: score not saved, Drive file not replaced`);
-      // One notice per message, however many of its workbooks were held.
-      const owed = Boolean(replyTo && messageId && SEND_ERROR_REPLIES && !isAutomatedSender(replyTo) && !receipt?.holdNoticeSent);
-      if (owed) {
-        if (receipt) receipt.holdNoticeSent = true;
-        try {
-          await gmail!.sendMessage({ to: replyTo, subject: HOLD_REPLY_SUBJECT, body: holdReplyBody(), replyToMessageId: messageId });
-          console.log(`│        📧  Hold notice sent to the sender`);
-        } catch (err) {
-          console.error(`│        ❌  Hold notice failed: ${errForLog(err)}`);
-          if (receipt) receipt.answered = false;
-        }
-      }
-      return "replied";
-    }
-  }
-
   // ── Claude and the JS score disagree: the admin reads the total ────────
   // Only when the JS method is not trusted on its own (claude-analyst.ts
   // chooseScore); a high-confidence JS score has already won outright.
@@ -1190,7 +1133,6 @@ export async function processBuffer(buffer: Buffer, {
   // server-side received_at as emailDate.
   const ts = submissionTime(gmailReceivedAt, emailDate);
   let scoreSaved = false;
-  let senderRecorded = false;
   if (match) {
     try {
       await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
@@ -1227,9 +1169,7 @@ export async function processBuffer(buffer: Buffer, {
 
     // ── Record sender → physician match (feeds the Telegram approve message) ──
     // Email path only: this table exists to learn which sender address belongs
-    // to which physician. Its database trigger turns an address that is not
-    // yet a physician into an access request for the admin to approve; it
-    // never grants access itself (sender-gate.ts). On the upload path that mapping is already known and
+    // to which physician. On the upload path that mapping is already known and
     // verified (it is the session), and there is no sender address to learn
     // from — `replyTo` is empty.
     if (!isUpload) try {
@@ -1241,7 +1181,6 @@ export async function processBuffer(buffer: Buffer, {
         department        : match.department,
         similarity        : match.similarity,
       });
-      senderRecorded = true;
       console.log(`│        🗂️   sender_physician_match updated`);
     } catch (matchLogErr) {
       console.warn(`│        ⚠️  sender_physician_match update skipped (non-fatal): ${errForLog(matchLogErr)}`);
@@ -1262,15 +1201,6 @@ export async function processBuffer(buffer: Buffer, {
     console.log(`│        ✅  Telegram message sent.`);
   } catch (tgErr) {
     console.error(`│        ❌  Telegram error: ${tgErr instanceof Error ? tgErr.message : tgErr}`);
-  }
-
-  // A new address submitted for a physician with no score yet: accepted as
-  // before, and the admin is told so they can confirm or refuse the address.
-  if (gate?.gate === "new_unscored" && match) {
-    await sendTelegram(formatNewSenderAlert({
-      senderEmail: replyTo, account: gate.account, physicianName: match.matchedName, department: match.department,
-      monthKey: workMonth, score: analysis.score, filename: filename ?? null, messageId, requestRecorded: senderRecorded,
-    }, scoreSaved)).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
   }
 
   // ── Tell the physician ────────────────────────────────────────────────
@@ -1647,7 +1577,6 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
                 receivedDate: tm.msg.body ? tm.msg.receivedAt : msg.receivedAt,
                 threadId : msg.threadId,
                 siblingFilenames: xlsxInMsg.map((a) => a.filename),
-                receipt  : { answered: true },
               };
               relayFound = true;
               const results = await Promise.allSettled(
@@ -1723,7 +1652,6 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
           gmailReceivedAt: msg.receivedAt,
           threadId : msg.threadId,
           siblingFilenames: threadXlsx.atts.map((a) => a.filename),
-          receipt  : { answered: true },
         };
         const results = await Promise.allSettled(
           threadXlsx.atts.map((att) => processAttachment(att, threadXlsx!.messageId, context, gmail, threadXlsx!.atts.length))

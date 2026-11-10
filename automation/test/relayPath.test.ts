@@ -58,21 +58,3 @@ test("a relayed workbook that was answered with an alert marks the relay message
   await poll(gmail);   // the next minute's poll
   assert.equal(gmail.sent.length, 1, "not answered again a minute later");
 });
-
-test("on the relay path the ORIGINAL sender is the one checked: an unknown one on a scored row is held", async () => {
-  const be = installFakeBackends({
-    "2569_10"  : [{ index: 3, firstname: "ทดสอบ", lastname: "ตัวอย่าง", prefix: "", department: "ทดสอบ", score: 500, submitted_at: null }],
-    // the relay mailbox has a physicians row of the physician's name: it must not count
-    physicians : [{ email: "relay@example.org", full_name: "ทดสอบ ตัวอย่าง", active: true }],
-  });
-  const thread = await relayThread("ส่ง P4P ตุลาคม 2569");
-  thread[0]!.attachments[0]!.filename = "P4P_ทดสอบ ตัวอย่าง.xlsx";
-  const gmail = fakeGmail(thread);
-  await poll(gmail);
-  assert.deepEqual(be.patches, [], "nothing saved");
-  assert.equal(gmail.sent.length, 1);
-  assert.equal(gmail.sent[0]!.to, "doc@example.com", "the original sender, not the relay, gets the hold notice");
-  assert.match(gmail.sent[0]!.subject, /รอผู้ดูแลระบบยืนยันอีเมลผู้ส่ง/);
-  assert.deepEqual(gmail.modified.map((m) => m.id), ["relay1"], "the relay message is marked handled");
-  assert.ok(be.telegrams.some((t) => t.includes("doc@example.com") && t.includes("relay1")));
-});

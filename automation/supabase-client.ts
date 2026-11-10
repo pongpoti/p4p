@@ -12,7 +12,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { SIMILARITY_THRESHOLD, SUPABASE_ROW_LIMIT } from "./config.js";
 import type { RosterLookup, RosterMatch } from "./types.js";
-import type { PhysicianAccount } from "./sender-gate.js";
 
 // ── Singleton client ───────────────────────────────────────────────────────
 let _supabase: SupabaseClient | null = null;
@@ -233,45 +232,6 @@ export async function getRosterRowByIndex(date: string, index: number | string |
     index      : row.index,
     similarity : 1,
   };
-}
-
-/**
- * The physicians row (the login allow-list) for one sender address, or null
- * when there is none. Read-only: the email pipeline never adds or renames a
- * physician (sender-gate.ts). Throws on a query error, so a lookup that
- * failed is never mistaken for "not a physician".
- */
-export async function getPhysicianByEmail(email: string): Promise<PhysicianAccount | null> {
-  const addr = String(email ?? "").trim().toLowerCase();
-  if (!addr) return null;
-  const { data, error } = await getSupabase()
-    .from("physicians")
-    .select("email, full_name, active")
-    .eq("email", addr)
-    .limit(1);
-  if (error) throw new Error(`physicians lookup error: ${error.message}`);
-  const row = (data as { email: string; full_name: string | null; active: boolean | null }[] | null)?.[0];
-  if (!row) return null;
-  return { email: row.email, fullName: row.full_name ?? null, active: row.active === true };
-}
-
-/**
- * The score already saved on one roster row, or null when it has none yet.
- * Throws on a query error or when the row is missing.
- */
-export async function getRosterScore(date: string, index: number | string): Promise<number | null> {
-  if (!isValidDate(date)) throw new Error(`Cannot read score — invalid date key: "${date}"`);
-  const { data, error } = await getSupabase()
-    .from(date)
-    .select("score")
-    .eq("index", index)
-    .limit(1);
-  if (error) throw new Error(`Supabase query error on table "${date}": ${error.message}`);
-  const row = (data as { score: number | string | null }[] | null)?.[0];
-  if (!row) throw new Error(`Roster table "${date}" has no row ${index}`);
-  if (row.score === null || row.score === undefined) return null;
-  const n = Number(row.score);
-  return Number.isFinite(n) ? n : null;
 }
 
 export interface SubmissionInput {

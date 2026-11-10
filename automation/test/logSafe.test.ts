@@ -97,7 +97,7 @@ test("a processed submission prints ids, counts and tags only", async () => {
   assert.match(text, new RegExp(`sender ${logTag(OWNER)}`));
 });
 
-test("a held submission from an unknown sender prints nothing personal either", async () => {
+test("a submission that replaces an existing score prints nothing personal either", async () => {
   const be = installFakeBackends({
     "2569_10"      : [{ index: 7, firstname: FIRST, lastname: LAST, prefix: "นพ.", department: "ทดสอบ", score: 999, submitted_at: null }],
     physicians     : [],
@@ -105,7 +105,6 @@ test("a held submission from an unknown sender prints nothing personal either", 
   });
   const gmail = fakeGmail([await mail(STRANGER)]);
   const text = await printed(() => readSubmissionEmails({ gmail: gmail as never }));
-  assert.equal(be.patches.length, 0, "held");
+  assert.ok(be.patches.length > 0, "saved (new senders are still accepted, as before)");
   assertNothingPersonal(text, STRANGER);
-  assert.ok(be.telegrams.some((t) => t.includes(STRANGER) && t.includes(NAME)), "the private admin chat still gets the details");
 });
