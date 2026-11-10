@@ -674,41 +674,51 @@
 
     // Budget and N are whole numbers (lib/review-core.ts parseBudget, parseCount).
     // per P4P = budget ÷ N to the satang, as the SQL stores it (lib/review-core.ts perP4p).
-    const WHOLE_RE = /^\d+$/
-    const BUDGET_MSG = "ใส่จำนวนเต็มบาทมากกว่า 0 ไม่มีทศนิยม"
-    const DOCTORS_MSG = "ใส่จำนวนเต็มมากกว่า 0 ไม่มีทศนิยม"
+    const BUDGET_DIGITS = 11 // under 1e11, as the server takes it
+    const DOCTORS_DIGITS = 5 // under 1e5
+    const wholeOf = (v: string): number | null => {
+        const d = v.replace(/,/g, "").trim()
+        return /^\d+$/.test(d) && Number(d) > 0 ? Number(d) : null
+    }
     function ratePreview(budget: string, n: string): string {
-        const b = budget.replace(/,/g, "").trim(), c = n.replace(/,/g, "").trim()
-        if (!/^[1-9]\d*$/.test(b) || !/^[1-9]\d*$/.test(c)) return "–"
-        const v = Math.round(Math.round(Number(b) * 100) / Number(c)) / 100
+        const b = wholeOf(budget), c = wholeOf(n)
+        if (b === null || c === null || b >= 1e11 || c >= 1e5) return "–"
+        const v = Math.round(Math.round(b * 100) / c) / 100
         return v > 0 ? baht(v) : "–"
     }
     const grouped = (digits: string): string => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-    // A whole-number field: a typed letter or space does nothing, and with
-    // `group` the digits show a comma every 1,000 as they are typed, the
-    // caret staying after the same digit; Backspace or Delete on a comma
-    // takes the digit beside it. Nothing the user typed is dropped without
-    // a word: a decimal point (typed or pasted) or other pasted text stays
-    // and the field says at once that it takes whole numbers (dropping the
-    // point would turn 2,158,709.06 into 215,870,906), and a leading 0 stays
-    // and is flagged (dropping it would turn 2,058,709 with the 2 deleted
-    // into 58,709, and the 2 typed again into 258,709).
-    const ZERO_MSG = "ตัวเลขต้องไม่ขึ้นต้นด้วย 0"
-    const fieldProblem = (v: string, msg: string): string | null =>
-        /[^\d,]/.test(v) ? msg : /^0\d/.test(v.replace(/,/g, "")) ? ZERO_MSG : null
-    function showFieldProblem(i: HTMLInputElement, msg: string): void {
-        const e = document.getElementById(i.id + "-e")
-        if (!e) return
-        const want = fieldProblem(i.value, msg)
-        if (want) { e.textContent = want; e.classList.remove("hidden"); i.setAttribute("aria-invalid", "true"); fieldErrs.set(i.id, want) }
-        else if (fieldErrs.get(i.id) === msg || fieldErrs.get(i.id) === ZERO_MSG) {
-            e.textContent = ""; e.classList.add("hidden"); i.removeAttribute("aria-invalid"); fieldErrs.delete(i.id)
-        }
-    }
-    function wholeField(i: HTMLInputElement, group: boolean, msg: string): void {
+    // A whole-number field takes digits only and says nothing: a typed
+    // letter, space or "." does nothing, and so do the digits typed right
+    // after a "." (until the caret moves), the same as pasted text keeps the
+    // digits before its first ".": 2,158,709.06 gives 2,158,709 either way,
+    // never 215,870,906.
+    // A digit past the field's limit does nothing either. With `group` the
+    // digits show a comma every 1,000 as they are typed, the caret staying
+    // after the same digit; Backspace or Delete on a comma takes the digit
+    // beside it. A leading 0 stays while typing (deleting the 2 of 2,058,709
+    // must not leave 58,709 when the 2 is typed back) and goes when the
+    // field is left.
+    function wholeField(i: HTMLInputElement, group: boolean, maxDigits: number): void {
         let prev: string | null = null
+        let good = ""
+        let fraction = false
+        const whole = (): void => { fraction = false }
+        i.addEventListener("focus", () => { good = i.value; fraction = false })
+        i.addEventListener("mousedown", whole)
+        i.addEventListener("keydown", (e) => { if (e.key.length > 1 || e.ctrlKey || e.metaKey || e.altKey) fraction = false })
         // Only with a bare caret: a selected comma deleted is just that comma.
         i.addEventListener("beforeinput", () => { prev = i.selectionStart === i.selectionEnd ? i.value : null })
+        i.addEventListener("paste", (e) => {
+            e.preventDefault()
+            fraction = false
+            const text = e.clipboardData ? e.clipboardData.getData("text") : ""
+            const clean = text.split(".")[0].replace(/\D/g, "")
+            if (!clean) return
+            const from = i.selectionStart ?? i.value.length
+            i.setRangeText(clean, from, i.selectionEnd ?? from, "end")
+            i.dispatchEvent(new Event("input", { bubbles: true }))
+        })
+        i.addEventListener("drop", (e) => { e.preventDefault() })
         i.addEventListener("input", (e) => {
             const ev = e as InputEvent
             const was = prev
@@ -716,20 +726,23 @@
             if (ev.isComposing) return
             let raw = i.value
             let pos = i.selectionStart ?? raw.length
-            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1 && !/[\d,.]/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) {
-                raw = raw.slice(0, pos - 1) + raw.slice(pos)
-                pos -= 1
-            } else if (was !== null && raw !== was && raw.replace(/,/g, "") === was.replace(/,/g, "")) {
+            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1) {
+                if (ev.data === ".") fraction = true
+                else if (fraction && /\d/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) { raw = raw.slice(0, pos - 1) + raw.slice(pos); pos -= 1 }
+            }
+            if (was !== null && raw !== was && raw.replace(/,/g, "") === was.replace(/,/g, "")) {
                 if (ev.inputType === "deleteContentBackward" && pos > 0) { raw = raw.slice(0, pos - 1) + raw.slice(pos); pos -= 1 }
                 else if (ev.inputType === "deleteContentForward" && pos < raw.length) raw = raw.slice(0, pos) + raw.slice(pos + 1)
             }
-            if (/[^\d,]/.test(raw)) {
-                if (raw !== i.value) { i.value = raw; i.setSelectionRange(pos, pos) }
-                showFieldProblem(i, msg)
+            const digits = raw.replace(/\D/g, "")
+            if (digits.length > maxDigits) {
+                const back = raw.length - pos
+                i.value = good
+                const at = Math.max(0, good.length - back)
+                i.setSelectionRange(at, at)
                 return
             }
-            const digits = raw.replace(/,/g, "")
-            const before = raw.slice(0, pos).replace(/,/g, "").length
+            const before = raw.slice(0, pos).replace(/\D/g, "").length
             const out = group ? grouped(digits) : digits
             if (out !== i.value) {
                 i.value = out
@@ -737,11 +750,20 @@
                 for (let k = 0; at < out.length && k < before; at++) if (out[at] !== ",") k++
                 i.setSelectionRange(at, at)
             }
-            showFieldProblem(i, msg)
+            good = i.value
+        })
+        i.addEventListener("blur", () => {
+            const digits = i.value.replace(/,/g, "")
+            const trimmed = digits.replace(/^0+(?=\d)/, "")
+            if (trimmed === digits) return
+            i.value = group ? grouped(trimmed) : trimmed
+            i.dispatchEvent(new Event("input", { bubbles: true }))
         })
     }
+    // A budget saved with satang before whole numbers were required shows
+    // its whole baht, as a change still to be saved.
     const budgetField = (n: number | null | undefined): string =>
-        n === null || n === undefined ? "" : Number.isInteger(Number(n)) ? grouped(String(Number(n))) : fmt2(n)
+        n === null || n === undefined ? "" : grouped(String(Math.trunc(Number(n))))
     const fmt2 = (n: number | null | undefined): string =>
         n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -753,7 +775,7 @@
         const editable = auditeeTurn(s)
         const form = el("form", "rv-form rv-inputs-form")
         form.noValidate = true
-        const field = (id: string, label: string, saved: string, group: boolean, msg: string): [HTMLElement, HTMLInputElement] => {
+        const field = (id: string, label: string, saved: string, group: boolean, maxDigits: number): [HTMLElement, HTMLInputElement] => {
             const w = el("div", "rv-field")
             const l = el("label", undefined, label)
             l.htmlFor = id
@@ -763,21 +785,17 @@
             i.inputMode = "numeric"
             i.autocomplete = "off"
             i.placeholder = "0"
-            if (editable) { wholeField(i, group, msg); keep(i, id, saved) }
+            if (editable) { wholeField(i, group, maxDigits); keep(i, id, saved) }
             else { i.value = saved; i.readOnly = true }
-            // A budget saved with satang before whole numbers were required.
-            if (editable && !fieldErrs.has(id)) { const p = fieldProblem(i.value, msg); if (p) fieldErrs.set(id, p) }
-            const fe = editable ? fieldErrs.get(id) : undefined
-            const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "")
-            err.id = id + "-e"
-            if (fe) i.setAttribute("aria-invalid", "true")
-            i.setAttribute("aria-describedby", err.id)
-            w.append(l, i, err)
+            w.append(l, i)
             return [w, i]
         }
         const inp = s.inputs
-        const [bw, bi] = field("rv-budget", "งบประมาณ (บาท)", inp ? budgetField(inp.budget) : "", true, BUDGET_MSG)
-        const [nw, ni] = field("rv-doctors", "จำนวนแพทย์ (N)", inp && inp.doctors ? String(inp.doctors) : "", false, DOCTORS_MSG)
+        if (editable && inp && inp.budget !== null && inp.budget !== undefined && !Number.isInteger(Number(inp.budget)) && !drafts.has("rv-budget")) {
+            drafts.set("rv-budget", budgetField(inp.budget))
+        }
+        const [bw, bi] = field("rv-budget", "งบประมาณ (บาท)", inp ? budgetField(inp.budget) : "", true, BUDGET_DIGITS)
+        const [nw, ni] = field("rv-doctors", "จำนวนแพทย์ (N)", inp && inp.doctors ? String(inp.doctors) : "", false, DOCTORS_DIGITS)
         const rw = el("div", "rv-field")
         const rl = el("span", "rv-label", "per P4P ")
         rl.id = "rv-rate-l"
@@ -799,6 +817,12 @@
             save.type = "submit"
             save.id = "rv-save-inputs"
             if (flying(s, "inputs")) markBusy(save)
+            // Nothing to save until both are whole numbers above 0 that give
+            // a per P4P above 0.00; the button says so by being off.
+            const ready = (): void => { save.disabled = ratePreview(bi.value, ni.value) === "–" }
+            ready()
+            bi.addEventListener("input", ready)
+            ni.addEventListener("input", ready)
             act.append(save)
             const n = noteEl("inputs")
             if (n) act.append(n)
@@ -814,31 +838,10 @@
 
     async function saveInputs(s: State, form: HTMLFormElement, btn: HTMLButtonElement): Promise<void> {
         if (flying(s, "inputs")) return
-        let bad: HTMLInputElement | null = null
-        const check = (id: string, ok: (v: string) => boolean, msg: string): string => {
-            const i = form.querySelector("#" + id) as HTMLInputElement
-            const e = form.querySelector("#" + id + "-e") as HTMLElement
-            const v = i.value.replace(/,/g, "").trim()
-            const problem = fieldProblem(i.value.trim(), msg) || (ok(v) ? null : msg)
-            const good = !problem
-            i.setAttribute("aria-invalid", String(!good))
-            e.textContent = problem || ""
-            e.classList.toggle("hidden", good)
-            if (good) fieldErrs.delete(id)
-            else fieldErrs.set(id, problem)
-            if (!good && !bad) bad = i
-            return v
-        }
-        const budget = check("rv-budget", (v) => WHOLE_RE.test(v) && Number(v) > 0 && Number(v) < 1e11, BUDGET_MSG)
-        const doctors = check("rv-doctors", (v) => WHOLE_RE.test(v) && Number(v) > 0 && Number(v) < 1e5, DOCTORS_MSG)
-        if (bad) { (bad as HTMLInputElement).focus(); return }
-        if (ratePreview(budget, doctors) === "–") {
-            fieldErrs.set("rv-doctors", "per P4P (งบ ÷ N) ต้องมากกว่า 0.00")
-            render()
-            const i = document.getElementById("rv-doctors")
-            if (i) i.focus()
-            return
-        }
+        const value = (id: string): string => (form.querySelector("#" + id) as HTMLInputElement).value
+        if (ratePreview(value("rv-budget"), value("rv-doctors")) === "–") return
+        const budget = String(wholeOf(value("rv-budget")))
+        const doctors = String(wholeOf(value("rv-doctors")))
         if (!begin(s, "inputs", btn)) return
         busy = true
         let saved = false
@@ -855,14 +858,11 @@
         if (!saved) { await reload(); return }
         // Saved: the fields show the saved numbers from the new state, or
         // keep what was typed if that state does not come.
-        const typed = ["rv-budget", "rv-doctors"].map((k) => [k, drafts.get(k), fieldErrs.get(k)] as [string, string | undefined, string | undefined])
+        const typed = ["rv-budget", "rv-doctors"].map((k) => [k, drafts.get(k)] as [string, string | undefined])
         forget(s, "rv-budget", "rv-doctors")
-        // A problem typed while saving belonged to that typing, not to the saved numbers.
-        fieldErrs.delete("rv-budget"); fieldErrs.delete("rv-doctors")
         await loadState(false).catch((e) => {
-            if (s.month === month) for (const [k, v, fe] of typed) {
+            if (s.month === month) for (const [k, v] of typed) {
                 if (v !== undefined && !drafts.has(k)) drafts.set(k, v)
-                if (fe !== undefined && !fieldErrs.has(k)) fieldErrs.set(k, fe)
             }
             loadFailed(e)
         })
