@@ -21,9 +21,13 @@ on:
           - test
           - broadcast
       version:
-        description: "Carousel release version"
+        description: "Carousel release version: v followed by a number (v1, v2, ...)"
         required: true
         default: v1
+
+# Checkout is all this job needs from GITHUB_TOKEN.
+permissions:
+  contents: read
 
 jobs:
   send:
@@ -39,6 +43,23 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # The version names a file (assets/cards/feature-carousel.<version>.flex.json).
+      # It reaches every script only through the VERSION env var, never pasted
+      # into the run: text, and must look like v1, so a crafted value can
+      # neither run as shell nor point outside that folder.
+      - name: Check version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+$ ]]; then
+            echo "::error::version must be v followed by a number, e.g. v1"
+            exit 1
+          fi
+          if [ ! -f "assets/cards/feature-carousel.$VERSION.flex.json" ]; then
+            echo "::error::No carousel for $VERSION in assets/cards/"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
@@ -51,17 +72,20 @@ jobs:
         # value here and sets a bad precedent for future secrets.)
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
-        run: npx tsx scripts/validate-flex.mts "${{ inputs.version }}"
+          VERSION: ${{ inputs.version }}
+        run: npx tsx scripts/validate-flex.mts "$VERSION"
 
       - name: Test-send to a single user
         if: inputs.mode == 'test'
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: npx tsx scripts/send-test-flex.mts "${{ inputs.version }}"
+          VERSION: ${{ inputs.version }}
+        run: npx tsx scripts/send-test-flex.mts "$VERSION"
 
       - name: Broadcast to all followers
         if: inputs.mode == 'broadcast'
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN || secrets.LINE_TOKEN }}
-        run: npx tsx scripts/broadcast-flex.mts "${{ inputs.version }}"
+          VERSION: ${{ inputs.version }}
+        run: npx tsx scripts/broadcast-flex.mts "$VERSION"
