@@ -31,7 +31,7 @@ group 1-2 workflows it watches by their name.
 
 | Name | File | Use it to |
 |---|---|---|
-| 3.1 Manual · Email: read submission emails (backup) | `3-1-manual-email-read-submission-emails.yml` | Read the inbox once if the always-on run is stopped |
+| 3.1 Manual · Email: read submission emails (backup) | `3-1-manual-email-read-submission-emails.yml` | Read the inbox once if the always-on run is stopped. It refuses to start while 1 has a run queued or running, then holds 1's concurrency group so 1 waits until it ends. |
 | 3.2 Manual · Email: resend a month's emails | `3-2-manual-email-resend-month.yml` | Resend department-head emails for chosen months |
 | 3.3 Manual · Email: unstar old P4P document emails | `3-3-manual-email-unstar-old-emails.yml` | Clear stars on old เอกสาร P4P mail |
 | 3.4 Manual · LINE: set up LINE menu | `3-4-manual-line-setup-menu.yml` | Push the rich menu after a menu change is merged |
