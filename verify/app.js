@@ -94,19 +94,47 @@
             throw new Error("session POST failed: " + resp.status);
     }
     // ── Return target (open-redirect safe) ────────────────────────────────
-    // Only accept same-origin paths: a single leading "/" that is not "//"
-    // or "/\" (protocol-relative). Anything else falls back to /status/.
-    function safeReturn() {
-        const raw = new URLSearchParams(location.search).get("return") || "";
+    // Only a path on this origin survives; anything else falls back to
+    // /status/. A pattern check on the raw string is not enough: the URL
+    // parser drops ASCII tab and newline anywhere in its input, so
+    // "/<tab>/evil.example" passed a "one leading slash" test and then
+    // navigated to //evil.example. So the value must start with "/", may hold
+    // no control character or backslash (no real target has either), is then
+    // parsed against this origin and kept only if it still names this origin,
+    // and is rebuilt from the parsed parts rather than used as typed.
+    //
+    // The rebuilt path needs one more check: dot segments are resolved by the
+    // parse, so "/.//evil.example" comes out as the path "//evil.example" —
+    // protocol-relative again once it is handed to location.replace(). A path
+    // starting "//" is refused, and the result must still resolve here.
+    function safeReturnTarget(raw, origin) {
+        const fallback = "/status/";
         const dec = (() => { try {
             return decodeURIComponent(raw);
         }
         catch {
             return "";
         } })();
-        if (/^\/(?![/\\])/.test(dec))
-            return dec;
-        return "/status/";
+        if (dec.charAt(0) !== "/")
+            return fallback;
+        for (let i = 0; i < dec.length; i++) {
+            const c = dec.charCodeAt(i);
+            if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x5c)
+                return fallback;
+        }
+        try {
+            const url = new URL(dec, origin);
+            if (url.origin !== origin || url.pathname.charAt(1) === "/")
+                return fallback;
+            const target = url.pathname + url.search + url.hash;
+            return new URL(target, origin).origin === origin ? target : fallback;
+        }
+        catch {
+            return fallback;
+        }
+    }
+    function safeReturn() {
+        return safeReturnTarget(new URLSearchParams(location.search).get("return") || "", location.origin);
     }
     const RETURN_TO = safeReturn();
     // ── DOM refs ──────────────────────────────────────────────────────────
