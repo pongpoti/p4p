@@ -39,6 +39,34 @@ test("a bomb whose headers understate its size is refused too", async () => {
   assert.equal(zipProblem(await lyingBomb())?.code, "ZIP_TOO_LARGE");
 });
 
+/**
+ * A small entry and a hidden one that inflates to 60 MB while its headers say 2000 bytes, then one
+ * change to the end record so that the guard and JSZip read different central directories.
+ */
+async function hiddenEntryZip(tamper: "undercount" | "gap" | "zip64"): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file("xl/workbook.xml", "<workbook/>", { createFolders: false });
+  zip.file("xl/media/image1.png", Buffer.alloc(60 * 1024 * 1024), { createFolders: false });
+  const buf = Buffer.from(await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } }));
+  const cd2 = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  buf.writeUInt32LE(2000, cd2 + 24);
+  buf.writeUInt32LE(2000, buf.readUInt32LE(cd2 + 42) + 22);
+  const eocd = buf.length - 22;
+  if (tamper === "undercount") { buf.writeUInt16LE(1, eocd + 8); buf.writeUInt16LE(1, eocd + 10); }
+  if (tamper === "zip64") buf.writeUInt16LE(0xffff, eocd + 4);
+  if (tamper === "gap") return Buffer.concat([buf.subarray(0, eocd), Buffer.alloc(16), buf.subarray(eocd)]);
+  return buf;
+}
+
+test("an archive JSZip reads differently from the guard is refused (undercount, gap, zip64 marker)", async () => {
+  // Each of these passed the guard while JSZip (inside ExcelJS) went on to inflate the hidden entry.
+  const undercount = await hiddenEntryZip("undercount");
+  assert.equal(Object.keys((await JSZip.loadAsync(undercount)).files).length, 2, "JSZip lists the entry the end record leaves out");
+  assert.equal(zipProblem(undercount)?.code, "ZIP_MALFORMED");
+  assert.equal(zipProblem(await hiddenEntryZip("gap"))?.code, "ZIP_MALFORMED");
+  assert.equal(zipProblem(await hiddenEntryZip("zip64"))?.code, "ZIP64_UNSUPPORTED");
+});
+
 test("a real workbook passes", async () => {
   assert.equal(zipProblem(await workbook()), null);
 });

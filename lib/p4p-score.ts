@@ -645,10 +645,12 @@ const DEFAULT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 function findEndOfCentralDirectory(buf: Buffer): number {
   // EOCD is 22 bytes plus an optional comment of up to 65535 bytes — scan
   // backward from the end for the signature rather than assuming a fixed
-  // offset.
+  // offset. The scan starts 4 bytes from the end, as JSZip's does, so both
+  // settle on the same record: a signature too close to the end to hold a
+  // whole record is refused here, where JSZip would fail on it.
   const minPos = Math.max(0, buf.length - 22 - 65535)
-  for (let i = buf.length - 22; i >= minPos; i--) {
-    if (buf.readUInt32LE(i) === ZIP_EOCD_SIGNATURE) return i
+  for (let i = buf.length - 4; i >= minPos; i--) {
+    if (buf.readUInt32LE(i) === ZIP_EOCD_SIGNATURE) return i + 22 <= buf.length ? i : -1
   }
   return -1
 }
@@ -668,9 +670,30 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     throw err
   }
 
+  const diskNumber = buf.readUInt16LE(eocdPos + 4)
+  const centralDirDisk = buf.readUInt16LE(eocdPos + 6)
+  const entriesOnDisk = buf.readUInt16LE(eocdPos + 8)
   const totalEntries = buf.readUInt16LE(eocdPos + 10)
   const cdSize = buf.readUInt32LE(eocdPos + 12)
   const cdOffset = buf.readUInt32LE(eocdPos + 16)
+
+  // What this guard counts must be exactly what JSZip (inside ExcelJS) will
+  // inflate, or a crafted file shows the guard one small entry and hands
+  // JSZip another, huge one (audit F18 follow-up). JSZip reads the zip
+  // differently from the plain reading below in three ways, so each is
+  // refused here rather than followed:
+  // - any end-record field at its maximum sends JSZip to a ZIP64 record
+  //   elsewhere in the file, with its own central directory;
+  // - a gap between the central directory and the end record makes JSZip
+  //   take the gap for prepended data and shift every offset by it;
+  // - JSZip reads every central-directory record in a row, however many the
+  //   end record says there are.
+  if (
+    diskNumber === 0xffff || centralDirDisk === 0xffff || entriesOnDisk === 0xffff || totalEntries === 0xffff ||
+    cdSize === 0xffffffff || cdOffset === 0xffffffff
+  ) {
+    throw zipError("ZIP64_UNSUPPORTED", "zip64 archives are not supported")
+  }
 
   if (totalEntries > maxEntries) {
     const err = new Error(`too many zip entries: ${totalEntries} > ${maxEntries}`) as CodedError
@@ -678,15 +701,21 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     throw err
   }
 
+  const cdEnd = cdOffset + cdSize
+  if (cdEnd !== eocdPos) {
+    throw zipError("ZIP_MALFORMED", "zip central directory does not end where the end record starts")
+  }
+
   let pos = cdOffset
   let seen = 0
   let uncompressedTotal = 0
-  const cdEnd = cdOffset + cdSize
   const entries: { method: number; compressedSize: number; uncompressedSize: number; localOffset: number }[] = []
 
-  while (pos < cdEnd && pos + 46 <= buf.length && seen < totalEntries) {
-    const sig = buf.readUInt32LE(pos)
-    if (sig !== ZIP_CENTRAL_DIR_SIGNATURE) break
+  // Every record up to the end record is read, the way JSZip reads them, so
+  // a record the end record leaves out of its count is still seen (and the
+  // mismatch refused below).
+  while (pos < cdEnd) {
+    if (pos + 46 > cdEnd || buf.readUInt32LE(pos) !== ZIP_CENTRAL_DIR_SIGNATURE) break
 
     const method = buf.readUInt16LE(pos + 10)
     const compressedSize = buf.readUInt32LE(pos + 20)
@@ -696,13 +725,19 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
     const commentLen = buf.readUInt16LE(pos + 32)
     const localOffset = buf.readUInt32LE(pos + 42)
 
-    // 0xFFFFFFFF marks a ZIP64 entry (real size lives in the extra field).
-    // A genuine xlsx this small (bucket cap 5 MB) never needs ZIP64 — treat
-    // it as suspicious rather than parse the extra field.
-    if (uncompressedSize === 0xffffffff) {
+    // 0xFFFFFFFF marks a ZIP64 entry (the real value lives in the extra
+    // field, which JSZip then reads). A genuine xlsx this small (bucket cap
+    // 5 MB) never needs ZIP64 — treat it as suspicious rather than parse
+    // the extra field.
+    if (uncompressedSize === 0xffffffff || compressedSize === 0xffffffff || localOffset === 0xffffffff) {
       const err = new Error("zip64 entries are not supported") as CodedError
       err.code = "ZIP64_UNSUPPORTED"
       throw err
+    }
+
+    seen += 1
+    if (seen > maxEntries) {
+      throw zipError("ZIP_TOO_MANY_ENTRIES", `too many zip entries: more than ${maxEntries}`)
     }
 
     uncompressedTotal += uncompressedSize
@@ -714,10 +749,9 @@ function checkZipSafety(buf: Buffer, opts: { maxEntries?: number; maxUncompresse
 
     entries.push({ method, compressedSize, uncompressedSize, localOffset })
     pos += 46 + nameLen + extraLen + commentLen
-    seen += 1
   }
 
-  if (seen !== totalEntries) {
+  if (pos !== cdEnd || seen !== totalEntries) {
     const err = new Error("zip central directory is malformed") as CodedError
     err.code = "ZIP_MALFORMED"
     throw err
