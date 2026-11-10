@@ -34,7 +34,7 @@ import type { AxiosStatic } from "axios"
 
 const core = require("./review-core") as {
   parseMonth(key: unknown): { be: number; month: number } | null
-  parseMoney(v: unknown, max: number): number | null
+  parseBudget(v: unknown, max: number): number | null
   parseCount(v: unknown, max: number): number | null
   parseScore(v: unknown): number | null
 }
@@ -195,10 +195,10 @@ export function mountReview(d: ReviewDeps): void {
   app.put("/dashboard/api/review/:month/inputs", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
     const g = await gate(req, res)
     if (!g) return
-    const budget = core.parseMoney(req.body && req.body.budget, 1e11)
+    const budget = core.parseBudget(req.body && req.body.budget, 1e11)
     const doctors = core.parseCount(req.body && req.body.doctors, 1e5)
-    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่ตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง", field: "budget" })
-    if (doctors === null) return res.status(400).json({ error: "N: ต้องเป็นจำนวนเต็มมากกว่า 0", field: "doctors" })
+    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่จำนวนเต็มบาทมากกว่า 0 ไม่มีทศนิยม", field: "budget" })
+    if (doctors === null) return res.status(400).json({ error: "N: ใส่จำนวนเต็มมากกว่า 0 ไม่มีทศนิยม", field: "doctors" })
     try {
       const st = await state(g.month)
       if (!auditeeTurn(st)) return res.status(409).json({ error: "ส่งให้ผู้ตรวจสอบแล้ว เปลี่ยนตัวเลขไม่ได้จนกว่าจะได้ผลตรวจ" })

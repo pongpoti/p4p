@@ -7,9 +7,10 @@
  *   1. reads the built SK03 back (staff/intern sheets, Y9, W9 and every
  *      department sheet) and exports it as .xlsx;
  *   2. for every person on the roster runs the two automatic checks:
- *        เทียบคะแนน  staff/intern K   vs the total the doctor wrote on their
- *                    own sheet (lib/review-core.ts statedTotal, saved values
- *                    only, never recalculated)
+ *        เทียบคะแนน  staff/intern K   vs the score the workflow takes from
+ *                    the doctor's own sheet (lib/review-core.ts
+ *                    workflowTotal: lib/p4p-score.ts resolveScore, its full
+ *                    rule, on the sheet's saved values)
  *        เทียบเงิน    staff/intern N   vs the department sheet's F
  *                    (ตามสัดส่วนวิชาชีพ)
  *   3. uploads both files to the private Storage bucket review-files, and
@@ -40,8 +41,11 @@ import type { drive_v3, sheets_v4 } from 'googleapis';
 const crypto  = require('crypto') as typeof import('crypto');
 const ExcelJS = require('exceljs') as typeof import('exceljs');
 const { log, withRetry, normaliseName } = require('./lib') as typeof import('./lib');
+type Resolve = (rows: Record<string, unknown>[]) => { score: number | null; method: string };
+// The rule that put each score in SK03 K (a port of automation/claude-analyst.ts).
+const p4p = require('../lib/p4p-score') as { resolveScore: Resolve };
 const core = require('../lib/review-core') as {
-  statedTotal(grid: unknown[][], uncached?: Set<string>): StatedTotal;
+  workflowTotal(grid: unknown[][], uncached: Set<string>, resolve: Resolve): StatedTotal;
   scoreCheck(a: number | null | undefined, b: number | null | undefined): Check;
   moneyCheck(a: number | null | undefined, b: number | null | undefined): Check;
   w9Rate(formula: unknown): number | null;
@@ -119,6 +123,90 @@ export async function reviewV2(supabase: SupabaseClient): Promise<boolean> {
   throw new Error(`review_builds read error: ${error.message}`);
 }
 
+/** The first month the ตรวจสอบ tab covers (lib/review-server.ts FIRST_MONTH). */
+export const REVIEW_FIRST_MONTH = '2569_08';
+
+/**
+ * The months among `keys` whose ตรวจสอบ review is on the auditee's side:
+ * from ส.ค. 2569 on, with no round sent yet or the live one sent back (the
+ * SQL's review_auditee_turn). A month the auditor has, or one approved, is
+ * left as it is.
+ */
+export async function auditeeSideMonths(supabase: SupabaseClient, keys: string[]): Promise<Set<string>> {
+  const want = keys.filter((k) => /^\d{4}_\d{2}$/.test(k) && k >= REVIEW_FIRST_MONTH);
+  if (!want.length) return new Set();
+  const { data, error } = await supabase.from('review_rounds').select('month')
+    .in('month', want).in('status', ['submitted', 'approved']);
+  if (error) {
+    if (missingTable(error)) return new Set();
+    throw new Error(`review_rounds read error: ${error.message}`);
+  }
+  const theirs = new Set(((data ?? []) as { month: string }[]).map((r) => r.month));
+  return new Set(want.filter((k) => !theirs.has(k)));
+}
+
+const cents = (n: number): number => Math.round(n * 100);
+
+/**
+ * Why the newest build of `month` is no longer what the tab needs, or null:
+ * none yet, no รวมค่าคะแนน link (once the second SQL file is in), not the
+ * budget / per P4P typed in the tab, or people changed since it was built
+ * (review_build_stale: a re-sent file, a score, a department). The same
+ * things that stop the auditee from sending (review_submit_round).
+ */
+export async function reviewBuildOutdated(supabase: SupabaseClient, month: string, v2: boolean): Promise<string | null> {
+  const { data, error } = await supabase.from('review_builds')
+    .select(v2 ? 'id, budget, per_p4p, merged_file_id' : 'id, budget, per_p4p')
+    .eq('month', month).order('built_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw new Error(`review_builds read error: ${error.message}`);
+  const b = data as { id: string; budget: number | null; per_p4p: number | null; merged_file_id?: string | null } | null;
+  if (!b) return 'no build yet';
+  if (v2 && !b.merged_file_id) return 'no รวมค่าคะแนน link';
+  const input = await loadReviewInput(supabase, month);
+  if (input && (cents(input.budget) !== cents(Number(b.budget)) || cents(input.per_p4p) !== cents(Number(b.per_p4p)))) {
+    return 'not the budget / per P4P typed in the tab';
+  }
+  if (v2) {
+    const { data: n, error: e } = await supabase.rpc('review_build_stale', { p_month: month, p_build: b.id });
+    if (e) throw new Error(`review_build_stale error: ${e.message}`);
+    if (Number(n) > 0) return `${Number(n)} people changed since`;
+  }
+  return null;
+}
+
+/**
+ * For the nightly run: each month among `older` (months older than the ones
+ * it just built) whose review is on the auditee's side and whose newest
+ * build is out of date gets the tab's own one-month rebuild request
+ * (review_request_build, as the สร้างไฟล์ใหม่ button does), which the
+ * always-on relay starts after this run. Built in this run instead, they
+ * would push the job past the time the SQL gives a waiting request.
+ * Never throws; returns the months queued.
+ */
+export async function queueOutdatedReviewMonths(supabase: SupabaseClient, older: string[], v2: boolean): Promise<string[]> {
+  const queued: string[] = [];
+  let side: Set<string>;
+  try {
+    side = await auditeeSideMonths(supabase, older);
+  } catch (err: any) {
+    log(`  [Review] ⚠ ${err.message} — no rebuilds queued for older months`, 'warn');
+    return queued;
+  }
+  for (const month of [...side].sort().reverse()) {
+    try {
+      const why = await reviewBuildOutdated(supabase, month, v2);
+      if (!why) { log(`  [Review] ${month}: under review, build up to date`); continue; }
+      const { error } = await supabase.rpc('review_request_build', { p_month: month, p_reason: 'rebuild', p_actor: '2.2 nightly' });
+      if (error) throw new Error(`review_request_build error: ${error.message}`);
+      log(`  [Review] ${month}: under review, ${why} — rebuild queued for after this run`);
+      queued.push(month);
+    } catch (err: any) {
+      log(`  [Review] ⚠ ${month}: ${err.message}`, 'warn');
+    }
+  }
+  return queued;
+}
+
 /** The month's budget and per P4P from the tab, or null. */
 export async function loadReviewInput(supabase: SupabaseClient, monthKey: string): Promise<ReviewInput | null> {
   const { data, error } = await supabase.from('review_inputs').select('budget, per_p4p').eq('month', monthKey).maybeSingle();
@@ -169,7 +257,7 @@ export function savedValue(v: unknown): { value: string | number | null; uncache
 
 /**
  * A cell as the submission pipeline reads it into a row (automation/index.ts
- * rowsOfSheet, lib/p4p-score.ts rowsFromWorksheet), so statedTotal sees the
+ * rowsOfSheet, lib/p4p-score.ts rowsFromWorksheet), so workflowTotal sees the
  * numbers the doctor's score was taken from: a formula's cell.result (a
  * shared-formula copy's only when it is a number, a merged copy's none),
  * dates as ISO text, rich text joined. `uncached` is a formula Excel saved
@@ -238,7 +326,7 @@ export async function analyseDoctorFile(buffer: Buffer): Promise<{ stated: State
   });
   const merges = ((ws as unknown as { model?: { merges?: string[] } }).model?.merges ?? []).slice(0, 300);
   return {
-    stated: core.statedTotal(scoreGrid, uncached),
+    stated: core.workflowTotal(scoreGrid, uncached, p4p.resolveScore),
     grid: { sheet: ws.name, rows: maxR, cols: maxC, cells, merges },
     sha256: fileSha,
   };
