@@ -11,9 +11,9 @@
 
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
-import { analyseJson, isHighConfidence, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
+import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
 import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex, getPhysicianByEmail, getRosterScore } from "./supabase-client.js";
-import { formatAdminReviewAlert, formatLowConfidenceAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
+import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { decideSenderGate, formatHoldAlert, formatNewSenderAlert, HOLD_REPLY_SUBJECT, holdReplyBody, type SenderGateResult } from "./sender-gate.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
@@ -1262,18 +1262,6 @@ export async function processBuffer(buffer: Buffer, {
     console.log(`│        ✅  Telegram message sent.`);
   } catch (tgErr) {
     console.error(`│        ❌  Telegram error: ${tgErr instanceof Error ? tgErr.message : tgErr}`);
-  }
-
-  // ── Low-confidence score (email path) ─────────────────────────────────
-  // Saved and confirmed as before, but a score that did not come from the
-  // sheet's own grand-total row (sub-total sums, "largest in sheet", Claude's
-  // reading alone, …) is a guess, so the admin is asked to check it.
-  // /upload/score gates on the same method set before saving.
-  if (!isUpload && scoreSaved && match && !isHighConfidence(analysis.scoreMethod)) {
-    await sendTelegram(formatLowConfidenceAlert({
-      sender: replyTo, physicianName: match.matchedName, rosterIndex: match.index, department: match.department,
-      monthKey: workMonth, score: analysis.score, scoreMethod: analysis.scoreMethod ?? null, filename: filename ?? null, messageId,
-    })).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
   }
 
   // A new address submitted for a physician with no score yet: accepted as

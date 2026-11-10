@@ -120,37 +120,3 @@ export function formatAdminReviewAlert(d: AdminReviewAlertData, labelName: strin
   lines.push(``, `📎 File: ${d.filename ?? "(unknown)"}`);
   return lines.join("\n");
 }
-
-export interface LowConfidenceAlertData {
-  sender: string;
-  physicianName: string;
-  rosterIndex: number | string;
-  department?: string | null;
-  monthKey: string;
-  score: number;
-  scoreMethod: string | null;
-  filename?: string | null;
-  messageId?: string | null;
-}
-
-/**
- * Telegram: an email score that was saved and confirmed, but read by a method
- * that is not trusted on its own (claude-analyst.ts isHighConfidence). Not a
- * hold: the admin is asked to check the total against the file.
- */
-export function formatLowConfidenceAlert(d: LowConfidenceAlertData): string {
-  return [
-    `🔎 P4P: คะแนนนี้อ่านด้วยวิธีที่ต้องตรวจสอบ — บันทึกแล้ว โปรดตรวจ`,
-    ``,
-    `📧 Sender   : ${d.sender}`,
-    `👤 Physician: #${d.rosterIndex} ${d.physicianName}${d.department ? ` (${d.department})` : ""}`,
-    `📅 Month    : ${d.monthKey}`,
-    `🏅 Score    : ${d.score.toFixed(2)} (บันทึกแล้ว)`,
-    `🧮 Method   : ${d.scoreMethod ?? "(unknown)"}`,
-    ...(d.messageId ? [`✉️ Gmail id : ${d.messageId}`] : []),
-    ``,
-    `ระบบบันทึกคะแนนและส่งอีเมลยืนยันแล้ว แต่คะแนนนี้ไม่ได้มาจากแถวคะแนนรวมทั้งหมดของไฟล์ โปรดเปิดไฟล์ตรวจว่าคะแนนรวมถูกต้อง หากไม่ถูก ให้แก้คะแนนในตาราง ${d.monthKey}`,
-    ``,
-    `📎 File: ${d.filename ?? "(unknown)"}`,
-  ].join("\n");
-}
