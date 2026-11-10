@@ -186,17 +186,19 @@ function shortYearToBe(yy: string): number {
 }
 
 /**
- * The year a filename states, for the LINE upload path only (not mirrored in
- * automation/): the month_mismatch cross-check and the single-sheet `matched`
- * test. Both REJECT an upload on a different year, so this reads only what is
+ * The year a filename states, for the LINE upload path: the month_mismatch
+ * cross-check and the single-sheet `matched` test (mirrored exactly by
+ * automation/claude-analyst.ts for the worker's copy of the same check). Both REJECT an upload on a different year, so this reads only what is
  * plainly a year. resolveBeYear takes any lone two-digit number for one (43-99
  * as 25xx, 00-42 as 20xx), which is fine for picking a sheet but turned a
  * version, ward or day count ("_12", "v15", "เวร 30 วัน", a "(85)" copy
  * suffix, "P4P 05") into a year and refused the doctor's file. Read here:
  *   - a 4-digit BE (25xx) or CE (20xx) year: "2569", "P4P_9_2026";
- *   - two digits right after a month name, with at most a few of space . _ -
- *     / ' between them and an optional "ปี": "ต.ค.69", "ตุลาคม 69", "ตค69",
- *     "Oct-69", "ตุลาคม ปี 69";
+ *   - a BE short year (43-99) right after a month name, with at most a few
+ *     of space . _ - / ' between them and an optional "ปี": "ต.ค.69",
+ *     "ตุลาคม 69", "ตค69", "Oct-69", "ตุลาคม ปี 69". Not 00-42 (a day or a
+ *     count: "ตุลาคม 30 วัน", "มกราคม 15"), and not when วัน, เวร, shift or
+ *     day follows ("Oct 45 days");
  *   - a month number (after an optional day), "/" or "-", then a BE short
  *     year (43-99): "10/69", "10-69", "31-10-69". Only BE here, so a day
  *     range like "1-15" is not a year.
@@ -209,11 +211,13 @@ function resolveFilenameYear(filename?: string | null): number | null {
   const ce = s.match(/(?<!\d)(20\d{2})(?!\d)/)
   if (ce) return parseInt(ce[1]!, 10) + 543
 
-  const tail = "[\\s._'’/-]{0,3}(?:ปี\\s?)?(\\d{2})(?!\\d)"
+  // A BE short year only (43-99), and not a count: "ตุลาคม 30 วัน", "ต.ค. 31วัน",
+  // "Oct 15 shifts" and "มกราคม 15" state no year.
+  const tail = "[\\s._'’/-]{0,3}(?:ปี\\s?)?(4[3-9]|[5-9]\\d)(?!\\d)(?!\\s*(?:วัน|เวร|shifts?|days?))"
   for (const [token] of MONTH_TOKEN_MAP) {
     const m = /^[A-Za-z]+$/.test(token)
       ? s.match(new RegExp(`(?<![A-Za-z])${token}(?![A-Za-z])${tail}`, "i"))
-      : s.match(new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`))
+      : s.match(new RegExp(`(?:^|[^฀-๿]|(?<=เดือน))${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`, "i"))
     if (m) return shortYearToBe(m[1]!)
   }
 

@@ -32,6 +32,12 @@ const NOT_A_YEAR = [
   "ทดสอบ v15.xlsx",
   "P4P 05.xlsx",
   "P4P ตุลาคม 1-15.xlsx",
+  "P4P ตุลาคม 30 วัน.xlsx",
+  "P4P ต.ค. 31วัน.xlsx",
+  "P4P Oct 15 shifts.xlsx",
+  "P4P มกราคม 15.xlsx",
+  "P4P Oct 45 days.xlsx",
+  "P4P ตุลาคม 45 เวร.xlsx",
   "",
 ];
 
