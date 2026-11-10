@@ -172,7 +172,7 @@ export async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<v
       source: "LINE upload", accountName: row.full_name, email: row.email, monthKey: row.month_key, errorType: "other",
     })).catch(() => {});
     await rejectScored(row.id, { errorType: "other", errorDetail });
-    await finishFailedRow(row, "other", errorDetail);
+    await afterOutcome("the failure notice", () => finishFailedRow(row, "other", errorDetail));
     return;
   }
 
@@ -230,12 +230,15 @@ export async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<v
     // did NOT archive, and the row stays archive_pending — in which case the
     // object must survive, or claim_p4p_archive() would keep claiming a row
     // whose bytes are gone.
+    // The score (and Drive copy) are saved from here on: a failed write
+    // below must not fail the row or tell the physician to resend.
     const archived = Boolean(getDrive());
-    await completeScored(row.id, {
-      score: state.success.score,
+    const success = state.success;
+    await afterOutcome("closing the queue row", () => completeScored(row.id, {
+      score: success.score,
       scoreMethod: "claude (deferred tier)",
       archived,
-    });
+    }));
     if (archived) {
       await deleteObject(row.object_path);
       // Not archived means handleArchive() finishes this row later and sends
@@ -273,7 +276,30 @@ export async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<v
 
   console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${redactForLog(errorDetail)}${terminal ? " (terminal)" : " — will retry"}`);
   if (!terminal) return;
-  await finishFailedRow(row, errorType, errorDetail);
+  await afterOutcome("the failure notice", () => finishFailedRow(row, errorType, errorDetail));
+}
+
+/**
+ * A failure after the row's outcome was written: the score and Drive copy
+ * saved, or the refusal recorded and the physician told. handleScoreCrash
+ * only reports it; it must not put the row back, fail it, or push a second,
+ * contradicting failure bubble.
+ */
+export class AfterOutcomeError extends Error {
+  readonly step: string;
+  constructor(step: string, cause: unknown) {
+    super(`${step} failed after the outcome was saved: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "AfterOutcomeError";
+    this.step = step;
+  }
+}
+
+async function afterOutcome<T>(step: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new AfterOutcomeError(step, err);
+  }
 }
 
 /**
@@ -290,7 +316,12 @@ async function finishFailedRow(row: ScoreFallbackQueueRow, errorType: string, er
       uploadLiffUrl: UPLOAD_LIFF,
     }),
   ]);
-  if (pushed) await markNotified(row.id);
+  // The bubble is delivered either way; a failed stamp must not stop the
+  // delete below or be taken for a failed upload.
+  if (pushed) {
+    await markNotified(row.id)
+      .catch((e: unknown) => console.warn(`│      ⚠️  notified_at not stamped: ${errForLog(e)}`));
+  }
   // A row held for the admin keeps its file: the admin's alert says how to
   // run it again once the right roster row is set (admin-review.ts).
   if (errorType !== ADMIN_REVIEW_ERROR_TYPE) await deleteObject(row.object_path);
@@ -308,6 +339,20 @@ async function finishFailedRow(row: ScoreFallbackQueueRow, errorType: string, er
  */
 export async function handleScoreCrash(row: ScoreFallbackQueueRow, err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof AfterOutcomeError) {
+    // The outcome stands, and the admin is told. A row left 'processing'
+    // (its close failed) is claimed again after 30 minutes while it has
+    // attempts left, and that pass saves the same score and closes it.
+    console.error(`│      ⚠️  ${errForLog(message)} — the outcome stands`);
+    await sendTelegram(formatErrorMessage(message, row.filename, {
+      source: "LINE upload",
+      accountName: row.full_name,
+      email: row.email,
+      monthKey: row.month_key,
+      errorType: "other",
+    })).catch(() => {});
+    return;
+  }
   const temporary = err instanceof RetryLaterError;
   console.error(`│      ❌  ${temporary ? "Temporary failure" : "Scoring crashed"}: ${errForLog(message)}`);
   // error_detail is shown to the physician (the LINE failure bubble); the
