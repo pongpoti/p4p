@@ -1755,7 +1755,7 @@ app.post("/upload/score", express.json({ limit: "8kb" }), async (req: Request, r
   } catch (e: any) {
     if (e.code === "PARSE_TIMEOUT") return defer("parse timeout (deferred to worker)")
     console.warn("[upload] parse failed (" + (e.code || "parse_error") + "): " + e.message)
-    return reject("other", "ไม่สามารถอ่านไฟล์ได้: " + e.message)
+    return reject("other", "ไม่สามารถอ่านไฟล์ได้ กรุณาตรวจสอบว่าไฟล์เปิดได้ใน Microsoft Excel และบันทึกเป็น .xlsx แล้วส่งใหม่อีกครั้ง")
   }
 
   // The same two corruption checks processBuffer() already runs.

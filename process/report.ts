@@ -36,6 +36,18 @@ const {
   createDriveClient, driveListAll, listFolders, listExcelFiles,
 } = require('./lib') as typeof import('./lib');
 
+/**
+ * Log who is missing as counts per department. This runs every minute in a
+ * public Actions log, so it never prints a physician's name (audit F02).
+ */
+function logMissingByDept(rows: { department: string }[]): void {
+  const byDept = new Map<string, number>();
+  for (const p of rows) byDept.set(p.department || '-', (byDept.get(p.department || '-') ?? 0) + 1);
+  for (const [dept, n] of [...byDept].sort((a, b) => a[0].localeCompare(b[0], 'th'))) {
+    log(`    • ${dept}: ${n}`);
+  }
+}
+
 /** Escape a value before interpolating it into the PNG-render HTML template. */
 function escHtml(s: unknown): string {
   return String(s ?? '')
@@ -680,7 +692,7 @@ async function main(): Promise<void> {
       const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
       monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
       totalMissing += rows.length;
-      rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
+      logMissingByDept(rows);
       continue;
     }
     log(`  [Drive] ${driveNames.size} files`);
@@ -696,7 +708,7 @@ async function main(): Promise<void> {
     // Sort missing by name ascending (Thai locale)
     const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
     log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
-    rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
+    logMissingByDept(rows);
     monthGroups.push({ monthLabel, abbMonthLabel, key, month, rows });
     totalMissing += rows.length;
   }

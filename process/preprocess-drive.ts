@@ -164,7 +164,7 @@ export async function trashUnrelated(
   let trashed = 0;
   for (const f of unrelated) {
     await drive.files.update({ fileId: f.id!, requestBody: { trashed: true } });
-    log(`  [Unrelated] ✗ trashed "${f.name}" (no matching Supabase row)`, 'warn');
+    log(`  [Unrelated] ✗ trashed file id ${f.id} (no matching Supabase row)`, 'warn');
     trashed++;
   }
   return { kept, trashed };

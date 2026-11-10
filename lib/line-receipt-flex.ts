@@ -384,11 +384,13 @@ interface FailureBubbleArgs {
     not_in_roster: "ไม่พบรายชื่อของท่านในทะเบียนแพทย์ของเดือนนี้ กรุณาติดต่อผู้ดูแลระบบ",
     physician_not_found: "ไม่พบชื่อแพทย์ในระบบ กรุณาติดต่อผู้ดูแลระบบ",
     oversize: "ไฟล์มีขนาดใหญ่เกิน 5 MB กรุณาลดขนาดไฟล์แล้วส่งใหม่",
+    admin_review: "ได้รับไฟล์แล้ว แต่ต้องให้เจ้าหน้าที่ตรวจสอบก่อนบันทึกคะแนน ท่านไม่ต้องส่งไฟล์ใหม่",
+    stuck_processing: "ระบบประมวลผลไฟล์นี้ไม่สำเร็จ กรุณาส่งไฟล์ใหม่อีกครั้ง",
     other: "ระบบไม่สามารถอ่านไฟล์ของท่านได้ กรุณาตรวจสอบไฟล์แล้วส่งใหม่",
   }
 
   // A retry button on an unretryable error is worse than no button (§7.4).
-  const RETRYABLE = new Set<string>(["wrong_extension", "temp_file", "month_mismatch", "month_not_found", "zero_score", "wrong_date", "oversize", "file_link"])
+  const RETRYABLE = new Set<string>(["wrong_extension", "temp_file", "month_mismatch", "month_not_found", "zero_score", "wrong_date", "oversize", "file_link", "stuck_processing"])
 
   function errorText(errorType: string): string {
     return ERROR_TEXT[errorType] || ERROR_TEXT.other
