@@ -21,8 +21,8 @@ group 1-2 workflows it watches by their name.
 | 2.1 Every minute: missing submission report | `2-1-every-minute-missing-submission-report.yml` | Every minute, in ~58-minute runs that start the next one themselves (cron :10/:30/:50 restarts the chain if it breaks). Updates the Excel and PNGs in the report Drive folder; sends nothing. |
 | 2.2 Nightly: build SK03 files and notify department heads | `2-2-nightly-build-sk03-and-notify-heads.yml` | Daily ~00:37. Also started by 1 for one month (inputs `month`, `request_id`) when the ตรวจสอบ tab asks; those runs skip the dept-head emails. One 2.2 run at a time. |
 | 2.3 Daily: keep database awake | `2-3-daily-keep-database-awake.yml` | Daily 07:00 |
-| 2.4 Monthly: create next month's roster table | `2-4-monthly-create-roster-table.yml` | 1st of month 01:00 |
-| 2.5 Monthly: update LINE menu month picker | `2-5-monthly-update-line-menu-month.yml` | 1st of month 06:00 |
+| 2.4 Monthly: create next month's roster table | `2-4-monthly-create-roster-table.yml` | Daily 23:07 and 01:07. Creates the current month's roster table if it is missing, and on the last day of the month next month's (at 23:07, an hour before the month starts). Other runs find the tables there and do nothing, so a missed run is caught by the next one. |
+| 2.5 Monthly: update LINE menu month picker | `2-5-monthly-update-line-menu-month.yml` | Daily 06:07 and 12:07. Rebuilds the month picker only when it does not offer the current month yet (so on the 1st); other runs only read it. A manual run always rebuilds. |
 | 2.6 Monthly: eligible physician list (PDF) | `2-6-monthly-eligible-physician-list.yml` | 1st of month 09:00 |
 | 2.7 Yearly: create Drive year folders | `2-7-yearly-create-drive-folders.yml` | 1 January 07:00 |
 | 2.8 On request: build the review approval PDF | `2-8-on-request-build-review-approval-pdf.yml` | Started by 1 when the auditor approves a month in the ตรวจสอบ tab. Builds the approval PDF (cover plus every department sheet, A4 landscape, approval time on every page) into Supabase Storage for the tab; sends nothing. Running it by hand is harmless. |

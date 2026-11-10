@@ -2,20 +2,35 @@ name: "2.4 Monthly: create next month's roster table"
 
 # ── Triggers ────────────────────────────────────────────────────────────────
 on:
-  # Target: 01:00 Asia/Bangkok (UTC+7) on the 1st of every month, so the new
-  # month's roster table exists before anyone submits P4P for it.
+  # Makes sure the current Bangkok month's roster table exists, and on the
+  # last day of a month next month's as well, so a month's table is there
+  # before anyone submits P4P for it.
   #
-  # GitHub cron is UTC and has no "last day of month" field. 01:00 Bangkok on
-  # the 1st is 18:00 UTC on the LAST day of the PREVIOUS month (28th–31st).
-  # So this fires at 18:00 UTC on days 28–31, and the "Skip unless tomorrow is
-  # the 1st" guard below drops every day except the actual last day of the
-  # month. (Same trick as 2-5-monthly-update-line-menu-month.yml.)
+  # Twice EVERY day, not once a month: GitHub delays scheduled runs by hours
+  # and sometimes drops them (see 1-always-on-process-line-uploads-and-emails.yml).
+  # The old schedule had one useful tick a month (18:00 UTC on the last day,
+  # kept only if it still started before UTC midnight), so one dropped or late
+  # tick left the month with no table. Now each run asks Supabase which month
+  # tables exist and creates only the missing ones, so the other runs of the
+  # month do nothing and send nothing. Month keys come from the Bangkok date
+  # when the run actually starts, so a late run still picks the right month.
+  #
+  #   16:07 UTC = 23:07 Bangkok. On the last day of the month: next month's
+  #               table, an hour before the month starts.
+  #   18:07 UTC = 01:07 Bangkok. The old run time: creates the month's table
+  #               if 23:07 was missed. Every later day retries again.
+  #
+  # Next month's table is created on the last day only, not earlier: its
+  # roster is copied from this month's table at that moment, so roster changes
+  # made after it would not carry over.
   schedule:
-    - cron: '0 18 28-31 * *'
+    - cron: '7 16 * * *'
+    - cron: '7 18 * * *'
 
-  # Manual runs bypass the guard. Leave inputs blank to provision
-  # the current Bangkok month from last month; set them to backfill/repair a
-  # specific month (e.g. new_key=2569_08, old_key=2569_07).
+  # Leave inputs blank to do what the schedule does (create the current
+  # month's table if missing, plus next month's on the last day). Set them to
+  # backfill/repair a specific month (e.g. new_key=2569_08, old_key=2569_07);
+  # that goes straight to the script, which skips a table that already exists.
   workflow_dispatch:
     inputs:
       new_key:
@@ -30,28 +45,78 @@ on:
 permissions:
   contents: read
 
+# One run at a time: two runs creating the same table at once would make one
+# of them fail.
+concurrency:
+  group: provision-month
+  cancel-in-progress: false
+
 jobs:
   provision:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Skip unless tomorrow is the 1st
-        id: guard
+      - name: Find month tables to create
+        id: plan
+        env:
+          SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+          NEW_KEY_INPUT: ${{ inputs.new_key }}
+          OLD_KEY_INPUT: ${{ inputs.old_key }}
         run: |
-          tomorrow_day=$(date -u -d '+1 day' +%d)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$tomorrow_day" = "01" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Not the eve of a new month (tomorrow is day $tomorrow_day) — skipping."
+          set -euo pipefail
+
+          # Manual repair or backfill: pass the keys on as typed.
+          if [ -n "$NEW_KEY_INPUT$OLD_KEY_INPUT" ]; then
+            for k in "$NEW_KEY_INPUT" "$OLD_KEY_INPUT"; do
+              if [ -n "$k" ] && ! [[ "$k" =~ ^[0-9]{4}_[0-9]{2}$ ]]; then
+                echo "::error::Month keys look like 2569_08 (Buddhist year, underscore, month)."
+                exit 1
+              fi
+            done
+            echo "todo=$NEW_KEY_INPUT:$OLD_KEY_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          # Month key (Buddhist year _ month) of a calendar date.
+          key() { local ym; ym=$(TZ=UTC date -d "$1" +%Y_%m); echo "$(( ${ym%_*} + 543 ))_${ym#*_}"; }
+
+          today=$(TZ=Asia/Bangkok date +%F)
+          tomorrow=$(TZ=UTC date -d "$today +1 day" +%F)
+          cur=$(key "$today")
+          prev=$(key "$(TZ=UTC date -d "${today%-*}-01 -1 day" +%F)")
+
+          todo=""
+          # $1 = month table to create if missing, $2 = month to copy the roster from.
+          plan() {
+            local code
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --head --max-time 30 \
+              -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY" \
+              "${SUPABASE_URL%/}/rest/v1/$1?select=*&limit=1" || true)
+            if [ "$code" = 200 ]; then
+              echo "public.\"$1\" exists."
+            else
+              # 404 means missing. Anything else is unknown, and the script is
+              # safe either way: it skips a table that exists and reports a
+              # real error itself.
+              echo "public.\"$1\": HTTP $code, will create it from public.\"$2\"."
+              todo="$todo $1:$2"
+            fi
+          }
+
+          plan "$cur" "$prev"
+          if [ "${tomorrow##*-}" = 01 ]; then
+            plan "$(key "$tomorrow")" "$cur"
+          fi
+          echo "todo=${todo# }" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
-        if: steps.guard.outputs.run == 'true'
+        if: steps.plan.outputs.todo != ''
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        if: steps.guard.outputs.run == 'true'
+        if: steps.plan.outputs.todo != ''
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -59,18 +124,23 @@ jobs:
           cache-dependency-path: automation/package-lock.json
 
       - name: Install dependencies
-        if: steps.guard.outputs.run == 'true'
+        if: steps.plan.outputs.todo != ''
         working-directory: automation
         run: npm ci
 
+      # Each pair is "new:old". The script sends the Telegram message (created,
+      # skipped or failed) and exits non-zero on failure, which 1.2 also reports.
       - name: Provision new month table
-        if: steps.guard.outputs.run == 'true'
+        if: steps.plan.outputs.todo != ''
         working-directory: automation
         env:
           SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          NEW_KEY:            ${{ inputs.new_key }}
-          OLD_KEY:            ${{ inputs.old_key }}
-        run: npx tsx scripts/provision-next-month.ts
+          TODO:               ${{ steps.plan.outputs.todo }}
+        run: |
+          set -euo pipefail
+          for pair in $TODO; do
+            NEW_KEY="${pair%%:*}" OLD_KEY="${pair#*:}" npx tsx scripts/provision-next-month.ts
+          done
