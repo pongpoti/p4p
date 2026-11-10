@@ -189,8 +189,10 @@ already-applied file is safe.
     - PART 1 (F13): `log_access_request(text, text, text)`, the only
       version (anon). Cleans control characters, caps name and department
       at 100, ignores a blank name or a malformed address, never overwrites
-      an open request's name or department, never reopens a resolved
-      request, and writes nothing for an active physician's address.
+      an open request's name or department, and writes nothing for an
+      active physician's address. A resolved request is opened again, with
+      the name given then, so a rejected or deactivated physician can ask
+      again.
     - PART 2 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
       `processing` for over 30 minutes while it has attempts left (cap 3),
       and marks it `failed` / `stuck_processing` when it has none.

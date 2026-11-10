@@ -15,10 +15,12 @@
 
 
 -- PART 1 — F13: log_access_request (anon, called by /verify/ before login).
---   It takes any address, so it must not let a caller rename or reopen
---   someone else's request: an open request keeps its name and department
---   (only requested_at and request_count move), a resolved one is not
---   touched, and an active physician gets no request at all. Input is
+--   It takes any address, so it must not let a caller rename someone
+--   else's open request: an open request keeps its name and department
+--   (only requested_at and request_count move), and an active physician
+--   gets no request at all. A resolved request (rejected, or approved and
+--   later deactivated) is opened again as a new one, with the name and
+--   department given now, so that person can still ask again. Input is
 --   cleaned as the 2026-08-07 live hardening did (security-hardening
 --   Appendix B): control characters out, whitespace collapsed, name and
 --   department capped at 100, a blank name or a malformed address writes
@@ -80,8 +82,14 @@ begin
   values (v_email, v_name, v_dept, now(), 1, false)
   on conflict (email) do update
     set requested_at  = now(),
-        request_count = public.access_requests.request_count + 1
-    where not public.access_requests.resolved;
+        request_count = public.access_requests.request_count + 1,
+        name          = case when public.access_requests.resolved
+                             then excluded.name
+                             else public.access_requests.name end,
+        department    = case when public.access_requests.resolved
+                             then excluded.department
+                             else public.access_requests.department end,
+        resolved      = false;
 end;
 $$;
 revoke all on function public.log_access_request(text, text, text) from public;

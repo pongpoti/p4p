@@ -168,9 +168,11 @@ not an approval gate).
 - Written via the `log_access_request()` RPC, called from `/verify/` when a
   user's email fails the allow-list check. It is anon-callable with any
   address, so it never overwrites an open request's `name`/`department`,
-  never reopens a resolved one, writes nothing for an active physician, and
-  cleans its input (control characters out, 100-character caps, blank name
-  or malformed address ignored) — `scripts/audit-fixes-2026-11.sql` PART 2,
+  writes nothing for an active physician, and cleans its input (control
+  characters out, 100-character caps, blank name or malformed address
+  ignored). A resolved request (rejected, or approved and later
+  deactivated) is opened again as a new request with the name given then,
+  so that person can ask again — `scripts/audit-fixes-2026-11.sql` PART 1,
   audit F13. `department` is required on the
   form (`assets/shared.js`'s `P4P.DEPARTMENTS`, the same fixed ~19-entry list
   `status/app.js`/`admin/app.js` use) so it can't drift from the canonical
