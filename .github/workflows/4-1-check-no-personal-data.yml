@@ -1,6 +1,7 @@
 name: "4.1 Check: no personal data committed"
 
-# Fails a pull request that adds personal data to this PUBLIC repository.
+# Fails a pull request, or a push to main, that adds personal data to this
+# PUBLIC repository.
 #
 # History: 773 rows of physician name + department + score (csv_2569_01-04/)
 # and 18 department heads' personal email addresses (automation/sql/
@@ -8,12 +9,22 @@ name: "4.1 Check: no personal data committed"
 # specific filename at the time, so neither was caught. This is the backstop
 # that does not depend on remembering to update a denylist.
 #
-# Scope: files ADDED or MODIFIED by the PR, not the whole tree — the history
-# still contains the original leak, and failing every run on that helps nobody.
+# Scope: files ADDED, COPIED, MODIFIED or RENAMED by the PR or push, not the
+# whole tree — the history still contains the original leak, and failing every
+# run on that helps nobody. Renames count: a roster pasted into x.sql and then
+# renamed to x-old.sql must not pass as "only renamed".
+#
+# It only blocks a merge if branch protection lists it as a required check.
 
 on:
   pull_request:
     branches: [main]
+  # A direct push to main never opens a PR, so scan pushes too.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   scan:
@@ -27,17 +38,61 @@ jobs:
 
       - name: Scan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # PR: the PR's own changes. Push: what this push added to main.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
 
-          files=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA")
-          [ -z "$files" ] && { echo "No added/modified files."; exit 0; }
+          # NUL-separated names: plain --name-only prints a Thai file name
+          # quoted with octal escapes, which then fails the [ -f ] test below
+          # and is skipped without being scanned.
+          list=$(mktemp)
+          zero=0000000000000000000000000000000000000000
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero" ] \
+             || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            # A new branch, or a force push whose old tip is gone: nothing to
+            # diff against, so scan every tracked file.
+            echo "No usable base commit; scanning every tracked file."
+            git ls-files -z > "$list"
+          # Three dots: only what the PR (or push) itself changed, not files
+          # that main changed since the branch was cut.
+          elif ! git diff -z --name-only --diff-filter=ACMR "$BASE_SHA...$HEAD_SHA" > "$list"; then
+            echo "::error::Could not list the changed files ($BASE_SHA...$HEAD_SHA)."
+            exit 1
+          fi
+          [ -s "$list" ] || { echo "No added/modified files."; exit 0; }
+
+          # Email addresses that are not personal data:
+          #  - reserved example domains (RFC 2606 / 6761): example.com, .net,
+          #    .org and anything under .example, .test, .invalid, .localhost;
+          #  - SYSTEM_MAILBOXES, the project's own accounts: the P4P inbox that
+          #    receives submissions and the Drive owner. They appear in
+          #    config, and flagging them would fail every PR that touches
+          #    automation/config.ts;
+          #  - Google Drive's no-reply sender, which the inbox filter and its
+          #    tests match on;
+          #  - fake placeholders already used in comments, tests and SQL
+          #    examples.
+          #  Add an exact address here only if it is not a person's.
+          email_ok='@(([a-z0-9-]+\.)*example\.(com|net|org)|([a-z0-9-]+\.)+(example|test|invalid|localhost))$'
+          email_ok="$email_ok"'|^(sakhonmso|p4pskh)@gmail\.com$'
+          email_ok="$email_ok"'|^drive-shares-dm-noreply@google\.com$'
+          email_ok="$email_ok"'|^(dr@hosp\.com|x@y\.com|a@b\.co|someone@else\.com|new@email\.com)$'
+
+          # npm copies package maintainers' contact addresses into the
+          # "deprecated" notices of package-lock.json. Those lines come from
+          # the npm registry, not from us; the rest of the file is scanned.
+          email_source() {
+            case "$1" in
+              package-lock.json|*/package-lock.json) grep -av '"deprecated":' "$1" ;;
+              *) cat "$1" ;;
+            esac
+          }
 
           fail=0
 
-          while IFS= read -r f; do
+          while IFS= read -r -d '' f; do
             [ -f "$f" ] || continue
 
             # Skip this workflow and the docs that necessarily discuss the
@@ -59,22 +114,30 @@ jobs:
             # Only scan text.
             file --mime "$f" | grep -q 'charset=binary' && continue
 
-            # 2. Real-looking personal email addresses. Consumer domains are
-            #    the tell — institutional aliases and example.com are fine.
-            #
-            #    SYSTEM_MAILBOXES are the project's own accounts, not personal
-            #    data: the P4P inbox that receives submissions and the Drive
-            #    owner. They appear legitimately in config, and flagging them
-            #    would fail every PR that touches automation/config.js.
-            hits=$(grep -aoiE '[a-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|live|icloud)\.com' "$f" 2>/dev/null \
-                   | grep -viE '^(sakhonmso|p4pskh)@gmail\.com$' | sort -u || true)
+            # 2. Email addresses, any domain: hospital and .go.th addresses
+            #    are as personal as gmail ones. Allowed: email_ok above.
+            hits=$(email_source "$f" 2>/dev/null \
+                   | grep -aoiE '[a-z0-9._%+-]+@([a-z0-9-]+\.)+[a-z]{2,}' \
+                   | tr '[:upper:]' '[:lower:]' | grep -vE "$email_ok" | sort -u || true)
             if [ -n "$hits" ]; then
-              echo "::error file=$f::Personal email address(es) found. These are also the login allow-list; keep them in the dept_heads table."
+              echo "::error file=$f::Email address(es) found. Personal addresses belong in Supabase (the dept_heads table is also the login allow-list), not in this public repo."
               echo "$hits" | sed 's/^/    /'
               fail=1
             fi
 
-            # 3. A physician roster in any file format.
+            # 3. LINE user ids: U followed by 32 hex digits. Each one names a
+            #    person's LINE account, so it lives in env vars and Supabase.
+            #    Only the line number and the first characters are printed, so
+            #    the public log does not repeat the id.
+            ids=$(grep -anoE '\bU[0-9a-f]{32}\b' "$f" 2>/dev/null \
+                  | sed -E 's/^([0-9]+):(U[0-9a-f]{4}).*/    line \1: \2.../' || true)
+            if [ -n "$ids" ]; then
+              echo "::error file=$f::LINE user id(s) found. Keep them in env vars or Supabase, not in this public repo."
+              echo "$ids"
+              fail=1
+            fi
+
+            # 4. A physician roster in any file format.
             #
             #    DENSITY, not presence. The first version of this rule asked
             #    only "does the file contain two Thai words AND the word
@@ -97,7 +160,7 @@ jobs:
               echo "::error file=$f::Looks like a physician roster — $names name-shaped rows. Roster data belongs in Supabase."
               fail=1
             fi
-          done <<< "$files"
+          done < "$list"
 
           if [ "$fail" -ne 0 ]; then
             echo ""
