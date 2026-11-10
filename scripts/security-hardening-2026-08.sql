@@ -296,9 +296,17 @@ revoke all on function public.reject_access_request(text)          from public, 
 revoke all on function public.rls_auto_enable()                    from public, anon, authenticated;
 revoke all on function public.secure_new_roster()                  from public, anon, authenticated;
 revoke all on function public.notify_access_request()              from public, anon, authenticated;
-revoke all on function public.bind_line_user_id(text, text)        from public, anon;
 revoke all on function public.record_bind_failure()                from public, anon;
 revoke all on function public.is_current_user_allowlisted()        from public, anon;
+-- bind_line_user_id is dropped by scripts/audit-fixes-2026-11.sql PART 4 (and
+-- is already gone live). REVOKE on a missing function is an error that would
+-- roll this whole file back, so it is revoked only while it still exists.
+do $revoke_bind$
+begin
+  if to_regprocedure('public.bind_line_user_id(text, text)') is not null then
+    revoke all on function public.bind_line_user_id(text, text) from public, anon;
+  end if;
+end $revoke_bind$;
 
 -- Re-assert the intended grants (revoking from a role the function was granted
 -- to via default privileges does not disturb service_role's own grant, but
@@ -312,7 +320,17 @@ grant execute on function public.record_bind_failure()         to authenticated;
 -- stated explicitly so the intent survives Block 2's event trigger if any of
 -- them is ever recreated with CREATE OR REPLACE.
 grant execute on function public.is_sender_allowlisted(text)            to anon, authenticated;
-grant execute on function public.log_access_request(text, text, text)   to anon, authenticated;
+-- log_access_request(text, text, text) exists only once audit-fixes-2026-11.sql
+-- PART 1 (step 24) has run, and that PART grants it the same way. Until then
+-- the grant is skipped, so this file can be pasted before or after step 24.
+do $grant_request$
+begin
+  if to_regprocedure('public.log_access_request(text, text, text)') is not null then
+    grant execute on function public.log_access_request(text, text, text) to anon, authenticated;
+  else
+    raise notice 'log_access_request(text, text, text) does not exist yet: audit-fixes-2026-11.sql PART 1 creates and grants it';
+  end if;
+end $grant_request$;
 
 -- UPDATE 2026-11 (audit finding F10): the grants that stood here for
 -- list_all_physicians() (anon, see Appendix B), get_line_bind_gate_status(text)
