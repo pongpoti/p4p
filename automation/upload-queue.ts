@@ -179,6 +179,47 @@ export async function downloadObject(objectPath: string): Promise<Buffer> {
   return Buffer.from(await data.arrayBuffer());
 }
 
+export interface LeftoverObjectRow {
+  id: string;
+  object_path: string;
+}
+
+/**
+ * Rows that will never be claimed again but may still hold their uploaded
+ * object: superseded by a newer upload for the same month (audit F17), or
+ * failed as stuck in processing (F09). Both are set inside the claim
+ * functions, in SQL, where no object can be deleted. object_deleted_at
+ * (scripts/audit-fixes-2026-11.sql PART 3) says which are done; a read error
+ * (that column not there yet, say) throws.
+ */
+export async function listLeftoverObjects(limit = 50): Promise<LeftoverObjectRow[]> {
+  const { data, error } = await getSupabase()
+    .from("p4p_upload_queue")
+    .select("id, object_path")
+    .is("object_deleted_at", null)
+    .or("archive_status.eq.superseded,and(status.eq.failed,error_type.eq.stuck_processing)")
+    .order("received_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`leftover-object query error: ${error.message}`);
+  return (data ?? []) as LeftoverObjectRow[];
+}
+
+/**
+ * Delete these rows' objects, then stamp object_deleted_at on them. Unlike
+ * deleteObject this throws, so a row is stamped only once its object is gone
+ * (removing an object that is already gone is not an error).
+ */
+export async function removeLeftoverObjects(rows: LeftoverObjectRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const { error } = await getSupabase().storage.from(BUCKET).remove(rows.map((r) => r.object_path));
+  if (error) throw new Error(`storage delete error: ${error.message}`);
+  const { error: stampError } = await getSupabase()
+    .from("p4p_upload_queue")
+    .update({ object_deleted_at: new Date().toISOString() })
+    .in("id", rows.map((r) => r.id));
+  if (stampError) throw new Error(`p4p_upload_queue update error: ${stampError.message}`);
+}
+
 /**
  * The bucket is a transient drop box, not storage: the object goes as soon as
  * it has reached Drive (§11's retention posture). Best-effort — a failed

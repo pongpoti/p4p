@@ -159,7 +159,14 @@ commit;
 --   once a newer upload for the same email and month is scored or archived:
 --   it gets archive_status 'superseded' instead (a new value, added to the
 --   check constraint here) and is never claimed again.
+--   Such a row's uploaded workbook, and that of a row PART 2 failed as
+--   'stuck_processing', would otherwise stay in the p4p-uploads bucket for
+--   good: nothing claims them again. The drain deletes those objects
+--   (drain-uploads.ts sweepLeftoverObjects) and stamps the new column
+--   object_deleted_at, so each row is done once.
 begin;
+
+alter table public.p4p_upload_queue add column if not exists object_deleted_at timestamptz;
 
 do $$
 declare r record;

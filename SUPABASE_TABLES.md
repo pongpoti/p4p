@@ -55,7 +55,9 @@ scorecard, alongside email. One row per submitted file, carrying two
   the scoring lifecycle (`status`, `attempts`, `claimed_at`, `finished_at`,
   `error_type`, `error_detail`, `score`, `score_method`, `notified_at`) and
   the archive lifecycle (`archive_status`, `archive_attempts`,
-  `archive_last_attempt_at`, `archived_at`), and the chat-receipt outcome
+  `archive_last_attempt_at`, `archived_at`), `object_deleted_at` (set when
+  the drain deleted the object of a superseded or stuck row), and the
+  chat-receipt outcome
   (`receipt_status`, `receipt_context`, `receipt_error`, `receipt_reported_at`)
   — the browser sends the receipt itself via `liff.sendMessages()`, so it
   reports back through `POST /upload/receipt` whether the send actually
@@ -89,8 +91,10 @@ scorecard, alongside email. One row per submitted file, carrying two
   physician can drop a file in and can never read one back, their own
   included. Only `service_role` (the worker, and `/upload/score`) reads.
 - **Transient by design:** the object is deleted once `archive_status =
-  'archived'`, so the raw file lives here for minutes, not indefinitely. A
-  `superseded` row's object is not deleted by anything yet.
+  'archived'`, so the raw file lives here for minutes, not indefinitely. The
+  object of a row nothing will claim again (`superseded`, or `failed` with
+  `stuck_processing`) is deleted by the drain once a run, which then stamps
+  `object_deleted_at` (`scripts/drain-uploads.ts` `sweepLeftoverObjects`).
 
 ## `dept_heads`
 

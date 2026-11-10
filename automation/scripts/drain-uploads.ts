@@ -40,6 +40,7 @@ import { processBuffer, extractFirstSheetBuffer, monthSheet, readSubmissionEmail
 import {
   claimArchive, claimScoreFallback, completeScored, failScored, rejectScored,
   markArchived, markNotified, listStuckArchives, downloadObject, deleteObject,
+  listLeftoverObjects, removeLeftoverObjects,
   type ArchiveQueueRow, type ScoreFallbackQueueRow,
 } from "../upload-queue.js";
 import { createDriveClient, type DriveClient } from "../drive-client.js";
@@ -339,6 +340,27 @@ async function alertStuckArchives() {
   }
 }
 
+// ── Leftover objects ──────────────────────────────────────────────────────
+/**
+ * Delete the uploaded objects of rows the queue will never claim again
+ * (superseded, or failed as stuck in processing; see listLeftoverObjects).
+ * The bucket is a drop box (§11): those workbooks carry a physician's name
+ * and workload and must not stay in it for good. Once per run, beside the
+ * stuck-archive alert; up to 50 rows a pass. Never throws.
+ */
+export async function sweepLeftoverObjects(): Promise<number> {
+  try {
+    const rows = await listLeftoverObjects();
+    if (rows.length === 0) return 0;
+    await removeLeftoverObjects(rows);
+    console.log(`│  🧹  Deleted ${rows.length} uploaded file(s) of superseded or stuck queue rows`);
+    return rows.length;
+  } catch (err) {
+    console.warn(`⚠️  leftover-object sweep skipped: ${errForLog(err)}`);
+    return 0;
+  }
+}
+
 // ── 3. Submission emails ──────────────────────────────────────────────────
 /** Is an inbox pass due? Pure, so the timing rules are testable. */
 export function emailPollDue(now: number, lastPollAt: number | null, until: number, intervalMs: number = EMAIL_POLL_MS): boolean {
@@ -436,6 +458,7 @@ async function main() {
     if (!didWork && !alerted) {
       alerted = true;
       await alertStuckArchives();
+      await sweepLeftoverObjects();
     }
 
     // Only sleep when the queue was empty — a busy queue drains back to back.
@@ -443,7 +466,10 @@ async function main() {
   }
 
   // A run that never went idle still owes its one look.
-  if (!alerted) await alertStuckArchives();
+  if (!alerted) {
+    await alertStuckArchives();
+    await sweepLeftoverObjects();
+  }
 
   console.log(`└─ drain finished — ${handled} row(s) handled`);
 }

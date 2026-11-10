@@ -220,7 +220,9 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     - PART 3 (F17): `claim_p4p_archive()` marks an older `archive_pending`
       row `superseded` (new `archive_status` value) when a newer upload for
       the same email and month is done or archived, so it never replaces
-      the newer file in Drive.
+      the newer file in Drive. Adds `object_deleted_at`, which the drain
+      stamps once it has deleted the uploaded object of a superseded or
+      stuck row.
     - PART 4 (F10): revokes and drops `list_all_physicians()`,
       `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
     After it, run the check query at the end of the file: anon must not be
