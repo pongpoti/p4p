@@ -43,6 +43,10 @@ export interface AnalysisResult {
   name: string;
   date: string;
   score: number;
+  /** How the score was found: a resolveScore() method, or CLAUDE_SCORE_METHOD when it is Claude's alone. */
+  scoreMethod?: string;
+  /** Claude and the JS score disagree and the JS method is not high-confidence: nothing may be saved until an admin checks. */
+  scoreConflict?: { claudeScore: number; jsScore: number; jsMethod: string } | null;
 }
 
 /** A fuzzy or exact roster row match — matchName()/getRosterRowByIndex(). */

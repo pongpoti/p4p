@@ -30,7 +30,7 @@ import log                              from "./logger.js";
 import * as path                        from "path";
 import { pathToFileURL }                from "url";
 import ExcelJS from "exceljs";
-import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, RosterLookup, UploadIdentity, NotifyHooks, ProcessOutcome } from "./types.js";
+import type { Row, GmailAttachment, MessageWithAttachments, RosterMatch, RosterLookup, UploadIdentity, NotifyHooks, ProcessOutcome, AnalysisResult } from "./types.js";
 // override:true ensures .env values win over stale system-level env vars
 // (e.g. ANTHROPIC_API_KEY="" set at OS level would otherwise shadow the real key)
 import { config as dotenvConfig } from "dotenv";
@@ -854,7 +854,7 @@ export async function processBuffer(buffer: Buffer, {
   // "name+month+year" subject and answered a different month than the one
   // actually stated anywhere.
   console.log(`│        🤖  Resolving physician + score…`);
-  let analysis: { name: string; date: string; score: number };
+  let analysis: AnalysisResult;
   try {
     analysis = await analyseJson(intermediate, filename);
     console.log(`│        ✅  Name and score read (month ${analysis.date})`);
@@ -1025,6 +1025,7 @@ export async function processBuffer(buffer: Buffer, {
       nameInFile : analysis.name ?? null,
       monthKey   : workMonth,
       score      : analysis.score,
+      scoreMethod: analysis.scoreMethod ?? null,
       filename   : filename ?? null,
       messageId  : isUpload ? null : messageId,
       queueId    : isUpload ? identity!.queueId ?? null : null,
@@ -1112,6 +1113,13 @@ export async function processBuffer(buffer: Buffer, {
       }
       return "replied";
     }
+  }
+
+  // ── Claude and the JS score disagree: the admin reads the total ────────
+  // Only when the JS method is not trusted on its own (claude-analyst.ts
+  // chooseScore); a high-confidence JS score has already won outright.
+  if (match && analysis.scoreConflict) {
+    return holdForAdmin({ reason: "score_conflict", match, conflict: analysis.scoreConflict });
   }
 
   // ── Upload to Google Drive (must succeed before saving score / archiving) ─

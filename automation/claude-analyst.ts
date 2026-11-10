@@ -1400,6 +1400,53 @@ export function resolveScore(rows: Row[]): ScoreResult {
   return { score: jsScore, method: jsMethod };
 }
 
+// ── Which score to trust ───────────────────────────────────────────────────
+
+/**
+ * The resolveScore() methods trusted on their own: a total the sheet itself
+ * labels as the grand total. The same set /upload/score gates on
+ * (lib/p4p-score.ts HIGH_CONFIDENCE_METHODS; test/scoreChoice.test.ts keeps
+ * the two equal). Every other method (sub-total sums, "largest in sheet",
+ * the day-count and reconstruction tiers) is a guess an admin should see.
+ */
+export const HIGH_CONFIDENCE_METHODS: ReadonlySet<string> = new Set([
+  "grand-total label row (all columns)",
+  "free-text summary line",
+]);
+
+export function isHighConfidence(method: string | null | undefined): boolean {
+  return typeof method === "string" && HIGH_CONFIDENCE_METHODS.has(method);
+}
+
+/** The method recorded when the score is Claude's alone (JS found none). Never high-confidence. */
+export const CLAUDE_SCORE_METHOD = "claude (no JS score)";
+
+/** Two readings of one total this close are the same number: Claude answers to two decimals. */
+export const SCORE_TOLERANCE = 0.01;
+
+export type ScoreChoice =
+  | { kind: "score"; score: number; method: string }
+  | { kind: "conflict"; claudeScore: number; jsScore: number; jsMethod: string }
+  | { kind: "none" };
+
+/**
+ * The score to save once Claude has answered. Claude's number is never
+ * preferred over the deterministic one: a misread, a sub-total, or text in a
+ * cell telling the model what to answer would otherwise become the pay.
+ *   • JS has a score, Claude agrees (within SCORE_TOLERANCE) or has none → JS
+ *   • they disagree and the JS method is high-confidence                  → JS
+ *   • they disagree and it is not                → conflict (an admin decides)
+ *   • JS has none                                → Claude's, as CLAUDE_SCORE_METHOD
+ */
+export function chooseScore(claudeScore: number | null, jsScore: number | null, jsMethod: string): ScoreChoice {
+  const claude = claudeScore !== null && Number.isFinite(claudeScore) && claudeScore > 0 ? claudeScore : null;
+  const js = jsScore !== null && Number.isFinite(jsScore) && jsScore > 0 ? jsScore : null;
+  if (js === null) return claude === null ? { kind: "none" } : { kind: "score", score: claude, method: CLAUDE_SCORE_METHOD };
+  if (claude === null || Math.abs(claude - js) <= SCORE_TOLERANCE + 1e-9) return { kind: "score", score: js, method: jsMethod };
+  if (isHighConfidence(jsMethod)) return { kind: "score", score: js, method: jsMethod };
+  return { kind: "conflict", claudeScore: claude, jsScore: js, jsMethod };
+}
+
 /** Shape of the object analyseJson() is called with. */
 export interface AnalyseJsonInput {
   _email_subject?: string;
@@ -1454,7 +1501,7 @@ export async function analyseJson(jsonData: AnalyseJsonInput, filename: string =
   // month than the one actually stated.
   if (resolvedName && jsScore !== null) {
     console.log(`│        ⚡  Resolved without AI: name + score both pre-scanned`);
-    return { name: resolvedName, date: dateKey, score: jsScore };
+    return { name: resolvedName, date: dateKey, score: jsScore, scoreMethod: jsMethod };
   }
 
   const client = getClient();
@@ -1531,28 +1578,35 @@ ${rowsJson}`;
     throw new Error(`Missing or empty "name": ${raw}`);
   }
 
-  // Score: prefer Claude's answer; fall back to JS if Claude returns 0/null
+  // Score: the deterministic JS reading wins whenever there is one; Claude's
+  // answer only fills a gap or flags a disagreement (see chooseScore).
   const rawScore = parsed?.score;
-  let numeric = 0;
+  let numeric = NaN;
   if (rawScore !== undefined && rawScore !== null && rawScore !== "null") {
     numeric = typeof rawScore === "number"
       ? rawScore
       : parseFloat(String(rawScore).replace(/,/g, ""));
   }
-  if (isNaN(numeric) || numeric <= 0) {
-    if (jsScore !== null && jsScore > 0) {
-      console.log(`│        ⚠️  Claude gave no usable score — using the JS score (${jsMethod})`);
-      numeric = jsScore;
-    } else {
-      throw new Error(
-        `Could not determine score. Claude: "${rawScore}", JS scan: null (${jsMethod}). ` +
-        `Row count: ${rows.length}. Sample values: ${
-          rows.slice(0, 3).map(r => JSON.stringify(Object.values(r).slice(0, 4))).join(" | ")
-        }`
-      );
-    }
+  const choice = chooseScore(Number.isFinite(numeric) ? numeric : null, jsScore, jsMethod);
+  if (choice.kind === "none") {
+    throw new Error(
+      `Could not determine score. Claude: "${rawScore}", JS scan: null (${jsMethod}). ` +
+      `Row count: ${rows.length}. Sample values: ${
+        rows.slice(0, 3).map(r => JSON.stringify(Object.values(r).slice(0, 4))).join(" | ")
+      }`
+    );
+  }
+  if (choice.kind === "conflict") {
+    // Numbers stay out of the public log (log-safe.ts); the admin's alert has them.
+    console.warn(`│        ⚠️  Claude's score disagrees with the JS score (${jsMethod}, not a high-confidence method) — held for the admin`);
+    return { name: name.trim(), date: dateKey, score: choice.jsScore, scoreMethod: jsMethod, scoreConflict: { claudeScore: choice.claudeScore, jsScore: choice.jsScore, jsMethod } };
+  }
+  if (choice.method === CLAUDE_SCORE_METHOD) {
+    console.log(`│        🤖  No JS score — using Claude's`);
+  } else if (Number.isFinite(numeric) && numeric > 0 && Math.abs(numeric - choice.score) > SCORE_TOLERANCE + 1e-9) {
+    console.warn(`│        ⚠️  Claude's score disagrees with a high-confidence JS score (${jsMethod}) — using the JS score`);
   }
 
   // Return score as a number — callers format with .toFixed(2) for display
-  return { name: name.trim(), date: dateKey, score: numeric };
+  return { name: name.trim(), date: dateKey, score: choice.score, scoreMethod: choice.method };
 }
