@@ -212,6 +212,51 @@ export function createDriveClient(): DriveClient {
   return { uploadFile, listMonthFiles };
 }
 
+// ── Transient errors ──────────────────────────────────────────────────────
+// Network-level failures a later attempt can get past (connection reset,
+// DNS hiccup, timeout).
+const TRANSIENT_NET_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EPIPE",
+  "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+]);
+// Drive answers some rate limits with 403 instead of 429.
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded"]);
+
+interface ErrorLike {
+  status?: unknown;
+  code?: unknown;
+  errors?: { reason?: unknown }[];
+  response?: { status?: unknown; data?: { error?: { errors?: { reason?: unknown }[] } } };
+  cause?: unknown;
+  message?: unknown;
+}
+
+/**
+ * Is this Drive (googleapis/gaxios) error one that may succeed if simply tried
+ * again: HTTP 408, 429, 5xx, a 403 rate limit, or a network failure? Anything
+ * else (a 403 permission error, a 404, a missing month folder, a bad
+ * workbook) is not, and retrying it would only repeat it.
+ */
+export function isTransientDriveError(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== "object" || depth > 3) return false;
+  const e = err as ErrorLike;
+  const numeric = (v: unknown): number => (typeof v === "number" ? v : typeof v === "string" && /^\d{3}$/.test(v) ? Number(v) : NaN);
+  const status = [e.status, e.response?.status, e.code].map(numeric).find((n) => !Number.isNaN(n));
+  if (status !== undefined) {
+    if (status === 408 || status === 429 || (status >= 500 && status <= 599)) return true;
+    if (status === 403) {
+      const reasons = [...(e.errors ?? []), ...(e.response?.data?.error?.errors ?? [])].map((x) => x?.reason);
+      return reasons.some((r) => typeof r === "string" && RATE_LIMIT_REASONS.has(r));
+    }
+    return false;
+  }
+  if (typeof e.code === "string" && TRANSIENT_NET_CODES.has(e.code)) return true;
+  if (typeof e.message === "string" && /socket hang up|network timeout/i.test(e.message)) return true;
+  // fetch wraps the network error: TypeError("fetch failed", { cause })
+  return isTransientDriveError(e.cause, depth + 1);
+}
+
 // ── Helper: convert Buffer to a Node.js Readable stream ───────────────────
 function bufferToReadable(buf: Buffer): Readable {
   const r = new Readable();

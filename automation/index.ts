@@ -10,7 +10,7 @@
  */
 
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
-import { createDriveClient }             from "./drive-client.js";
+import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
 import { matchName, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex, getPhysicianByEmail, getRosterScore } from "./supabase-client.js";
 import { decideSenderGate, formatHoldAlert, formatNewSenderAlert, HOLD_REPLY_SUBJECT, holdReplyBody, type SenderGateResult } from "./sender-gate.js";
@@ -568,6 +568,8 @@ export interface ProcessBufferContext {
   gmailReceivedAt?: string | null;
   /** processBuffer sets `answered` to false when a reply it owed the sender could not be sent. Shared by all workbooks of a message. */
   receipt?: { answered: boolean; holdNoticeSent?: boolean };
+  /** A Drive client to use instead of the one P4P_FOLDER_ID configures (tests); null means no Drive. */
+  drive?: DriveClient | null;
 }
 
 /**
@@ -601,7 +603,7 @@ export interface ProcessBufferContext {
  *   when identity is set. The pipeline stops knowing which channel it is.
  */
 export async function processBuffer(buffer: Buffer, {
-  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, gmailReceivedAt = null, receipt = undefined,
+  subject = "", body = "", filename, replyTo = "", senderDisplayName = "", messageId = "", emailDate = null, threadId = null, gmail, source = "email", identity = null, monthKey = null, notify = null, workbookCount = 1, siblingFilenames = [], textDate = null, receivedDate = null, gmailReceivedAt = null, receipt = undefined, drive: driveOverride,
 }: ProcessBufferContext): Promise<ProcessOutcome> {
   const isUpload = identity !== null;
 
@@ -1048,7 +1050,7 @@ export async function processBuffer(buffer: Buffer, {
   }
 
   // ── Upload to Google Drive (must succeed before saving score / archiving) ─
-  const drive = getDrive();
+  const drive = driveOverride !== undefined ? driveOverride : getDrive();
   if (drive) {
     if (!match) {
       // On the upload path this is `not_in_roster`, not a name mismatch:
@@ -1089,11 +1091,19 @@ export async function processBuffer(buffer: Buffer, {
       } catch (driveErr) {
         const message = driveErr instanceof Error ? driveErr.message : String(driveErr);
         console.error(`│        ❌  Drive upload failed: ${errForLog(message)}`);
+        // A 5xx, 429 or network error says nothing about the file: the next
+        // poll may well get through. Nothing has been saved or sent yet, so
+        // the throw leaves the email unread for the bounded retry (the admin
+        // is told if it gives up) instead of answering and archiving it for
+        // good. On the LINE path the drain retries the queue row.
+        if (isTransientDriveError(driveErr)) {
+          throw new RetryLaterError(`Drive upload failed (temporary): ${message}`);
+        }
         await sendTelegram(
           formatErrorMessage(`Drive upload failed: ${message}`, filename ?? null)
         ).catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
         await otherReply();
-        return "replied";  // ← do not archive, do not save score
+        return "replied";  // answered; the score is not saved
       }
     }
   }
