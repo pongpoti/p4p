@@ -19,7 +19,7 @@ import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
 import { zipProblem }                   from "./zip-guard.js";
-import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
+import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, anyOutcomeHandled, thrownPassExhausted, MAX_THROWN_PASSES, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
 import { decideStatedPeriod } from "./period-gate.js";
 import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
@@ -1255,20 +1255,29 @@ export async function processAttachment(att: GmailAttachment, messageId: string,
 }
 
 /**
+ * Message id -> polls in a row on which its processing threw and nothing was
+ * handled (see thrownPassExhausted). Kept for the life of the process, which
+ * on the always-on relay is one run of up to an hour.
+ */
+const thrownPasses = new Map<string, number>();
+
+/**
  * One pass over the inbox: read every new submission email, score it, reply,
  * and label it handled. Run on its own by `npx tsx index.ts` (manual
  * workflow), and once a minute by the drain relay (scripts/drain-uploads.ts),
  * which is what makes submissions land within a minute or two instead of
  * waiting on an hourly cron that GitHub can delay by hours.
+ *
+ * @param deps.gmail  a Gmail client to use instead of creating one (tests)
  */
-export async function readSubmissionEmails(): Promise<void> {
+export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): Promise<void> {
   // Fail fast if any required env var is missing
   const { absentOptional } = checkEnv();
   if (absentOptional.length > 0) {
     log.info(`Optional env vars not set: ${absentOptional.join(", ")}`);
   }
 
-  const gmail = createGmailClient();
+  const gmail = deps.gmail ?? createGmailClient();
 
   // ── Resolve "เอกสาร P4P" label ID once ───────────────────────────────
   // Used to tag processed messages. If the label doesn't exist yet,
@@ -1320,6 +1329,44 @@ export async function readSubmissionEmails(): Promise<void> {
     console.log(`\n✅  Done.`);
     return;
   }
+
+  /** Mark a message read, archived and labelled, so no later poll fetches it again. */
+  const markHandled = async (msgId: string, sourceLabel: "INBOX" | "SPAM"): Promise<void> => {
+    const addLabels    = p4pLabelId ? [p4pLabelId] : [];
+    const removeLabels = ["UNREAD", sourceLabel];
+    try {
+      await gmail.modifyMessage(msgId, addLabels, removeLabels);
+      console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
+    } catch (err) {
+      console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  /**
+   * After a pass on which nothing was handled and a workbook threw: true once
+   * the message has used up its passes AND the admin has been told, so the
+   * caller marks it handled. Until then (or while Telegram is down) it stays
+   * unread and is tried again on the next poll.
+   */
+  const setAsideAfterThrows = async (msgId: string, results: PromiseSettledResult<unknown>[]): Promise<boolean> => {
+    if (anyOutcomeHandled(results) || !results.some((r) => r.status === "rejected")) return false;
+    if (!thrownPassExhausted(thrownPasses, msgId)) {
+      console.warn(`│  ⏳  Processing threw — tried again on the next poll (${thrownPasses.get(msgId)}/${MAX_THROWN_PASSES})`);
+      return false;
+    }
+    try {
+      await sendTelegram(
+        `⚠️ P4P: อีเมล ${msgId} ประมวลผลไม่สำเร็จ ${MAX_THROWN_PASSES} รอบติดต่อกัน (ข้อผิดพลาดภายใน ดู log ของ workflow รอบนี้)\n` +
+        `ระบบทำเครื่องหมายว่าจัดการแล้วเพื่อหยุดการลองซ้ำทุกนาที ยังไม่ได้บันทึกคะแนนและยังไม่ได้ตอบผู้ส่ง\n` +
+        `เมื่อแก้ไขแล้ว หากต้องการให้ระบบอ่านใหม่: ย้ายอีเมลกลับเข้า Inbox เอาป้าย "${P4P_LABEL_NAME}" ออก และทำเครื่องหมายว่ายังไม่อ่าน`
+      );
+    } catch (err) {
+      console.warn(`│  ⚠️   Telegram notify failed: ${err instanceof Error ? err.message : err} — message left unmarked, to be retried`);
+      return false;
+    }
+    console.warn(`│  🛑  Processing threw ${MAX_THROWN_PASSES} polls in a row — set aside, admin told`);
+    return true;
+  };
 
   console.log(`\n📬  ${messages.length} message(s) found (${inboxMessages.length} inbox, ${spamMessages.length} spam/junk):\n`);
 
@@ -1398,7 +1445,7 @@ export async function readSubmissionEmails(): Promise<void> {
       // Instead of skipping, search the thread for an xlsx from the original sender.
       if (THREAD_RELAY_SENDERS.has(fromEmail) && msg.threadId) {
         console.log(`│  🔄  Relay sender — searching thread for xlsx from original messages…`);
-        let relayProcessed = false;
+        let relayFound = false;
         try {
           const threadMsgs = await gmail.getThreadMessages(msg.threadId);
           for (const tm of [...threadMsgs].reverse()) {
@@ -1421,24 +1468,20 @@ export async function readSubmissionEmails(): Promise<void> {
                 threadId : msg.threadId,
                 siblingFilenames: xlsxInMsg.map((a) => a.filename),
               };
+              relayFound = true;
               const results = await Promise.allSettled(
                 xlsxInMsg.map((att) => processAttachment(att, tm.msg.id, relayContext, gmail, xlsxInMsg.length))
               );
-              relayProcessed = results.some((r) => r.status === "fulfilled" && r.value === true);
               results.forEach((r, idx) => {
                 if (r.status === "rejected") {
                   console.error(`│      ❌  Relay attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
                 }
               });
-              if (relayProcessed) {
-                const addLabels    = p4pLabelId ? [p4pLabelId] : [];
-                const removeLabels = ["UNREAD", _sourceLabel];
-                try {
-                  await gmail.modifyMessage(id, addLabels, removeLabels);
-                  console.log(`│  🏷️   Marked: read · archived · "${P4P_LABEL_NAME}"`);
-                } catch (err) {
-                  console.error(`│  ❌  Failed to update message labels: ${err instanceof Error ? err.message : err}`);
-                }
+              // Handled = processed OR already answered ("replied"/"rejected"),
+              // as on the other two paths: an answered relay message left
+              // unread was re-analysed and re-answered every minute.
+              if (anyOutcomeHandled(results) || await setAsideAfterThrows(id, results)) {
+                await markHandled(id, _sourceLabel);
               }
               break;
             }
@@ -1446,7 +1489,7 @@ export async function readSubmissionEmails(): Promise<void> {
         } catch (err) {
           console.warn(`│  ⚠️   Relay thread search failed: ${err instanceof Error ? err.message : err}`);
         }
-        if (!relayProcessed) {
+        if (!relayFound) {
           console.log(`│  📭  No xlsx found in thread from original sender — skipping`);
         }
       } else {
@@ -1518,7 +1561,7 @@ export async function readSubmissionEmails(): Promise<void> {
             console.error(`│      ❌  Thread attachment[${idx}] threw: ${r.reason?.message ?? r.reason}`);
           }
         });
-        if (processedAnyAttachment || handledOtherwise) {
+        if (processedAnyAttachment || handledOtherwise || await setAsideAfterThrows(id, results)) {
           const addLabels    = p4pLabelId ? [p4pLabelId] : [];
           const removeLabels = ["UNREAD", _sourceLabel];
           try {
@@ -1634,7 +1677,7 @@ export async function readSubmissionEmails(): Promise<void> {
 
     // ── Mark message: read + starred + labeled ────────────────────────
     // Applied after a successful processing OR after an alert reply was sent.
-    if (processedAnyAttachment || repliedToAny || rejectedAny) {
+    if (processedAnyAttachment || repliedToAny || rejectedAny || await setAsideAfterThrows(id, results)) {
       const addLabels    = p4pLabelId ? [p4pLabelId] : [];
       const removeLabels = ["UNREAD", _sourceLabel];
       try {

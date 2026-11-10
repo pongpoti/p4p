@@ -346,6 +346,33 @@ export async function withRetry(
   return false;
 }
 
+/**
+ * Did a message's workbooks come back handled: processed (true), or already answered with an alert
+ * ("replied", "rejected")? Such a message is marked read and labelled. Anything else (no workbook ran, or
+ * every one threw) leaves it unread, and the next poll, a minute later on the always-on relay, fetches it
+ * again. The same rule on every path: the relay path used to count only `true`, so a relayed file that
+ * was answered with an alert was re-analysed and re-answered every minute.
+ */
+export function anyOutcomeHandled(results: PromiseSettledResult<unknown>[]): boolean {
+  return results.some((r) => r.status === "fulfilled" && (r.value === true || r.value === "replied" || r.value === "rejected"));
+}
+
+/** Polls in a row a message may come back with nothing handled and a workbook thrown before it is set aside. */
+export const MAX_THROWN_PASSES = 5;
+
+/**
+ * Bounded retry for a message whose processing threw: counts the pass against `id` and says whether the
+ * message has now used up its passes. When it has, the caller tells the admin and marks it handled instead
+ * of re-running it (Claude, Supabase, replies) every minute for the rest of the relay run. `counts` lives
+ * for the process (one relay run), so a message that only failed while a service was down is tried again
+ * MAX_THROWN_PASSES times, never forever.
+ */
+export function thrownPassExhausted(counts: Map<string, number>, id: string, max: number = MAX_THROWN_PASSES): boolean {
+  const n = (counts.get(id) ?? 0) + 1;
+  counts.set(id, n);
+  return n >= max;
+}
+
 export interface HeldAlert { id: string; peerId: string }
 
 /**
