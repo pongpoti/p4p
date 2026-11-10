@@ -67,9 +67,16 @@ test("the trusted methods are the same set /upload/score gates on (lib/p4p-score
 
 const NO_NAME = { _source_file: "P4P.xlsx", _email_subject: "", _email_body: "", _selected_sheet: "Sheet1", _date_key: "2569_10" };
 
+/** analyseJson with its progress lines silenced (raw console output can garble the test runner's stream). */
+async function analyse(rows: Record<string, unknown>[]) {
+  const orig = { log: console.log, error: console.error, warn: console.warn };
+  console.log = console.error = console.warn = () => {};
+  try { return await analyseJson({ ...NO_NAME, rows: rows as never }); } finally { Object.assign(console, orig); }
+}
+
 test("analyseJson: a high-confidence JS total beats a different Claude answer", async () => {
   claudeAnswer = { name: "ทดสอบ ตัวอย่าง", score: "4000" };
-  const r = await analyseJson({ ...NO_NAME, rows: [{ col_1: "งาน", col_2: 10 }, { col_1: "รวมทั้งหมด", col_3: 1800 }] });
+  const r = await analyse([{ col_1: "งาน", col_2: 10 }, { col_1: "รวมทั้งหมด", col_3: 1800 }]);
   assert.equal(r.score, 1800);
   assert.equal(r.scoreMethod, GRAND);
   assert.equal(r.scoreConflict ?? null, null);
@@ -77,14 +84,14 @@ test("analyseJson: a high-confidence JS total beats a different Claude answer", 
 
 test("analyseJson: Claude disagreeing with a sub-total reading is a conflict, not Claude's number", async () => {
   claudeAnswer = { name: "ทดสอบ ตัวอย่าง", score: "650.00" };
-  const r = await analyseJson({ ...NO_NAME, rows: [{ col_1: "รวมคะแนน", col_2: 400 }, { col_1: "รวมคะแนน", col_2: 250 }] });
+  const r = await analyse([{ col_1: "รวมคะแนน", col_2: 400 }, { col_1: "รวมคะแนน", col_2: 250 }]);
   assert.deepEqual(r.scoreConflict, { claudeScore: 650, jsScore: 400, jsMethod: SUB });
   assert.notEqual(r.score, 650);
 });
 
 test("analyseJson: Claude agreeing with a sub-total reading keeps the JS score and its method", async () => {
   claudeAnswer = { name: "ทดสอบ ตัวอย่าง", score: "400.00" };
-  const r = await analyseJson({ ...NO_NAME, rows: [{ col_1: "รวมคะแนน", col_2: 400 }, { col_1: "รวมคะแนน", col_2: 250 }] });
+  const r = await analyse([{ col_1: "รวมคะแนน", col_2: 400 }, { col_1: "รวมคะแนน", col_2: 250 }]);
   assert.equal(r.score, 400);
   assert.equal(r.scoreMethod, SUB);
   assert.equal(r.scoreConflict ?? null, null);
@@ -92,7 +99,7 @@ test("analyseJson: Claude agreeing with a sub-total reading keeps the JS score a
 
 test("analyseJson: Claude's score is used only when JS has none, and is marked as Claude's", async () => {
   claudeAnswer = { name: "ทดสอบ ตัวอย่าง", score: "512.25" };
-  const r = await analyseJson({ ...NO_NAME, rows: [{ col_1: "ชื่อ", col_2: "ข้อความ" }, { col_1: "อื่น", col_2: "ไม่มีตัวเลข" }] });
+  const r = await analyse([{ col_1: "ชื่อ", col_2: "ข้อความ" }, { col_1: "อื่น", col_2: "ไม่มีตัวเลข" }]);
   assert.equal(r.score, 512.25);
   assert.equal(r.scoreMethod, CLAUDE_SCORE_METHOD);
 });
