@@ -7,9 +7,10 @@
  *   1. reads the built SK03 back (staff/intern sheets, Y9, W9 and every
  *      department sheet) and exports it as .xlsx;
  *   2. for every person on the roster runs the two automatic checks:
- *        เทียบคะแนน  staff/intern K   vs the total the doctor wrote on their
- *                    own sheet (lib/review-core.ts statedTotal, saved values
- *                    only, never recalculated)
+ *        เทียบคะแนน  staff/intern K   vs the score the workflow takes from
+ *                    the doctor's own sheet (lib/review-core.ts
+ *                    workflowTotal: lib/p4p-score.ts resolveScore, its full
+ *                    rule, on the sheet's saved values)
  *        เทียบเงิน    staff/intern N   vs the department sheet's F
  *                    (ตามสัดส่วนวิชาชีพ)
  *   3. uploads both files to the private Storage bucket review-files, and
@@ -40,8 +41,11 @@ import type { drive_v3, sheets_v4 } from 'googleapis';
 const crypto  = require('crypto') as typeof import('crypto');
 const ExcelJS = require('exceljs') as typeof import('exceljs');
 const { log, withRetry, normaliseName } = require('./lib') as typeof import('./lib');
+type Resolve = (rows: Record<string, unknown>[]) => { score: number | null; method: string };
+// The rule that put each score in SK03 K (a port of automation/claude-analyst.ts).
+const p4p = require('../lib/p4p-score') as { resolveScore: Resolve };
 const core = require('../lib/review-core') as {
-  statedTotal(grid: unknown[][], uncached?: Set<string>): StatedTotal;
+  workflowTotal(grid: unknown[][], uncached: Set<string>, resolve: Resolve): StatedTotal;
   scoreCheck(a: number | null | undefined, b: number | null | undefined): Check;
   moneyCheck(a: number | null | undefined, b: number | null | undefined): Check;
   w9Rate(formula: unknown): number | null;
@@ -119,6 +123,30 @@ export async function reviewV2(supabase: SupabaseClient): Promise<boolean> {
   throw new Error(`review_builds read error: ${error.message}`);
 }
 
+/** The first month the ตรวจสอบ tab covers (lib/review-server.ts FIRST_MONTH). */
+export const REVIEW_FIRST_MONTH = '2569_08';
+
+/**
+ * The months among `keys` whose ตรวจสอบ review is on the auditee's side:
+ * from ส.ค. 2569 on, with no round sent yet or the live one sent back (the
+ * SQL's review_auditee_turn). The nightly run builds these as well as the
+ * latest two complete months, so the tab's files and checks follow the
+ * doctors' files without anyone pressing สร้างไฟล์ใหม่. A month the auditor
+ * has, or one approved, is left as it is.
+ */
+export async function auditeeSideMonths(supabase: SupabaseClient, keys: string[]): Promise<Set<string>> {
+  const want = keys.filter((k) => /^\d{4}_\d{2}$/.test(k) && k >= REVIEW_FIRST_MONTH);
+  if (!want.length) return new Set();
+  const { data, error } = await supabase.from('review_rounds').select('month')
+    .in('month', want).in('status', ['submitted', 'approved']);
+  if (error) {
+    if (missingTable(error)) return new Set();
+    throw new Error(`review_rounds read error: ${error.message}`);
+  }
+  const theirs = new Set(((data ?? []) as { month: string }[]).map((r) => r.month));
+  return new Set(want.filter((k) => !theirs.has(k)));
+}
+
 /** The month's budget and per P4P from the tab, or null. */
 export async function loadReviewInput(supabase: SupabaseClient, monthKey: string): Promise<ReviewInput | null> {
   const { data, error } = await supabase.from('review_inputs').select('budget, per_p4p').eq('month', monthKey).maybeSingle();
@@ -169,7 +197,7 @@ export function savedValue(v: unknown): { value: string | number | null; uncache
 
 /**
  * A cell as the submission pipeline reads it into a row (automation/index.ts
- * rowsOfSheet, lib/p4p-score.ts rowsFromWorksheet), so statedTotal sees the
+ * rowsOfSheet, lib/p4p-score.ts rowsFromWorksheet), so workflowTotal sees the
  * numbers the doctor's score was taken from: a formula's cell.result (a
  * shared-formula copy's only when it is a number, a merged copy's none),
  * dates as ISO text, rich text joined. `uncached` is a formula Excel saved
@@ -238,7 +266,7 @@ export async function analyseDoctorFile(buffer: Buffer): Promise<{ stated: State
   });
   const merges = ((ws as unknown as { model?: { merges?: string[] } }).model?.merges ?? []).slice(0, 300);
   return {
-    stated: core.statedTotal(scoreGrid, uncached),
+    stated: core.workflowTotal(scoreGrid, uncached, p4p.resolveScore),
     grid: { sheet: ws.name, rows: maxR, cols: maxC, cells, merges },
     sha256: fileSha,
   };

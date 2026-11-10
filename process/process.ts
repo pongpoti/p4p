@@ -19,7 +19,10 @@
  * Each run targets the latest 2 complete months (a fixed top-2 scan, not
  * unbounded backlog-hunting): Phase A walks the window newest → oldest,
  * skipping — not stopping at — incomplete months to keep looking older,
- * until 2 complete months are found or the window is exhausted. Phase B
+ * until 2 complete months are found or the window is exhausted. It also
+ * builds every other complete month in the window whose ตรวจสอบ review is
+ * still on the auditee's side (review.auditeeSideMonths), so the tab never
+ * needs its rebuild button after a doctor re-sends a file. Phase B
  * processes each of those independently, so a null-scores or merge-failure
  * outcome on one never blocks the other. The merged workbook and SK03
  * spreadsheet are regenerated and overwritten in place on EVERY run for
@@ -1785,7 +1788,10 @@ async function main(): Promise<void> {
   // it propagates and fails the whole job, same as an unexpected error
   // anywhere else in this script. Stop once TARGET_COMPLETE_MONTHS complete
   // months are found, or the window is exhausted — this is a fixed top-N
-  // scan, not unbounded backlog-hunting past older months.
+  // scan, not unbounded backlog-hunting past older months. The one
+  // exception: older months in the window whose ตรวจสอบ review is still on
+  // the auditee's side are looked at and built too, so a doctor re-sending
+  // a file for such a month never needs the tab's สร้างใหม่ button.
   console.log(`┌─ Discovery ${'─'.repeat(40)}`);
   interface CompleteMonth {
     key: string;
@@ -1794,9 +1800,26 @@ async function main(): Promise<void> {
     sbData: SupabasePerson[];
   }
   const completeMonths: CompleteMonth[] = [];
+  // Months whose ตรวจสอบ review is on the auditee's side are built too,
+  // beyond the latest TARGET_COMPLETE_MONTHS. Never on a one-month run, and
+  // a failed look only means building the usual months.
+  let reviewSide = new Set<string>();
+  if (reviewOn && !targeted) {
+    try {
+      reviewSide = await review.auditeeSideMonths(supabase, months.map((m) => m.key));
+      log(`  ตรวจสอบ tab, auditee's side: ${[...reviewSide].join(', ') || '(none)'}`);
+    } catch (err: any) {
+      log(`  [Review] ⚠ ${err.message} — building only the latest ${TARGET_COMPLETE_MONTHS} complete months`, 'warn');
+    }
+  }
+  let latest = 0;
   for (const monthInfo of months) {
-    if (completeMonths.length >= TARGET_COMPLETE_MONTHS) break;
     const { key } = monthInfo;
+    const extra = latest >= TARGET_COMPLETE_MONTHS;
+    if (extra && !reviewSide.has(key)) {
+      if ([...reviewSide].some((k) => k < key)) continue;
+      break;
+    }
 
     log(`  [${key}] Step 2 — Google Drive…`);
     const driveData = await getDriveMonthData(drive, monthInfo);
@@ -1813,8 +1836,9 @@ async function main(): Promise<void> {
       log(`  [${key}] → ✗ Lists do not match — skipping`, 'warn');
       continue;
     }
-    log(`  [${key}] → ✓ Complete`);
+    log(`  [${key}] → ✓ Complete${extra ? ' (built too: its ตรวจสอบ review is on the auditee\'s side)' : ''}`);
     completeMonths.push({ key, monthInfo, driveData, sbData });
+    if (!extra) latest++;
   }
   console.log(`└─ Found ${completeMonths.length} complete month(s): ${completeMonths.map(m => m.key).join(', ') || '(none)'}\n`);
   if (targeted && completeMonths.length === 0) {

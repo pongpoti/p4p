@@ -6,14 +6,17 @@
  * (lib/review-server.ts). No network, no dependencies, so the root tests can
  * hold both sides to the same rules (lib/__tests__/review-core.test.mjs).
  *
- *   statedTotal   the total a doctor wrote on their own sheet, read with the
- *                 submission pipeline's rule (lib/p4p-score.ts
- *                 extractScoreFromRows, the rule that put the score in SK03
- *                 K): grand-total label rows, then a free-text summary line,
- *                 then sub-total label rows. Only the passes that read a
- *                 number the doctor wrote: never the pipeline's guesses or
- *                 recalculations, and a total formula with no saved value is
- *                 reported as uncached, not rebuilt from the days.
+ *   workflowTotal the score the workflow takes from a doctor's own sheet,
+ *                 by its full rule (lib/p4p-score.ts resolveScore, passed in:
+ *                 the rule that put the score in SK03 K), with the cell it
+ *                 sits in when it sits in one
+ *   statedTotal   the cell finder: the total a doctor wrote, read with the
+ *                 pipeline's first passes (extractScoreFromRows): grand-total
+ *                 label rows, then a free-text summary line, then sub-total
+ *                 label rows, then the sheet's largest number when it sits on
+ *                 a row labelled as a total. Never the pipeline's guesses or
+ *                 recalculations; a total formula with no saved value is
+ *                 reported as uncached.
  *   scoreCheck    SK03 score (staff/intern sheet K) vs that stated total
  *   moneyCheck    staff/intern pay (N) vs the department sheet (F, ตามสัดส่วนวิชาชีพ)
  *   w9Rate        the per P4P written into the intern W9 formula (=W10*rate)
@@ -86,7 +89,12 @@ function cellName(r: number, c: number): string {
 export interface StatedTotal {
   value: number | null
   cell: string | null
-  /** grand-total · free-text · sub-total · largest-over-sub-total · uncached · none */
+  /**
+   * grand-total · free-text · sub-total · largest-over-sub-total ·
+   * largest-on-total-row · uncached · none, and from workflowTotal
+   * largest-in-sheet · largest-year-like · weight-x-days ·
+   * sum-of-sub-totals · sum-of-data-rows · rebuilt-from-days
+   */
   how: string
 }
 
@@ -119,13 +127,15 @@ function findScoreColumn(grid: unknown[][]): number | null {
  * falling through to a lesser pass.
  *
  * The passes and what each takes are lib/p4p-score.ts extractScoreFromRows'
- * first three: (1) grand-total label rows, any column: the declared score
+ * first four: (1) grand-total label rows, any column: the declared score
  * column's number, else the row's non-year numbers (its year-like ones only
  * when it has no other), plus numbers inside the label cell; (2) a total
  * typed as text; (3) sub-total labels in the first three columns (declared
  * column first), where a bigger number anywhere in the sheet wins, as it
- * does in the pipeline. The largest of a pass is the total; `cell` is where
- * it is (for text, the cell holding the text).
+ * does in the pipeline; (4) the pipeline's next pass, the largest number in
+ * the sheet, only when its row has a total label in any column. The largest
+ * of a pass is the total; `cell` is where it is (for text, the cell holding
+ * the text).
  */
 function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): StatedTotal {
   const best = (cands: Candidate[]): Candidate =>
@@ -206,7 +216,79 @@ function statedTotal(grid: unknown[][], uncached: Set<string> = new Set()): Stat
     if (m.n > s.n) return found(m, "largest-over-sub-total")
     return found(s, "sub-total")
   }
+
+  // Pass 4: the pipeline's "largest in sheet", taken only when that number
+  // sits on a row labelled as a total in any column (a form with "รวม" in
+  // AB15 and its total in AK15). A largest number on an unlabelled row is a
+  // guess and stays out.
+  const sheet: Candidate[] = []
+  grid.forEach((row, r) => { if (row) sheet.push(...rowNums(row, r)) })
+  if (sheet.length) {
+    const top = sheet.reduce((a, x) => (x.n > a ? x.n : a), 0)
+    const labelled = (r: number): boolean => (grid[r] ?? []).some((v) =>
+      [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS].some((l) => includesLabel(String(v ?? ""), l)))
+    const onTotal = sheet.filter((x) => x.n === top && labelled(x.r))
+    if (onTotal.length) return found(best(onTotal), "largest-on-total-row")
+  }
   return { value: null, cell: null, how: "none" }
+}
+
+/**
+ * A grid as the rows the submission pipeline reads (automation/index.ts
+ * rowsOfSheet): one object per non-empty row, `col_N` keys (1-based) in
+ * column order, holes left out.
+ */
+function rowsOf(grid: unknown[][]): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = []
+  grid.forEach((row) => {
+    if (!row) return
+    const o: Record<string, unknown> = {}
+    row.forEach((v, c) => { o["col_" + (c + 1)] = v })
+    if (Object.keys(o).length) rows.push(o)
+  })
+  return rows
+}
+
+/** The pipeline's method (lib/p4p-score.ts) → the tab's short name for it. */
+const WORKFLOW_HOW: Record<string, string> = {
+  "grand-total label row (all columns)": "grand-total",
+  "free-text summary line": "free-text",
+  "sub-total label row (col_1-3)": "sub-total",
+  "largest in sheet (exceeds sub-total label rows)": "largest-over-sub-total",
+  "largest in sheet": "largest-in-sheet",
+  "largest in sheet (year-like fallback)": "largest-year-like",
+  "weight × day-count computation": "weight-x-days",
+  "sum of sub-total rows (grand-total formula uncached)": "sum-of-sub-totals",
+  "sum of score-column data rows (sub-totals partially uncached)": "sum-of-data-rows",
+  "reconstructed from daily cells × rate (sub-totals also uncached)": "rebuilt-from-days",
+}
+
+type Resolve = (rows: Record<string, unknown>[]) => { score: number | null; method: string }
+
+/**
+ * The score the workflow takes from this sheet, by its full rule (Pong,
+ * 2026-11-10): `resolve` is lib/p4p-score.ts resolveScore, the rule that put
+ * the score in SK03 K, passed in so this file stays dependency-free. That
+ * includes the passes statedTotal leaves out: the largest number in the
+ * sheet, and the totals the pipeline adds up or rebuilds from the daily
+ * counts × แต้ม when the total row has no saved value.
+ *
+ * `cell` is where the number is: statedTotal's cell when it reads the same
+ * number, else the last cell holding exactly that number, else null (a sum
+ * or a rebuild sits in no cell).
+ */
+function workflowTotal(grid: unknown[][], uncached: Set<string>, resolve: Resolve): StatedTotal {
+  const own = statedTotal(grid, uncached)
+  const { score, method } = resolve(rowsOf(grid))
+  if (score === null || !isFinite(score) || score <= 0) {
+    return { value: null, cell: null, how: own.how === "uncached" ? "uncached" : "none" }
+  }
+  if (own.value !== null && cents(own.value) === cents(score)) return own
+  let cell: string | null = null
+  grid.forEach((row, r) => {
+    if (row) row.forEach((v, c) => { if (typeof v === "number" && cents(v) === cents(score)) cell = cellName(r, c) })
+  })
+  return { value: score, cell, how: WORKFLOW_HOW[method] ?? method }
 }
 
 type Check = "match" | "mismatch" | "missing"
@@ -238,11 +320,11 @@ function parseMonth(key: unknown): { be: number; month: number } | null {
   return { be: parseInt(m[1], 10), month }
 }
 
-/** Budget as typed: up to 2 decimals, commas allowed. */
-function parseMoney(v: unknown, max: number): number | null {
+/** Budget as typed: whole baht from 1, no decimals, commas allowed (Pong, 2026-11-10). */
+function parseBudget(v: unknown, max: number): number | null {
   const s = String(v ?? "").replace(/,/g, "").trim()
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null
-  const n = parseFloat(s)
+  if (!/^\d+$/.test(s)) return null
+  const n = parseInt(s, 10)
   return n > 0 && n < max ? n : null
 }
 
@@ -286,11 +368,13 @@ function scoreFlag(score: number | null | undefined): "high" | "low" | null {
   colName,
   cellName,
   statedTotal,
+  rowsOf,
+  workflowTotal,
   scoreCheck,
   moneyCheck,
   w9Rate,
   parseMonth,
-  parseMoney,
+  parseBudget,
   parseCount,
   parseScore,
   perP4p,

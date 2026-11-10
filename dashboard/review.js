@@ -60,6 +60,8 @@
     };
     const baht = (n) => n === null || n === undefined ? "—" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const int = (n) => Number(n || 0).toLocaleString("th-TH");
+    // The budget is whole baht: no decimals, unless an older one was saved with satang.
+    const budgetText = (n) => n === null || n === undefined ? "—" : Number.isInteger(Number(n)) ? int(Number(n)) : baht(n);
     const sizeText = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
     const say = (msg) => { live.textContent = ""; setTimeout(() => { live.textContent = msg; }, 50); };
     // A failure is announced at once (role=alert); say() is the polite one.
@@ -706,7 +708,7 @@
             h.id = "rv-h-more";
             more.setAttribute("aria-labelledby", h.id);
             const row = el("div", "rv-actions");
-            const sum = el("span", "rv-hint", s.inputs ? "งบ " + baht(s.inputs.budget) + " · N " + (s.inputs.doctors ? int(s.inputs.doctors) : "–") + " · per P4P " + baht(s.inputs.per_p4p) : "ยังไม่ได้กรอกงบประมาณ");
+            const sum = el("span", "rv-hint", s.inputs ? "งบ " + budgetText(s.inputs.budget) + " · N " + (s.inputs.doctors ? int(s.inputs.doctors) : "–") + " · per P4P " + baht(s.inputs.per_p4p) : "ยังไม่ได้กรอกงบประมาณ");
             const t = el("button", "btn-ghost", moreOpen ? "ซ่อน" : "แสดง");
             t.type = "button";
             t.id = "rv-more-toggle";
@@ -755,16 +757,79 @@
         c.append(top, bar, el("p", "rv-hint", "ส่งแล้ว " + int(s.roster.sent) + " จาก " + int(s.roster.total) + " · ระบบสร้าง SK03 ให้เองเมื่อส่งครบ"));
         return c;
     }
+    // Budget and N are whole numbers (lib/review-core.ts parseBudget, parseCount).
     // per P4P = budget ÷ N to the satang, as the SQL stores it (lib/review-core.ts perP4p).
-    const MONEY_RE = /^\d+(\.\d{1,2})?$/;
-    const COUNT_RE = /^\d+$/;
+    const WHOLE_RE = /^\d+$/;
+    const BUDGET_MSG = "ใส่จำนวนเต็มบาทมากกว่า 0 ไม่มีทศนิยม";
+    const DOCTORS_MSG = "ใส่จำนวนเต็มมากกว่า 0 ไม่มีทศนิยม";
     function ratePreview(budget, n) {
         const b = budget.replace(/,/g, "").trim(), c = n.replace(/,/g, "").trim();
-        if (!MONEY_RE.test(b) || !COUNT_RE.test(c) || !(Number(b) > 0) || !(Number(c) > 0))
+        if (!WHOLE_RE.test(b) || !WHOLE_RE.test(c) || !(Number(b) > 0) || !(Number(c) > 0))
             return "–";
         const v = Math.round(Math.round(Number(b) * 100) / Number(c)) / 100;
         return v > 0 ? baht(v) : "–";
     }
+    const grouped = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    // A whole-number field: a typed letter or space does nothing, and with
+    // `group` the digits show a comma every 1,000 as they are typed, the
+    // caret staying after the same digit. A decimal point (typed or pasted)
+    // or any other pasted text stays as it is and the field says at once
+    // that it takes whole numbers: dropping the point would turn
+    // 2,158,709.06 into 215,870,906 without a word.
+    function wholeField(i, group, msg) {
+        const say = (bad) => {
+            const e = document.getElementById(i.id + "-e");
+            if (!e)
+                return;
+            if (bad) {
+                e.textContent = msg;
+                e.classList.remove("hidden");
+                i.setAttribute("aria-invalid", "true");
+                fieldErrs.set(i.id, msg);
+            }
+            else if (fieldErrs.get(i.id) === msg) {
+                e.textContent = "";
+                e.classList.add("hidden");
+                i.removeAttribute("aria-invalid");
+                fieldErrs.delete(i.id);
+            }
+        };
+        i.addEventListener("input", (e) => {
+            var _a;
+            const ev = e;
+            if (ev.isComposing)
+                return;
+            let raw = i.value;
+            let pos = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : raw.length;
+            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1 && !/[\d,.]/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) {
+                raw = raw.slice(0, pos - 1) + raw.slice(pos);
+                pos -= 1;
+            }
+            if (/[^\d,]/.test(raw)) {
+                if (raw !== i.value) {
+                    i.value = raw;
+                    i.setSelectionRange(pos, pos);
+                }
+                say(true);
+                return;
+            }
+            say(false);
+            const all = raw.replace(/,/g, "");
+            const lead = all.length - all.replace(/^0+(?=\d)/, "").length;
+            const digits = all.slice(lead);
+            const before = Math.max(0, raw.slice(0, pos).replace(/,/g, "").length - lead);
+            const out = group ? grouped(digits) : digits;
+            if (out === i.value)
+                return;
+            i.value = out;
+            let at = 0;
+            for (let k = 0; at < out.length && k < before; at++)
+                if (out[at] !== ",")
+                    k++;
+            i.setSelectionRange(at, at);
+        });
+    }
+    const budgetField = (n) => n === null || n === undefined ? "" : Number.isInteger(Number(n)) ? grouped(String(Number(n))) : fmt2(n);
     const fmt2 = (n) => n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     function inputsCard(s) {
         const c = el("section", "rv-card glass rv-inputs");
@@ -774,18 +839,20 @@
         const editable = auditeeTurn(s);
         const form = el("form", "rv-form rv-inputs-form");
         form.noValidate = true;
-        const field = (id, label, saved, mode, placeholder) => {
+        const field = (id, label, saved, group, msg) => {
             const w = el("div", "rv-field");
             const l = el("label", undefined, label);
             l.htmlFor = id;
             const i = el("input");
             i.id = id;
             i.type = "text";
-            i.inputMode = mode;
+            i.inputMode = "numeric";
             i.autocomplete = "off";
-            i.placeholder = placeholder;
-            if (editable)
+            i.placeholder = "0";
+            if (editable) {
+                wholeField(i, group, msg);
                 keep(i, id, saved);
+            }
             else {
                 i.value = saved;
                 i.readOnly = true;
@@ -800,8 +867,8 @@
             return [w, i];
         };
         const inp = s.inputs;
-        const [bw, bi] = field("rv-budget", "งบประมาณ (บาท)", inp ? fmt2(inp.budget) : "", "decimal", "0.00");
-        const [nw, ni] = field("rv-doctors", "จำนวนแพทย์ (N)", inp && inp.doctors ? String(inp.doctors) : "", "numeric", "0");
+        const [bw, bi] = field("rv-budget", "งบประมาณ (บาท)", inp ? budgetField(inp.budget) : "", true, BUDGET_MSG);
+        const [nw, ni] = field("rv-doctors", "จำนวนแพทย์ (N)", inp && inp.doctors ? String(inp.doctors) : "", false, DOCTORS_MSG);
         const rw = el("div", "rv-field");
         const rl = el("span", "rv-label", "per P4P ");
         rl.id = "rv-rate-l";
@@ -860,8 +927,8 @@
                 bad = i;
             return v;
         };
-        const budget = check("rv-budget", (v) => MONEY_RE.test(v) && Number(v) > 0 && Number(v) < 1e11, "ใส่ตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง");
-        const doctors = check("rv-doctors", (v) => COUNT_RE.test(v) && Number(v) > 0 && Number(v) < 1e5, "ต้องเป็นจำนวนเต็มมากกว่า 0");
+        const budget = check("rv-budget", (v) => WHOLE_RE.test(v) && Number(v) > 0 && Number(v) < 1e11, BUDGET_MSG);
+        const doctors = check("rv-doctors", (v) => WHOLE_RE.test(v) && Number(v) > 0 && Number(v) < 1e5, DOCTORS_MSG);
         if (bad) {
             bad.focus();
             return;
@@ -927,7 +994,7 @@
                 // No id: a build from before the file's id was kept, or the
                 // upload failed. The next build stores it.
                 if (!id)
-                    return el("span", "rv-hint", text + ": ยังไม่มีลิงก์" + (auditeeTurn(s) ? " (กดสร้างใหม่)" : ""));
+                    return el("span", "rv-hint", text + ": ยังไม่มีลิงก์");
                 const a = el("a", "rv-link", text + " ");
                 a.href = url(id);
                 a.target = "_blank";
@@ -1494,7 +1561,7 @@
     }
     function kvGrid(budget, doctors, perP4p, edits) {
         const g = el("div", "rv-kvs");
-        g.append(kv("งบประมาณ", baht(budget)), kv("N", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
+        g.append(kv("งบประมาณ", budgetText(budget)), kv("N", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
         if (edits !== undefined)
             g.append(kv("แก้คะแนน", int(edits) + " คน"));
         return g;
@@ -1844,7 +1911,10 @@
         department: "กลุ่มงานเปลี่ยน", name: "ชื่อเปลี่ยน", check: "ผลเทียบไม่ตรงกัน",
     };
     const HOW_TEXT = {
-        "grand-total": "แถวรวมทั้งหมด", "free-text": "ข้อความสรุปยอดรวม", "sub-total": "แถวรวม", "largest-over-sub-total": "ตัวเลขมากที่สุดในชีต (มากกว่าแถวรวม)",
+        "grand-total": "แถวรวมทั้งหมด", "free-text": "ข้อความสรุปยอดรวม", "sub-total": "แถวรวม", "largest-over-sub-total": "ตัวเลขมากที่สุดในชีต (มากกว่าแถวรวม)", "largest-on-total-row": "ตัวเลขมากที่สุดในชีต อยู่ในแถวรวม",
+        "largest-in-sheet": "ตัวเลขมากที่สุดในชีต", "largest-year-like": "ตัวเลขมากที่สุดในชีต รวมตัวเลขที่ดูคล้ายปี", "weight-x-days": "คำนวณจากแต้ม × จำนวนวัน",
+        "sum-of-sub-totals": "ผลบวกแถวรวมย่อย เพราะแถวรวมทั้งหมดไม่มีค่าที่บันทึกไว้", "sum-of-data-rows": "ผลบวกคอลัมน์แต้ม เพราะแถวรวมไม่มีค่าที่บันทึกไว้",
+        "rebuilt-from-days": "คำนวณจากจำนวนรายวัน × แต้ม เพราะแถวรวมไม่มีค่าที่บันทึกไว้",
         uncached: "แถวรวมเป็นสูตรที่ Excel ไม่ได้บันทึกค่าไว้", none: "ไม่พบแถวรวม", empty: "ชีตว่าง", "no-sheet": "ไม่พบชีตของแพทย์",
     };
     const bothMatch = (p) => p.scoreCheck === "match" && p.moneyCheck === "match";
@@ -1882,7 +1952,7 @@
             return approvedView(s, r, "auditor");
         ensure(s, r);
         const out = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true), "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
-                " · งบประมาณ " + baht(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
+                " · งบประมาณ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
                 (r.edits ? " · ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน" : ""))];
         out.push(finishBar(s, r));
         if (peopleErr)
@@ -2206,7 +2276,7 @@
         const thead = el("thead"), tbody = el("tbody");
         thead.append(head);
         tbody.append(row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
-            : num(p.stated) + " ช่อง " + p.statedCell + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
+            : num(p.stated) + (p.statedCell ? " ช่อง " + p.statedCell : "") + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
         t.append(cap, thead, tbody);
         panel.append(t);
         panel.append(sheetBox(s, r, p));
