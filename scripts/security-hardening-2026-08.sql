@@ -82,7 +82,7 @@
 --  physician names to any unauthenticated caller — is an APPLICATION change,
 --  not a grant change. It cannot be revoked, because /verify/ genuinely calls
 --  it pre-login. See Appendix B. (UPDATE 2026-11: done — the app no longer
---  calls it and scripts/audit-fixes-2026-11.sql PART 5 drops it.)
+--  calls it and scripts/audit-fixes-2026-11.sql PART 4 drops it.)
 --
 --  Idempotent. Ordered so nothing is left half-open between blocks.
 --
@@ -318,7 +318,7 @@ grant execute on function public.log_access_request(text, text, text)   to anon,
 -- list_all_physicians() (anon, see Appendix B), get_line_bind_gate_status(text)
 -- (anon, see Appendix A) and bind_line_user_id(text, text) (authenticated)
 -- are removed. All three are dropped (live per DATA_EXPOSURE_ANALYSIS.md
--- section 5, and in source by scripts/audit-fixes-2026-11.sql PART 5); never
+-- section 5, and in source by scripts/audit-fixes-2026-11.sql PART 4); never
 -- grant them again. log_access_request is the 3-argument version from that
 -- file's PART 2; the 2-argument one no longer exists.
 
@@ -564,7 +564,7 @@ where n.nspname = 'public' order by objtype, grantor;
 --
 --  UPDATE 2026-11 (audit findings F10, F13): the hardened log_access_request
 --  described above was never written back into the repo, so the source still
---  had the old body. It now lives in scripts/audit-fixes-2026-11.sql PART 2
+--  had the old body. It now lives in scripts/audit-fixes-2026-11.sql PART 1
 --  (same cleaning, plus: an existing request's name and department are never
 --  overwritten and a resolved request is never reopened), and PART 5 of that
 --  file does the revoke + drop below, uncommented. The rest of this appendix

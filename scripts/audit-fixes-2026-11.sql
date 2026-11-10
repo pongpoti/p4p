@@ -1,6 +1,6 @@
 -- ============================================================================
 --  audit-fixes-2026-11.sql — database half of the 2026-11-10 code audit
---  (findings F01, F13, F09, F17, F10).
+--  (findings F13, F09, F17, F10; F01 is left as it is, by the owner's choice).
 --
 --  Paste into the Supabase SQL editor after SUPABASE_MIGRATIONS.md steps
 --  14, 15 and 18 (it needs physicians, access_requests.department and
@@ -14,16 +14,15 @@
 -- ============================================================================
 
 
--- PART 1 — F01: an email sender is never added to physicians on its own.
---   bump_sender_match records every sender the email pipeline matched to a
---   roster name, and that name comes from the file, so it proves nothing
---   about who sent it. The old trigger made that address an active
---   physician under the matched name (a login, and the victim's LINE upload
---   identity) and renamed an existing physicians row to the matched name.
---   Now an address with no physicians row gets an open access request
---   (name = matched roster name) for an admin to approve; an address that
---   already has a physicians row, active or not, is left alone; a resolved
---   (approved or rejected) request is never reopened.
+-- PART 1 — F13: log_access_request (anon, called by /verify/ before login).
+--   It takes any address, so it must not let a caller rename or reopen
+--   someone else's request: an open request keeps its name and department
+--   (only requested_at and request_count move), a resolved one is not
+--   touched, and an active physician gets no request at all. Input is
+--   cleaned as the 2026-08-07 live hardening did (security-hardening
+--   Appendix B): control characters out, whitespace collapsed, name and
+--   department capped at 100, a blank name or a malformed address writes
+--   nothing.
 begin;
 
 alter table public.access_requests add column if not exists department text;
@@ -47,52 +46,6 @@ as $$
 $$;
 revoke all on function public.clean_request_text(text, integer) from public, anon, authenticated;
 
-create or replace function public.sync_physician_from_match()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_email text := lower(trim(coalesce(new.sender_email, '')));
-  v_name  text := public.clean_request_text(new.matched_physician, 100);
-  v_dept  text := public.clean_request_text(new.department, 100);
-begin
-  if not new.matched or v_email = '' or v_name is null then
-    return new;
-  end if;
-  if exists (select 1 from public.physicians p where p.email = v_email) then
-    return new;
-  end if;
-  insert into public.access_requests (email, name, department, requested_at, request_count, resolved)
-  values (v_email, v_name, v_dept, now(), 1, false)
-  on conflict (email) do update
-    set requested_at  = now(),
-        request_count = public.access_requests.request_count + 1
-    where not public.access_requests.resolved;
-  return new;
-end;
-$$;
-revoke all on function public.sync_physician_from_match() from public, anon, authenticated;
-
-drop trigger if exists trg_sync_physician_from_match on public.sender_physician_match;
-create trigger trg_sync_physician_from_match
-  after insert or update on public.sender_physician_match
-  for each row execute function public.sync_physician_from_match();
-
-commit;
-
-
--- PART 2 — F13: log_access_request (anon, called by /verify/ before login).
---   It takes any address, so it must not let a caller rename or reopen
---   someone else's request: an open request keeps its name and department
---   (only requested_at and request_count move), a resolved one is not
---   touched, and an active physician gets no request at all. Input is
---   cleaned as the 2026-08-07 live hardening did (security-hardening
---   Appendix B): control characters out, whitespace collapsed, name and
---   department capped at 100, a blank name or a malformed address writes
---   nothing.
-begin;
 
 drop function if exists public.log_access_request(text);
 drop function if exists public.log_access_request(text, text);
@@ -137,7 +90,7 @@ grant execute on function public.log_access_request(text, text, text) to anon, a
 commit;
 
 
--- PART 3 — F09: reclaim upload-queue rows a dead runner left in 'processing'.
+-- PART 2 — F09: reclaim upload-queue rows a dead runner left in 'processing'.
 --   The drain sets 'processing' when it claims a row. If the runner dies
 --   before it writes the outcome, the row used to stay 'processing' for
 --   good, and p4p_upload_queue_one_inflight then refused every new upload
@@ -187,7 +140,7 @@ grant execute on function public.claim_p4p_score_fallback() to service_role;
 commit;
 
 
--- PART 4 — F17: an older upload never overwrites a newer one in Drive.
+-- PART 3 — F17: an older upload never overwrites a newer one in Drive.
 --   Drive keeps one file per physician and month, replaced by name. An
 --   older row whose archive failed and is backing off must not be archived
 --   once a newer upload for the same email and month is scored or archived:
@@ -258,7 +211,7 @@ grant execute on function public.claim_p4p_archive() to service_role;
 commit;
 
 
--- PART 5 — F10: drop the retired anon-reachable functions for good.
+-- PART 4 — F10: drop the retired anon-reachable functions for good.
 --   list_all_physicians() returned every roster name to anon;
 --   get_line_bind_gate_status(text) and bind_line_user_id(text, text) are
 --   the retired LINE-bind gate. DATA_EXPOSURE_ANALYSIS.md section 5 records
@@ -292,7 +245,3 @@ commit;
 --    where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'EXECUTE')
 --    order by 1;
 --   -- expect no list_all_physicians, get_line_bind_gate_status, bind_line_user_id
---   select email, full_name, created_at from public.physicians
---    where source = 'matched_sender' order by created_at desc;
---   -- rows the old trigger added by itself: confirm each address really
---   -- belongs to that physician, set active = false for any that does not

@@ -21,9 +21,7 @@ already-applied file is safe.
 3. `automation/sql/sender_physician_match.sql` — `sender_physician_match`
    table + RLS.
 4. `automation/sql/bump_sender_match.sql` — atomic increment RPC for
-   `sender_physician_match.email_count` (used by the live pipeline). Its
-   `matched = true` only means a roster name was matched; it is not proof of
-   who sent the file (see step 24).
+   `sender_physician_match.email_count` (used by the live pipeline).
 5. `automation/sql/management_stipends.sql` — `management_stipends` table +
    RLS + seed data. Replaces `process/process.js`'s previously-hardcoded
    `MANAGEMENT_DATA`/`DEPT_HEAD_SET` (real physician names + compensation
@@ -38,8 +36,7 @@ already-applied file is safe.
    `blocked_emails`, and the first allow-list functions
    (`is_sender_allowlisted`, `is_current_user_allowlisted`) — only while
    `physicians` does not exist yet, so pasting it again after step 14 does not
-   undo step 14. It no longer creates `log_access_request` (step 24 does) nor
-   seeds `physician_directory` from matched senders (audit F01, 2026-11).
+   undo step 14. It no longer creates `log_access_request` (step 24 does).
 7. `scripts/provision-month-function.sql` — `provision_month(p_new, p_old)`,
    the function `provision-next-month.mjs` calls every month to create the
    next roster table. **Must be run AFTER step 6** — it relies on
@@ -51,7 +48,7 @@ already-applied file is safe.
 8. ~~`scripts/list-all-physicians.sql`~~ — **superseded, nothing to add.**
    It used to create `list_all_physicians()` and grant it to `anon` (every
    roster name to anyone, for a `/verify/` dropdown that no longer exists).
-   The file now only revokes and drops that function, like step 24's PART 5,
+   The file now only revokes and drops that function, like step 24's PART 4,
    so running it is harmless. Audit F10, 2026-11.
 9. `scripts/bind-line-user.sql` + `scripts/line-user-id-columns.sql` +
    `scripts/line-bind-gate.sql` — LINE userId binding
@@ -74,12 +71,9 @@ already-applied file is safe.
 14. `scripts/auth-rewrite-2026-08.sql` — **the current auth model**, replacing
     steps 6 (its `physician_directory`/`blocked_emails`/allow-list-union half)
     and 9-10 (the LINE-bind-as-second-factor machinery) with a single
-    `physicians` table (email, LINE binding, active flag, all in one row).
-    (It used to add a trigger that made every matched email sender an active
-    physician; that let anyone who emailed a file with a physician's name
-    log in as that physician. Removed in 2026-11, audit F01: the trigger now
-    lives in step 24 and only opens an access request. The matched-sender
-    backfill in its Block 2 is gone for the same reason.) `is_sender_allowlisted` /
+    `physicians` table (email, LINE binding, active flag, all in one row) and
+    a trigger that auto-provisions a row the moment the email-matching
+    pipeline confirms a submission sender. `is_sender_allowlisted` /
     `is_current_user_allowlisted` keep their names (so RLS policies and
     `provision_month` need no changes) but their bodies now read only
     `physicians`. Run AFTER step 6 and step 9-10 (it migrates data out of
@@ -192,28 +186,22 @@ already-applied file is safe.
     18 (not the review-tab files). Each PART is its own transaction, so it
     can also be pasted one PART at a time; no backslashes, so it pastes
     through chat. Safe to re-run.
-    - PART 1 (F01): `sync_physician_from_match()` and its trigger. A matched
-      email sender is never inserted into `physicians` and a `physicians`
-      row is never renamed; an address with no `physicians` row gets an open
-      `access_requests` row (name = matched roster name, department) for an
-      admin to approve. Resolved requests are not reopened.
-    - PART 2 (F13): `log_access_request(text, text, text)`, the only
+    - PART 1 (F13): `log_access_request(text, text, text)`, the only
       version (anon). Cleans control characters, caps name and department
       at 100, ignores a blank name or a malformed address, never overwrites
       an open request's name or department, never reopens a resolved
       request, and writes nothing for an active physician's address.
-    - PART 3 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
+    - PART 2 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
       `processing` for over 30 minutes while it has attempts left (cap 3),
       and marks it `failed` / `stuck_processing` when it has none.
-    - PART 4 (F17): `claim_p4p_archive()` marks an older `archive_pending`
+    - PART 3 (F17): `claim_p4p_archive()` marks an older `archive_pending`
       row `superseded` (new `archive_status` value) when a newer upload for
       the same email and month is done or archived, so it never replaces
       the newer file in Drive.
-    - PART 5 (F10): revokes and drops `list_all_physicians()`,
+    - PART 4 (F10): revokes and drops `list_all_physicians()`,
       `get_line_bind_gate_status(text)` and `bind_line_user_id(text, text)`.
-    After it, check the `physicians` rows with `source = 'matched_sender'`
-    (the query is at the end of the file): the old trigger added them with
-    no admin step.
+    After it, run the check query at the end of the file: anon must not be
+    able to execute any of the dropped functions.
 
 ## Superseded — do NOT run
 
@@ -271,7 +259,7 @@ No need to run them on a fresh project; kept for history:
   (see SECURITY_ANALYSIS.md §2c).
 - `scripts/list-all-physicians.sql` — already unused by the app (see its own
   in-file deprecation header). It now only drops the function (step 8 above);
-  step 24's PART 5 does the same.
+  step 24's PART 4 does the same.
 
 ## Health check — catching this class of bug automatically
 

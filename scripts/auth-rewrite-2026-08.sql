@@ -31,12 +31,10 @@
 --  state, no attempt counter, no per-session proof table, and no staged
 --  enforcement flag. sender_physician_match keeps its own automation
 --  bookkeeping (similarity score, name source, email counts) — that is a
---  diagnostic table for the email-matching pipeline, not an auth table.
---  (This file used to add a trigger that copied every matched sender into
---  `physicians` as an active login. That let anyone who emailed a file with
---  a physician's name become that physician — audit finding F01, 2026-11.
---  The trigger now lives in scripts/audit-fixes-2026-11.sql PART 1 and only
---  opens an access request for an admin to approve.)
+--  diagnostic table for the email-matching pipeline, not an auth table — but
+--  a trigger below keeps `physicians` in sync with it automatically, which is
+--  the actual mechanism behind "a physician who already emailed a submission
+--  can log in immediately, with no admin step."
 --
 --  line_bind_attempts and line_verified_sessions have no replacement: they
 --  existed only to support the fail-open/enforce machinery this migration
@@ -55,9 +53,9 @@ create table if not exists public.physicians (
   line_display_name  text,
   -- 'directory'      — an admin added this row by hand (manual onboarding,
   --                    or approving an access request).
-  -- 'matched_sender' — added by itself by the email-matching pipeline's
-  --                    old trigger (removed in 2026-11, see Block 3). No
-  --                    new rows get this source; an admin approves instead.
+  -- 'matched_sender' — the email-matching pipeline recognized this address
+  --                    as a P4P submission sender and auto-provisioned it
+  --                    (see the trigger in Block 3).
   source             text not null default 'directory'
                        check (source in ('directory', 'matched_sender')),
   active             boolean     not null default true,
@@ -91,11 +89,11 @@ on conflict (email) do update
   set full_name  = coalesce(public.physicians.full_name, excluded.full_name),
       department = coalesce(public.physicians.department, excluded.department);
 
--- The matched-sender backfill that stood here ran once, in 2026-08. It is
--- left out on purpose: run again, it would make every address in
--- sender_physician_match an active login, including ones no admin ever
--- approved (audit finding F01, 2026-11). A matched sender is not proof of
--- identity; see scripts/audit-fixes-2026-11.sql PART 1.
+insert into public.physicians (email, full_name, department, active, source, created_at)
+select lower(m.sender_email), m.matched_physician, m.department, true, 'matched_sender', now()
+from public.sender_physician_match m
+where m.matched and m.sender_email is not null
+on conflict (email) do nothing;
 
 update public.physicians p
 set line_user_id      = b.line_user_id,
@@ -110,18 +108,40 @@ where lower(bl.email) = p.email;
 
 
 -- ----------------------------------------------------------------------------
--- Block 3 — REMOVED (audit finding F01, 2026-11).
+-- Block 3 — auto-provisioning: keep `physicians` in sync with the matching
+--           pipeline. This IS "a physician who already sent an email gets
+--           added automatically" — a database trigger, not app logic, so it
+--           applies the moment the pipeline (live or batch) upserts a match,
+--           independent of which front end is deployed.
 --
---   This block used to install sync_physician_from_match() and its trigger
---   on sender_physician_match, which inserted every matched email sender
---   into `physicians` as active (and renamed an existing row to the matched
---   roster name). The name it used comes from the submitted file, so any
---   outsider could get a login and another physician's upload identity.
---   The function and trigger are now defined only in
---   scripts/audit-fixes-2026-11.sql PART 1, where a new sender address
---   becomes an open access request instead. Nothing is created here, so
---   pasting this file again cannot bring the old trigger back.
+--   The `where public.physicians.active` guard means a revoked email
+--   (active = false) is never silently resurrected just because the
+--   pipeline re-matches an old submission — an admin has to re-enable it.
 -- ----------------------------------------------------------------------------
+create or replace function public.sync_physician_from_match()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.matched and new.sender_email is not null then
+    insert into public.physicians (email, full_name, department, active, source, created_at, updated_at)
+    values (lower(new.sender_email), new.matched_physician, new.department, true, 'matched_sender', now(), now())
+    on conflict (email) do update
+      set full_name  = excluded.full_name,
+          department = excluded.department,
+          updated_at = now()
+      where public.physicians.active;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_sync_physician_from_match on public.sender_physician_match;
+create trigger trg_sync_physician_from_match
+  after insert or update on public.sender_physician_match
+  for each row execute function public.sync_physician_from_match();
 
 
 -- ----------------------------------------------------------------------------
@@ -262,7 +282,7 @@ $$;
 --   -- the PII-leaking dropdown feed — already unused, see
 --   -- scripts/list-all-physicians.sql and SECURITY_ANALYSIS.md §2a.
 --   -- Now done for real (with get_line_bind_gate_status and
---   -- bind_line_user_id) by scripts/audit-fixes-2026-11.sql PART 5.
+--   -- bind_line_user_id) by scripts/audit-fixes-2026-11.sql PART 4.
 --   drop function if exists public.list_all_physicians();
 --
 --   -- superseded by physicians (data already migrated in Block 2)

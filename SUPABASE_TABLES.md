@@ -117,12 +117,9 @@ submission email) to the physician identity it was matched to.
 - Replaces a previously-committed `sender-physician-match.csv`. Populated by
   the "Match Sender Emails" GitHub Action (batch, `saveSenderMatch`) and
   incrementally per live submission (`bumpSenderMatch`).
-- **Not an allow-list.** `matched = true` only means the pipeline matched the
-  file to a roster name, and that name comes from the file itself. The
-  trigger `trg_sync_physician_from_match` turns a sender address with no
-  `physicians` row into an open `access_requests` row (name = matched roster
-  name) for an admin to approve; it never adds or renames a `physicians` row
-  (`scripts/audit-fixes-2026-11.sql` PART 1, audit F01, 2026-11).
+- Doubles as half of the **auth allow-list**: a `matched = true` row means
+  that email belongs to a verified physician, allowed to request an OTP login
+  on `/verify/` (see `is_sender_allowlisted()`).
 - **Access:** RLS enabled, no anon/authenticated policies — reachable only via
   `service_role` or the `SECURITY DEFINER` allow-list functions.
 - Migration: `automation/sql/sender_physician_match.sql`.
@@ -137,16 +134,14 @@ revoked. Replaces `physician_directory`, the auth-relevant half of
 - **Columns:** `email` (PK), `full_name`, `department`, `line_user_id`
   (unique, nullable), `line_display_name`, `active` (bool — `false` IS the
   denylist, no separate table), `source` (`'directory'` — an admin added it
-  by hand or approved a request — or `'matched_sender'` — added by itself by
-  the old trigger, see below),
+  by hand — or `'matched_sender'` — auto-provisioned, see below),
   `created_at`, `updated_at`, `last_login_at`.
-- **No auto-provisioning (since 2026-11).** Until then a trigger on
-  `sender_physician_match` upserted a row here, active, for every sender the
-  email pipeline matched — so anyone who emailed a file carrying a
-  physician's name became that physician (login and LINE upload identity),
-  and an existing row could be renamed (audit F01). The trigger now only
-  opens an access request for an address with no row here. Rows with
-  `source = 'matched_sender'` were added that way, with no admin step.
+- **Auto-provisioning:** a trigger on `sender_physician_match`
+  (`sync_physician_from_match()`) upserts a row here every time the
+  email-matching pipeline confirms a submission sender (`matched = true`) —
+  this is the mechanism behind "a physician who already emailed a submission
+  can log in immediately, no admin step." The upsert never resurrects a row
+  an admin has set `active = false` on.
 - **LINE binding is traceability, not a security factor.** `line_user_id` /
   `line_display_name` are refreshed on every login that carries a LINE ID
   token (last-write-wins) — there is deliberately no mismatch detection, no
@@ -161,10 +156,9 @@ revoked. Replaces `physician_directory`, the auth-relevant half of
 
 ## `access_requests`
 
-**Purpose:** Login attempts from emails that are *not* on the allow-list, so
-an admin can see who still needs to be added, and new email-submission
-sender addresses waiting for an admin to approve them (written by the
-`sender_physician_match` trigger, `name` = the matched roster name).
+**Purpose:** Audit log of login attempts from emails that are *not* on the
+allow-list, so an admin can see who still needs to be added (visibility only,
+not an approval gate).
 
 - **Columns:** `email` (PK), `name` (self-reported), `department`
   (self-reported, from a fixed dropdown — see below), `requested_at`,
@@ -283,10 +277,9 @@ These tables split into two groups:
    the queue is a front door, not a second store of record.
 2. **Auth / allow-list plumbing** for the `/verify/` OTP login gate —
    `physicians` (allow-list + LINE binding + revocation, all one table) and
-   `access_requests`. A trigger on `sender_physician_match` turns a new
-   sender address into an open access request; nothing else crosses the
-   boundary between the two groups, and nothing on the automation side can
-   add or change a `physicians` row by itself.
+   `access_requests`. A trigger on `sender_physician_match` keeps `physicians`
+   in sync with the automation's matches; nothing else crosses the boundary
+   between the two groups.
 3. **Access monitoring** — `liff_access_log`, the Telegram-alert trail for
    every rich-menu LIFF open. Reads `physicians` (to resolve `matched_*`) but
    nothing else writes to it, so it sits alongside group 2 rather than inside

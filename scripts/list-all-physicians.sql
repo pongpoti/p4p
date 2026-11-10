@@ -2,7 +2,7 @@
 --  ⚠️  SUPERSEDED — the dropdown this backs was REMOVED. Do not reintroduce.
 -- ============================================================================
 --  This function is a PII leak and is DROPPED: running this file now removes
---  it (see the bottom of the file and scripts/audit-fixes-2026-11.sql PART 5).
+--  it (see the bottom of the file and scripts/audit-fixes-2026-11.sql PART 4).
 --  The app change it waited on is deployed: verify/ no longer calls it.
 --
 --  Why it was removed
@@ -47,7 +47,7 @@
 -- list_all_physicians() and grant it to anon, so pasting it again (or following an old copy
 -- of SUPABASE_MIGRATIONS.md, which listed it as step 8) re-published the
 -- whole roster. It now only removes it — the same statements as
--- scripts/audit-fixes-2026-11.sql PART 5. The old body is in git history.
+-- scripts/audit-fixes-2026-11.sql PART 4. The old body is in git history.
 do $$
 begin
   if to_regprocedure('public.list_all_physicians()') is not null then

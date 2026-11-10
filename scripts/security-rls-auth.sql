@@ -154,12 +154,16 @@ begin
   end if;
 end $$;
 
--- The one-time seed that stood here (every matched sender copied into
--- physician_directory) ran once, when this file was first applied. It is
--- left out on purpose: `matched` only means the pipeline matched a name
--- taken from the submitted file, not that the address belongs to that
--- physician, so running it again would allow-list addresses nobody approved
--- (audit finding F01, 2026-11).
+-- One-time seed: pull every email we already know from past senders so the
+-- directory isn't empty on day one. Only MATCHED senders (matched = true) are
+-- seeded — an unmatched sender is just someone who emailed the P4P inbox and
+-- could not be tied to a physician, so they must not be auto-allow-listed.
+-- Idempotent (on conflict do nothing).
+insert into public.physician_directory (email, full_name, department)
+select distinct lower(m.sender_email), m.matched_physician, m.department
+from public.sender_physician_match m
+where m.sender_email is not null and m.matched
+on conflict (email) do nothing;
 
 
 -- ----------------------------------------------------------------------------
@@ -167,65 +171,48 @@ end $$;
 --           directory + sender_physician_match without granting SELECT on them).
 -- ----------------------------------------------------------------------------
 
--- GUARDED (2026-11): these two bodies are the pre-physicians allow-list
--- (physician_directory UNION matched senders). scripts/auth-rewrite-2026-08.sql
--- replaced them with physicians-only versions, so once `physicians` exists
--- this block leaves them alone. Without the guard, pasting this file again
--- would make every matched email sender a login again (audit finding F01).
-do $guard$
-begin
-  if to_regclass('public.physicians') is not null then
-    raise notice 'physicians exists: keeping the allow-list functions from auth-rewrite-2026-08.sql';
-    return;
-  end if;
+-- Used by /verify/ BEFORE login: "is this email allowed to request a code?"
+-- Returns only a boolean, so the email list is never exposed to the client.
+create or replace function public.is_sender_allowlisted(p_email text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  -- Denylist wins over everything (revocation).
+  select not exists (
+    select 1 from public.blocked_emails b
+    where lower(b.email) = lower(p_email)
+  ) and (
+    exists (
+      select 1 from public.physician_directory d
+      where lower(d.email) = lower(p_email) and d.active
+    ) or exists (
+      -- MATCHED senders only: an unmatched sender is a stranger who emailed the
+      -- P4P inbox, not a verified physician, and must not be allow-listed.
+      select 1 from public.sender_physician_match m
+      where lower(m.sender_email) = lower(p_email) and m.matched
+    )
+  );
+$$;
 
-  -- Used by /verify/ BEFORE login: "is this email allowed to request a code?"
-  -- Returns only a boolean, so the email list is never exposed to the client.
-  execute $fn$
-    create or replace function public.is_sender_allowlisted(p_email text)
-    returns boolean
-    language sql
-    security definer
-    stable
-    set search_path = public
-    as $body$
-      -- Denylist wins over everything (revocation).
-      select not exists (
-        select 1 from public.blocked_emails b
-        where lower(b.email) = lower(p_email)
-      ) and (
-        exists (
-          select 1 from public.physician_directory d
-          where lower(d.email) = lower(p_email) and d.active
-        ) or exists (
-          -- MATCHED senders only: an unmatched sender is a stranger who emailed the
-          -- P4P inbox, not a verified physician, and must not be allow-listed.
-          select 1 from public.sender_physician_match m
-          where lower(m.sender_email) = lower(p_email) and m.matched
-        )
-      );
-    $body$
-  $fn$;
-
-  -- Used by the RLS policies AFTER login: "is the current session's email allowed?"
-  execute $fn$
-    create or replace function public.is_current_user_allowlisted()
-    returns boolean
-    language sql
-    security definer
-    stable
-    set search_path = public
-    as $body$
-      select public.is_sender_allowlisted(auth.jwt() ->> 'email');
-    $body$
-  $fn$;
-end $guard$;
+-- Used by the RLS policies AFTER login: "is the current session's email allowed?"
+create or replace function public.is_current_user_allowlisted()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select public.is_sender_allowlisted(auth.jwt() ->> 'email');
+$$;
 
 -- log_access_request: /verify/ calls it when an email is NOT allow-listed, to
 -- record the attempt so an admin knows WHO to add. The 2-argument version
 -- this file used to create let any anon caller rename or reopen anyone's
 -- request (audit finding F13, 2026-11); the only version now is the
--- 3-argument one in scripts/audit-fixes-2026-11.sql PART 2.
+-- 3-argument one in scripts/audit-fixes-2026-11.sql PART 1.
 drop function if exists public.log_access_request(text);
 drop function if exists public.log_access_request(text, text);
 
