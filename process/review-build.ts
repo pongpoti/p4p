@@ -129,10 +129,8 @@ export const REVIEW_FIRST_MONTH = '2569_08';
 /**
  * The months among `keys` whose ตรวจสอบ review is on the auditee's side:
  * from ส.ค. 2569 on, with no round sent yet or the live one sent back (the
- * SQL's review_auditee_turn). The nightly run builds these as well as the
- * latest two complete months, so the tab's files and checks follow the
- * doctors' files without anyone pressing สร้างไฟล์ใหม่. A month the auditor
- * has, or one approved, is left as it is.
+ * SQL's review_auditee_turn). A month the auditor has, or one approved, is
+ * left as it is.
  */
 export async function auditeeSideMonths(supabase: SupabaseClient, keys: string[]): Promise<Set<string>> {
   const want = keys.filter((k) => /^\d{4}_\d{2}$/.test(k) && k >= REVIEW_FIRST_MONTH);
@@ -145,6 +143,68 @@ export async function auditeeSideMonths(supabase: SupabaseClient, keys: string[]
   }
   const theirs = new Set(((data ?? []) as { month: string }[]).map((r) => r.month));
   return new Set(want.filter((k) => !theirs.has(k)));
+}
+
+const cents = (n: number): number => Math.round(n * 100);
+
+/**
+ * Why the newest build of `month` is no longer what the tab needs, or null:
+ * none yet, no รวมค่าคะแนน link (once the second SQL file is in), not the
+ * budget / per P4P typed in the tab, or people changed since it was built
+ * (review_build_stale: a re-sent file, a score, a department). The same
+ * things that stop the auditee from sending (review_submit_round).
+ */
+export async function reviewBuildOutdated(supabase: SupabaseClient, month: string, v2: boolean): Promise<string | null> {
+  const { data, error } = await supabase.from('review_builds')
+    .select(v2 ? 'id, budget, per_p4p, merged_file_id' : 'id, budget, per_p4p')
+    .eq('month', month).order('built_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw new Error(`review_builds read error: ${error.message}`);
+  const b = data as { id: string; budget: number | null; per_p4p: number | null; merged_file_id?: string | null } | null;
+  if (!b) return 'no build yet';
+  if (v2 && !b.merged_file_id) return 'no รวมค่าคะแนน link';
+  const input = await loadReviewInput(supabase, month);
+  if (input && (cents(input.budget) !== cents(Number(b.budget)) || cents(input.per_p4p) !== cents(Number(b.per_p4p)))) {
+    return 'not the budget / per P4P typed in the tab';
+  }
+  if (v2) {
+    const { data: n, error: e } = await supabase.rpc('review_build_stale', { p_month: month, p_build: b.id });
+    if (e) throw new Error(`review_build_stale error: ${e.message}`);
+    if (Number(n) > 0) return `${Number(n)} people changed since`;
+  }
+  return null;
+}
+
+/**
+ * For the nightly run: each month among `older` (months older than the ones
+ * it just built) whose review is on the auditee's side and whose newest
+ * build is out of date gets the tab's own one-month rebuild request
+ * (review_request_build, as the สร้างไฟล์ใหม่ button does), which the
+ * always-on relay starts after this run. Built in this run instead, they
+ * would push the job past the time the SQL gives a waiting request.
+ * Never throws; returns the months queued.
+ */
+export async function queueOutdatedReviewMonths(supabase: SupabaseClient, older: string[], v2: boolean): Promise<string[]> {
+  const queued: string[] = [];
+  let side: Set<string>;
+  try {
+    side = await auditeeSideMonths(supabase, older);
+  } catch (err: any) {
+    log(`  [Review] ⚠ ${err.message} — no rebuilds queued for older months`, 'warn');
+    return queued;
+  }
+  for (const month of [...side].sort().reverse()) {
+    try {
+      const why = await reviewBuildOutdated(supabase, month, v2);
+      if (!why) { log(`  [Review] ${month}: under review, build up to date`); continue; }
+      const { error } = await supabase.rpc('review_request_build', { p_month: month, p_reason: 'rebuild', p_actor: '2.2 nightly' });
+      if (error) throw new Error(`review_request_build error: ${error.message}`);
+      log(`  [Review] ${month}: under review, ${why} — rebuild queued for after this run`);
+      queued.push(month);
+    } catch (err: any) {
+      log(`  [Review] ⚠ ${month}: ${err.message}`, 'warn');
+    }
+  }
+  return queued;
 }
 
 /** The month's budget and per P4P from the tab, or null. */

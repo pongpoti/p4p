@@ -764,7 +764,7 @@
     const DOCTORS_MSG = "ใส่จำนวนเต็มมากกว่า 0 ไม่มีทศนิยม";
     function ratePreview(budget, n) {
         const b = budget.replace(/,/g, "").trim(), c = n.replace(/,/g, "").trim();
-        if (!WHOLE_RE.test(b) || !WHOLE_RE.test(c) || !(Number(b) > 0) || !(Number(c) > 0))
+        if (!/^[1-9]\d*$/.test(b) || !/^[1-9]\d*$/.test(c))
             return "–";
         const v = Math.round(Math.round(Number(b) * 100) / Number(c)) / 100;
         return v > 0 ? baht(v) : "–";
@@ -772,31 +772,41 @@
     const grouped = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     // A whole-number field: a typed letter or space does nothing, and with
     // `group` the digits show a comma every 1,000 as they are typed, the
-    // caret staying after the same digit. A decimal point (typed or pasted)
-    // or any other pasted text stays as it is and the field says at once
-    // that it takes whole numbers: dropping the point would turn
-    // 2,158,709.06 into 215,870,906 without a word.
+    // caret staying after the same digit; Backspace or Delete on a comma
+    // takes the digit beside it. Nothing the user typed is dropped without
+    // a word: a decimal point (typed or pasted) or other pasted text stays
+    // and the field says at once that it takes whole numbers (dropping the
+    // point would turn 2,158,709.06 into 215,870,906), and a leading 0 stays
+    // and is flagged (dropping it would turn 2,058,709 with the 2 deleted
+    // into 58,709, and the 2 typed again into 258,709).
+    const ZERO_MSG = "ตัวเลขต้องไม่ขึ้นต้นด้วย 0";
+    const fieldProblem = (v, msg) => /[^\d,]/.test(v) ? msg : /^0\d/.test(v.replace(/,/g, "")) ? ZERO_MSG : null;
+    function showFieldProblem(i, msg) {
+        const e = document.getElementById(i.id + "-e");
+        if (!e)
+            return;
+        const want = fieldProblem(i.value, msg);
+        if (want) {
+            e.textContent = want;
+            e.classList.remove("hidden");
+            i.setAttribute("aria-invalid", "true");
+            fieldErrs.set(i.id, want);
+        }
+        else if (fieldErrs.get(i.id) === msg || fieldErrs.get(i.id) === ZERO_MSG) {
+            e.textContent = "";
+            e.classList.add("hidden");
+            i.removeAttribute("aria-invalid");
+            fieldErrs.delete(i.id);
+        }
+    }
     function wholeField(i, group, msg) {
-        const say = (bad) => {
-            const e = document.getElementById(i.id + "-e");
-            if (!e)
-                return;
-            if (bad) {
-                e.textContent = msg;
-                e.classList.remove("hidden");
-                i.setAttribute("aria-invalid", "true");
-                fieldErrs.set(i.id, msg);
-            }
-            else if (fieldErrs.get(i.id) === msg) {
-                e.textContent = "";
-                e.classList.add("hidden");
-                i.removeAttribute("aria-invalid");
-                fieldErrs.delete(i.id);
-            }
-        };
+        let prev = null;
+        i.addEventListener("beforeinput", () => { prev = i.value; });
         i.addEventListener("input", (e) => {
             var _a;
             const ev = e;
+            const was = prev;
+            prev = null;
             if (ev.isComposing)
                 return;
             let raw = i.value;
@@ -805,28 +815,34 @@
                 raw = raw.slice(0, pos - 1) + raw.slice(pos);
                 pos -= 1;
             }
+            else if (was !== null && raw !== was && raw.replace(/,/g, "") === was.replace(/,/g, "")) {
+                if (ev.inputType === "deleteContentBackward" && pos > 0) {
+                    raw = raw.slice(0, pos - 1) + raw.slice(pos);
+                    pos -= 1;
+                }
+                else if (ev.inputType === "deleteContentForward" && pos < raw.length)
+                    raw = raw.slice(0, pos) + raw.slice(pos + 1);
+            }
             if (/[^\d,]/.test(raw)) {
                 if (raw !== i.value) {
                     i.value = raw;
                     i.setSelectionRange(pos, pos);
                 }
-                say(true);
+                showFieldProblem(i, msg);
                 return;
             }
-            say(false);
-            const all = raw.replace(/,/g, "");
-            const lead = all.length - all.replace(/^0+(?=\d)/, "").length;
-            const digits = all.slice(lead);
-            const before = Math.max(0, raw.slice(0, pos).replace(/,/g, "").length - lead);
+            const digits = raw.replace(/,/g, "");
+            const before = raw.slice(0, pos).replace(/,/g, "").length;
             const out = group ? grouped(digits) : digits;
-            if (out === i.value)
-                return;
-            i.value = out;
-            let at = 0;
-            for (let k = 0; at < out.length && k < before; at++)
-                if (out[at] !== ",")
-                    k++;
-            i.setSelectionRange(at, at);
+            if (out !== i.value) {
+                i.value = out;
+                let at = 0;
+                for (let k = 0; at < out.length && k < before; at++)
+                    if (out[at] !== ",")
+                        k++;
+                i.setSelectionRange(at, at);
+            }
+            showFieldProblem(i, msg);
         });
     }
     const budgetField = (n) => n === null || n === undefined ? "" : Number.isInteger(Number(n)) ? grouped(String(Number(n))) : fmt2(n);
@@ -856,6 +872,12 @@
             else {
                 i.value = saved;
                 i.readOnly = true;
+            }
+            // A budget saved with satang before whole numbers were required.
+            if (editable && !fieldErrs.has(id)) {
+                const p = fieldProblem(i.value, msg);
+                if (p)
+                    fieldErrs.set(id, p);
             }
             const fe = editable ? fieldErrs.get(id) : undefined;
             const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "");
@@ -915,14 +937,15 @@
             const i = form.querySelector("#" + id);
             const e = form.querySelector("#" + id + "-e");
             const v = i.value.replace(/,/g, "").trim();
-            const good = ok(v);
+            const problem = fieldProblem(i.value.trim(), msg) || (ok(v) ? null : msg);
+            const good = !problem;
             i.setAttribute("aria-invalid", String(!good));
-            e.textContent = good ? "" : msg;
+            e.textContent = problem || "";
             e.classList.toggle("hidden", good);
             if (good)
                 fieldErrs.delete(id);
             else
-                fieldErrs.set(id, msg);
+                fieldErrs.set(id, problem);
             if (!good && !bad)
                 bad = i;
             return v;
