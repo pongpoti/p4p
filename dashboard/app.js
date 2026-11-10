@@ -947,6 +947,30 @@
     let rosterSeq = 0;
     let rosterTables = null;
     // Errors from the roster API carry the database's reason (e.g. a bad number).
+    // Approve, and when the server answers "name_taken" (another physician
+    // already has this name, audit F13) ask the owner: correct the name, or
+    // keep it for a different person who shares it. False when they cancel.
+    const approveCheckingName = async (requestedName, post) => {
+        let body = {};
+        for (;;) {
+            try {
+                await post(body);
+                return true;
+            }
+            catch (e) {
+                if (e.message !== "name_taken")
+                    throw e;
+                const current = (body.name || requestedName).trim();
+                const typed = prompt("ชื่อ \"" + current + "\" ตรงกับแพทย์อีกท่านที่มีบัญชีอยู่แล้ว\n" +
+                    "ถ้าคำขอนี้ใช้ชื่อผิด ให้แก้ชื่อให้ถูกต้องแล้วกดตกลง\n" +
+                    "ถ้าเป็นแพทย์คนละคนที่ชื่อเหมือนกันจริง ให้กดตกลงโดยไม่แก้ชื่อ", current);
+                if (typed === null || !typed.trim())
+                    return false;
+                const name = typed.trim();
+                body = name === current ? { name, confirmSameName: true } : { name };
+            }
+        }
+    };
     const rosterApi = async (url, init) => {
         const r = await fetch(url, { credentials: "same-origin", ...init });
         if (r.status === 401) {
@@ -1327,8 +1351,14 @@
                 if (decision === "reject" && !confirm("ปฏิเสธคำขอของ " + (q.name || q.email) + "?"))
                     return;
                 ok.disabled = no.disabled = true;
+                const url = "/dashboard/api/access-requests/" + encodeURIComponent(q.email) + "/" + decision;
                 try {
-                    await rosterApi("/dashboard/api/access-requests/" + encodeURIComponent(q.email) + "/" + decision, { method: "POST" });
+                    if (decision === "reject")
+                        await rosterApi(url, { method: "POST" });
+                    else if (!await approveCheckingName(q.name || "", (body) => rosterApi(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }))) {
+                        ok.disabled = no.disabled = false;
+                        return;
+                    }
                 }
                 catch (e) {
                     if (e.status !== 404) {

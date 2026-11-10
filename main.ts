@@ -1247,7 +1247,7 @@ app.get("/dashboard/api/access-requests", async (req: Request, res: Response) =>
   }
 })
 
-app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request, res: Response) => {
+app.post("/dashboard/api/access-requests/:email/:decision", express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
@@ -1259,11 +1259,17 @@ app.post("/dashboard/api/access-requests/:email/:decision", async (req: Request,
     const open = await axios.get(SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&select=name,department&email=eq." +
       encodeURIComponent(email), { headers: SERVICE_HEADERS(), timeout: 8000 })
     if (!open.data.length) return res.status(404).json({ error: "not found" })
-    if (decision === "approve") await approveAccessRequest(email)
+    const opts = approveOptionsFrom(req.body)
+    if (decision === "approve") await approveAccessRequest(email, opts)
     else await resolveAccessRequest(email)
-    await audit(req, s, "access." + decision, { email, name: open.data[0].name || "", department: open.data[0].department || "" })
+    await audit(req, s, "access." + decision, {
+      email, name: (decision === "approve" && opts.name) || open.data[0].name || "", department: open.data[0].department || "",
+      ...(decision === "approve" && opts.name && opts.name !== open.data[0].name ? { requested_name: open.data[0].name || "" } : {}),
+      ...(decision === "approve" && opts.sameNameConfirmed ? { same_name_confirmed: true } : {}),
+    })
     res.json({ ok: true })
   } catch (e: any) {
+    if (e.status === 409) return res.status(409).json({ error: "name_taken", name: e.name_taken })
     console.error("[dashboard] access-request " + decision + " failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, decision + " failed") })
   }
@@ -1417,10 +1423,40 @@ app.get("/admin/api/access-requests", requireAdmin, async (req: Request, res: Re
   }
 })
 
+// The normalisation enqueue_p4p_upload and my_p4p_identity use to match a
+// physicians.full_name to a roster row (lower case, runs of space as one).
+function normalisePhysicianName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase()
+}
+
+// A name the admin typed in place of the request's own when approving:
+// cleaned like log_access_request cleans a requested name (control, zero-width
+// and bidi characters out, whitespace collapsed, capped at 100).
+function cleanApprovalName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const s = Array.from(raw, (ch) => {
+    const c = ch.codePointAt(0)!
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029) return " "
+    if ((c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff) return ""
+    return ch
+  }).join("").replace(/\s+/g, " ").trim().slice(0, 100).trim()
+  return s || null
+}
+
+interface ApproveOptions {
+  // The admin's own spelling of the name, used instead of the request's.
+  name?: string | null
+  // The admin has seen that another physician already has this name and
+  // says this is a different person with the same name.
+  sameNameConfirmed?: boolean
+}
+
 // Shared by /admin/ and the dashboard's รายชื่อ tab. Returns the request's
 // name (null when it had none) once the physician is allow-listed. Throws a
-// 404 StatusError when the email has no open request.
-async function approveAccessRequest(email: string): Promise<{ name: string | null; department: string | null }> {
+// 404 StatusError when the email has no open request, and a 409 (code
+// "name_taken") when the name it would write already belongs to another
+// physician and the admin has not confirmed it.
+async function approveAccessRequest(email: string, opts: ApproveOptions = {}): Promise<{ name: string | null; department: string | null }> {
   const reqRow = await axios.get(
     SUPABASE_URL + "/rest/v1/access_requests?resolved=is.false&email=eq." + encodeURIComponent(email) + "&select=name,department",
     { headers: SERVICE_HEADERS(), timeout: 8000 }
@@ -1430,16 +1466,20 @@ async function approveAccessRequest(email: string): Promise<{ name: string | nul
     err.status = 404
     throw err
   }
-  const name = (reqRow.data[0].name && String(reqRow.data[0].name).trim()) || null
+  const name = cleanApprovalName(opts.name) || (reqRow.data[0].name && String(reqRow.data[0].name).trim()) || null
   const department = reqRow.data[0].department || null
 
   // The request's name is self-reported (log_access_request is open to
-  // anon, and anyone can rewrite a pending request's name), while
-  // physicians.full_name is what enqueue_p4p_upload and my_p4p_identity match
-  // against the roster. So it may name a NEW physician, but never replaces
-  // an existing one's: a tampered name on a re-request would send that
-  // account's uploads to someone else's roster row, and a request with no
-  // name would blank it. An existing row only has a blank name filled.
+  // anon, so whoever asks first for an address sets the name on its
+  // request), while physicians.full_name is what enqueue_p4p_upload and
+  // my_p4p_identity match against the roster. So it may name a NEW
+  // physician, but never replaces an existing one's: a tampered name on a
+  // re-request would send that account's uploads to someone else's roster
+  // row, and a request with no name would blank it. An existing row only has
+  // a blank name filled. And a name another physician already has is not
+  // written until the admin has looked (audit F13): either it was typed to
+  // borrow that physician's roster row, or two physicians share a name, and
+  // only the admin can tell which.
   //
   // department is left out entirely when the request never captured one (a
   // request logged before this field existed), so an existing row keeps the
@@ -1455,6 +1495,21 @@ async function approveAccessRequest(email: string): Promise<{ name: string | nul
   }
 
   const existing = await axios.get(byEmail + "&select=full_name", { headers: SERVICE_HEADERS(), timeout: 8000 })
+  const writesName = Boolean(name) && !(existing.data && existing.data[0] && String(existing.data[0].full_name || "").trim())
+  if (writesName && !opts.sameNameConfirmed) {
+    const others = await axios.get(
+      SUPABASE_URL + "/rest/v1/physicians?select=full_name&email=neq." + encodeURIComponent(email),
+      { headers: SERVICE_HEADERS(), timeout: 8000 }
+    )
+    const wanted = normalisePhysicianName(name!)
+    if ((others.data || []).some((p: { full_name?: string | null }) => p.full_name && normalisePhysicianName(p.full_name) === wanted)) {
+      const err = new Error("another physician already has the name " + name) as StatusError & { code?: string; name_taken?: string }
+      err.status = 409
+      err.code = "name_taken"
+      err.name_taken = name!
+      throw err
+    }
+  }
   if (existing.data && existing.data[0]) {
     // e.g. a previously revoked physician re-requesting: re-activate the row.
     await reactivate(!String(existing.data[0].full_name || "").trim())
@@ -1483,15 +1538,22 @@ async function resolveAccessRequest(email: string): Promise<void> {
   )
 }
 
-app.post("/admin/api/access-requests/:email/approve", requireAdmin, async (req: Request, res: Response) => {
+// The approve routes' optional JSON body: { name, confirmSameName }.
+function approveOptionsFrom(body: unknown): ApproveOptions {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
+  return { name: cleanApprovalName(b.name), sameNameConfirmed: b.confirmSameName === true }
+}
+
+app.post("/admin/api/access-requests/:email/approve", requireAdmin, express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
   const email = String(req.params.email || "").trim().toLowerCase()
   if (!email) return res.status(400).json({ error: "missing email" })
   try {
-    await approveAccessRequest(email)
+    await approveAccessRequest(email, approveOptionsFrom(req.body))
     res.json({ ok: true })
   } catch (e: any) {
     // Already resolved (or never requested): nothing to approve.
     if (e.status === 404) return res.status(404).json({ error: "no open request" })
+    if (e.status === 409) return res.status(409).json({ error: "name_taken", name: e.name_taken })
     console.error("[admin] approve access-request failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: pgErrorMessage(e, "approve failed") })
   }

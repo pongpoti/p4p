@@ -80,6 +80,30 @@
             throw new Error(body.error || ("request failed: " + resp.status));
         return body;
     }
+    // Approve, and when the server answers "name_taken" (another physician
+    // already has this name, audit F13) ask the admin: correct the name, or
+    // keep it for a different person who shares it. False when they cancel.
+    async function approveCheckingName(requestedName, post) {
+        let body = {};
+        for (;;) {
+            try {
+                await post(body);
+                return true;
+            }
+            catch (e) {
+                if (e.message !== "name_taken")
+                    throw e;
+                const current = (body.name || requestedName).trim();
+                const typed = prompt("ชื่อ \"" + current + "\" ตรงกับแพทย์อีกท่านที่มีบัญชีอยู่แล้ว\n" +
+                    "ถ้าคำขอนี้ใช้ชื่อผิด ให้แก้ชื่อให้ถูกต้องแล้วกดตกลง\n" +
+                    "ถ้าเป็นแพทย์คนละคนที่ชื่อเหมือนกันจริง ให้กดตกลงโดยไม่แก้ชื่อ", current);
+                if (typed === null || !typed.trim())
+                    return false;
+                const name = typed.trim();
+                body = name === current ? { name, confirmSameName: true } : { name };
+            }
+        }
+    }
     // Current Thai-calendar (Buddhist year) YYYY_MM, same arithmetic as
     // main.js's createStatusSublist (Gregorian year + 543).
     function currentRosterTableName() {
@@ -156,8 +180,11 @@
                 '<button type="button" class="row-btn btn-approve">อนุมัติ</button>' +
                 "</div></div>";
         card.querySelector(".btn-approve").addEventListener("click", async () => {
+            const url = "/admin/api/access-requests/" + encodeURIComponent(reqRow.email) + "/approve";
             try {
-                await api("/admin/api/access-requests/" + encodeURIComponent(reqRow.email) + "/approve", { method: "POST" });
+                const done = await approveCheckingName(reqRow.name || "", (body) => api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+                if (!done)
+                    return;
                 showStatus("อนุมัติแล้ว: " + reqRow.email, false);
                 await loadAccessRequests();
             }
