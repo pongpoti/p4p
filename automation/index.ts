@@ -21,7 +21,7 @@ import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
 import { zipProblem }                   from "./zip-guard.js";
 import { logTag, errForLog }            from "./log-safe.js";
-import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, anyOutcomeHandled, thrownPassExhausted, MAX_THROWN_PASSES, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
+import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, anyOutcomeHandled, thrownPassExhausted, thrownReasons, RetryLaterError, MAX_THROWN_PASSES, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
 import { decideStatedPeriod } from "./period-gate.js";
 import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
 import { MAX_MESSAGES, SKIP_SENDERS, SEND_ERROR_REPLIES, THREAD_RELAY_SENDERS, MAX_ATTACHMENT_SIZE_BYTES } from "./config.js";
@@ -573,6 +573,8 @@ export interface ProcessBufferContext {
 /**
  * Process a single xlsx buffer through Claude → Supabase → Telegram → Drive.
  * Returns true if the full pipeline completed (Claude succeeded), false otherwise.
+ * Throws (RetryLaterError for a temporary cause) when nothing may be answered
+ * yet: the caller leaves the submission for a bounded retry.
  *
  * ONE pipeline, two callers. The email path (identity === null) behaves
  * exactly as it always has, byte for byte. The LINE-upload path
@@ -1113,9 +1115,14 @@ export async function processBuffer(buffer: Buffer, {
       console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
     } catch (dbErr) {
       console.error(`│        ❌  Supabase save error: ${errForLog(dbErr)}`);
-      // The sender is still sent the receipt below, as before — but nothing was saved, so this workbook must
-      // not count as "answered" when another message's alert is waiting on it (see settleHeldAlerts).
-      if (receipt) receipt.answered = false;
+      // Nothing is sent to the sender: a confirmation would tell them a score
+      // is recorded when it is not. The throw leaves the email unread for the
+      // bounded retry (setAsideAfterThrows tells the admin when it gives up),
+      // and on the LINE path the drain puts the queue row back for a retry
+      // instead of marking it done with this score. The Drive copy above is
+      // simply replaced again on the next pass.
+      const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      throw new RetryLaterError(`score not saved (table "${workMonth}", roster row #${match.index}): ${message}`);
     }
   }
 
@@ -1426,6 +1433,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
     try {
       await sendTelegram(
         `⚠️ P4P: อีเมล ${msgId} ประมวลผลไม่สำเร็จ ${MAX_THROWN_PASSES} รอบติดต่อกัน (ข้อผิดพลาดภายใน ดู log ของ workflow รอบนี้)\n` +
+        thrownReasons(results).map((r) => `สาเหตุ: ${r}\n`).join("") +
         `ระบบทำเครื่องหมายว่าจัดการแล้วเพื่อหยุดการลองซ้ำทุกนาที ยังไม่ได้บันทึกคะแนนและยังไม่ได้ตอบผู้ส่ง\n` +
         `เมื่อแก้ไขแล้ว หากต้องการให้ระบบอ่านใหม่: ย้ายอีเมลกลับเข้า Inbox เอาป้าย "${P4P_LABEL_NAME}" ออก และทำเครื่องหมายว่ายังไม่อ่าน`
       );
@@ -1434,6 +1442,25 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
       return false;
     }
     console.warn(`│  🛑  Processing threw ${MAX_THROWN_PASSES} polls in a row — set aside, admin told`);
+    return true;
+  };
+
+  /**
+   * Whether to mark a message handled after its workbooks ran. Handled when any workbook was processed or
+   * answered; otherwise only once setAsideAfterThrows gives up on it. A message marked handled while another
+   * of its workbooks threw is never read again, so that workbook would be lost without a word (a score that
+   * was not saved, a Drive upload that failed): the admin is told which.
+   */
+  const shouldMarkHandled = async (msgId: string, results: PromiseSettledResult<unknown>[]): Promise<boolean> => {
+    if (!anyOutcomeHandled(results)) return setAsideAfterThrows(msgId, results);
+    const lost = thrownReasons(results);
+    if (lost.length > 0) {
+      await sendTelegram(
+        `⚠️ P4P: อีเมล ${msgId} มีไฟล์ที่ประมวลผลไม่สำเร็จ ${lost.length} ไฟล์ แต่ไฟล์อื่นในอีเมลเดียวกันจัดการแล้ว ระบบจึงไม่ลองไฟล์นี้ใหม่\n` +
+        lost.map((r) => `สาเหตุ: ${r}\n`).join("") +
+        `ไฟล์นี้ยังไม่ได้บันทึกคะแนนและยังไม่ได้ตอบผู้ส่ง หากต้องการให้ระบบอ่านใหม่: ย้ายอีเมลกลับเข้า Inbox เอาป้าย "${P4P_LABEL_NAME}" ออก และทำเครื่องหมายว่ายังไม่อ่าน`
+      ).catch((e) => console.warn(`│  ⚠️   Telegram notify failed: ${e instanceof Error ? e.message : e}`));
+    }
     return true;
   };
 
@@ -1551,7 +1578,7 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
               // Handled = processed OR already answered ("replied"/"rejected"),
               // as on the other two paths: an answered relay message left
               // unread was re-analysed and re-answered every minute.
-              if (anyOutcomeHandled(results) || await setAsideAfterThrows(id, results)) {
+              if (await shouldMarkHandled(id, results)) {
                 await markHandled(id, _sourceLabel);
               }
               break;
@@ -1618,22 +1645,16 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
         const results = await Promise.allSettled(
           threadXlsx.atts.map((att) => processAttachment(att, threadXlsx!.messageId, context, gmail, threadXlsx!.atts.length))
         );
-        processedAnyAttachment = results.some(
-          (r) => r.status === "fulfilled" && r.value === true
-        );
-        // "replied" (a validation alert was already sent) and "rejected"
-        // (ditto, on the reject-without-guessing paths) both count as this
-        // message having been handled — otherwise it stays unread/unstarred
-        // and the next hourly run re-fetches and re-alerts on it forever.
-        const handledOtherwise = results.some(
-          (r) => r.status === "fulfilled" && (r.value === "replied" || r.value === "rejected")
-        );
         results.forEach((r, idx) => {
           if (r.status === "rejected") {
             console.error(`│      ❌  Thread attachment[${idx}] threw: ${errForLog(r.reason)}`);
           }
         });
-        if (processedAnyAttachment || handledOtherwise || await setAsideAfterThrows(id, results)) {
+        // "replied" (a validation alert was already sent) and "rejected"
+        // (ditto, on the reject-without-guessing paths) count as handled as
+        // well as a processed file — otherwise the message stays unread and
+        // the next run re-fetches and re-alerts on it forever.
+        if (await shouldMarkHandled(id, results)) {
           const addLabels    = p4pLabelId ? [p4pLabelId] : [];
           const removeLabels = ["UNREAD", _sourceLabel];
           try {
@@ -1731,16 +1752,6 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
         ? [{ outcome: results[i]!.status === "fulfilled" ? (results[i] as PromiseFulfilledResult<unknown>).value : "threw" }]
         : []),
     }));
-    const repliedToAny = results.some(
-      (r) => r.status === "fulfilled" && r.value === "replied"
-    );
-    // A "rejected" outcome (no_period, ambiguous_period, month_mismatch,
-    // month_not_found) already sent the sender an alert reply — it must count
-    // as handled too, or this message stays unread/unstarred and the next
-    // hourly run re-fetches it and sends the same alert again indefinitely.
-    const rejectedAny = results.some(
-      (r) => r.status === "fulfilled" && r.value === "rejected"
-    );
     results.forEach((r, idx) => {
       if (r.status === "rejected") {
         console.error(`│      ❌  Attachment[${idx}] threw: ${errForLog(r.reason)}`);
@@ -1748,8 +1759,11 @@ export async function readSubmissionEmails(deps: { gmail?: GmailClient } = {}): 
     });
 
     // ── Mark message: read + starred + labeled ────────────────────────
-    // Applied after a successful processing OR after an alert reply was sent.
-    if (processedAnyAttachment || repliedToAny || rejectedAny || await setAsideAfterThrows(id, results)) {
+    // Applied after a successful processing OR after an alert reply was sent:
+    // a "replied" or "rejected" outcome (no_period, ambiguous_period,
+    // month_mismatch, month_not_found, …) already answered the sender, and
+    // left unread the message would be re-fetched and re-answered every run.
+    if (await shouldMarkHandled(id, results)) {
       const addLabels    = p4pLabelId ? [p4pLabelId] : [];
       const removeLabels = ["UNREAD", _sourceLabel];
       try {

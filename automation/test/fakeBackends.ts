@@ -25,6 +25,8 @@ export interface FakeBackends {
   telegramDown: boolean;
   /** Tables whose reads fail with a PostgREST error. */
   failingTables: Set<string>;
+  /** Tables whose PATCH updates fail with a PostgREST error (reads still work). */
+  failingWrites: Set<string>;
 }
 
 function json(status: number, body: unknown): Response {
@@ -52,7 +54,7 @@ function matches(row: FakeRow, params: URLSearchParams): boolean {
 }
 
 export function installFakeBackends(tables: Record<string, FakeRow[]> = {}): FakeBackends {
-  const state: FakeBackends = { tables, patches: [], inserts: [], rpcs: [], telegrams: [], telegramDown: false, failingTables: new Set() };
+  const state: FakeBackends = { tables, patches: [], inserts: [], rpcs: [], telegrams: [], telegramDown: false, failingTables: new Set(), failingWrites: new Set() };
 
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -80,6 +82,7 @@ export function installFakeBackends(tables: Record<string, FakeRow[]> = {}): Fak
         return json(200, Number.isFinite(limit) ? hits.slice(0, limit) : hits);
       }
       if (method === "PATCH") {
+        if (state.failingWrites.has(path)) return json(503, { message: `fake failure writing ${path}`, code: "XX000" });
         const body = JSON.parse(bodyText) as FakeRow;
         state.patches.push({ table: path, body, query: url.search });
         const hits = rows.filter((r) => matches(r, url.searchParams));

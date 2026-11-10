@@ -140,6 +140,11 @@ async function handleArchive(row: ArchiveQueueRow): Promise<void> {
 }
 
 // ── 2. Score fallback ─────────────────────────────────────────────────────
+/** A pass that reported success without the score row being written (pure, for the tests). */
+export function scoreNotSaved(outcome: unknown, success: NotifyOkPayload | null): boolean {
+  return outcome === true && success !== null && !success.scoreSaved;
+}
+
 async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
   console.log(`│  🧮  Scoring queue row ${row.id} (${row.month_key}, roster row #${row.roster_index ?? "?"}) — attempt ${row.attempts}`);
 
@@ -183,6 +188,14 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
     },
     notify,
   });
+
+  // Never close a row as done with a score that was not written: the
+  // physician's "ดูผลคะแนน" button would show it as saved. Thrown, the row
+  // goes back to pending through the crash handler below (failScored, three
+  // attempts in all) and its uploaded object is kept for that retry.
+  if (scoreNotSaved(outcome, state.success)) {
+    throw new Error(`score not saved for queue row ${row.id} — left for a retry`);
+  }
 
   if (outcome === true && state.success) {
     // processBuffer archived to Drive in the same pass, so both lifecycles

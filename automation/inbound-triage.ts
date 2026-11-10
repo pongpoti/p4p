@@ -373,6 +373,28 @@ export function thrownPassExhausted(counts: Map<string, number>, id: string, max
   return n >= max;
 }
 
+/**
+ * Thrown by processBuffer for a failure that a later pass can fix (a score write that did not land, a
+ * Drive upload that hit a 5xx/429/network error), BEFORE the sender is told anything. Like any throw it
+ * leaves the message unread for the bounded retry above; the class only marks the cause as temporary, and
+ * its message is what the admin is told when the retries run out. Never shown to the sender.
+ */
+export class RetryLaterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryLaterError";
+  }
+}
+
+/** The reasons of the workbooks that threw, each cut to `max` characters, for the admin's Telegram. */
+export function thrownReasons(results: PromiseSettledResult<unknown>[], max: number = 300): string[] {
+  return results.flatMap((r) => {
+    if (r.status !== "rejected") return [];
+    const text = r.reason instanceof Error ? r.reason.message : String(r.reason);
+    return [text.length > max ? `${text.slice(0, max)}…` : text];
+  });
+}
+
 export interface HeldAlert { id: string; peerId: string }
 
 /**
