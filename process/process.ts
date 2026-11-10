@@ -315,7 +315,7 @@ async function uploadFileToDrive(
       await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate id: ${d.id}`, 'warn');
     }
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    log(`  [Drive] Overwriting "${fileName}"`);
     const res = await withRetry(() => drive.files.update({
       fileId: first.id!,
       requestBody: { name: fileName },
@@ -611,7 +611,9 @@ async function mergeAndUpload(
     const sheetCnt = manifestEntries.length;
     log(`\n  [Merge] Uploading "${name}" — ${sheetCnt} sheets…`);
     const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
-    log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
+    // No link and no file id: this log is public and the folder may be
+    // shared by link, so either one would open every physician's sheet.
+    log(`  [Merge] ✓ uploaded`);
     return { uploaded, buffer: buf, docs };
 
   } finally {
@@ -1307,7 +1309,7 @@ async function createSK03(
     requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
     fields: 'id',
   }))).data.id!;
-  log(`  [SK03] id: ${ssId}`);
+  log(`  [SK03] created`);
 
   for (const old of existing) {
     await withRetry(() => drive.files.delete({ fileId: old.id! }));
@@ -1478,7 +1480,7 @@ async function createSK03(
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
-  log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
+  log(`  [SK03] ✓ Done`);
   return { ssId, staffSheetName, internSheetName };
 }
 

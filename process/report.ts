@@ -400,7 +400,7 @@ async function uploadReport(drive: drive_v3.Drive, buffer: Buffer): Promise<driv
       await withRetry(() => drive.files.delete({ fileId: d.id! }));
       log(`  [Drive] Deleted duplicate: ${d.id}`, 'warn');
     }
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    log(`  [Drive] Overwriting "${fileName}"`);
     const res = await withRetry(() => drive.files.update({
       fileId: first.id!,
       requestBody: { name: fileName },
@@ -610,7 +610,7 @@ async function uploadPng(drive: drive_v3.Drive, buffer: Buffer, fileName: string
     if (existing.length > 0) {
       const [first, ...dupes] = existing;
       for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id! }));
-      log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+      log(`  [Drive] Overwriting "${fileName}"`);
       const res = await withRetry(() => drive.files.update({
         fileId: first.id!,
         requestBody: { name: fileName },
@@ -724,7 +724,10 @@ async function main(): Promise<void> {
   const buffer   = await buildExcel(monthGroups, runTime, allDeptSet);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
-  log(`\n✓ Excel saved : ${uploaded.webViewLink}`);
+  // No link and no file id: this log is public, and the report folder is
+  // shared by link until GOING_PRIVATE.md step 5 is done, so either one would
+  // open the list of physicians who have not sent their file.
+  log(`\n✓ Excel saved`);
 
   // Remove all existing PNG files in report folder before uploading new ones
   log('\n[PNG] Clearing existing PNG files in report folder…');
@@ -747,7 +750,7 @@ async function main(): Promise<void> {
     const html      = buildHtml(group, runTime);
     const pngBuffer = await renderPng(html);
     const up        = await uploadPng(drive, pngBuffer, pngFileName);
-    log(`    ✓ ${up.webViewLink}`);
+    log(`    ✓ uploaded`);
   }
 }
 

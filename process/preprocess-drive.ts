@@ -128,10 +128,12 @@ async function removeDuplicates(
     const [newest, ...older] = group;
     kept.push(newest);
     // The file name is the physician's name and this log is public: ids only.
-    log(`  [Dedupe] ${group.length} copies of one file name, keeping ${newest.id} (${newest.modifiedTime})`, 'warn');
+    // No file ids either: the per-physician tree is shared by link, so an id
+    // in this public log would open that physician's file.
+    log(`  [Dedupe] ${group.length} copies of one file name, keeping the newest (${newest.modifiedTime})`, 'warn');
     for (const dupe of older) {
       await drive.files.update({ fileId: dupe.id!, requestBody: { trashed: true } });
-      log(`    ✗ trashed duplicate ${dupe.id} (${dupe.modifiedTime})`, 'warn');
+      log(`    ✗ trashed a duplicate (${dupe.modifiedTime})`, 'warn');
       removed++;
     }
   }
@@ -165,7 +167,7 @@ export async function trashUnrelated(
   let trashed = 0;
   for (const f of unrelated) {
     await drive.files.update({ fileId: f.id!, requestBody: { trashed: true } });
-    log(`  [Unrelated] ✗ trashed file id ${f.id} (no matching Supabase row)`, 'warn');
+    log(`  [Unrelated] ✗ trashed a file that matches no Supabase row`, 'warn');
     trashed++;
   }
   return { kept, trashed };
