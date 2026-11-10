@@ -42,7 +42,8 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
 4. `automation/sql/bump_sender_match.sql` — atomic increment RPC for
    `sender_physician_match.email_count` (used by the live pipeline).
 5. `automation/sql/management_stipends.sql` — `management_stipends` table +
-   RLS + seed data. Replaces `process/process.js`'s previously-hardcoded
+   RLS (no seed rows since 2026-11: the rows are personal pay data and are
+   kept only in the table). Replaces `process/process.js`'s previously-hardcoded
    `MANAGEMENT_DATA`/`DEPT_HEAD_SET` (real physician names + compensation
    figures baked into source). Read by `process/process.js`'s
    `loadManagementStipends()`, once per run.
