@@ -18,6 +18,7 @@ import { sendConfirmationEmail }        from "./confirmation-email.js";
 import { buildHtmlErrorReply }          from "./templates/error-reply.js";
 import { keepOneSheet, workbookSheetNames } from "./xlsx-package.js";
 import { checkEnv }                     from "./env-check.js";
+import { zipProblem }                   from "./zip-guard.js";
 import { decideNoXlsx, isHandled, isAutomatedSender, findSupersedingPeer, messageRanToCompletion, settleHeldAlerts, withRetry, CLOUD_LINK_RE, type TriageMessage } from "./inbound-triage.js";
 import { decideStatedPeriod } from "./period-gate.js";
 import { pickReportBesideExample, type TabInfo } from "./sheet-rescue.js";
@@ -451,6 +452,8 @@ export const SENDER_DETAIL = {
   blankSheet  : "ชีตที่ใช้ส่งไม่มีข้อมูล กรุณาตรวจสอบไฟล์แล้วส่งใหม่อีกครั้ง",
   rosterLookup: "ระบบขัดข้องชั่วคราวระหว่างค้นหารายชื่อแพทย์ กรุณาส่งใหม่อีกครั้งภายหลัง",
   crashed     : "ระบบขัดข้องระหว่างประมวลผลไฟล์ กรุณาส่งใหม่อีกครั้ง หากยังพบปัญหา กรุณาติดต่อเจ้าหน้าที่องค์กรแพทย์",
+  notAZip     : "ไฟล์นี้ไม่ใช่ไฟล์ .xlsx ที่ถูกต้อง หรือไฟล์เสียหาย กรุณาเปิดไฟล์ใน Microsoft Excel แล้วบันทึกเป็น .xlsx ก่อนส่งใหม่อีกครั้ง",
+  zipTooBig   : "ไฟล์มีขนาดข้อมูลภายในใหญ่ผิดปกติ ระบบจึงไม่เปิดอ่าน กรุณาส่งเฉพาะชีตของเดือนที่ต้องการ หรือบันทึกไฟล์ใหม่แล้วส่งอีกครั้ง",
 } as const;
 
 interface SendAlertReplyOpts {
@@ -1151,8 +1154,9 @@ export async function processBuffer(buffer: Buffer, {
 /**
  * Download and process a single Excel attachment through the full pipeline.
  * Extracted so multiple attachments can be processed in parallel via Promise.allSettled.
+ * Exported for the tests only.
  */
-async function processAttachment(att: GmailAttachment, messageId: string, context: Partial<ProcessBufferContext>, gmail: GmailClient, workbookCount: number = 1): Promise<ProcessOutcome | false> {
+export async function processAttachment(att: GmailAttachment, messageId: string, context: Partial<ProcessBufferContext>, gmail: GmailClient, workbookCount: number = 1): Promise<ProcessOutcome | false> {
   const excel = isExcelFile(att.mimeType, att.filename);
 
   console.log(`│`);
@@ -1199,6 +1203,28 @@ async function processAttachment(att: GmailAttachment, messageId: string, contex
       messageId,
       gmail,
     });
+    return "replied";
+  }
+
+  // Zip-bomb guard before ExcelJS or JSZip inflates anything: the size check
+  // above is on the compressed bytes only, and a small attachment can inflate
+  // to gigabytes, which kills the always-on runner outright (no catch stops
+  // an out-of-memory abort) and leaves the message unread to do it again.
+  // A refusal is answered once and the message is marked handled ("replied").
+  const zip = zipProblem(buffer);
+  if (zip) {
+    console.warn(`│        ⛔  Attachment refused before parsing: ${zip.code}`);
+    await sendTelegram(formatErrorMessage(`Attachment refused by the zip guard (${zip.code}): ${zip.message}`, att.filename ?? null))
+      .catch((e) => console.warn(`│        ⚠️  Telegram notify failed: ${e.message}`));
+    const sent = await sendAlertReply({
+      errorType   : "other",
+      safeFilename: att.filename ?? "",
+      detail      : zip.code === "NOT_A_ZIP" || zip.code === "ZIP_MALFORMED" ? SENDER_DETAIL.notAZip : SENDER_DETAIL.zipTooBig,
+      replyTo     : context.replyTo ?? "",
+      messageId,
+      gmail,
+    });
+    if (!sent && context.receipt) context.receipt.answered = false;
     return "replied";
   }
 

@@ -38,6 +38,20 @@ export const MAX_ATTACHMENT_SIZE_BYTES = Number.isFinite(_maxAttSize) && _maxAtt
   : 15 * 1024 * 1024; // 15 MB
 
 /**
+ * Zip-bomb limits for an email attachment, checked from the zip's own
+ * directory before ExcelJS inflates anything (zip-guard.ts). The defaults are
+ * the ones the LINE upload path uses (lib/p4p-score.ts checkZipSafety); a
+ * real P4P workbook, even one holding every month of a year, is far below
+ * both.
+ */
+const _maxEntries = parseInt(process.env.MAX_XLSX_ZIP_ENTRIES ?? "", 10);
+export const MAX_XLSX_ZIP_ENTRIES = Number.isFinite(_maxEntries) && _maxEntries > 0 ? _maxEntries : 200;
+const _maxUnzipped = parseInt(process.env.MAX_XLSX_UNCOMPRESSED_BYTES ?? "", 10);
+export const MAX_XLSX_UNCOMPRESSED_BYTES = Number.isFinite(_maxUnzipped) && _maxUnzipped > 0
+  ? _maxUnzipped
+  : 50 * 1024 * 1024; // 50 MB
+
+/**
  * Whether to send error/alert reply emails back to the original sender.
  * Set to false to suppress all alert replies (e.g. during testing).
  * Resume by setting back to true.
