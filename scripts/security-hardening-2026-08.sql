@@ -320,7 +320,7 @@ grant execute on function public.log_access_request(text, text, text)   to anon,
 -- are removed. All three are dropped (live per DATA_EXPOSURE_ANALYSIS.md
 -- section 5, and in source by scripts/audit-fixes-2026-11.sql PART 4); never
 -- grant them again. log_access_request is the 3-argument version from that
--- file's PART 2; the 2-argument one no longer exists.
+-- file's PART 1; the 2-argument one no longer exists.
 
 
 -- ----------------------------------------------------------------------------
@@ -565,9 +565,9 @@ where n.nspname = 'public' order by objtype, grantor;
 --  UPDATE 2026-11 (audit findings F10, F13): the hardened log_access_request
 --  described above was never written back into the repo, so the source still
 --  had the old body. It now lives in scripts/audit-fixes-2026-11.sql PART 1
---  (same cleaning, plus: an existing request's name and department are never
---  overwritten and a resolved request is never reopened), and PART 5 of that
---  file does the revoke + drop below, uncommented. The rest of this appendix
+--  (same cleaning, plus: an open request's name and department are never
+--  overwritten), and PART 4 of that file does the revoke + drop below,
+--  uncommented. The rest of this appendix
 --  is kept as the record of how it got there.
 --
 --  ⚠️  THE FUNCTION IS STILL PRESENT AND STILL ANON-CALLABLE, ON PURPOSE.

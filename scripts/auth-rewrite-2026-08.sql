@@ -199,9 +199,9 @@ grant execute on function public.is_current_user_allowlisted() to authenticated;
 -- column something else might still reference.
 --
 -- The 2-argument version this block used to create let any anon caller
--- rename or reopen anyone's request (audit finding F13, 2026-11). The only
+-- rename anyone's open request (audit finding F13, 2026-11). The only
 -- version now is the 3-argument one in scripts/audit-fixes-2026-11.sql
--- PART 2; this just makes sure the old overloads are gone.
+-- PART 1; this just makes sure the old overloads are gone.
 drop function if exists public.log_access_request(text);
 drop function if exists public.log_access_request(text, text);
 

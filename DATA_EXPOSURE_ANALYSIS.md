@@ -260,7 +260,7 @@ Postgres row order.
 > `authenticated` only.
 >
 > **Update (2026-11, audit finding F10).** The scripts now say the same
-> thing. `scripts/audit-fixes-2026-11.sql` PART 5 revokes and drops all
+> thing. `scripts/audit-fixes-2026-11.sql` PART 4 revokes and drops all
 > three functions (uncommented, safe to re-run); the grant lines that
 > re-published them are gone from `security-hardening-2026-08.sql`,
 > `bind-line-user.sql` and `line-bind-gate.sql` (which now revoke instead);

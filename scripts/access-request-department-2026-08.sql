@@ -33,7 +33,7 @@ alter table public.access_requests add column if not exists department text;
 -- The 3-argument function this file used to create is now defined only in
 -- scripts/audit-fixes-2026-11.sql PART 1 (audit finding F13, 2026-11): this
 -- version let any anon caller overwrite the name and department on someone
--- else's request, reopen a resolved one, and store text of any length. Not
+-- else's open request, and store text of any length. Not
 -- creating it here means pasting this file again cannot bring that back.
 drop function if exists public.log_access_request(text, text);
 

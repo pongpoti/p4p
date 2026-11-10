@@ -207,7 +207,7 @@ create table if not exists public.p4p_upload_queue (
   -- saved the physician has nothing left to fix, so this backs off rather
   -- than ever terminating (design §7.7 rec 2, §12). Since 2026-11 a third
   -- value, 'superseded' (a newer upload for the same month won), is added
-  -- to this check by scripts/audit-fixes-2026-11.sql PART 4.
+  -- to this check by scripts/audit-fixes-2026-11.sql PART 3.
   archive_status          text
                 check (archive_status in ('archive_pending','archived')),
   archive_attempts        smallint    not null default 0,
@@ -558,7 +558,7 @@ grant execute on function public.my_p4p_uploads(integer) to authenticated;
 --  rows claimable immediately. Only rows nobody has looked at yet wait.
 -- UPDATE 2026-11 (audit findings F09, F17): claim_p4p_score_fallback() and
 -- claim_p4p_archive() are now defined only in scripts/audit-fixes-2026-11.sql
--- (PART 3 and PART 4), so pasting this file again cannot bring back the two
+-- (PART 2 and PART 3), so pasting this file again cannot bring back the two
 -- bugs the old versions had:
 --   * F09: a row stayed 'processing' for good when the runner died between
 --     the claim and writing the outcome, and the one-in-flight index then
