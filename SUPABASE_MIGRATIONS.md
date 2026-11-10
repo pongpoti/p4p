@@ -214,7 +214,9 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
       again.
     - PART 2 (F09): `claim_p4p_score_fallback()` also claims a row stuck in
       `processing` for over 30 minutes while it has attempts left (cap 3),
-      and marks it `failed` / `stuck_processing` when it has none.
+      and marks it `failed` / `stuck_processing` when it has none. A row put
+      back to `pending` after a failed attempt waits 5 minutes per attempt
+      before it is claimed again.
     - PART 3 (F17): `claim_p4p_archive()` marks an older `archive_pending`
       row `superseded` (new `archive_status` value) when a newer upload for
       the same email and month is done or archived, so it never replaces

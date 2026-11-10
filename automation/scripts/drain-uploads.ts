@@ -54,6 +54,7 @@ import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
 import { errForLog, redactForLog } from "../log-safe.js";
 import { ADMIN_REVIEW_ERROR_TYPE } from "../admin-review.js";
+import { RetryLaterError } from "../inbound-triage.js";
 import type { RosterMatch, NotifyOkPayload } from "../types.js";
 
 dotenvConfig({ override: true });
@@ -193,7 +194,7 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
 
   // Never close a row as done with a score that was not written: the
   // physician's "ดูผลคะแนน" button would show it as saved. Thrown, the row
-  // goes back to pending through the crash handler below (failScored, three
+  // goes back to pending through handleScoreCrash (failScored, three
   // attempts in all) and its uploaded object is kept for that retry.
   if (scoreNotSaved(outcome, state.success)) {
     throw new Error(`score not saved for queue row ${row.id} — left for a retry`);
@@ -248,10 +249,15 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
 
   console.log(`│      ${terminal ? "❌" : "⏳"}  ${errorType}: ${redactForLog(errorDetail)}${terminal ? " (terminal)" : " — will retry"}`);
   if (!terminal) return;
+  await finishFailedRow(row, errorType, errorDetail);
+}
 
-  // PUSH ON FAILURE: rare, and the one case where the physician has something
-  // to do about it. A push that cannot be delivered leaves notified_at null
-  // rather than failing anything.
+/**
+ * A row that has just failed for good. PUSH ON FAILURE: rare, and the one
+ * case where the physician has something to do about it. A push that cannot
+ * be delivered leaves notified_at null rather than failing anything.
+ */
+async function finishFailedRow(row: ScoreFallbackQueueRow, errorType: string, errorDetail: string): Promise<void> {
   const pushed = await pushLine(row.line_user_id, [
     buildFailureBubble({
       monthKey: row.month_key,
@@ -264,6 +270,50 @@ async function handleScoreFallback(row: ScoreFallbackQueueRow): Promise<void> {
   // A row held for the admin keeps its file: the admin's alert says how to
   // run it again once the right roster row is set (admin-review.ts).
   if (errorType !== ADMIN_REVIEW_ERROR_TYPE) await deleteObject(row.object_path);
+}
+
+/**
+ * handleScoreFallback threw. The row goes back to 'pending' (the claim
+ * waits 5 minutes per attempt before it is claimed again, audit-fixes
+ * PART 2), and at the third attempt it fails for good: the physician then
+ * gets the failure bubble and the uploaded object is deleted, the same as a
+ * failure processBuffer answered. A RetryLaterError (a temporary Drive or
+ * database error, or an admin-hold alert that was not delivered) tells the
+ * admin only when it gives up, as the email path does; any other crash on
+ * every attempt. Never throws.
+ */
+export async function handleScoreCrash(row: ScoreFallbackQueueRow, err: unknown): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  const temporary = err instanceof RetryLaterError;
+  console.error(`│      ❌  ${temporary ? "Temporary failure" : "Scoring crashed"}: ${errForLog(message)}`);
+  // error_detail is shown to the physician (the LINE failure bubble); the
+  // raw message goes to Telegram below, never to them.
+  const errorType = "other";
+  const errorDetail = SENDER_DETAIL.crashed;
+  let terminal: boolean | null = null;
+  try {
+    terminal = await failScored(row.id, { errorType, errorDetail, attempts: row.attempts });
+  } catch (e) {
+    // The row stays 'processing'; the claim takes it again after 30 minutes.
+    console.error(`│      ❌  failScored failed too: ${errForLog(e)}`);
+  }
+  if (!temporary || terminal !== false) {
+    await sendTelegram(
+      formatErrorMessage(temporary && terminal ? `Gave up after ${row.attempts} attempts: ${message}` : message, row.filename, {
+        source: "LINE upload",
+        accountName: row.full_name,
+        email: row.email,
+        monthKey: row.month_key,
+        errorType,
+        attempt: row.attempts,
+        maxAttempts: 3,
+      })
+    ).catch(() => {});
+  }
+  if (terminal) {
+    await finishFailedRow(row, errorType, errorDetail)
+      .catch((e: unknown) => console.error(`│      ❌  Failure notice failed: ${errForLog(e)}`));
+  }
 }
 
 // ── Stuck-archive alerting ────────────────────────────────────────────────
@@ -374,26 +424,7 @@ async function main() {
           try {
             await handleScoreFallback(scoreRow);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            console.error(`│      ❌  Scoring crashed: ${errForLog(message)}`);
-            // error_detail is shown to the physician (the LINE failure bubble);
-            // the raw message goes to Telegram below, never to them.
-            await failScored(scoreRow.id, {
-              errorType: "other",
-              errorDetail: SENDER_DETAIL.crashed,
-              attempts: scoreRow.attempts,
-            }).catch((e: unknown) => console.error(`│      ❌  failScored failed too: ${errForLog(e)}`));
-            await sendTelegram(
-              formatErrorMessage(message, scoreRow.filename, {
-                source: "LINE upload",
-                accountName: scoreRow.full_name,
-                email: scoreRow.email,
-                monthKey: scoreRow.month_key,
-                errorType: "other",
-                attempt: scoreRow.attempts,
-                maxAttempts: 3,
-              })
-            ).catch(() => {});
+            await handleScoreCrash(scoreRow, err);
           }
         }
       } catch (err) {

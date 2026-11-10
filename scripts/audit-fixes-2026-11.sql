@@ -106,6 +106,9 @@ commit;
 --   is claimed again while it has attempts left (the same 3 as before); with
 --   none left it becomes 'failed' (error_type 'stuck_processing'), which
 --   frees the month for a new upload and shows up for the admin.
+--   A row put back to 'pending' after a failed attempt waits 5 minutes per
+--   attempt so far before it is claimed again, so a Drive or database blip
+--   of a few minutes does not use up all 3 attempts within seconds.
 begin;
 
 create or replace function public.claim_p4p_score_fallback()
@@ -133,7 +136,9 @@ begin
       where attempts < 3
         and ((status = 'pending'
               and (score_method is not null
-                   or received_at < now() - interval '30 seconds'))
+                   or received_at < now() - interval '30 seconds')
+              and (claimed_at is null
+                   or claimed_at < now() - attempts * interval '5 minutes'))
           or (status = 'processing'
               and coalesce(claimed_at, received_at) < now() - interval '30 minutes'))
       order by received_at
