@@ -229,8 +229,10 @@ drop function if exists public.review_submit_round(text, uuid, uuid, text);
 -- budget and per P4P, have no blocking problem, still match the roster, have
 -- no score of 30,000 or more or under 2,200, and no build may be on its
 -- way. From round 2 on, a person the auditor approved keeps that result
--- unless their own score, department or name changed, or one of their checks
--- no longer matches; everyone else is checked again (recheck_why says why).
+-- unless their own score, department or name changed, their pay check is not
+-- a match or their score check is a mismatch (a score check of missing, no
+-- saved total in the doctor's file, keeps it); everyone else is checked again
+-- (recheck_why says why).
 create or replace function public.review_submit_round(p_month text, p_actor text)
 returns public.review_rounds
 language plpgsql
@@ -294,7 +296,9 @@ begin
                when q.sk03_score is distinct from p.sk03_score then 'score'
                when q.department is distinct from p.department then 'department'
                when q.name is distinct from p.name then 'name'
-               when p.score_check <> 'match' or p.money_check <> 'match' then 'check'
+               -- A score check of missing (no saved total in the doctor's file)
+               -- was approved after a look (2026-11-10) and keeps it.
+               when p.score_check = 'mismatch' or p.money_check <> 'match' then 'check'
                else 'keep'
              end as why
         from public.review_build_people p
@@ -478,8 +482,8 @@ begin
     'people', coalesce((select jsonb_agg(jsonb_build_object(
         'index', p.roster_index, 'name', p.name, 'department', p.department, 'intern', p.is_intern,
         'sk03Row', p.sk03_row, 'score', p.sk03_score, 'stated', p.stated_total, 'statedCell', p.stated_cell,
-        'statedHow', p.stated_how, 'sheet', p.merged_sheet, 'pay', p.sk03_pay, 'deptPay', p.dept_pay,
-        'admin', p.dept_admin, 'scoreCheck', p.score_check, 'moneyCheck', p.money_check,
+        'statedHow', p.stated_how, 'sheet', p.merged_sheet, 'pay', p.sk03_pay, 'deptRow', p.dept_row,
+        'deptPay', p.dept_pay, 'admin', p.dept_admin, 'scoreCheck', p.score_check, 'moneyCheck', p.money_check,
         'decision', d.decision, 'remark', d.remark, 'carried', d.carried, 'why', d.recheck_why,
         'decidedAt', d.decided_at, 'reply', d.reply,
         'prev', case when pd.roster_index is null then null else

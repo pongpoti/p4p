@@ -251,6 +251,14 @@
         drawTabs();
         return month !== "";
     }
+    // The month list again, for the tabs only: the month shown stays.
+    async function refreshMonthRows() {
+        const r = await api("/dashboard/api/review/months");
+        if (r.installed && r.months) {
+            monthRows = r.months;
+            drawTabs();
+        }
+    }
     // A month the doctors have not all sent, with nothing sent to the
     // auditor yet: the auditee side cannot open it (Pong, 2026-11-10).
     const locked = (m) => role === "auditee" && !m.round && m.sent < m.total;
@@ -261,9 +269,15 @@
         const m = can.find((x) => !x.round || x.round.status !== "approved") || can[can.length - 1];
         return m ? m.month : "";
     }
-    const noMonthCard = () => monthRows.length
-        ? card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน")])
-        : card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")]);
+    function noMonthCard() {
+        if (!monthRows.length)
+            return card("ยังไม่มีเดือนให้ตรวจ", [el("p", undefined, "ยังไม่มีตารางรายชื่อตั้งแต่ ส.ค. 69")]);
+        const again = el("button", "btn-ghost", "ดูอีกครั้ง");
+        again.type = "button";
+        again.id = "rv-months-again";
+        again.addEventListener("click", () => { void open(); });
+        return card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน"), again]);
+    }
     // One button per month, in time order; the status under it depends on
     // the side shown (redrawn on a role switch).
     function drawTabs() {
@@ -285,11 +299,18 @@
             if (off)
                 b.setAttribute("aria-disabled", "true");
             b.addEventListener("click", () => {
-                if (off) {
-                    say(shortMonth(m.month) + " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ");
+                if (!off) {
+                    pickMonth(m.month);
                     return;
                 }
-                pickMonth(m.month);
+                // The list may be old: look again before saying no.
+                void refreshMonthRows().catch(() => undefined).then(() => {
+                    const now = monthRows.find((x) => x.month === m.month);
+                    if (now && !locked(now))
+                        pickMonth(m.month);
+                    else
+                        say(shortMonth(m.month) + " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ");
+                });
             });
             return b;
         }));
@@ -502,6 +523,8 @@
                 localStorage.setItem(ROLE_KEY, role);
             }
             catch (e) { /* ignore */ }
+            for (const x of roleBtns)
+                x.setAttribute("aria-pressed", String(x.dataset.role === role));
             // The auditee cannot stay on a month it cannot open; the auditor
             // gets a month back after the auditee side had none to show.
             const shown = monthRows.find((m) => m.month === month);
@@ -904,7 +927,7 @@
                 // No id: a build from before the file's id was kept, or the
                 // upload failed. The next build stores it.
                 if (!id)
-                    return el("span", "rv-hint", text + ": ยังไม่มีลิงก์");
+                    return el("span", "rv-hint", text + ": ยังไม่มีลิงก์" + (auditeeTurn(s) ? " (กดสร้างใหม่)" : ""));
                 const a = el("a", "rv-link", text + " ");
                 a.href = url(id);
                 a.target = "_blank";
@@ -2092,7 +2115,7 @@
         const fl = el("label", "rv-mini", "แสดง");
         const sel = el("select");
         sel.id = "rv-filter";
-        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ผลเทียบไม่ตรง"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
+        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ไม่ตรงหรือไม่พบ"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
             const o = el("option", undefined, t);
             o.value = v;
             sel.append(o);
@@ -2124,8 +2147,10 @@
             const top = el("span", "rv-pname", p.name);
             const sub = el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + " · " + decisionText(p));
             b.append(top, sub);
-            if (!bothMatch(p))
+            if (p.scoreCheck === "mismatch" || p.moneyCheck === "mismatch")
                 b.append(chip("bad", "ผลเทียบไม่ตรง"));
+            else if (!bothMatch(p))
+                b.append(chip("miss", "ไม่พบข้อมูล"));
             b.addEventListener("click", () => { selected = p.index; render(); const t = document.getElementById("rv-person-h"); if (t)
                 t.focus(); });
             li.append(b);
@@ -2148,8 +2173,10 @@
         h.tabIndex = -1;
         panel.setAttribute("aria-labelledby", h.id);
         panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + (p.sk03Row ? " · SK03 แถว " + p.sk03Row : "") + " · " + decisionText(p)));
+        // 'check': a check is not ตรงกัน in the new build; say which kind.
+        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why);
         if (p.why)
-            panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + (WHY_TEXT[p.why] || p.why)));
+            panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText));
         if (p.edit)
             panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")));
         if (p.prev && (p.prev.remark || p.prev.reply)) {
@@ -2172,14 +2199,14 @@
             const th = el("th", undefined, label);
             th.scope = "row";
             const res = el("td");
-            res.append(chip(check === "match" ? "ok" : "bad", CHECK_TEXT[check]));
+            res.append(chip(check === "match" ? "ok" : check === "missing" ? "miss" : "bad", CHECK_TEXT[check]));
             tr.append(th, el("td", undefined, a), el("td", undefined, b), res);
             return tr;
         };
         const thead = el("thead"), tbody = el("tbody");
         thead.append(head);
         tbody.append(row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
-            : num(p.stated) + " ช่อง " + p.statedCell + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน แถว " + p.deptRow + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
+            : num(p.stated) + " ช่อง " + p.statedCell + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
         t.append(cap, thead, tbody);
         panel.append(t);
         panel.append(sheetBox(s, r, p));
@@ -2336,7 +2363,10 @@
     }
     function decideBox(s, p) {
         const box = el("div", "rv-decide");
-        const ok = bothMatch(p);
+        // Pay must be ตรงกัน. The score may be ตรงกัน, or ไม่พบ (the doctor's
+        // file has no saved total): then the auditor looks at the sheet and
+        // approves (Pong, 2026-11-10). ไม่ตรงกัน never approves.
+        const ok = p.moneyCheck === "match" && p.scoreCheck !== "mismatch";
         const spot = "decide-" + p.index;
         const approve = el("button", "btn-primary", p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ");
         approve.type = "button";
@@ -2346,7 +2376,12 @@
         if (!ok) {
             approve.setAttribute("aria-disabled", "true");
             approve.setAttribute("aria-describedby", why.id);
-            why.textContent = "อนุมัติได้เมื่อเทียบคะแนนและเทียบเงินตรงกันทั้งคู่ คนนี้ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ";
+            why.textContent = (p.moneyCheck === "missing" && p.scoreCheck !== "mismatch" ? "ไม่พบเงินในชีตกลุ่มงาน" : "เทียบไม่ตรงกัน")
+                + " อนุมัติไม่ได้ ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ";
+        }
+        else if (!bothMatch(p)) {
+            approve.setAttribute("aria-describedby", why.id);
+            why.textContent = "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข";
         }
         approve.addEventListener("click", () => {
             if (!ok) {
