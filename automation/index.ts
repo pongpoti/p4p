@@ -12,7 +12,7 @@
 import { createGmailClient, P4P_LABEL_NAME, type GmailClient } from "./gmail-client.js";
 import { createDriveClient, isTransientDriveError, type DriveClient } from "./drive-client.js";
 import { analyseJson, resolveBeMonth, resolveBeMonthFromRows, resolveBeYear, resolveBeYearByPriority, resolveFilenameYear, resolveBeYearFromRows, resolvePhysicianNameCandidates, resolvePhysicianNameFromSheet, sheetMatchScore, statedPeriods, monthYearFromText, monthYearFromRows } from "./claude-analyst.js";
-import { findRosterMatch, saveScore, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
+import { findRosterMatch, saveScore, keepEarliestSubmittedAt, newerUploadScored, logSubmission, bumpSenderMatch, getRosterRowByIndex } from "./supabase-client.js";
 import { formatAdminReviewAlert, adminReviewDetail, adminReviewReplyBody, ADMIN_REVIEW_REPLY_SUBJECT, ADMIN_REVIEW_ERROR_TYPE, type AdminReviewAlertData } from "./admin-review.js";
 import { sendTelegram, formatResultMessage, formatErrorMessage } from "./telegram.js";
 import { sendConfirmationEmail }        from "./confirmation-email.js";
@@ -573,6 +573,39 @@ export interface ProcessBufferContext {
 }
 
 /**
+ * Roster row ("table#index") -> the receive time (ms) of the newest
+ * submission whose score this process saved. Kept for the life of the
+ * process (one relay run of up to an hour, which also runs the LINE drain),
+ * like thrownPasses: a retried email is retried within that run.
+ */
+const savedSubmissionTimes = new Map<string, number>();
+const rosterRowKey = (table: string, index: number | string): string => `${table}#${index}`;
+
+/** Tests only: forget the saved times, so one test's saves do not decide another's. */
+export function forgetSavedSubmissionTimes(): void {
+  savedSubmissionTimes.clear();
+}
+
+/**
+ * Was a NEWER submission for this roster row already saved? A retried email
+ * (its Drive upload or score save failed for a temporary reason, so it was
+ * left unread) can come round again after a corrected file was saved, by
+ * email in this run or by a LINE upload that /upload/score scored at once.
+ * Writing the older score then would undo the newer one. A failed queue read
+ * is not a reason to refuse a save, so it counts as "no".
+ */
+async function newerSubmissionSaved(table: string, index: number | string, ts: Date): Promise<boolean> {
+  const seen = savedSubmissionTimes.get(rosterRowKey(table, index));
+  if (seen !== undefined && seen > ts.getTime()) return true;
+  try {
+    return await newerUploadScored(table, index, ts.toISOString());
+  } catch (err) {
+    console.warn(`│        ⚠️  Newer-upload check skipped: ${errForLog(err)}`);
+    return false;
+  }
+}
+
+/**
  * Process a single xlsx buffer through Claude → Supabase → Telegram → Drive.
  * Returns true if the full pipeline completed (Claude succeeded), false otherwise.
  * Throws (RetryLaterError for a temporary cause) when nothing may be answered
@@ -1065,6 +1098,27 @@ export async function processBuffer(buffer: Buffer, {
     return holdForAdmin({ reason: "score_conflict", match, conflict: analysis.scoreConflict });
   }
 
+  // The punctuality timestamp is Gmail's receive time, not the Date header:
+  // the header is whatever the sender's client wrote (a wrong clock, or set
+  // on purpose), and saveScore only ever moves submitted_at EARLIER, so a
+  // backdated header would pin an on-time stamp for good. The header is the
+  // fallback only when Gmail gave no time; the LINE path passes its own
+  // server-side received_at as emailDate.
+  const ts = submissionTime(gmailReceivedAt, emailDate);
+
+  // ── A newer submission is already saved: never write this one over it ──
+  // Checked before Drive too, so this file does not replace the newer one
+  // there either. The receive time still counts: the physician did hand a
+  // file in then, so submitted_at may still move earlier.
+  if (match && await newerSubmissionSaved(workMonth, match.index, ts)) {
+    try {
+      await keepEarliestSubmittedAt(workMonth, match.index, ts.toISOString());
+    } catch (err) {
+      throw new RetryLaterError(`submitted_at not saved (table "${workMonth}", roster row #${match.index}): ${err instanceof Error ? err.message : err}`);
+    }
+    return holdForAdmin({ reason: "older_than_saved", match });
+  }
+
   // ── Upload to Google Drive (must succeed before saving score / archiving) ─
   const drive = driveOverride !== undefined ? driveOverride : getDrive();
   if (drive) {
@@ -1125,18 +1179,13 @@ export async function processBuffer(buffer: Buffer, {
   }
 
   // ── Save score to Supabase (only after Drive upload confirmed) ────────
-  // The punctuality timestamp is Gmail's receive time, not the Date header:
-  // the header is whatever the sender's client wrote (a wrong clock, or set
-  // on purpose), and saveScore only ever moves submitted_at EARLIER, so a
-  // backdated header would pin an on-time stamp for good. The header is the
-  // fallback only when Gmail gave no time; the LINE path passes its own
-  // server-side received_at as emailDate.
-  const ts = submissionTime(gmailReceivedAt, emailDate);
   let scoreSaved = false;
   if (match) {
     try {
       await saveScore(workMonth, match.index, analysis.score, ts.toISOString());
       scoreSaved = true;
+      const key = rosterRowKey(workMonth, match.index);
+      savedSubmissionTimes.set(key, Math.max(savedSubmissionTimes.get(key) ?? -Infinity, ts.getTime()));
       console.log(`│        💾  Score saved → table "${workMonth}", row ${match.index}`);
     } catch (dbErr) {
       console.error(`│        ❌  Supabase save error: ${errForLog(dbErr)}`);

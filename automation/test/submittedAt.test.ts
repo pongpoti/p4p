@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert   from "node:assert/strict";
 import ExcelJS  from "exceljs";
 
-const { processBuffer, submissionTime } = await import("../index.js");
+const { processBuffer, submissionTime, forgetSavedSubmissionTimes } = await import("../index.js");
 
 const SENDER = "doctor.test@example.com";
 const NAME   = "ทดสอบ ตัวอย่าง";
@@ -24,6 +24,8 @@ async function report(): Promise<Buffer> {
 }
 
 function backends() {
+  // Each test saves the same row afresh; an earlier test's newer save must not hold this one back.
+  forgetSavedSubmissionTimes();
   return installFakeBackends({
     "2569_10"        : [{ index: 7, firstname: "ทดสอบ", lastname: "ตัวอย่าง", prefix: "นพ.", department: "ทดสอบ", score: null, submitted_at: null }],
     physicians       : [{ email: SENDER, full_name: NAME, department: "ทดสอบ", active: true }],

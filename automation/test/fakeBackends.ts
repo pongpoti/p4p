@@ -6,9 +6,10 @@
  * *.test.ts files that need it import it AFTER pointing SUPABASE_URL at
  * FAKE_SUPABASE_URL.
  *
- * Only what processBuffer's queries use is implemented: eq filters, limit,
- * the one `or=(submitted_at.is.null,submitted_at.gt."…")` filter saveScore
- * sends, PATCH, POST inserts and RPC calls.
+ * Only what processBuffer's queries use is implemented: eq and gt filters
+ * (gt compares strings, which is right for ISO times), limit, the one
+ * `or=(submitted_at.is.null,submitted_at.gt."…")` filter saveScore sends,
+ * PATCH, POST inserts and RPC calls.
  */
 
 export const FAKE_SUPABASE_URL = "http://supabase.test";
@@ -44,6 +45,12 @@ function matches(row: FakeRow, params: URLSearchParams): boolean {
       if (!m) throw new Error(`fake supabase: unsupported or filter ${value}`);
       const v = row[m[1]!];
       if (!(v === null || v === undefined || String(v) > m[2]!)) return false;
+      continue;
+    }
+    const gt = value.match(/^gt\.(.*)$/);
+    if (gt) {
+      const v = row[key];
+      if (v === null || v === undefined || !(String(v) > gt[1]!)) return false;
       continue;
     }
     const eq = value.match(/^eq\.(.*)$/);

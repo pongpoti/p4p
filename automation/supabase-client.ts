@@ -396,17 +396,45 @@ export async function saveScore(date: string, index: number | string, score: num
     throw new Error(`Supabase update on table "${date}" matched no row for index ${index} — score was NOT saved`);
   }
 
-  // submitted_at is the punctuality timestamp the ranking reads, so it keeps
-  // the EARLIEST submission: a re-send of a month (a corrected file, or an old
-  // file attached by mistake) updates the score above but must never move an
-  // on-time submission past the deadline. Written only when empty or later
-  // than this one; 0 rows matched here just means an earlier time is kept.
-  if (submittedAt !== undefined) {
-    const { error: tsError } = await supabase
-      .from(date)
-      .update({ submitted_at: submittedAt })
-      .eq("index", index)
-      .or(`submitted_at.is.null,submitted_at.gt."${submittedAt}"`);
-    if (tsError) throw new Error(`Supabase submitted_at update error on table "${date}": ${tsError.message}`);
+  if (submittedAt !== undefined) await keepEarliestSubmittedAt(date, index, submittedAt);
+}
+
+/**
+ * submitted_at is the punctuality timestamp the ranking reads, so it keeps
+ * the EARLIEST submission: a re-send of a month (a corrected file, or an old
+ * file attached by mistake) updates the score but must never move an on-time
+ * submission past the deadline. Written only when empty or later than this
+ * one; 0 rows matched here just means an earlier time is kept. Also used on
+ * its own for a submission whose score is not written because a newer one is
+ * already saved: the physician still handed a file in at that time.
+ */
+export async function keepEarliestSubmittedAt(date: string, index: number | string, submittedAt: string): Promise<void> {
+  if (!isValidDate(date)) {
+    throw new Error(`Cannot save submitted_at — invalid date key: "${date}"`);
   }
+  const { error: tsError } = await getSupabase()
+    .from(date)
+    .update({ submitted_at: submittedAt })
+    .eq("index", index)
+    .or(`submitted_at.is.null,submitted_at.gt."${submittedAt}"`);
+  if (tsError) throw new Error(`Supabase submitted_at update error on table "${date}": ${tsError.message}`);
+}
+
+/**
+ * Has a LINE upload for this roster row and month, received after `sinceIso`,
+ * already been scored (p4p_upload_queue status 'done')? /upload/score writes
+ * such a score straight away, in another process, so this is the only place
+ * the relay can learn of it. Throws on a read error; the caller decides.
+ */
+export async function newerUploadScored(monthKey: string, rosterIndex: number | string, sinceIso: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("p4p_upload_queue")
+    .select("id")
+    .eq("month_key", monthKey)
+    .eq("roster_index", rosterIndex)
+    .eq("status", "done")
+    .gt("received_at", sinceIso)
+    .limit(1);
+  if (error) throw new Error(`p4p_upload_queue read error: ${error.message}`);
+  return (data ?? []).length > 0;
 }
