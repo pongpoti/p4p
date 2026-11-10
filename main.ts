@@ -21,11 +21,22 @@ const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 // The single LINE userId allowed into /admin/ (the roster CRUD dashboard,
-// see servePage-adjacent routes below). Not a secret in itself — a LINE
-// userId only identifies an account, it can't be used to authenticate as
-// one — so a hardcoded fallback is fine; ADMIN_LINE_USER_ID lets it be
-// overridden per-deployment without a code change.
-const ADMIN_LINE_USER_ID = process.env.ADMIN_LINE_USER_ID || "Ub5c3e37b54e59f479fbf450e2df60d18"
+// see servePage-adjacent routes below) and the /dashboard/ owner. Not a
+// secret — a LINE userId cannot authenticate as its account — but it is a
+// personal identifier, and this repository is public, so it lives only in
+// the environment. Unset means NO owner, not a default one: the "admin" bot
+// command answers nobody, the owner-only dashboard routes return 404, and
+// DASHBOARD_LINE_USER_IDS has nothing to fall back to.
+const ADMIN_LINE_USER_ID = (process.env.ADMIN_LINE_USER_ID || "").trim()
+if (!ADMIN_LINE_USER_ID) {
+  console.error("[admin] ADMIN_LINE_USER_ID is not set — the \"admin\" login command and the " +
+    "dashboard's owner-only features are DISABLED")
+}
+// Fails closed: with no owner configured, no userId (not even a missing one)
+// is the owner.
+function isOwnerLineUserId(userId: string | undefined | null): boolean {
+  return Boolean(ADMIN_LINE_USER_ID) && userId === ADMIN_LINE_USER_ID
+}
 // Base URL used to build the one-time admin login link sent over LINE DM
 // (the webhook has no `req` to read a Host header from).
 const ADMIN_BASE_URL = process.env.ADMIN_BASE_URL || "https://p4p-sakhonmso.vercel.app"
@@ -66,8 +77,8 @@ const PAGE_TOKEN_PLACEHOLDER = "__P4P_ACCESS_TOKEN__"
 // so the id lives in one place — the env var scripts/setup-richmenu.mts
 // already requires — rather than being hardcoded in two.
 const UPLOAD_LIFF_PLACEHOLDER = "__P4P_UPLOAD_LIFF_ID__"
-// Hardcoded fallback for the same reason ADMIN_LINE_USER_ID and
-// ADMIN_BASE_URL have one: a LIFF id is not a secret. This exact string is
+// Hardcoded fallback for the same reason ADMIN_BASE_URL has one: a LIFF id
+// is not a secret. This exact string is
 // already public in the rich menu's own `uri` action and in every copy of
 // this page's HTML. Making it a required env var bought nothing and cost a
 // silent failure — with it unset, liff.init() never runs, so the chat
@@ -535,7 +546,8 @@ app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
 // the /admin/ cookie: /admin/ is the phone page and stays as it is. Only the
 // LINE userIds in DASHBOARD_LINE_USER_IDS get a session. That list lives in
 // the environment rather than here because this repository is public; the
-// fallback is the single admin id that is already hardcoded above.
+// fallback is ADMIN_LINE_USER_ID (also env-only), so with neither set nobody
+// gets a session.
 //
 // The channel secret is env-only (LINE_LOGIN_CHANNEL_SECRET). Without it the
 // login route refuses to start rather than signing sessions with a
@@ -545,6 +557,9 @@ const LINE_LOGIN_CHANNEL_SECRET = process.env.LINE_LOGIN_CHANNEL_SECRET || ""
 const DASHBOARD_LINE_USER_IDS = new Set(
   (process.env.DASHBOARD_LINE_USER_IDS || ADMIN_LINE_USER_ID).split(",").map((s) => s.trim()).filter(Boolean),
 )
+if (DASHBOARD_LINE_USER_IDS.size === 0) {
+  console.error("[dashboard] neither DASHBOARD_LINE_USER_IDS nor ADMIN_LINE_USER_ID is set — no one can sign in to the dashboard")
+}
 if (!LINE_LOGIN_CHANNEL_SECRET) {
   console.error("[dashboard] LINE_LOGIN_CHANNEL_SECRET is not set — dashboard login is DISABLED")
 }
@@ -620,7 +635,7 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 // append-only), so an admin cannot skip or alter an entry. Only the owner
 // (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
 // dashboard admins never see the tab and get 404 from its API.
-const isDashOwner = (sub: string): boolean => sub === ADMIN_LINE_USER_ID
+const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -2025,7 +2040,7 @@ const handleEvent = async (event: LineWebhookEvent): Promise<unknown> => {
     // Silent no-op for anyone else — never confirm or deny that "admin" is a
     // recognized command, so this can't be used to probe for the admin's
     // userId.
-    if (event.source.userId !== ADMIN_LINE_USER_ID) return Promise.resolve(null)
+    if (!isOwnerLineUserId(event.source.userId)) return Promise.resolve(null)
     // signAdminToken throws when the signing secrets are missing. Report that
     // to the admin instead of letting it reject the whole webhook — the
     // handler's catch would turn one unusable command into a 500 for every

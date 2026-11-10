@@ -45,10 +45,12 @@ export const serverEnv = {
   lineChannelSecret: () => process.env.LINE_CHANNEL_SECRET,
   supabaseServiceRoleKey: () => process.env.SUPABASE_SERVICE_ROLE_KEY,
   telegramBotToken: () => process.env.TELEGRAM_BOT_TOKEN,
-  /** The single LINE userId allowed into /admin/. Not a secret in itself — a
-   *  LINE userId identifies an account but cannot authenticate as one. */
-  adminLineUserId: () =>
-    process.env.ADMIN_LINE_USER_ID ?? "Ub5c3e37b54e59f479fbf450e2df60d18",
+  /** The single LINE userId allowed into /admin/. Not a secret — a LINE userId
+   *  cannot authenticate as its account — but a personal identifier, so it is
+   *  env-only in this public repository. Unset gives "", which equals no LINE
+   *  userId (present or missing), so the admin check fails closed. Callers
+   *  should still treat "" as "no admin configured". */
+  adminLineUserId: (): string => (process.env.ADMIN_LINE_USER_ID ?? "").trim(),
   /** Baked into the one-time admin login link the bot sends over DM, so it must
    *  point at whichever deployment is live. Cutover checklist item. */
   adminBaseUrl: () => process.env.ADMIN_BASE_URL ?? "https://p4p-sakhonmso.vercel.app",
