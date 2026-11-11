@@ -8,11 +8,10 @@
  * Step 5  — Merge individual Excel files → one workbook per person sheet
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  *           Pay uses the new formula (./sk03-formula.ts): interns first, then
- *           staff by department budget (sheet งบรายสาขา). Each month the
- *           dashboard's ตรวจสอบ tab gives two numbers (review_inputs): the
- *           total budget → staff Y9, and per P4P (budget ÷ N, N typed in the
- *           tab) per intern → intern W9 (=W10×rate). Until then all pay
- *           shows 0.
+ *           staff by department budget (sheet งบรายสาขา). The total
+ *           budget (staff Y9) and per P4P (intern W9) are left empty (Pong,
+ *           2026-11-11: ignore the ตรวจสอบ tab's numbers in the SK03), so
+ *           pay shows 0 until someone types them into the sheet.
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -710,8 +709,8 @@ async function writeOverallMeta(
   const cells: CellWrite[] = [
     ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
     ...(isIntern
-      ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow, input?.per_p4p ?? 0)]
-      : staffPanel(internSheetName, S, lastRow, input?.budget ?? 0)),
+      ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow, input?.per_p4p ?? '')]
+      : staffPanel(internSheetName, S, lastRow, input?.budget ?? '')),
   ];
 
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
@@ -1685,10 +1684,12 @@ async function main(): Promise<void> {
         results.skipped++; console.log('└─ skipped\n'); continue;
       }
 
-      // Step 6 — budget and per P4P as typed in the ตรวจสอบ tab
+      // Step 6 — the SK03. Pong, 2026-11-11: budget (staff Y9) and per P4P
+      // (intern W9) stay empty; the tab's numbers are kept only for the
+      // review record (review_builds, review_submit_round), not the sheet.
       const input = reviewOn ? await review.loadReviewInput(supabase, key) : null;
-      log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'not typed yet → 0'})`);
-      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+      log('  [Step 6] Creating SK03 spreadsheet… (budget and per P4P left empty)');
+      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, null);
 
       // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
       // built but ends the job red so 1.2 alerts.
