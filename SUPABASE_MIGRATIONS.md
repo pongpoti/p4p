@@ -238,6 +238,20 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     `p4p_score_saves` or run `save_p4p_score`. The same release needs
     `ADMIN_LINE_USER_ID` set in Vercel first — see "Before deploying the
     2026-11 audit fixes" at the top of this file.
+25. `scripts/budget-inputs-2026-11.sql` — **not applied yet; paste it.**
+    PART 1 copies the 17 months 2568_05 to 2569_09 that were in the Monthly
+    Budget Inputs table of `process/FORMULA.md` into `review_inputs`
+    (budget, N, per P4P), overwriting any row there, and ends with a check
+    query (17 months, 0 mismatches). PART 2 adds `review_inputs.tg_pending`
+    and the function `budget_save` (service_role only) behind the overview
+    page's งบ button: it saves budget and N, and queues workflow 2.2 for the
+    month when its roster is complete. Since 2026-11-11 workflow 2.2 takes
+    the SK03's budget (staff Y9) and per P4P (intern W9) from that table,
+    not from FORMULA.md, and sends Pong a Telegram once a saved budget is in
+    the SK03. Needs steps 23 and the review-tab auditee file
+    (`scripts/review-tab-2026-11-auditee.sql`, for the `doctors` column and
+    `review_request_build`). Each PART can be pasted on its own; safe to
+    re-run.
 
 ## Superseded — do NOT run
 

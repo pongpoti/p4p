@@ -877,7 +877,26 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    res.json({ months })
+    // The owner also gets each month's budget and N (review_inputs), for the
+    // budget button on the month cards. Others get none, and no button.
+    const owner = isDashOwner(s.sub)
+    const budgets: Record<string, unknown> = {}
+    if (owner) {
+      try {
+        const keys = months.map((m) => m.key).join(",")
+        const r = await axios.get(
+          SUPABASE_URL + "/rest/v1/review_inputs?select=month,budget,per_p4p,doctors,updated_at,updated_by&month=in.(" + keys + ")",
+          { headers: SERVICE_HEADERS(), timeout: 8000 },
+        )
+        for (const row of r.data as { month: string; budget: string; per_p4p: string; doctors: number | null; updated_at: string; updated_by: string }[]) {
+          budgets[row.month] = { budget: Number(row.budget), per_p4p: Number(row.per_p4p), doctors: row.doctors, updated_at: row.updated_at, updated_by: row.updated_by }
+        }
+      } catch (e: any) {
+        // Not installed yet, or Supabase busy: the cards show no budget.
+        console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      }
+    }
+    res.json({ months: owner ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null })) : months, canBudget: owner })
   } catch (e: any) {
     console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load overview" })
@@ -1034,7 +1053,7 @@ const AUDIT_GROUPS: Record<string, string> = {
   session: "action=like.session.*",
   view: "action=in.(view.overview,view.followup,view.roster,view.review,pending.open,followup.history,audit.view,review.download)",
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
-    "review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
+    "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
     "review.pdf_retry,review.reopen)",
   refused: "action=eq.login.refused",

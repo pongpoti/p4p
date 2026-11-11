@@ -148,9 +148,39 @@
         const footer = el("div", "card-footer");
         footer.innerHTML = CLOCK_SVG;
         footer.appendChild(el("span", undefined, m.lastSubmittedAt ? "ส่งล่าสุด " + fmtWhen(m.lastSubmittedAt) : "ยังไม่มีการส่งไฟล์"));
+        if (canBudget)
+            footer.appendChild(budgetBtn(m));
         card.appendChild(footer);
         return card;
     };
+    // ── งบประมาณจัดสรร (owner only) ──────────────────────────────────────
+    // Pong, 2026-11-11: each month's budget and N are typed here, on the
+    // month card's งบ button (⚠ until they are in), not in the ตรวจสอบ tab.
+    // A save starts workflow 2.2 for the month at once when every doctor
+    // has sent (otherwise the build after the last file uses them), and
+    // Pong gets a Telegram once the SK03 is built with them.
+    const WARN_SVG = '<svg class="bud-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+    const fmtRate = (n) => n.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Whole baht as saved; an older month saved with satang keeps them.
+    const fmtBudget = (n) => Number.isInteger(n) ? fmtNum(n) : fmtRate(n);
+    function budgetBtn(m) {
+        const b = m.budget || null;
+        const btn = el("button", "budbtn" + (b ? "" : " missing"));
+        btn.setAttribute("type", "button");
+        if (b)
+            btn.appendChild(el("span", "dot"));
+        else
+            btn.innerHTML = WARN_SVG;
+        btn.appendChild(document.createTextNode("งบ"));
+        const label = b
+            ? "งบประมาณจัดสรร " + m.name + ": " + fmtBudget(b.budget) + " บาท · N " + (b.doctors ? fmtNum(b.doctors) : "–") + " · per P4P " + fmtRate(b.per_p4p)
+            : "ยังไม่ได้กรอกงบประมาณจัดสรร " + m.name;
+        btn.title = label;
+        btn.setAttribute("aria-label", label);
+        btn.setAttribute("aria-haspopup", "dialog");
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); openBudget(m); });
+        return btn;
+    }
     // ── Tabs ─────────────────────────────────────────────────────────────
     // ภาพรวม shows all six months; ตามส่ง shows only the months not yet
     // complete. Both come from the one overview response; the URL hash
@@ -164,6 +194,8 @@
     };
     const isComplete = (m) => m.exists && m.total > 0 && m.sent === m.total;
     let months = null;
+    // The owner's overview also carries each month's budget (the งบ button).
+    let canBudget = false;
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false;
     const auditView = document.getElementById("audit-view");
@@ -560,6 +592,7 @@
                 throw new Error("HTTP " + r.status);
             const data = await r.json();
             months = data.months;
+            canBudget = data.canBudget === true;
             errorEl.classList.add("hidden");
             render();
         }
@@ -572,6 +605,223 @@
             monthsEl.setAttribute("aria-busy", "false");
         }
     }
+    // ── งบประมาณจัดสรร: the box behind a month card's งบ button ────────────
+    // Budget and N are whole numbers (lib/review-core.ts parseBudget,
+    // parseCount); per P4P = budget ÷ N to the satang, as the SQL stores it.
+    const BUDGET_DIGITS = 11; // under 1e11, as the server takes it
+    const DOCTORS_DIGITS = 5; // under 1e5
+    const grouped = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const wholeOf = (v) => {
+        const d = v.replace(/,/g, "").trim();
+        return /^\d+$/.test(d) && Number(d) > 0 ? Number(d) : null;
+    };
+    const rateOf = (budget, n) => {
+        const b = wholeOf(budget), c = wholeOf(n);
+        if (b === null || c === null || b >= 1e11 || c >= 1e5)
+            return null;
+        const v = Math.round(Math.round(b * 100) / c) / 100;
+        return v > 0 ? v : null;
+    };
+    // A whole-number field takes digits only and says nothing: a typed
+    // letter, space or "." does nothing, and so do the digits typed right
+    // after a "." (until the caret moves), the same as pasted text keeps the
+    // digits before its first ".": 2,158,709.06 gives 2,158,709 either way,
+    // never 215,870,906 (Pong, 2026-11-10).
+    // A digit past the field's limit does nothing either. With `group` the
+    // digits show a comma every 1,000 as they are typed, the caret staying
+    // after the same digit; Backspace or Delete on a comma takes the digit
+    // beside it. A leading 0 stays while typing (deleting the 2 of 2,058,709
+    // must not leave 58,709 when the 2 is typed back) and goes when the
+    // field is left.
+    function wholeField(i, group, maxDigits) {
+        let prev = null;
+        let good = "";
+        let fraction = false;
+        const whole = () => { fraction = false; };
+        i.addEventListener("focus", () => { good = i.value; fraction = false; });
+        i.addEventListener("mousedown", whole);
+        i.addEventListener("keydown", (e) => { if (e.key.length > 1 || e.ctrlKey || e.metaKey || e.altKey)
+            fraction = false; });
+        // Only with a bare caret: a selected comma deleted is just that comma.
+        i.addEventListener("beforeinput", () => { prev = i.selectionStart === i.selectionEnd ? i.value : null; });
+        i.addEventListener("paste", (e) => {
+            var _a, _b;
+            e.preventDefault();
+            fraction = false;
+            const text = e.clipboardData ? e.clipboardData.getData("text") : "";
+            const clean = text.split(".")[0].replace(/\D/g, "");
+            if (!clean)
+                return;
+            const from = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : i.value.length;
+            i.setRangeText(clean, from, (_b = i.selectionEnd) !== null && _b !== void 0 ? _b : from, "end");
+            i.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        i.addEventListener("drop", (e) => { e.preventDefault(); });
+        i.addEventListener("input", (e) => {
+            var _a;
+            const ev = e;
+            const was = prev;
+            prev = null;
+            if (ev.isComposing)
+                return;
+            let raw = i.value;
+            let pos = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : raw.length;
+            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1) {
+                if (ev.data === ".")
+                    fraction = true;
+                else if (fraction && /\d/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) {
+                    raw = raw.slice(0, pos - 1) + raw.slice(pos);
+                    pos -= 1;
+                }
+            }
+            if (was !== null && raw !== was && raw.replace(/,/g, "") === was.replace(/,/g, "")) {
+                if (ev.inputType === "deleteContentBackward" && pos > 0) {
+                    raw = raw.slice(0, pos - 1) + raw.slice(pos);
+                    pos -= 1;
+                }
+                else if (ev.inputType === "deleteContentForward" && pos < raw.length)
+                    raw = raw.slice(0, pos) + raw.slice(pos + 1);
+            }
+            const digits = raw.replace(/\D/g, "");
+            if (digits.length > maxDigits) {
+                const back = raw.length - pos;
+                i.value = good;
+                const at = Math.max(0, good.length - back);
+                i.setSelectionRange(at, at);
+                return;
+            }
+            const before = raw.slice(0, pos).replace(/\D/g, "").length;
+            const out = group ? grouped(digits) : digits;
+            if (out !== i.value) {
+                i.value = out;
+                let at = 0;
+                for (let k = 0; at < out.length && k < before; at++)
+                    if (out[at] !== ",")
+                        k++;
+                i.setSelectionRange(at, at);
+            }
+            good = i.value;
+        });
+        i.addEventListener("blur", () => {
+            const digits = i.value.replace(/,/g, "");
+            const trimmed = digits.replace(/^0+(?=\d)/, "");
+            if (trimmed === digits)
+                return;
+            i.value = group ? grouped(trimmed) : trimmed;
+            i.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+    }
+    const budgetDlg = document.getElementById("budget-dialog");
+    const budgetTitle = document.getElementById("budget-title");
+    const budgetForm = document.getElementById("budget-form");
+    const budgetAmount = document.getElementById("budget-amount");
+    const budgetN = document.getElementById("budget-doctors");
+    const budgetRate = document.getElementById("budget-rate");
+    const budgetOk = document.getElementById("budget-ok");
+    const budgetMeta = document.getElementById("budget-meta");
+    const budgetError = document.getElementById("budget-error");
+    const budgetCancel = document.getElementById("budget-cancel");
+    const budgetSave = document.getElementById("budget-save");
+    wholeField(budgetAmount, true, BUDGET_DIGITS);
+    wholeField(budgetN, false, DOCTORS_DIGITS);
+    budgetDlg.addEventListener("click", (ev) => { if (ev.target === budgetDlg)
+        budgetDlg.close(); });
+    let budgetMonth = null;
+    let budgetBusy = false;
+    // per P4P as typed; บันทึก is off until both are whole numbers above 0.
+    const paintBudget = () => {
+        const v = rateOf(budgetAmount.value, budgetN.value);
+        budgetRate.textContent = v === null ? "–" : fmtRate(v);
+        if (!budgetBusy)
+            budgetSave.disabled = v === null;
+    };
+    budgetAmount.addEventListener("input", paintBudget);
+    budgetN.addEventListener("input", paintBudget);
+    const showBudgetMeta = (b) => {
+        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), b.updated_by || ""].filter(Boolean) : [];
+        budgetMeta.textContent = bits.join(" · ");
+        budgetMeta.classList.toggle("hidden", !bits.length);
+    };
+    // Saved: the box shows the numbers read-only and says what happens next.
+    const setBudgetDone = (done) => {
+        budgetAmount.readOnly = done;
+        budgetN.readOnly = done;
+        budgetSave.classList.toggle("hidden", done);
+        budgetCancel.textContent = done ? "ปิด" : "ยกเลิก";
+    };
+    function openBudget(m) {
+        budgetMonth = m;
+        const b = m.budget || null;
+        budgetDlg.style.setProperty("--month", m.color);
+        budgetTitle.textContent = "งบประมาณจัดสรร " + m.name;
+        // A budget saved with satang (months before whole baht) shows its
+        // whole baht; saving it again stores that.
+        budgetAmount.value = b ? grouped(String(Math.trunc(b.budget))) : "";
+        budgetN.value = b && b.doctors ? String(b.doctors) : "";
+        budgetOk.classList.add("hidden");
+        budgetError.classList.add("hidden");
+        setBudgetDone(false);
+        showBudgetMeta(b);
+        paintBudget();
+        budgetDlg.showModal();
+        budgetAmount.focus();
+    }
+    budgetForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const m = budgetMonth;
+        if (!m || budgetBusy || budgetAmount.readOnly)
+            return;
+        const budget = wholeOf(budgetAmount.value), doctors = wholeOf(budgetN.value);
+        if (budget === null || doctors === null || rateOf(budgetAmount.value, budgetN.value) === null)
+            return;
+        const label = budgetSave.textContent;
+        budgetBusy = true;
+        budgetSave.disabled = true;
+        budgetSave.setAttribute("aria-busy", "true");
+        budgetSave.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"));
+        budgetError.classList.add("hidden");
+        let out = null;
+        let ok = false;
+        try {
+            const r = await fetch("/dashboard/api/budget/" + encodeURIComponent(m.key), {
+                method: "PUT", credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ budget: String(budget), doctors: String(doctors) }),
+            });
+            if (r.status === 401) {
+                location.href = "/dashboard/login?error=idle";
+                return;
+            }
+            out = await r.json().catch(() => null);
+            ok = r.ok;
+        }
+        catch (e) {
+            console.error("budget save failed:", e);
+        }
+        finally {
+            budgetBusy = false;
+            budgetSave.removeAttribute("aria-busy");
+            budgetSave.textContent = label;
+            paintBudget();
+        }
+        if (!ok || !out || !out.budget) {
+            budgetError.textContent = (out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่";
+            budgetError.classList.remove("hidden");
+            return;
+        }
+        m.budget = out.budget;
+        budgetOk.textContent = out.request
+            ? "✓ บันทึกแล้ว · เริ่มสร้าง SK03 ของเดือนนี้ (ประมาณ 10–15 นาที) เสร็จแล้วจะแจ้งทาง Telegram"
+            : "✓ บันทึกแล้ว · จะสร้าง SK03 เมื่อแพทย์ส่งครบ เสร็จแล้วจะแจ้งทาง Telegram";
+        budgetOk.classList.remove("hidden");
+        showBudgetMeta(out.budget);
+        setBudgetDone(true);
+        budgetCancel.focus();
+        // The card's button turns from ⚠ to ●.
+        if (budgetMonth === m)
+            render();
+        void loadOverview();
+    });
     const auditRows = document.getElementById("audit-rows");
     const auditWrap = auditRows.closest(".audit-table-wrap");
     const auditActor = document.getElementById("audit-actor");
@@ -602,6 +852,7 @@
         "access.approve": "อนุมัติคำขอเข้าใช้งาน",
         "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
         "view.review": "เปิดแท็บตรวจสอบ",
+        "budget.save": "บันทึกงบประมาณจัดสรร",
         "review.inputs": "บันทึกงบประมาณและจำนวนแพทย์",
         "review.rebuild": "ขอสร้าง SK03 ใหม่",
         "review.download": "ดาวน์โหลดไฟล์ตรวจสอบ",
@@ -711,9 +962,13 @@
             case "review.rebuild":
                 add(monthLabel(t.month));
                 break;
+            case "budget.save":
             case "review.inputs":
                 add(monthLabel(t.month));
                 add("งบประมาณ " + auditValue("", t.budget) + (t.doctors ? " · N " + auditValue("", t.doctors) : "") + " · per P4P " + auditValue("", t.per_p4p));
+                // budget.save: from the overview's งบ button; build = 2.2 started.
+                if (t.build === true)
+                    add("เริ่มสร้าง SK03");
                 break;
             case "review.download":
                 add(monthLabel(t.month));

@@ -25,9 +25,9 @@
  * every run also stores the Drive ids of the SK03 (a new Google Sheet each
  * run) and the รวมค่าคะแนน file on the newest build, kept or not.
  *
- * Also: the month's budget and per P4P from the tab (review_inputs; per
- * P4P = budget ÷ N), kept on the build record only (since 2026-11-11 the
- * SK03 leaves staff Y9 and intern W9 empty),
+ * Also: the month's budget and per P4P (review_inputs, saved on the
+ * dashboard's overview page; per P4P = budget ÷ N), which createSK03
+ * writes into staff Y9 and intern W9,
  * and the status of a "build this month now" request from the tab
  * (review_requests).
  *
@@ -465,9 +465,10 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
   });
 
   const problems: Record<string, unknown>[] = [];
-  // The SK03 no longer carries the tab's budget / per P4P (Pong,
-  // 2026-11-11), so there is no "inputs_not_in_sheet" check.
   if (!o.input) problems.push({ code: 'no_inputs', blocking: true });
+  else if (Math.round((sheetBudget ?? -1) * 100) !== Math.round(o.input.budget * 100) || core.w9Rate(w9) !== o.input.per_p4p) {
+    problems.push({ code: 'inputs_not_in_sheet', blocking: true, sheet_budget: sheetBudget, sheet_w9: str(w9) });
+  }
   // Names in a fixed order: the roster comes back in no particular order,
   // and past 50 the order would decide which names are kept.
   const someNames = (list: string[]): string[] => [...list].sort().slice(0, 50);

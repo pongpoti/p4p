@@ -8,8 +8,9 @@
  * The server side is lib/review-server.ts.
  *
  * Months start at ส.ค. 69 (2569_08), one tab each.
- * ผู้จัดทำ (auditee): types the month's budget and N (per P4P = budget ÷ N,
- * the build puts budget and per P4P in SK03 Y9 / W9), sees the SK03 and
+ * ผู้จัดทำ (auditee): sees the month's budget and N (typed on the overview
+ * page's month card since 2026-11-11; per P4P = budget ÷ N, the build puts
+ * budget and per P4P in SK03 Y9 / W9), sees the SK03 and
  * รวมค่าคะแนน files the system wrote to Google Drive (view only), can edit
  * any person's score (it goes to the roster and the files are built again),
  * and sends the newest build to the auditor. Sending waits for a finished
@@ -226,8 +227,8 @@
     // send bar already say it (Pong, 2026-11-10: the box was unnecessary).
     const blocking = (s) => (s.build ? s.build.problems.filter((p) => p.blocking && p.code !== "no_inputs") : []);
     const PROBLEM = {
-        no_inputs: () => "ยังไม่ได้กรอกงบประมาณและจำนวนแพทย์",
-        inputs_not_in_sheet: () => "งบประมาณหรือ per P4P ใน SK03 ไม่ตรงกับที่กรอก",
+        no_inputs: () => "ยังไม่ได้กรอกงบประมาณและจำนวนแพทย์ (กรอกที่หน้าภาพรวม)",
+        inputs_not_in_sheet: () => "งบประมาณหรือ per P4P ใน SK03 ไม่ตรงกับที่บันทึกไว้",
         not_in_sk03: (p) => "SK03 ไม่มีชื่อ " + int(p.count || 0) + " คนตามรายชื่อเดือนนี้",
         no_doctor_sheet: (p) => "ไม่พบชีตของแพทย์ " + int(p.count || 0) + " คนในไฟล์รวม",
         not_in_dept_sheet: (p) => "ไม่พบชื่อในชีตกลุ่มงาน " + int(p.count || 0) + " คน",
@@ -690,7 +691,7 @@
         void post("/dashboard/api/review/" + s.month + "/opened", { role: who }).catch(() => { opened.delete(key); });
     }
     // ผู้จัดทำ ─────────────────────────────────────────────────────────────
-    // Layout v5: budget and N in one card with the Drive links, everyone in
+    // Layout v5: budget and N (read-only) in one card with the Drive links, everyone in
     // the newest build in one table (edit a score inline), and one send bar.
     // Sending waits for: budget and N, a finished build that carries them,
     // still matches the roster, has no blocking problem and no score of
@@ -761,235 +762,30 @@
         c.append(top, bar, el("p", "rv-hint", "ส่งแล้ว " + int(s.roster.sent) + " จาก " + int(s.roster.total) + " · ระบบสร้าง SK03 ให้เองเมื่อส่งครบ"));
         return c;
     }
-    // Budget and N are whole numbers (lib/review-core.ts parseBudget, parseCount).
-    // per P4P = budget ÷ N to the satang, as the SQL stores it (lib/review-core.ts perP4p).
-    const BUDGET_DIGITS = 11; // under 1e11, as the server takes it
-    const DOCTORS_DIGITS = 5; // under 1e5
-    const wholeOf = (v) => {
-        const d = v.replace(/,/g, "").trim();
-        return /^\d+$/.test(d) && Number(d) > 0 ? Number(d) : null;
-    };
-    function ratePreview(budget, n) {
-        const b = wholeOf(budget), c = wholeOf(n);
-        if (b === null || c === null || b >= 1e11 || c >= 1e5)
-            return "–";
-        const v = Math.round(Math.round(b * 100) / c) / 100;
-        return v > 0 ? baht(v) : "–";
-    }
-    const grouped = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-    // A whole-number field takes digits only and says nothing: a typed
-    // letter, space or "." does nothing, and so do the digits typed right
-    // after a "." (until the caret moves), the same as pasted text keeps the
-    // digits before its first ".": 2,158,709.06 gives 2,158,709 either way,
-    // never 215,870,906.
-    // A digit past the field's limit does nothing either. With `group` the
-    // digits show a comma every 1,000 as they are typed, the caret staying
-    // after the same digit; Backspace or Delete on a comma takes the digit
-    // beside it. A leading 0 stays while typing (deleting the 2 of 2,058,709
-    // must not leave 58,709 when the 2 is typed back) and goes when the
-    // field is left.
-    function wholeField(i, group, maxDigits) {
-        let prev = null;
-        let good = "";
-        let fraction = false;
-        const whole = () => { fraction = false; };
-        i.addEventListener("focus", () => { good = i.value; fraction = false; });
-        i.addEventListener("mousedown", whole);
-        i.addEventListener("keydown", (e) => { if (e.key.length > 1 || e.ctrlKey || e.metaKey || e.altKey)
-            fraction = false; });
-        // Only with a bare caret: a selected comma deleted is just that comma.
-        i.addEventListener("beforeinput", () => { prev = i.selectionStart === i.selectionEnd ? i.value : null; });
-        i.addEventListener("paste", (e) => {
-            var _a, _b;
-            e.preventDefault();
-            fraction = false;
-            const text = e.clipboardData ? e.clipboardData.getData("text") : "";
-            const clean = text.split(".")[0].replace(/\D/g, "");
-            if (!clean)
-                return;
-            const from = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : i.value.length;
-            i.setRangeText(clean, from, (_b = i.selectionEnd) !== null && _b !== void 0 ? _b : from, "end");
-            i.dispatchEvent(new Event("input", { bubbles: true }));
-        });
-        i.addEventListener("drop", (e) => { e.preventDefault(); });
-        i.addEventListener("input", (e) => {
-            var _a;
-            const ev = e;
-            const was = prev;
-            prev = null;
-            if (ev.isComposing)
-                return;
-            let raw = i.value;
-            let pos = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : raw.length;
-            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1) {
-                if (ev.data === ".")
-                    fraction = true;
-                else if (fraction && /\d/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) {
-                    raw = raw.slice(0, pos - 1) + raw.slice(pos);
-                    pos -= 1;
-                }
-            }
-            if (was !== null && raw !== was && raw.replace(/,/g, "") === was.replace(/,/g, "")) {
-                if (ev.inputType === "deleteContentBackward" && pos > 0) {
-                    raw = raw.slice(0, pos - 1) + raw.slice(pos);
-                    pos -= 1;
-                }
-                else if (ev.inputType === "deleteContentForward" && pos < raw.length)
-                    raw = raw.slice(0, pos) + raw.slice(pos + 1);
-            }
-            const digits = raw.replace(/\D/g, "");
-            if (digits.length > maxDigits) {
-                const back = raw.length - pos;
-                i.value = good;
-                const at = Math.max(0, good.length - back);
-                i.setSelectionRange(at, at);
-                return;
-            }
-            const before = raw.slice(0, pos).replace(/\D/g, "").length;
-            const out = group ? grouped(digits) : digits;
-            if (out !== i.value) {
-                i.value = out;
-                let at = 0;
-                for (let k = 0; at < out.length && k < before; at++)
-                    if (out[at] !== ",")
-                        k++;
-                i.setSelectionRange(at, at);
-            }
-            good = i.value;
-        });
-        i.addEventListener("blur", () => {
-            const digits = i.value.replace(/,/g, "");
-            const trimmed = digits.replace(/^0+(?=\d)/, "");
-            if (trimmed === digits)
-                return;
-            i.value = group ? grouped(trimmed) : trimmed;
-            i.dispatchEvent(new Event("input", { bubbles: true }));
-        });
-    }
-    // A budget saved with satang before whole numbers were required shows
-    // its whole baht, as a change still to be saved.
-    const budgetField = (n) => n === null || n === undefined ? "" : grouped(String(Math.trunc(Number(n))));
     const fmt2 = (n) => n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Budget and N are typed on the overview page (ภาพรวม, the month card's
+    // งบ button; Pong, 2026-11-11), which also starts the month's build.
+    // Here they are shown only, with a way there, and the two Drive files.
     function inputsCard(s) {
         const c = el("section", "rv-card glass rv-inputs");
         const h = el("h2", "sr-only", "งบประมาณและไฟล์");
         h.id = "rv-h-inputs";
         c.setAttribute("aria-labelledby", h.id);
-        const editable = auditeeTurn(s);
-        const form = el("form", "rv-form rv-inputs-form");
-        form.noValidate = true;
-        const field = (id, label, saved, group, maxDigits) => {
-            const w = el("div", "rv-field");
-            const l = el("label", undefined, label);
-            l.htmlFor = id;
-            const i = el("input");
-            i.id = id;
-            i.type = "text";
-            i.inputMode = "numeric";
-            i.autocomplete = "off";
-            i.placeholder = "0";
-            if (editable) {
-                wholeField(i, group, maxDigits);
-                keep(i, id, saved);
-            }
-            else {
-                i.value = saved;
-                i.readOnly = true;
-            }
-            w.append(l, i);
-            return [w, i];
-        };
         const inp = s.inputs;
-        if (editable && inp && inp.budget !== null && inp.budget !== undefined && !Number.isInteger(Number(inp.budget)) && !drafts.has("rv-budget")) {
-            drafts.set("rv-budget", budgetField(inp.budget));
+        const row = el("div", "rv-ro");
+        const set = !!(inp && inp.doctors);
+        const go = el("a", (set ? "btn-ghost" : "btn-primary") + " rv-go", set ? "แก้ที่หน้าภาพรวม →" : "กรอกที่หน้าภาพรวม →");
+        go.href = "/dashboard/#overview";
+        if (inp) {
+            row.append(kv("งบประมาณ (บาท)", budgetText(inp.budget)), kv("จำนวนแพทย์ (N)", inp.doctors ? int(inp.doctors) : "–"), kv("per P4P", baht(inp.per_p4p)));
         }
-        const [bw, bi] = field("rv-budget", "งบประมาณ (บาท)", inp ? budgetField(inp.budget) : "", true, BUDGET_DIGITS);
-        const [nw, ni] = field("rv-doctors", "จำนวนแพทย์ (N)", inp && inp.doctors ? String(inp.doctors) : "", false, DOCTORS_DIGITS);
-        const rw = el("div", "rv-field");
-        const rl = el("span", "rv-label", "per P4P ");
-        rl.id = "rv-rate-l";
-        rl.append(el("span", "rv-hint", "(งบ ÷ N)"));
-        const out = el("output", "rv-rate");
-        out.id = "rv-rate";
-        out.setAttribute("aria-labelledby", rl.id);
-        out.setAttribute("aria-live", "off");
-        out.htmlFor.add("rv-budget");
-        out.htmlFor.add("rv-doctors");
-        const paint = () => { out.textContent = ratePreview(bi.value, ni.value); };
-        paint();
-        bi.addEventListener("input", paint);
-        ni.addEventListener("input", paint);
-        rw.append(rl, out);
-        const act = el("div", "rv-field rv-save");
-        if (editable) {
-            const save = el("button", "btn-primary", "บันทึก");
-            save.type = "submit";
-            save.id = "rv-save-inputs";
-            if (flying(s, "inputs"))
-                markBusy(save);
-            // Nothing to save until both are whole numbers above 0 that give
-            // a per P4P above 0.00; the button says so by being off.
-            const ready = () => { save.disabled = ratePreview(bi.value, ni.value) === "–"; };
-            ready();
-            bi.addEventListener("input", ready);
-            ni.addEventListener("input", ready);
-            act.append(save);
-            const n = noteEl("inputs");
-            if (n)
-                act.append(n);
-            else if (inp && inp.doctors && !drafts.has("rv-budget") && !drafts.has("rv-doctors"))
-                act.append(el("span", "rv-saved", "✓ บันทึกแล้ว"));
-            else if (!inp && !s.build)
-                act.append(el("span", "rv-hint", "กรอกไว้ก่อนได้"));
-            form.addEventListener("submit", (ev) => { ev.preventDefault(); void saveInputs(s, form, save); });
-        }
-        form.append(bw, nw, rw, act);
-        c.append(h, form);
+        if (!set)
+            row.append(el("span", "rv-none", inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ"));
+        row.append(go);
+        c.append(h, row);
         if (s.build || openRequest(s) || s.request)
             c.append(filesRow(s));
         return c;
-    }
-    async function saveInputs(s, form, btn) {
-        if (flying(s, "inputs"))
-            return;
-        const value = (id) => form.querySelector("#" + id).value;
-        if (ratePreview(value("rv-budget"), value("rv-doctors")) === "–")
-            return;
-        const budget = String(wholeOf(value("rv-budget")));
-        const doctors = String(wholeOf(value("rv-doctors")));
-        if (!begin(s, "inputs", btn))
-            return;
-        busy = true;
-        let saved = false;
-        try {
-            const r = await post(monthApi(s) + "/inputs", { budget, doctors: Number(doctors) }, "PUT");
-            saved = true;
-            tell(s, "inputs", "ok", r.changed ? "บันทึกแล้ว · กำลังสร้าง SK03 ใหม่" : "บันทึกแล้ว");
-        }
-        catch (e) {
-            tell(s, "inputs", "err", errText(e, "บันทึกไม่สำเร็จ"));
-        }
-        finally {
-            busy = false;
-            end(s, "inputs");
-        }
-        if (!saved) {
-            await reload();
-            return;
-        }
-        // Saved: the fields show the saved numbers from the new state, or
-        // keep what was typed if that state does not come.
-        const typed = ["rv-budget", "rv-doctors"].map((k) => [k, drafts.get(k)]);
-        forget(s, "rv-budget", "rv-doctors");
-        await loadState(false).catch((e) => {
-            if (s.month === month)
-                for (const [k, v] of typed) {
-                    if (v !== undefined && !drafts.has(k))
-                        drafts.set(k, v);
-                }
-            loadFailed(e);
-        });
-        void loadMonths().catch(() => false);
     }
     // The two files in Drive, view only: the tab never offers them as the
     // files that are sent (that is the build the system checked).
@@ -1525,7 +1321,7 @@
         if (s.roster.sent < s.roster.total)
             why.push("รอแพทย์ส่งครบ");
         if (!s.inputs || !s.inputs.doctors)
-            why.push("กรอกงบประมาณและจำนวนแพทย์");
+            why.push("กรอกงบประมาณที่หน้าภาพรวม");
         if (openRequest(s))
             why.push("รอสร้างไฟล์ใหม่เสร็จ");
         else if (!s.build)
