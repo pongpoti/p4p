@@ -12,7 +12,9 @@
  *   page 1      the cover: the approval stamp, every department's head count,
  *               total and first page, and the numbers and files the round used
  *   then        every department sheet, 13 rows a page and at most 8 on its
- *               last page, which carries the รวม row and the three signatures
+ *               last page, which carries the รวม row and the three signatures;
+ *               each of these pages has the form's name (SK02_FORM) at the
+ *               top right, as the hospital's SK02 form prints it in its header
  *
  * A4 landscape, full Sarabun (src/fonts/Sarabun-*.ttf; the .woff2 files there
  * are Thai-only subsets), and the approval date and time (Bangkok) at the
@@ -33,6 +35,8 @@ const ROWS_PER_PAGE = 13;
 const ROWS_LAST_PAGE = 8;
 const MAX_PER_RUN = 12;
 const HOSPITAL = 'โรงพยาบาลสมุทรสาคร';
+/** The page header (top right) of the hospital's SK02 form, which the department sheets follow. */
+export const SK02_FORM = 'แบบฟอร์ม P4P_SK02';
 
 const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
@@ -150,6 +154,7 @@ html, body { font-family: 'SarabunPDF', sans-serif; color: #111; font-size: 13.5
 .body[data-tight="2"] { font-size: 11.5px; }
 .body[data-tight="3"] { font-size: 10.5px; }
 .body[data-tight="2"] td, .body[data-tight="2"] th, .body[data-tight="3"] td, .body[data-tight="3"] th { padding-top: 1px; padding-bottom: 1px; }
+.form { position: absolute; top: 4.5mm; right: 12mm; font-size: 11px; line-height: 1; white-space: nowrap; }
 footer { position: absolute; left: 12mm; right: 12mm; bottom: 10mm; height: 9mm; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; font-size: 12.5px; }
 footer .pg { grid-column: 2; padding-bottom: 1mm; }
 footer .ok { grid-column: 3; justify-self: end; border-top: 0.35mm solid #111; padding: 1.2mm 0 0 18mm; font-weight: 700; white-space: nowrap; }
@@ -268,7 +273,7 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
         ? `<tr class="sum"><td></td><td>รวม ${dept.rows.length.toLocaleString('en-US')} คน</td><td></td><td></td>` +
           `<td class="n">${money(dept.admin)}</td><td class="n">${money(dept.pay)}</td><td class="n">${money(dept.total)}</td><td></td><td></td></tr>`
         : '';
-      return `<section class="page"><div class="body">
+      return `<section class="page"><p class="form">${esc(SK02_FORM)}</p><div class="body">
 <div class="head"><p class="t1">${esc(t1)}</p><p class="t2">${esc(t2)}</p><p class="t2">${esc(t3)}</p></div>
 <table class="sheet">${sheetHead}<tbody>${rows}${sum}</tbody></table>
 ${last ? `<div class="signs">${signs}</div>` : ''}
