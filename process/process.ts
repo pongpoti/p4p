@@ -7,8 +7,9 @@
  * Step 4  — Compare Drive vs Supabase lists
  * Step 5  — Merge individual Excel files → one workbook per person sheet
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
- *           Pay uses the new formula (./sk03-formula.ts): interns first, then
- *           staff by department budget (sheet งบรายสาขา). Each month the
+ *           Pay uses the new formula (./sk03-formula.ts): every staff member
+ *           gets 10,000 plus a share of the rest by department and score
+ *           (sheet งบรายสาขา); interns are paid from what the staff leave. Each month the
  *           dashboard's ตรวจสอบ tab gives two numbers (review_inputs): the
  *           total budget → staff Y9, and per P4P (budget ÷ N, N typed in the
  *           tab) per intern → intern W9 (=W10×rate). Until then all pay
@@ -696,7 +697,8 @@ async function writeOverallMeta(
   lastRow: number,
   isIntern: boolean,
   internSheetName: string,
-  input: ReviewInput | null
+  input: ReviewInput | null,
+  staffSheetName: string
 ): Promise<void> {
   const S = DATA_START;
   const sh = `'${sheetName}'!`;
@@ -710,7 +712,7 @@ async function writeOverallMeta(
   const cells: CellWrite[] = [
     ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
     ...(isIntern
-      ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow, input?.per_p4p ?? 0)]
+      ? [internMeanCell(S, lastRow), ...internPanel(staffSheetName, S, lastRow, input?.per_p4p ?? 0)]
       : staffPanel(internSheetName, S, lastRow, input?.budget ?? 0)),
   ];
 
@@ -926,13 +928,13 @@ async function formatOverallSheet(
 
   if (isIntern) {
     fmtReqs.push(bordersReq(sheetId, 8,  PL, 9,  PV));  // V9:W10
-    fmtReqs.push(bordersReq(sheetId, 11, PL, 12, PV));  // V12:W13
+    fmtReqs.push(bordersReq(sheetId, 11, PL, 13, PV));  // V12:W14
     fmtReqs.push(bordersReq(sheetId, 15, PL, 15, PV));  // V16:W16
     fmtReqs.push(...yellowBoxReqs(sheetId, 8, PV, 8, PV));     // W9
     fmtReqs.push(...yellowBoxReqs(sheetId, 9, PL, 9, PV));     // V10:W10
-    fmtReqs.push(...yellowBoxReqs(sheetId, 11, PV, 12, PV));   // W12:W13
+    fmtReqs.push(...yellowBoxReqs(sheetId, 11, PV, 13, PV));   // W12:W14
     fmtReqs.push(alignReq(sheetId, 7, PV, 15, PV, 'CENTER'));  // values
-    [8, 9, 11, 12, 15].forEach(r => fmtReqs.push(alignReq(sheetId, r, PL, r, PL, 'LEFT')));
+    [8, 9, 11, 12, 13, 15].forEach(r => fmtReqs.push(alignReq(sheetId, r, PL, r, PL, 'LEFT')));
     fmtReqs.push({ repeatCell: { range: gridRange(sheetId, 7, PL, 15, PL), cell: { userEnteredFormat: { wrapStrategy: 'OVERFLOW_CELL' } }, fields: 'userEnteredFormat.wrapStrategy' } });
   } else {
     fmtReqs.push(bordersReq(sheetId, 8,  PL, 10, PV));  // X9:Y11
@@ -1377,7 +1379,7 @@ async function createSK03(
   }
   const staffLastRow = S + staffArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName, input, staffSheetName);
   await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
 
   // Totals row: M, N, O = SUM immediately below last person, above signature.
@@ -1428,7 +1430,7 @@ async function createSK03(
   }
   const internLastRow = S + internArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName, input, staffSheetName);
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
 
   // Intern totals row: N and O only (no M — management fee not applicable for interns)
