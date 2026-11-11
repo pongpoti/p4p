@@ -25,8 +25,9 @@
  * every run also stores the Drive ids of the SK03 (a new Google Sheet each
  * run) and the รวมค่าคะแนน file on the newest build, kept or not.
  *
- * Also: the month's budget and per P4P from the tab (review_inputs; per
- * P4P = budget ÷ N), which createSK03 writes into staff Y9 and intern W9,
+ * Also: the month's budget and per P4P (review_inputs, saved on the
+ * dashboard's overview page; per P4P = budget ÷ N), which createSK03
+ * writes into staff Y9 and intern W9,
  * and the status of a "build this month now" request from the tab
  * (review_requests).
  *

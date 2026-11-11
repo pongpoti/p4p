@@ -421,7 +421,20 @@
             font-size: .875rem;
             color: var(--muted-foreground);
         }
-        .card-footer .ico { width: 16px; height: 16px; }
+        .card-footer .ico { width: 16px; height: 16px; flex: none; }
+        .card-footer > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* งบ button (owner only): ⚠ until the month's budget and N are in */
+        .budbtn {
+            flex: none; margin-left: auto; height: 30px; padding: 0 11px 0 9px;
+            display: inline-flex; align-items: center; gap: 6px; border-radius: 999px;
+            border: 1px solid var(--border); background: #fff; color: var(--foreground);
+            font: inherit; font-size: .85rem; font-weight: 700; white-space: nowrap; cursor: pointer;
+        }
+        .budbtn:hover { background: var(--accent); }
+        .budbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        .budbtn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
+        .budbtn .bud-ico { width: 16px; height: 16px; flex: none; color: #C2410C; }
+        .budbtn.missing { color: #8A4B00; border-color: rgba(150, 88, 0, .45); background: var(--warning-bg); }
 
         .no-roster .card-content p { color: var(--muted-foreground); padding-bottom: 22px; }
 
@@ -710,6 +723,28 @@
         .req-row:last-child { border-bottom: 0; }
         .req-row .name { font-weight: 600; }
         .req-row .meta { color: var(--muted-foreground); font-size: .875rem; overflow-wrap: anywhere; }
+
+        /* ภาพรวม: งบประมาณจัดสรร, one month's budget and N */
+        .budget-dialog { width: min(560px, 92vw); }
+        .budget-dialog .log-header { background: #F6EFE6; background: linear-gradient(180deg, color-mix(in srgb, var(--month, #F6EFE6) 45%, #FDFAF5), #FDFAF5); }
+        .bd-form { box-sizing: border-box; width: 100%; padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
+        .bd-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .bd-field label { font-size: .875rem; font-weight: 600; color: var(--muted-foreground); }
+        .bd-field input {
+            box-sizing: border-box; width: 100%; min-width: 0; height: 46px; padding: 0 12px;
+            border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px; background: #fff;
+            font: inherit; font-size: 1.15rem; font-weight: 600; color: var(--foreground); font-variant-numeric: tabular-nums;
+        }
+        .bd-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .bd-field input[readonly] { background: #F6EFE6; border-color: transparent; }
+        .bd-rate { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: #F6EFE6; }
+        .bd-rate .k { font-weight: 600; color: var(--muted-foreground); }
+        .bd-rate .k small { font-size: .875rem; font-weight: 400; }
+        .bd-rate .v { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .bd-ok { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border-left: 4px solid var(--success); border-radius: 6px; background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
+        .bd-meta { grid-column: 1 / -1; font-size: .875rem; color: var(--muted-foreground); }
+        .bd-form .error-text, .bd-form .log-actions { grid-column: 1 / -1; }
+        @media (max-width: 420px) { .bd-form { grid-template-columns: 1fr; } }
         .req-row .actions { display: flex; gap: 8px; }
         .req-row .btn-primary, .req-row .btn-ghost { height: 38px; padding: 0 14px; }
         .req-row .reject:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
@@ -890,9 +925,6 @@
         .rv-label { font-weight: 600; }
         .rv-inputs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 18px; align-items: start; }
         .rv-rate { display: flex; align-items: center; min-height: 44px; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .rv-rate.rv-rate-odd { color: var(--warning); }
-        .rv-rate-warn { margin: 8px 0 0; padding: 6px 10px; border-left: 4px solid var(--warning); border-radius: 6px; background: var(--warning-bg); color: #5C3A00; font-weight: 600; font-size: .95rem; }
-        .rv-rate-warn[hidden] { display: none; }
         .rv-save { justify-content: flex-start; padding-top: 26px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
         .rv-save .btn-primary { height: 44px; }
         .rv-files { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
@@ -934,6 +966,12 @@
         .rv-kv { display: flex; flex-direction: column; gap: 1px; }
         .rv-kv span { font-size: .85rem; color: var(--muted-foreground); }
         .rv-kv b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+        /* ตรวจสอบ: the budget and N, read-only (typed on ภาพรวม) */
+        .rv-ro { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; }
+        .rv-ro .rv-kv span { font-weight: 600; }
+        .rv-ro .rv-kv b { font-size: 1.15rem; }
+        .rv-ro .rv-go { margin-left: auto; height: 38px; padding: 0 14px; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+        .rv-ro .rv-none { color: var(--warning); font-weight: 700; }
         .rv-bar { height: 10px; border-radius: 999px; background: #EFE9E2; overflow: hidden; }
         .rv-bar > div { height: 100%; background: var(--primary); }
         .rv-fix { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 2fr) auto; gap: 6px 16px; align-items: start; padding: 10px 0; border-top: 1px solid var(--border); }
@@ -1167,6 +1205,40 @@
             <div class="log-actions">
                 <button type="button" class="btn-ghost" data-close>ปิด</button>
                 <button type="submit" id="log-submit" class="btn-primary">บันทึก</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- ภาพรวม: one month's budget and N, from the month card's งบ button (owner only) -->
+    <dialog id="budget-dialog" class="log-dialog budget-dialog" aria-labelledby="budget-title">
+        <div class="log-header">
+            <div>
+                <h2 id="budget-title">งบประมาณจัดสรร</h2>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <form id="budget-form" class="bd-form" novalidate>
+            <div class="bd-field">
+                <label for="budget-amount">งบประมาณ (บาท)</label>
+                <input id="budget-amount" type="text" inputmode="numeric" autocomplete="off" placeholder="เช่น 2,189,874">
+            </div>
+            <div class="bd-field">
+                <label for="budget-doctors">จำนวนแพทย์ (N)</label>
+                <input id="budget-doctors" type="text" inputmode="numeric" autocomplete="off" placeholder="เช่น 229">
+            </div>
+            <div class="bd-rate">
+                <span class="k" id="budget-rate-label">per P4P <small>(งบ ÷ N)</small></span>
+                <output id="budget-rate" class="v" for="budget-amount budget-doctors" aria-labelledby="budget-rate-label">–</output>
+            </div>
+            <p id="budget-ok" class="bd-ok hidden" role="status"></p>
+            <p id="budget-meta" class="bd-meta hidden"></p>
+            <p id="budget-error" class="error-text hidden" role="alert"></p>
+            <div class="log-actions">
+                <button type="button" id="budget-cancel" class="btn-ghost" data-close>ยกเลิก</button>
+                <button type="submit" id="budget-save" class="btn-primary" disabled>บันทึก</button>
             </div>
         </form>
     </dialog>

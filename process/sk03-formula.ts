@@ -183,7 +183,7 @@ export function internMeanCell(first: number, last: number): CellWrite {
 
 /**
  * Staff panel (X/Y). Y9 is the month's total budget, as saved in the
- * dashboard's ตรวจสอบ tab (review_inputs); empty, and pay 0, until it is.
+ * dashboard's overview page (review_inputs); empty, and pay 0, until it is.
  */
 export function staffPanel(internSheet: string, first: number, last: number, budget: number | '' = ''): CellWrite[] {
   const I = q(internSheet);
@@ -220,7 +220,7 @@ export function staffPanel(internSheet: string, first: number, last: number, bud
 /**
  * Intern panel (V/W). W9 = W10 × the month's per P4P per intern, the rate
  * written into the formula like the SK03 form's `=9906.44*24`: budget ÷ N
- * as saved in the dashboard's ตรวจสอบ tab (review_inputs); empty until it is.
+ * as saved on the dashboard's overview page (review_inputs); empty until it is.
  * W14 is the pool actually shared: W9, cut so the staff keep 10,000 each
  * (staff budget Y9 − 10,000 × staff Y11) when the budget is short.
  */

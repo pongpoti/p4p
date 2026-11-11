@@ -15,7 +15,6 @@
  *   GET  /dashboard/api/review/months                 the month tabs, oldest first
  *   GET  /dashboard/api/review/:month                 the month's state (?view=1 logs the visit)
  *   GET  /dashboard/api/review/:month/list            everyone in the newest build, with checks and edits
- *   PUT  /dashboard/api/review/:month/inputs          {budget, doctors}: per P4P = budget ÷ N, then a fresh build
  *   PUT  /dashboard/api/review/:month/scores/:index   {score, note}: one person's score, then a fresh build
  *   POST /dashboard/api/review/:month/rebuild         a fresh build (workflow 2.2 via the relay)
  *   POST /dashboard/api/review/:month/rounds          send the newest build to the auditor
@@ -27,6 +26,10 @@
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
+ *
+ * Also here, though not part of the review: PUT /dashboard/api/budget/:month
+ * {budget, doctors}, the overview page's budget box (any month; saves, then
+ * starts workflow 2.2 for the month when its roster is complete).
  */
 
 import type { Express, Request, Response } from "express"
@@ -107,22 +110,10 @@ const notInstalled = (e: any): boolean => {
     .test(String(d.message || ""))
 }
 const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส่วนนี้ของแท็บตรวจสอบ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql แล้ว scripts/review-tab-2026-11-auditee.sql ใน Supabase SQL editor"
+// The overview's budget box: budget_save comes with PART 2 of this file.
+const BUDGET_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการบันทึกงบประมาณ ผู้ดูแลระบบต้องรันไฟล์ scripts/budget-inputs-2026-11.sql (PART 2) ใน Supabase SQL editor"
 // review_state says v: 2 once the second file has been run.
 const SQL_VERSION = 2
-
-// Is the newest build made with these numbers?
-const inBuild = (b: any, budget: number, perP4p: number): boolean =>
-  !!b && b.budget !== null && b.per_p4p !== null && Number(b.budget) === budget && Number(b.per_p4p) === perP4p
-// The open request that will build with the numbers saved at savedAt, if
-// any: a queued or dispatched one reads review_inputs after its run starts,
-// a running one did only if it started after they were saved. (review_state
-// already shows a request past its deadline as failed.)
-const carrier = (q: any, savedAt: unknown): any => {
-  if (!q) return null
-  if (q.status === "queued" || q.status === "dispatched") return q
-  const started = Date.parse(String(q.started_at || "")), saved = Date.parse(String(savedAt || ""))
-  return q.status === "running" && started >= saved ? q : null
-}
 
 export function mountReview(d: ReviewDeps): void {
   const { app, axios } = d
@@ -192,37 +183,44 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { fail(res, "state", e, true) }
   })
 
-  app.put("/dashboard/api/review/:month/inputs", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
-    if (!g) return
+  // ── Budget and N, from the overview page's month cards ───────────────
+  // Pong, 2026-11-11: typed on ภาพรวม (one box per month card), not in the
+  // ตรวจสอบ tab, and not tied to its rounds. budget_save (scripts/
+  // budget-inputs-2026-11.sql PART 2) stores them in review_inputs with per
+  // P4P = round(budget ÷ N, 2), marks a Telegram as due, and queues a
+  // one-month build of workflow 2.2 when everyone on the roster has sent.
+  // Any month key, so a budget can go in before the month's roster exists.
+  app.put("/dashboard/api/budget/:month", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store")
+    const s = d.dashSession(req)
+    if (!s) return res.status(401).json({ error: "not authenticated" })
+    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
+    const month = String(req.params.month || "")
+    if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)
     const doctors = core.parseCount(req.body && req.body.doctors, 1e5)
-    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่จำนวนเต็มบาทมากกว่า 0 ไม่มีทศนิยม", field: "budget" })
-    if (doctors === null) return res.status(400).json({ error: "N: ใส่จำนวนเต็มมากกว่า 0 ไม่มีทศนิยม", field: "doctors" })
+    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่จำนวนเต็มบาทมากกว่า 0", field: "budget" })
+    if (doctors === null) return res.status(400).json({ error: "จำนวนแพทย์: ใส่จำนวนเต็มมากกว่า 0", field: "doctors" })
+    const actor = { sub: s.sub, name: s.name }
     try {
-      const st = await state(g.month)
-      if (!auditeeTurn(st)) return res.status(409).json({ error: "ส่งให้ผู้ตรวจสอบแล้ว เปลี่ยนตัวเลขไม่ได้จนกว่าจะได้ผลตรวจ" })
-      // per P4P = round(budget ÷ N, 2) is worked out by the SQL function.
-      const saved = await d.callServiceRpc("review_save_inputs", { p_month: g.month, p_budget: budget, p_doctors: doctors, p_actor: g.s.name })
-      const was = saved && saved.before, now = (saved && saved.after) || {}
+      const out = await d.callServiceRpc("budget_save", { p_month: month, p_budget: budget, p_doctors: doctors, p_actor: s.name })
+      const was = out && out.before, now = (out && out.after) || {}
       const before = was ? { budget: Number(was.budget), per_p4p: Number(was.per_p4p), doctors: was.doctors === null ? null : Number(was.doctors) } : null
       const perP4p = Number(now.per_p4p)
-      // Saved, so on record now, even if asking for the build below fails.
-      await d.audit(req, g.s, "review.inputs", { month: g.month, budget, doctors, per_p4p: perP4p, before })
-      // A build is needed when the numbers in the SK03 (budget, per P4P)
-      // changed, or when they did not (a retry after the build request
-      // failed) but the newest build lacks them and no open request will
-      // build with them. N on its own is not in the SK03.
-      const changed = !before || before.budget !== budget || before.per_p4p !== perP4p
-      const notBuilt = !changed && !inBuild(st.build, budget, perP4p)
-      const open = notBuilt ? carrier(st.request, st.inputs && st.inputs.updated_at) : null
-      const ask = changed || (notBuilt && !open)
-      const request = ask
-        ? await d.callServiceRpc("review_request_build", { p_month: g.month, p_reason: "inputs", p_actor: g.s.name })
-        : open
-      // changed: a build with these numbers is on its way (the tab's message).
-      res.json({ ok: true, changed: ask || !!open, per_p4p: perP4p, request })
-    } catch (e: any) { fail(res, "inputs", e) }
+      await d.audit(req, actor, "budget.save", { month, budget, doctors, per_p4p: perP4p, before, build: !!(out && out.request) })
+      res.json({
+        ok: true,
+        budget: { budget: Number(now.budget), per_p4p: perP4p, doctors: Number(now.doctors), updated_at: now.updated_at, updated_by: now.updated_by },
+        complete: !!(out && out.complete),
+        request: (out && out.request) || null,
+      })
+    } catch (e: any) {
+      if (notInstalled(e)) {
+        console.error("[dashboard] budget save: not installed (" + String(pgError(e).code || "") + ")")
+        res.status(503).json({ installed: false, error: BUDGET_NOT_INSTALLED_MSG }); return
+      }
+      fail(res, "budget", e)
+    }
   })
 
   // One person's score: written to the month's roster table, logged as a

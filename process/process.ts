@@ -11,10 +11,12 @@
  *           gets 10,000 plus a share of the rest by department and score
  *           (sheet งบรายสาขา); interns are paid from what the staff leave. The
  *           total budget (staff Y9) and per P4P (intern W9) come from the
- *           Supabase table review_inputs, which the dashboard's ตรวจสอบ tab
- *           saves (budget and N; per P4P = budget ÷ N). Pong, 2026-11-11: the
- *           one place for them, instead of process/FORMULA.md. A month with
- *           no row leaves the cells empty and pay 0.
+ *           Supabase table review_inputs, which the dashboard's overview
+ *           page saves (a month card's งบ button: budget and N; per P4P =
+ *           budget ÷ N). Pong, 2026-11-11: the one place for them, instead
+ *           of process/FORMULA.md. A month with no row leaves the cells
+ *           empty and pay 0. Once a saved budget is in the SK03, Pong gets
+ *           a Telegram (./budget-notify.ts).
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -63,6 +65,7 @@ type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
 const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
 type ReviewInput = import('./review-build').ReviewInput;
+const { notifyBudgetBuilt } = require('./budget-notify') as typeof import('./budget-notify');
 type DocInfo = import('./review-build').DocInfo;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1689,12 +1692,14 @@ async function main(): Promise<void> {
       }
 
       // Step 6 — the SK03, with the month's budget (staff Y9) and per P4P
-      // (intern W9) from review_inputs, as saved in the ตรวจสอบ tab (Pong,
+      // (intern W9) from review_inputs, as saved on the overview page (Pong,
       // 2026-11-11: one place in Supabase, not FORMULA.md). Read whether or
       // not the rest of the review is installed; no row leaves both empty.
       const input = await review.loadReviewInput(supabase, key);
       log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'none saved → empty'})`);
       const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+      // Pong's Telegram when the numbers saved on the overview page are in.
+      await notifyBudgetBuilt(supabase, key, input, sk03.ssId);
 
       // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
       // built but ends the job red so 1.2 alerts.

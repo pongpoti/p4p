@@ -86,6 +86,9 @@ jobs:
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
           TARGET_MONTH:           ${{ inputs.month }}
           REVIEW_REQUEST_ID:      ${{ inputs.request_id }}
+          # process/budget-notify.ts: Pong's message once a saved budget is in the SK03
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
         run: npx tsx process.ts
 
       # A ตรวจสอบ tab request whose run stopped before process.ts closed it
