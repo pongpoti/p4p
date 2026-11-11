@@ -1276,6 +1276,31 @@ async function buildDeptSheets(
  *   2. intern GAS → adds intern sheet + patches Supabase row_num
  *   3. dep GAS    → adds one dept sheet per department
  */
+// Pong, 2026-11-11: every sheet of the SK03 uses one font, TH SarabunPSK.
+// The templates and the code's own formatting leave a mix (Arial on the new
+// งบรายสาขา sheet, "TH Sarabun PSK" with a space from the template, and
+// cells whose textFormat was reset). One last pass sets the family on every
+// cell of every sheet; the field mask touches only fontFamily, so size, bold,
+// colour and values stay as they are. A failure only logs: the file is done.
+const SK03_FONT = 'TH SarabunPSK';
+async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promise<void> {
+  try {
+    const meta = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties(sheetId,title)' }));
+    const requests: sheets_v4.Schema$Request[] = (meta.data.sheets ?? []).map(sh => ({
+      repeatCell: {
+        range: { sheetId: sh.properties!.sheetId! },
+        cell: { userEnteredFormat: { textFormat: { fontFamily: SK03_FONT } } },
+        fields: 'userEnteredFormat.textFormat.fontFamily',
+      },
+    }));
+    if (requests.length === 0) return;
+    await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests } }));
+    log(`  [SK03] Font set to ${SK03_FONT} on ${requests.length} sheets`);
+  } catch (err: any) {
+    log(`  [SK03] ⚠ font pass failed (file kept): ${err.message}`, 'warn');
+  }
+}
+
 async function createSK03(
   drive: drive_v3.Drive,
   sheets: sheets_v4.Sheets,
@@ -1485,6 +1510,8 @@ async function createSK03(
   internArray.forEach((p, i) => addToRowNumMap(p, S + i));
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
+
+  await normaliseSK03Fonts(sheets, ssId);
 
   log(`  [SK03] ✓ Done`);
   return { ssId, staffSheetName, internSheetName };
