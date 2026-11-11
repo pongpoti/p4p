@@ -76,11 +76,11 @@ A physician at the department average receives mult = 1.00. Physicians with clos
 
 ```
 extra_pool  = staff_budget − 10,000 × N_staff
-dept_extra  = extra_pool × (count_d × cap_mult_d) / Σ (count × cap_mult)
+dept_extra  = extra_pool × (count_d × weight_d) / Σ (count × weight)     weight = 1.5 / 1.0 / 0.5 by tier
 payment_i   = ⌊ 10,000 + dept_extra × mult_i / Σ mult_d ⌋
 ```
 
-Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by capacity tier, then inside each department by score. The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
+Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by capacity tier (bonus weight 1.5 for สาขาขาดแคลน, 1.0 for สาขากึ่งขาดแคลน, 0.5 for สาขาเต็มศักยภาพ), then inside each department by score. With these weights and the ±50% score band, every สาขาขาดแคลน physician is paid more than every สาขาเต็มศักยภาพ physician. The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
 
 If `staff_budget < 10,000 × N_staff` even after the intern pool is cut to 0 (`total_budget < 10,000 × N_staff`), ฿10,000 each is not affordable: every STAFF physician gets `⌊staff_budget / N_staff⌋`.
 
@@ -184,12 +184,12 @@ Every STAFF physician's pay starts at ฿10,000. Only `extra_pool` depends on de
 ```
 for each department d:
     count_d          = number of physicians in department d
-    cap_mult_d       = capacity multiplier for department d
-    weighted_units_d = count_d × cap_mult_d
+    weight_d         = bonus weight of department d's tier (1.5 / 1.0 / 0.5)
+    weighted_units_d = count_d × weight_d                          งบรายสาขา columns E, H
 
 total_weighted_units = Σ weighted_units_d
 ```
-Each department's `cap_mult_d` (1.15, 1.00 or 0.85) is in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers).
+Each department's tier and `weight_d` are in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers). The tier names keep their capacity multipliers (1.15 / 1.00 / 0.85); only the split of the extra uses the wider weights 1.5 / 1.0 / 0.5 (Pong, 2026-11-11), so the tier still counts when the extra is small.
 
 **3.3 — Share the extra pool between departments**
 ```
@@ -199,7 +199,7 @@ for each department d:
     dept_extra_d  = weighted_units_d × extra_per_unit             งบรายสาขา column I
     dept_budget_d = (count_d × 10,000) + dept_extra_d              งบรายสาขา column J
 ```
-A shortage department's physician gets 1.15 ÷ 0.85 ≈ 1.35 times the extra share of a full-capacity one, on average.
+A shortage department's physician gets 1.5 ÷ 0.5 = 3 times the extra share of a full-capacity one, on average.
 
 **3.4 — Compute score multipliers within each department**
 ```
@@ -220,38 +220,43 @@ If `extra_pool < 0` (only possible when `total_budget < 10,000 × N_staff`), eve
 
 In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, 10000 + U × V), 0))`.
 
-**Results (2569_07 and 2569_08, ±50%)**
-- 2569_07 (180 STAFF, extra pool ฿62,603): STAFF ฿10,171–10,599, average ฿10,347. Inside a department the top and bottom scorer are ฿203 apart on average.
-- 2569_08 (181 STAFF, extra pool ฿83,428): STAFF ฿10,209–10,792, average ฿10,460; ฿281 apart on average inside a department.
-- With ฿150,000 more budget in 2569_08 the gap inside a department would be ฿786.
-- Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6, 2026-11-11 morning), at Pong's request: ฿10,000 is now built in, with no top-up.
+**Results (2569_07 and 2569_08: weights 1.5 / 1 / 0.5, score ±50%)**
+
+| | สาขาขาดแคลน (1.5) | สาขากึ่งขาดแคลน (1.0) | สาขาเต็มศักยภาพ (0.5) |
+|---|---|---|---|
+| 2569_07 (180 STAFF, extra ฿62,603) | ฿10,263–10,751, avg ฿10,493 | ฿10,168–10,513, avg ฿10,328 | ฿10,096–10,233, avg ฿10,164 |
+| 2569_08 (181 STAFF, extra ฿83,445) | ฿10,334–10,997, avg ฿10,657 | ฿10,230–10,690, avg ฿10,438 | ฿10,119–10,312, avg ฿10,219 |
+
+- The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿30 and ฿22).
+- No overlap holds as long as 1.5 × (1 − 0.5) > 0.5 × (1 + 0.5), i.e. 0.75 > 0.75 — exactly at the edge, so the margin comes only from department averages; a narrower score band widens it.
+- Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
 
 ---
 
 ## Departments and Capacity Multipliers
 
-Used in Step 3.2: each STAFF department's capacity multiplier sets its weighted share of the extra pool above ฿10,000. INTERN is paid from its own pool (Step 2) and has no capacity multiplier. `Abbrev` is each department's short code.
+Used in Step 3.2: each STAFF department's tier sets its bonus weight (1.5 / 1.0 / 0.5) and so its share of the extra pool above ฿10,000. INTERN is paid from its own pool (Step 2) and has no capacity multiplier. `Abbrev` is each department's short code.
 
-| # | Department | Abbrev | Capacity tier | Multiplier |
-|:-:|---|:-:|---|:-:|
-| 1 | กุมารเวชกรรม | PED | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 2 | จักษุวิทยา | EYE | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 3 | จิตเวชและยาเสพติด | PSY | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 5 | นิติเวช | FOR | สาขาขาดแคลน (shortage) | 1.15 |
-| 6 | ผู้ป่วยนอก | OPD | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 7 | พยาธิวิทยากายวิภาค | PAT | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 8 | รังสีวิทยา | RAD | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 9 | วิสัญญีวิทยา | ANS | สาขาขาดแคลน (shortage) | 1.15 |
-| 10 | เวชกรรมฟื้นฟู | RHB | สาขาขาดแคลน (shortage) | 1.15 |
-| 11 | เวชกรรมสังคม | SOC | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 12 | เวชศาสตร์ฉุกเฉิน | EMR | สาขาเต็มศักยภาพ (full capacity) | 0.85 |
-| 13 | ศัลยกรรม | SUR | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 15 | สูติ-นรีเวชกรรม | OBG | สาขาขาดแคลน (shortage) | 1.15 |
-| 16 | โสต ศอ นาสิก | ENT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 |
-| 17 | อาชีวเวชกรรม | OCM | สาขาขาดแคลน (shortage) | 1.15 |
-| 18 | อายุรกรรม | MED | สาขาขาดแคลน (shortage) | 1.15 |
+| # | Department | Abbrev | Capacity tier | Multiplier | Bonus weight |
+|:-:|---|:-:|---|:-:|:-:|
+| 1 | กุมารเวชกรรม | PED | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 2 | จักษุวิทยา | EYE | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 3 | จิตเวชและยาเสพติด | PSY | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 5 | นิติเวช | FOR | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
+| 6 | ผู้ป่วยนอก | OPD | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 7 | พยาธิวิทยากายวิภาค | PAT | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 8 | รังสีวิทยา | RAD | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 9 | วิสัญญีวิทยา | ANS | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
+| 10 | เวชกรรมฟื้นฟู | RHB | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
+| 11 | เวชกรรมสังคม | SOC | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 12 | เวชศาสตร์ฉุกเฉิน | EMR | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
+| 13 | ศัลยกรรม | SUR | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 15 | สูติ-นรีเวชกรรม | OBG | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
+| 16 | โสต ศอ นาสิก | ENT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
+| 17 | อาชีวเวชกรรม | OCM | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
+| 18 | อายุรกรรม | MED | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
 | 19 | INTERN | INT | — (own pool, Step 2) | — |
 
 Six departments sit in each tier: สาขาขาดแคลน, shortage specialty (1.15); สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and สาขาเต็มศักยภาพ, full-capacity specialty (0.85).
