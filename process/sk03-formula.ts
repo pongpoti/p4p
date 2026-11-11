@@ -2,7 +2,7 @@
  * SK03 new payment formula: the cell contents (formulas, labels and inputs)
  * that process.ts writes into the staff, intern and งบรายสาขา sheets.
  *
- * The formula is the one in pongpoti/p4p-analysis docs/formula/formula.md:
+ * The formula is the one in ./FORMULA.md:
  *   1. INTERN first. Pool = per P4P per intern × interns scoring ≥ 2,200.
  *      Multiplier = clip(1 + 0.05 × (excess ÷ intern mean excess − 1), 0.95, 1.05).
  *      Pay = ROUNDDOWN(multiplier × pool ÷ Σ multipliers, 0).
