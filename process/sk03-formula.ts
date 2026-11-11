@@ -54,7 +54,7 @@ export interface DeptCapacity {
   cap: number;  // capacity multiplier
 }
 
-/** formula.md "Departments and Capacity Multipliers", in that table's order. */
+/** FORMULA.md "Departments and Capacity Multipliers", in that table's order. */
 export const DEPT_CAPACITY: DeptCapacity[] = [
   { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', cap: 0.85 },
   { no: 2,  name: 'จักษุวิทยา',                          code: 'EYE', cap: 1.00 },
