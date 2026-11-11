@@ -1852,7 +1852,8 @@
     // People whose ต้องแก้ไข box the auditor opened, kept outside the page so
     // a re-render (the sheet arriving, a reload) leaves it open.
     const remarkOpen = new Set();
-    let swapAt = 0; // when the panel last changed person
+    let swapAt = 0; // when the panel last drew another person
+    let shownPerson = ""; // the person the panel last drew
     let lastDecided = ""; // the person the "decided" note in the list names
     const roundKey = (s, r) => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix);
     async function loadPeople(s, r) {
@@ -2282,12 +2283,11 @@
         h.tabIndex = -1;
         panel.setAttribute("aria-labelledby", h.id);
         panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + (p.sk03Row ? " · SK03 แถว " + p.sk03Row : "") + " · " + decisionText(p)));
-        // 'check': a check is not ตรงกัน in the new build; say which kind.
-        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why);
-        if (p.why)
-            panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText));
-        if (p.edit)
-            panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")));
+        // A person drawn for the first time starts the click guard (tooSoon).
+        if (p.index !== shownPerson) {
+            shownPerson = p.index;
+            swapAt = Date.now();
+        }
         // ผล comes second, so the eye goes from the result straight down to the buttons.
         const t = el("table", "rv-compare");
         const cap = el("caption", "sr-only", "ผลเทียบอัตโนมัติ");
@@ -2312,8 +2312,14 @@
             : num(p.stated) + (p.statedCell ? " ช่อง " + p.statedCell : "") + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
         t.append(cap, thead, tbody);
         panel.append(t, ...decideBox(s, p));
-        // The earlier remark and reply can be long: under the buttons, where
-        // they cannot push them down.
+        // Round 2's notes go under the buttons, so the buttons are at the
+        // same place for everyone.
+        // 'check': a check is not ตรงกัน in the new build; say which kind.
+        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why);
+        if (p.why)
+            panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText));
+        if (p.edit)
+            panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")));
         if (p.prev && (p.prev.remark || p.prev.reply)) {
             const prev = el("div", "rv-prev");
             if (p.prev.remark)
@@ -2332,8 +2338,6 @@
     // อนุมัติ is at the same place on the screen for everyone, and focus on
     // their name (one Tab on is อนุมัติ).
     function openPerson(index) {
-        if (index !== selected)
-            swapAt = Date.now();
         selected = index;
         render();
         toWorkingSpot();
@@ -2357,25 +2361,49 @@
         const fin = body.querySelector(".rv-finish");
         const h = fin ? fin.offsetHeight : 0;
         view.style.setProperty("--rv-fin", h + "px");
+        view.style.setProperty("--rv-view-h", view.clientHeight + "px");
+        // Only the counts bar here: a larger padding would also scroll the
+        // page whenever a control inside the pinned row itself gets focus.
+        // What sits under the pinned row clears it with scroll-margin (CSS).
+        view.style.scrollPaddingTop = h + 10 + "px";
         const bar = body.querySelector(".rv-decide-row");
-        view.style.scrollPaddingTop = h + (bar ? bar.offsetHeight + 18 : 10) + "px";
-        markStuck();
+        if (bar) {
+            view.style.setProperty("--rv-bar", bar.offsetHeight + "px");
+            // The sheet takes what is left under the pinned row, the
+            // หลักฐาน heading and the caption, so ไปที่ชีต shows all of it.
+            const ev = document.getElementById("rv-ev-h");
+            const cap = body.querySelector(".rv-sheet-cap");
+            const room = view.clientHeight - h - 8 - bar.offsetHeight - 10 - (ev ? ev.offsetHeight + 10 : 0) - (cap ? cap.offsetHeight + 10 : 0) - 36;
+            view.style.setProperty("--rv-sheet-max", Math.max(280, Math.floor(room)) + "px");
+        }
+        markStuck(true);
     }
     // Once the checks have scrolled away, the pinned row also names the person.
-    function markStuck() {
+    function markStuck(force = false) {
         const bar = body.querySelector(".rv-decide-row");
         const cmp = body.querySelector(".rv-compare");
         if (!bar || !cmp)
             return;
         const at = view.getBoundingClientRect().top + (parseFloat(getComputedStyle(bar).top) || 0);
-        bar.classList.toggle("stuck", cmp.getBoundingClientRect().bottom < at);
+        const stuck = cmp.getBoundingClientRect().bottom < at;
+        if (!force && stuck === bar.classList.contains("stuck"))
+            return;
+        bar.classList.toggle("stuck", stuck);
+        // The name shown in the pinned row only when the row still fits on
+        // one line with it.
+        bar.classList.remove("tight");
+        const btns = bar.querySelector(".rv-decide-btns");
+        const nav = bar.querySelector(".rv-decide-nav");
+        if (stuck && btns && nav && nav.offsetTop > btns.offsetTop + 4)
+            bar.classList.add("tight");
     }
-    view.addEventListener("scroll", markStuck, { passive: true });
+    view.addEventListener("scroll", () => markStuck(), { passive: true });
     window.addEventListener("resize", syncStick);
     // The click that decided one person must not land on the next one's
-    // button: ignore decision clicks for half a second after the panel
-    // changes person, and the second click of a double-click.
-    const tooSoon = (ev) => ev.detail > 1 || Date.now() - swapAt < 500;
+    // button: ignore pointer clicks for half a second after the panel shows
+    // another person, and the second click of a double-click. Keys (detail 0)
+    // always work.
+    const tooSoon = (ev) => ev.detail > 1 || (ev.detail === 1 && Date.now() - swapAt < 500);
     // What the auditor would most likely write, ready to edit.
     function suggestRemark(p) {
         if (p.scoreCheck === "mismatch")
@@ -2397,7 +2425,7 @@
         // The remark box is open when it is the only way on, when a remark is
         // saved, or when the auditor opened it (kept across re-renders).
         const forced = !ok || p.decision === "fix";
-        const open = forced || remarkOpen.has(p.index) || drafts.has(draftKey) || !!fe;
+        const open = forced || remarkOpen.has(p.index) || !!fe;
         const out = [];
         const bar = el("div", "rv-decide-row");
         bar.setAttribute("role", "group");
@@ -2409,9 +2437,6 @@
         const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""), p.decision === "fix" ? "✓ ต้องแก้ไขแล้ว" : "ต้องแก้ไข");
         fix.type = "button";
         fix.id = "rv-fix";
-        fix.setAttribute("aria-expanded", String(open));
-        if (open)
-            fix.setAttribute("aria-controls", "rv-remark-box");
         btns.append(approve, fix);
         if (p.decision) {
             const undo = el("button", "btn-ghost", "ยกเลิกผล");
@@ -2438,6 +2463,10 @@
         };
         nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"));
         bar.append(btns, who, nav);
+        // A failed save shows in the row, which is on screen even when pinned.
+        const n = noteEl(spot);
+        if (n)
+            bar.append(n);
         out.push(bar);
         const why = el("div", "rv-decide-hint");
         why.id = "rv-approve-why";
@@ -2450,12 +2479,14 @@
             out.push(why);
         }
         else if (!bothMatch(p)) {
-            approve.setAttribute("aria-describedby", why.id);
+            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข");
+            txt.id = "rv-approve-why-text";
+            approve.setAttribute("aria-describedby", txt.id);
             const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↓");
             goSheet.type = "button";
             goSheet.id = "rv-go-sheet";
             goSheet.addEventListener("click", showSheet);
-            why.append(el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข"), goSheet);
+            why.append(txt, goSheet);
             out.push(why);
         }
         approve.addEventListener("click", (ev) => {
@@ -2512,26 +2543,29 @@
             });
             const acts = el("div", "rv-actions");
             acts.append(sv);
-            const close = () => {
+            // ยกเลิก drops the text; Esc only folds the box away (the text
+            // comes back with ต้องแก้ไข).
+            const close = (discard) => {
                 remarkOpen.delete(p.index);
-                drafts.delete(draftKey);
+                if (discard)
+                    drafts.delete(draftKey);
                 fieldErrs.delete(draftKey);
                 render();
                 const f = document.getElementById("rv-fix");
                 if (f)
-                    f.focus();
+                    f.focus({ preventScroll: true });
             };
             if (!forced) {
                 const cancel = el("button", "btn-ghost", "ยกเลิก");
                 cancel.type = "button";
                 cancel.id = "rv-fix-cancel";
-                cancel.addEventListener("click", close);
+                cancel.addEventListener("click", () => close(true));
                 acts.append(cancel);
             }
             ta.addEventListener("keydown", (ev) => {
                 if (ev.key === "Escape" && !forced) {
                     ev.preventDefault();
-                    close();
+                    close(false);
                 }
                 else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
                     ev.preventDefault();
@@ -2545,9 +2579,6 @@
             for (const b of [approve, fix, save])
                 if (b)
                     markBusy(b);
-        const n = noteEl(spot);
-        if (n)
-            out.push(n);
         return out;
     }
     // ไปที่ชีต: the sheet straight under the pinned row, and the keyboard on it.
@@ -2677,6 +2708,7 @@
                         if (span > 1) {
                             td.colSpan = span;
                             td.className += " spill";
+                            td.replaceChildren(el("span", undefined, String(v)));
                             c += span - 1;
                         }
                     }
@@ -2729,13 +2761,14 @@
             return;
         notes.delete("decided");
         busy = true;
-        let moved = false;
+        let moved = false, failed = false;
         try {
             await post(monthApi(s) + "/decisions/" + p.index, { decision, remark }, "PUT");
             p.decision = decision;
             p.remark = decision === "fix" ? remark.trim() : "";
             p.carried = false;
             forget(s, "remark:" + p.index);
+            fieldErrs.delete("remark:" + p.index);
             if (decision !== "fix")
                 remarkOpen.delete(p.index);
             // Said in the people list, not under the next person's buttons,
@@ -2747,26 +2780,44 @@
                 const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index);
                 if (next) {
                     selected = next.index;
-                    swapAt = Date.now();
                     moved = true;
                 }
             }
         }
         catch (e) {
+            failed = true;
             tell(s, spot, "err", p.name + ": " + errText(e, "บันทึกไม่สำเร็จ"));
         }
         finally {
             busy = false;
             end(s, spot);
         }
+        // Show the next person at once; the reload only refreshes counts.
+        const focusHead = () => {
+            const hh = document.getElementById("rv-person-h");
+            if (hh)
+                hh.focus({ preventScroll: true });
+        };
+        if (moved && s.month === month) {
+            render();
+            toWorkingSpot();
+            focusHead();
+        }
+        const pressed = btn.id;
         await reload();
         if (s.month !== month)
             return;
-        if (moved)
+        if (moved) {
             toWorkingSpot();
-        const hh = document.getElementById("rv-person-h");
-        if (hh)
-            hh.focus({ preventScroll: true });
+            focusHead();
+            return;
+        }
+        // After a failure stay on the button that was pressed.
+        const back = failed && pressed ? document.getElementById(pressed) : null;
+        if (back)
+            back.focus({ preventScroll: true });
+        else
+            focusHead();
     }
     // ปัญหาอื่น ๆ (both sides) ──────────────────────────────────────────────
     function issuesCard(s, side) {
