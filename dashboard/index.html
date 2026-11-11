@@ -772,7 +772,9 @@
         .rv-finish { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 18px; border-radius: var(--radius); position: sticky; top: 0; z-index: 2; }
         .rv-counts { font-weight: 600; margin-right: auto; }
         .rv-review { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; gap: 14px; align-items: start; }
-        .rv-people { border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 72px; }
+        .rv-people { border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: calc(var(--rv-fin, 64px) + 8px); }
+        .rv-people .rv-note .rv-link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+        .rv-people .rv-note .rv-link:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-people-tools { display: flex; flex-direction: column; gap: 6px; }
         .rv-mini { display: flex; flex-direction: column; gap: 2px; font-size: .9rem; font-weight: 600; }
         .rv-mini select, .rv-mini input { height: 40px; padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
@@ -787,16 +789,22 @@
         .rv-chip-bad { color: #B42318; background: #FDECEA; }
         .rv-person { border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .rv-person-h { font-size: 1.1rem; }
-        .rv-person-h:focus { outline: 2px solid var(--ring); outline-offset: 2px; }
+        .rv-person-h:focus { outline: none; }
+        .rv-person-h:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-why { color: #1D4ED8; font-weight: 600; }
         .rv-prev { border-left: 4px solid #8A7B6E; padding: 4px 10px; background: #fff; border-radius: 6px; }
         .rv-compare, .rv-dept { border-collapse: collapse; width: 100%; background: #fff; }
         .rv-compare th, .rv-compare td, .rv-dept th, .rv-dept td { border: 1px solid rgba(63, 47, 36, .18); padding: 6px 8px; text-align: left; vertical-align: top; }
         .rv-compare thead th, .rv-dept thead th { background: #F3EBE1; font-size: .9rem; }
+        .rv-compare td:nth-child(2) { white-space: nowrap; }
         .rv-dept caption, .rv-sheet-cap { text-align: left; font-weight: 600; margin-bottom: 4px; }
         .rv-dept td.num, .rv-xl td.num { text-align: right; }
-        .rv-sheet-box { display: flex; flex-direction: column; gap: 10px; }
-        .rv-sheet { position: relative; overflow: auto; max-height: 420px; border: 1px solid rgba(63, 47, 36, .25); border-radius: 8px; background: #fff; }
+        .rv-evidence { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+        .rv-evidence h4 { font-size: 1rem; }
+        .rv-evidence h4:focus { outline: none; }
+        .rv-cell-chip { display: inline-block; white-space: nowrap; margin-left: 4px; padding: 0 8px; border-radius: 999px; border: 1px solid #B42318; background: #FFF4D6; color: #8A1C12; font-weight: 700; }
+        /* The sheet fits under the pinned decision row, so one scroll shows all of it. */
+        .rv-sheet { position: relative; overflow: auto; max-height: max(320px, calc(100vh - 300px)); max-height: max(320px, calc(100dvh - 300px)); border: 1px solid rgba(63, 47, 36, .25); border-radius: 8px; background: #fff; }
         .rv-sheet:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-xl { border-collapse: collapse; font-size: .85rem; }
         .rv-xl th { position: sticky; top: 0; background: #F3EBE1; font-weight: 600; padding: 2px 6px; border: 1px solid rgba(63, 47, 36, .15); }
@@ -804,10 +812,26 @@
         .rv-xl thead th { z-index: 2; } .rv-xl thead th.corner { left: 0; z-index: 3; }
         .rv-xl td { border: 1px solid rgba(63, 47, 36, .1); padding: 2px 6px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
         .rv-xl td.hit { outline: 3px solid #B42318; outline-offset: -3px; background: #FFF4D6; font-weight: 700; }
-        .rv-decide { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 12px; }
-        .rv-decide label { font-weight: 600; }
-        .rv-decide textarea, .rv-reply textarea { width: 100%; padding: 8px 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; resize: vertical; }
-        .rv-decide textarea[aria-invalid="true"] { border: 2px solid #B42318; }
+        .rv-xl td.spill { max-width: none; }
+        /* The decision row: under the two checks, pinned under the counts bar
+           while the auditor scrolls into the sheet. */
+        .rv-decide-row { position: sticky; top: calc(var(--rv-fin, 64px) + 8px); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; border: 1px solid rgba(63, 47, 36, .22); border-radius: 12px; background: #FFFDF9; }
+        .rv-decide-row.stuck { box-shadow: 0 8px 18px rgba(63, 47, 36, .16); }
+        .rv-decide-btns, .rv-decide-nav { display: flex; gap: 8px; }
+        .rv-decide-nav { margin-left: auto; }
+        .rv-decide-row button { white-space: nowrap; }
+        .rv-decide-who { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); font-weight: 600; }
+        .rv-decide-row.stuck .rv-decide-who { display: block; flex: 0 1 auto; margin-left: auto; }
+        .rv-decide-row.stuck .rv-decide-nav { margin-left: 0; }
+        .btn-primary.rv-off, .btn-primary.rv-off[aria-disabled="true"], .btn-primary.rv-off:hover { opacity: 1; background: #EFE7DE; color: #4A3D33; border: 1px dashed #8A7B6E; box-shadow: none; cursor: not-allowed; }
+        .btn-ghost.rv-pressed { background: #F3EBE1; border: 2px solid var(--primary); }
+        .rv-decide-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(150, 88, 0, .25); border-left: 4px solid var(--warning); background: var(--warning-bg); color: #5C3A00; font-weight: 600; font-size: .95rem; }
+        .rv-decide-hint.bad { border-color: rgba(180, 35, 24, .25); border-left-color: #B42318; background: #FDECEA; color: #8A1C12; }
+        .rv-decide-hint .btn-ghost { height: 36px; padding: 0 12px; }
+        .rv-remark-box { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid rgba(63, 47, 36, .18); border-radius: 10px; background: #fff; }
+        .rv-remark-box label { font-weight: 600; }
+        .rv-remark-box textarea, .rv-reply textarea { width: 100%; padding: 8px 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; resize: vertical; }
+        .rv-remark-box textarea[aria-invalid="true"] { border: 2px solid #B42318; }
         .rv-issue { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
         .rv-issue.closed { opacity: .75; }
         .rv-issue > .btn-ghost { align-self: flex-start; }
