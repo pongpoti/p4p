@@ -7,12 +7,13 @@
  * Step 4  — Compare Drive vs Supabase lists
  * Step 5  — Merge individual Excel files → one workbook per person sheet
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
- *           Pay uses the new formula (./sk03-formula.ts): interns first, then
- *           staff by department budget (sheet งบรายสาขา). Each month the
- *           dashboard's ตรวจสอบ tab gives two numbers (review_inputs): the
- *           total budget → staff Y9, and per P4P (budget ÷ N, N typed in the
- *           tab) per intern → intern W9 (=W10×rate). Until then all pay
- *           shows 0.
+ *           Pay uses the new formula (./sk03-formula.ts): every staff member
+ *           gets 10,000 plus a share of the rest by department and score
+ *           (sheet งบรายสาขา); interns are paid from what the staff leave. The
+ *           total budget (staff Y9) and per P4P (intern W9) come from the
+ *           Monthly Budget Inputs table in process/FORMULA.md (Pong,
+ *           2026-11-11; the ตรวจสอบ tab's numbers are not used in the SK03).
+ *           A month with no value there leaves the cell empty and pay 0.
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -60,7 +61,8 @@ const {
 type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
 const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
-type ReviewInput = import('./review-build').ReviewInput;
+type BudgetInput = import('./budget-inputs').BudgetInput;
+const { loadBudgetInput } = require('./budget-inputs') as typeof import('./budget-inputs');
 type DocInfo = import('./review-build').DocInfo;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -696,7 +698,8 @@ async function writeOverallMeta(
   lastRow: number,
   isIntern: boolean,
   internSheetName: string,
-  input: ReviewInput | null
+  input: BudgetInput | null,
+  staffSheetName: string
 ): Promise<void> {
   const S = DATA_START;
   const sh = `'${sheetName}'!`;
@@ -710,8 +713,8 @@ async function writeOverallMeta(
   const cells: CellWrite[] = [
     ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
     ...(isIntern
-      ? [internMeanCell(S, lastRow), ...internPanel(S, lastRow, input?.per_p4p ?? 0)]
-      : staffPanel(internSheetName, S, lastRow, input?.budget ?? 0)),
+      ? [internMeanCell(S, lastRow), ...internPanel(staffSheetName, S, lastRow, input?.per_p4p ?? '')]
+      : staffPanel(internSheetName, S, lastRow, input?.budget ?? '')),
   ];
 
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
@@ -926,13 +929,13 @@ async function formatOverallSheet(
 
   if (isIntern) {
     fmtReqs.push(bordersReq(sheetId, 8,  PL, 9,  PV));  // V9:W10
-    fmtReqs.push(bordersReq(sheetId, 11, PL, 12, PV));  // V12:W13
+    fmtReqs.push(bordersReq(sheetId, 11, PL, 13, PV));  // V12:W14
     fmtReqs.push(bordersReq(sheetId, 15, PL, 15, PV));  // V16:W16
     fmtReqs.push(...yellowBoxReqs(sheetId, 8, PV, 8, PV));     // W9
     fmtReqs.push(...yellowBoxReqs(sheetId, 9, PL, 9, PV));     // V10:W10
-    fmtReqs.push(...yellowBoxReqs(sheetId, 11, PV, 12, PV));   // W12:W13
+    fmtReqs.push(...yellowBoxReqs(sheetId, 11, PV, 13, PV));   // W12:W14
     fmtReqs.push(alignReq(sheetId, 7, PV, 15, PV, 'CENTER'));  // values
-    [8, 9, 11, 12, 15].forEach(r => fmtReqs.push(alignReq(sheetId, r, PL, r, PL, 'LEFT')));
+    [8, 9, 11, 12, 13, 15].forEach(r => fmtReqs.push(alignReq(sheetId, r, PL, r, PL, 'LEFT')));
     fmtReqs.push({ repeatCell: { range: gridRange(sheetId, 7, PL, 15, PL), cell: { userEnteredFormat: { wrapStrategy: 'OVERFLOW_CELL' } }, fields: 'userEnteredFormat.wrapStrategy' } });
   } else {
     fmtReqs.push(bordersReq(sheetId, 8,  PL, 10, PV));  // X9:Y11
@@ -1279,7 +1282,7 @@ async function createSK03(
   supabasePersons: SupabasePerson[],
   monthKey: string,
   supabase: SupabaseClient,
-  input: ReviewInput | null = null
+  input: BudgetInput | null = null
 ): Promise<{ ssId: string; staffSheetName: string; internSheetName: string }> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
@@ -1377,7 +1380,7 @@ async function createSK03(
   }
   const staffLastRow = S + staffArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName, input, staffSheetName);
   await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
 
   // Totals row: M, N, O = SUM immediately below last person, above signature.
@@ -1428,7 +1431,7 @@ async function createSK03(
   }
   const internLastRow = S + internArray.length - 1;
 
-  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName, input);
+  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName, input, staffSheetName);
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
 
   // Intern totals row: N and O only (no M — management fee not applicable for interns)
@@ -1685,10 +1688,15 @@ async function main(): Promise<void> {
         results.skipped++; console.log('└─ skipped\n'); continue;
       }
 
-      // Step 6 — budget and per P4P as typed in the ตรวจสอบ tab
+      // Step 6 — the SK03. Pong, 2026-11-11: budget (staff Y9) and per P4P
+      // (intern W9) come from the Monthly Budget Inputs table in
+      // process/FORMULA.md, empty when the month has none. The ตรวจสอบ tab's
+      // numbers are kept only for the review record (review_builds,
+      // review_submit_round), not the sheet.
       const input = reviewOn ? await review.loadReviewInput(supabase, key) : null;
-      log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'not typed yet → 0'})`);
-      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+      const md = loadBudgetInput(key);
+      log(`  [Step 6] Creating SK03 spreadsheet… (FORMULA.md: budget ${md.budget ?? 'empty'} · per P4P ${md.per_p4p ?? 'empty'})`);
+      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, md);
 
       // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
       // built but ends the job red so 1.2 alerts.
