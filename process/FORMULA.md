@@ -265,30 +265,8 @@ Six departments sit in each tier: สาขาขาดแคลน, shortage sp
 
 ## Monthly Budget Inputs
 
-`Budget` is `total_budget` and `perP4P` is the per-physician rate used in Step 1.1. `N` is the headcount in the allocation document that Budget is divided by (it includes doctors on study leave, so it is larger than the number of doctors in the SK03).
+`Budget` is `total_budget` and `perP4P` is the per-physician rate used in Step 1.1. `N` is the headcount in the allocation document that Budget is divided by (it includes doctors on study leave, so it is larger than the number of doctors in the SK03). **perP4P = round(Budget ÷ N, 2).**
 
-Workflow 2.2 reads this table on every run: `Budget` goes into staff Y9 and `perP4P` into intern W9 (`=W10*perP4P`) of that month's SK03. A month with no row, or a blank cell, leaves that cell empty (pay shows 0). If `perP4P` is blank but `Budget` and `N` are filled, 2.2 uses round(Budget ÷ N, 2). Keep the four columns and the `YYYY_MM` month format.
+Since 2026-11-11 the numbers are not kept in this file. Each month's Budget and N are saved in the dashboard's ตรวจสอบ tab (`/dashboard/`, owner only), which stores them with perP4P in the Supabase table `review_inputs`; every save is in the ประวัติการใช้งาน (History) tab with the numbers before and after. Workflow 2.2 reads that table on every run: Budget goes into staff Y9 and perP4P into intern W9 (`=W10*perP4P`) of that month's SK03. A month with nothing saved leaves both cells empty (pay shows 0).
 
-| Month | Budget | N | perP4P |
-|------|--------|---|--------|
-| 2568_05 | 2,113,551.36 | 216 | 9,784.96 |
-| 2568_06 | 2,102,336.65 | 215 | 9,778.31 |
-| 2568_07 | 2,123,888.28 | 219 | 9,698.12 |
-| 2568_08 | 2,156,973.75 | 225 | 9,586.55 |
-| 2568_09 | 2,151,499.84 | 224 | 9,604.91 |
-| 2568_10 | 2,213,270.80 | 221 | 10,014.80 |
-| 2568_11 | 2,204,138.20 | 220 | 10,018.81 |
-| 2568_12 | 2,206,831.00 | 220 | 10,031.05 |
-| 2569_01 | 2,219,107.41 | 221 | 10,041.21 |
-| 2569_02 | 2,211,228.80 | 220 | 10,051.04 |
-| 2569_03 | 2,191,518.72 | 216 | 10,145.92 |
-| 2569_04 | 2,144,594.88 | 216 | 9,928.68 |
-| 2569_05 | 2,139,791.04 | 216 | 9,906.44 |
-| 2569_06 | 2,159,731.84 | 224 | 9,641.66 |
-| 2569_07 | 2,158,709.06 | 226 | 9,551.81 |
-| 2569_08 | 2,189,874.33 | 229 | 9,562.77 |
-| 2569_09 | 2,210,764.71 | 231 | 9,570.41 |
-
-**perP4P = round(Budget ÷ N, 2)** for every month above.
-
-2569_08 and 2569_09 come from the hospital allocation document (จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N, ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget). 2569_07 comes from the final July SK03 (แบบฟอร์ม SK03 องค์กรแพทย์ เดือนกรกฎาคม 2569: staff Y9 งบทั้งหมด = Budget, intern W9 =31*9551.81 = perP4P).
+The 17 months 2568_05 to 2569_09 that used to be listed here were copied into the table by [`scripts/budget-inputs-2026-11.sql`](../scripts/budget-inputs-2026-11.sql), which also lists them and their sources (2569_08 and 2569_09: the allocation document จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N, ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget).

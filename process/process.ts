@@ -11,9 +11,10 @@
  *           gets 10,000 plus a share of the rest by department and score
  *           (sheet งบรายสาขา); interns are paid from what the staff leave. The
  *           total budget (staff Y9) and per P4P (intern W9) come from the
- *           Monthly Budget Inputs table in process/FORMULA.md (Pong,
- *           2026-11-11; the ตรวจสอบ tab's numbers are not used in the SK03).
- *           A month with no value there leaves the cell empty and pay 0.
+ *           Supabase table review_inputs, which the dashboard's ตรวจสอบ tab
+ *           saves (budget and N; per P4P = budget ÷ N). Pong, 2026-11-11: the
+ *           one place for them, instead of process/FORMULA.md. A month with
+ *           no row leaves the cells empty and pay 0.
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -61,8 +62,7 @@ const {
 type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
 const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
-type BudgetInput = import('./budget-inputs').BudgetInput;
-const { loadBudgetInput } = require('./budget-inputs') as typeof import('./budget-inputs');
+type ReviewInput = import('./review-build').ReviewInput;
 type DocInfo = import('./review-build').DocInfo;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -698,7 +698,7 @@ async function writeOverallMeta(
   lastRow: number,
   isIntern: boolean,
   internSheetName: string,
-  input: BudgetInput | null,
+  input: ReviewInput | null,
   staffSheetName: string
 ): Promise<void> {
   const S = DATA_START;
@@ -1282,7 +1282,7 @@ async function createSK03(
   supabasePersons: SupabasePerson[],
   monthKey: string,
   supabase: SupabaseClient,
-  input: BudgetInput | null = null
+  input: ReviewInput | null = null
 ): Promise<{ ssId: string; staffSheetName: string; internSheetName: string }> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
@@ -1688,15 +1688,13 @@ async function main(): Promise<void> {
         results.skipped++; console.log('└─ skipped\n'); continue;
       }
 
-      // Step 6 — the SK03. Pong, 2026-11-11: budget (staff Y9) and per P4P
-      // (intern W9) come from the Monthly Budget Inputs table in
-      // process/FORMULA.md, empty when the month has none. The ตรวจสอบ tab's
-      // numbers are kept only for the review record (review_builds,
-      // review_submit_round), not the sheet.
-      const input = reviewOn ? await review.loadReviewInput(supabase, key) : null;
-      const md = loadBudgetInput(key);
-      log(`  [Step 6] Creating SK03 spreadsheet… (FORMULA.md: budget ${md.budget ?? 'empty'} · per P4P ${md.per_p4p ?? 'empty'})`);
-      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, md);
+      // Step 6 — the SK03, with the month's budget (staff Y9) and per P4P
+      // (intern W9) from review_inputs, as saved in the ตรวจสอบ tab (Pong,
+      // 2026-11-11: one place in Supabase, not FORMULA.md). Read whether or
+      // not the rest of the review is installed; no row leaves both empty.
+      const input = await review.loadReviewInput(supabase, key);
+      log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'none saved → empty'})`);
+      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
 
       // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
       // built but ends the job red so 1.2 alerts.

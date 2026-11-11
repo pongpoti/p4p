@@ -890,6 +890,9 @@
         .rv-label { font-weight: 600; }
         .rv-inputs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 18px; align-items: start; }
         .rv-rate { display: flex; align-items: center; min-height: 44px; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .rv-rate.rv-rate-odd { color: var(--warning); }
+        .rv-rate-warn { margin: 8px 0 0; padding: 6px 10px; border-left: 4px solid var(--warning); border-radius: 6px; background: var(--warning-bg); color: #5C3A00; font-weight: 600; font-size: .95rem; }
+        .rv-rate-warn[hidden] { display: none; }
         .rv-save { justify-content: flex-start; padding-top: 26px; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
         .rv-save .btn-primary { height: 44px; }
         .rv-files { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }

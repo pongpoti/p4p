@@ -681,12 +681,24 @@
         const d = v.replace(/,/g, "").trim()
         return /^\d+$/.test(d) && Number(d) > 0 ? Number(d) : null
     }
-    function ratePreview(budget: string, n: string): string {
+    function rateOf(budget: string, n: string): number | null {
         const b = wholeOf(budget), c = wholeOf(n)
-        if (b === null || c === null || b >= 1e11 || c >= 1e5) return "–"
+        if (b === null || c === null || b >= 1e11 || c >= 1e5) return null
         const v = Math.round(Math.round(b * 100) / c) / 100
-        return v > 0 ? baht(v) : "–"
+        return v > 0 ? v : null
     }
+    function ratePreview(budget: string, n: string): string {
+        const v = rateOf(budget, n)
+        return v === null ? "–" : baht(v)
+    }
+    // Every month so far has had a per P4P of 9,551–10,146. One outside
+    // 9,000–11,000 is most likely a typo in the budget or N (or test
+    // numbers, like Aug's 2,000,000 ÷ 200): the field says so and the button
+    // reads ยืนยันบันทึก, but saving is still allowed (Pong, 2026-11-11: the
+    // budget box is where workflow 2.2 takes the SK03's budget from).
+    const RATE_LOW = 9000
+    const RATE_HIGH = 11000
+    const oddRate = (v: number | null): boolean => v !== null && (v < RATE_LOW || v > RATE_HIGH)
     const grouped = (digits: string): string => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
     // A whole-number field takes digits only and says nothing: a typed
     // letter, space or "." does nothing, and so do the digits typed right
@@ -807,32 +819,43 @@
         out.setAttribute("aria-live", "off")
         out.htmlFor.add("rv-budget")
         out.htmlFor.add("rv-doctors")
-        const paint = (): void => { out.textContent = ratePreview(bi.value, ni.value) }
-        paint()
-        bi.addEventListener("input", paint)
-        ni.addEventListener("input", paint)
+        const warn = el("p", "rv-rate-warn", "per P4P ผิดปกติ (ปกติ " + int(RATE_LOW) + "–" + int(RATE_HIGH) + ") ตรวจงบประมาณและ N อีกครั้ง")
+        warn.id = "rv-rate-warn"
+        let save: HTMLButtonElement | null = null
+        const paint = (): void => {
+            const v = rateOf(bi.value, ni.value)
+            const odd = oddRate(v)
+            out.textContent = v === null ? "–" : baht(v)
+            out.classList.toggle("rv-rate-odd", odd)
+            warn.hidden = !odd
+            if (save) save.textContent = odd ? "ยืนยันบันทึก" : "บันทึก"
+        }
         rw.append(rl, out)
         const act = el("div", "rv-field rv-save")
         if (editable) {
-            const save = el("button", "btn-primary", "บันทึก")
+            save = el("button", "btn-primary", "บันทึก")
             save.type = "submit"
             save.id = "rv-save-inputs"
             if (flying(s, "inputs")) markBusy(save)
             // Nothing to save until both are whole numbers above 0 that give
             // a per P4P above 0.00; the button says so by being off.
-            const ready = (): void => { save.disabled = ratePreview(bi.value, ni.value) === "–" }
+            const btn = save
+            const ready = (): void => { btn.disabled = ratePreview(bi.value, ni.value) === "–" }
             ready()
             bi.addEventListener("input", ready)
             ni.addEventListener("input", ready)
-            act.append(save)
+            act.append(btn)
             const n = noteEl("inputs")
             if (n) act.append(n)
             else if (inp && inp.doctors && !drafts.has("rv-budget") && !drafts.has("rv-doctors")) act.append(el("span", "rv-saved", "✓ บันทึกแล้ว"))
             else if (!inp && !s.build) act.append(el("span", "rv-hint", "กรอกไว้ก่อนได้"))
-            form.addEventListener("submit", (ev) => { ev.preventDefault(); void saveInputs(s, form, save) })
+            form.addEventListener("submit", (ev) => { ev.preventDefault(); void saveInputs(s, form, btn) })
         }
+        paint()
+        bi.addEventListener("input", paint)
+        ni.addEventListener("input", paint)
         form.append(bw, nw, rw, act)
-        c.append(h, form)
+        c.append(h, form, warn)
         if (s.build || openRequest(s) || s.request) c.append(filesRow(s))
         return c
     }
