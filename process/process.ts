@@ -9,11 +9,11 @@
  * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  *           Pay uses the new formula (./sk03-formula.ts): every staff member
  *           gets 10,000 plus a share of the rest by department and score
- *           (sheet งบรายสาขา); interns are paid from what the staff leave. Each month the
- *           dashboard's ตรวจสอบ tab gives two numbers (review_inputs): the
- *           total budget → staff Y9, and per P4P (budget ÷ N, N typed in the
- *           tab) per intern → intern W9 (=W10×rate). Until then all pay
- *           shows 0.
+ *           (sheet งบรายสาขา); interns are paid from what the staff leave. The
+ *           total budget (staff Y9) and per P4P (intern W9) come from the
+ *           Monthly Budget Inputs table in process/FORMULA.md (Pong,
+ *           2026-11-11; the ตรวจสอบ tab's numbers are not used in the SK03).
+ *           A month with no value there leaves the cell empty and pay 0.
  * Step 7  — Keep a copy of both files and run the two automatic checks for
  *           the ตรวจสอบ tab (./review-build.ts).
  *
@@ -61,7 +61,8 @@ const {
 type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
 const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
-type ReviewInput = import('./review-build').ReviewInput;
+type BudgetInput = import('./budget-inputs').BudgetInput;
+const { loadBudgetInput } = require('./budget-inputs') as typeof import('./budget-inputs');
 type DocInfo = import('./review-build').DocInfo;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -697,7 +698,7 @@ async function writeOverallMeta(
   lastRow: number,
   isIntern: boolean,
   internSheetName: string,
-  input: ReviewInput | null,
+  input: BudgetInput | null,
   staffSheetName: string
 ): Promise<void> {
   const S = DATA_START;
@@ -712,8 +713,8 @@ async function writeOverallMeta(
   const cells: CellWrite[] = [
     ...headers.map(h => ({ range: `${h.col}5`, values: [[h.text]] })),
     ...(isIntern
-      ? [internMeanCell(S, lastRow), ...internPanel(staffSheetName, S, lastRow, input?.per_p4p ?? 0)]
-      : staffPanel(internSheetName, S, lastRow, input?.budget ?? 0)),
+      ? [internMeanCell(S, lastRow), ...internPanel(staffSheetName, S, lastRow, input?.per_p4p ?? '')]
+      : staffPanel(internSheetName, S, lastRow, input?.budget ?? '')),
   ];
 
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
@@ -1281,7 +1282,7 @@ async function createSK03(
   supabasePersons: SupabasePerson[],
   monthKey: string,
   supabase: SupabaseClient,
-  input: ReviewInput | null = null
+  input: BudgetInput | null = null
 ): Promise<{ ssId: string; staffSheetName: string; internSheetName: string }> {
   const [beYearStr, monthStr] = monthKey.split('_');
   const beYear = parseInt(beYearStr);
@@ -1687,10 +1688,15 @@ async function main(): Promise<void> {
         results.skipped++; console.log('└─ skipped\n'); continue;
       }
 
-      // Step 6 — budget and per P4P as typed in the ตรวจสอบ tab
+      // Step 6 — the SK03. Pong, 2026-11-11: budget (staff Y9) and per P4P
+      // (intern W9) come from the Monthly Budget Inputs table in
+      // process/FORMULA.md, empty when the month has none. The ตรวจสอบ tab's
+      // numbers are kept only for the review record (review_builds,
+      // review_submit_round), not the sheet.
       const input = reviewOn ? await review.loadReviewInput(supabase, key) : null;
-      log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'not typed yet → 0'})`);
-      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+      const md = loadBudgetInput(key);
+      log(`  [Step 6] Creating SK03 spreadsheet… (FORMULA.md: budget ${md.budget ?? 'empty'} · per P4P ${md.per_p4p ?? 'empty'})`);
+      const sk03 = await createSK03(drive, sheets, sbData, key, supabase, md);
 
       // Step 7 — copy for the ตรวจสอบ tab. A failure here leaves the SK03
       // built but ends the job red so 1.2 alerts.

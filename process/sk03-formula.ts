@@ -182,10 +182,11 @@ export function internMeanCell(first: number, last: number): CellWrite {
 // ─── Side panels ──────────────────────────────────────────────────
 
 /**
- * Staff panel (X/Y). Y9 is the month's total budget: the one typed in the
- * dashboard's ตรวจสอบ tab (review_inputs), or 0 until someone types it.
+ * Staff panel (X/Y). Y9 is the month's total budget. Pong, 2026-11-11: the
+ * workflow leaves it empty (the ตรวจสอบ tab's budget is not written in), so
+ * pay shows 0 until someone types the budget into the sheet.
  */
-export function staffPanel(internSheet: string, first: number, last: number, budget = 0): CellWrite[] {
+export function staffPanel(internSheet: string, first: number, last: number, budget: number | '' = ''): CellWrite[] {
   const I = q(internSheet);
   const B = q(BUDGET_SHEET);
   return [
@@ -219,17 +220,18 @@ export function staffPanel(internSheet: string, first: number, last: number, bud
 
 /**
  * Intern panel (V/W). W9 = W10 × the month's per P4P per intern, the rate
- * written into the formula like the SK03 form's `=9906.44*24`: the one typed
- * in the dashboard's ตรวจสอบ tab (review_inputs), or 0 until someone types it.
+ * written into the formula like the SK03 form's `=9906.44*24`. Pong,
+ * 2026-11-11: the workflow leaves W9 empty (the ตรวจสอบ tab's per P4P is not
+ * written in) until someone types it into the sheet.
  * W14 is the pool actually shared: W9, cut so the staff keep 10,000 each
  * (staff budget Y9 − 10,000 × staff Y11) when the budget is short.
  */
-export function internPanel(staffSheet: string, first: number, last: number, rate = 0): CellWrite[] {
+export function internPanel(staffSheet: string, first: number, last: number, rate: number | '' = ''): CellWrite[] {
   const St = q(staffSheet);
   return [
     { range: 'V8:W8', values: [['งบจัดสรร', '']] },
     { range: 'V9:W10', values: [
-      ['เฉพาะ intern', `=W10*${rate}`],
+      ['เฉพาะ intern', rate === '' ? '' : `=W10*${rate}`],
       ['จำนวน intern (≥ 2,200)', `=COUNTIF(L${first}:L${last},">=0")`],
     ]},
     { range: 'V11:W11', values: [['ค่าที่คำนวณได้', '']] },
