@@ -10,7 +10,8 @@
  *      whatever is left after 10,000 × staff.
  *   2. STAFF get the rest: staff budget = total budget − interns' actual pay.
  *      Every staff member gets the 10,000 base. The extra (staff budget −
- *      10,000 × staff) goes to departments by (staff × capacity multiplier),
+ *      10,000 × staff) goes to departments by (staff × bonus weight: 1.5 for
+ *      สาขาขาดแคลน, 1.0 กึ่งขาดแคลน, 0.5 เต็มศักยภาพ),
  *      then inside a department by score: multiplier = clip(1 + 0.5 × (excess
  *      ÷ dept mean excess − 1), 0.5, 1.5).
  *      Pay = ROUNDDOWN(10,000 + multiplier × dept extra ÷ dept Σ multipliers, 0).
@@ -23,7 +24,7 @@
  * in column N on both sheets, so the department sheets keep reading N.
  *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept extra per multiplier
  *          panel X/Y: Y9 total budget (input) · Y10 staff budget · Y11 count ·
- *          Y13 base 10,000 × staff · Y14 extra · Y15 extra per capacity unit · Y17-Y20 totals · X23 คงคืน
+ *          Y13 base 10,000 × staff · Y14 extra · Y15 extra per unit (staff × bonus weight) · Y17-Y20 totals · X23 คงคืน
  *   intern Q ratio · R raw multiplier · S7 mean · T multiplier
  *          panel V/W: W9 pool = W10 × per P4P per intern (typed into the formula) ·
  *          W10 count · W12 sum point · W13 per P4P · W14 pool used (staff first) · W16 paid
@@ -75,6 +76,17 @@ export const DEPT_CAPACITY: DeptCapacity[] = [
   { no: 17, name: 'อาชีวเวชกรรม',                         code: 'OCM', cap: 1.15 },
   { no: 18, name: 'อายุรกรรม',                            code: 'MED', cap: 1.15 },
 ];
+
+/**
+ * Weight of each capacity tier when the extra above BASE is split between
+ * departments (Pong, 2026-11-11: 1.5 / 1 / 0.5, so with the ±50% score band
+ * every สาขาขาดแคลน doctor is paid more than every สาขาเต็มศักยภาพ doctor).
+ */
+export const BONUS_WEIGHT: Record<string, number> = {
+  '1.15': 1.5,
+  '1.00': 1.0,
+  '0.85': 0.5,
+};
 
 export const TIER_LABEL: Record<string, string> = {
   '1.15': 'สาขาขาดแคลน',
@@ -188,7 +200,7 @@ export function staffPanel(internSheet: string, first: number, last: number, bud
     { range: 'X13:Y15', values: [
       [`ฐาน ${BASE.toLocaleString('en-US')} × จำนวน staff`, `=${BASE}*Y11`],
       ['ส่วนเพิ่ม (แบ่งตามศักยภาพสาขา)', '=Y10-Y13'],
-      ['ส่วนเพิ่ม ต่อ 1 หน่วยศักยภาพ', `=Y14/${B}H${BUDGET_TOTAL}`],
+      ['ส่วนเพิ่ม ต่อ 1 หน่วย', `=Y14/${B}H${BUDGET_TOTAL}`],
     ]},
     { range: 'X16:Y16', values: [['ผลรวม', '']] },
     { range: 'X17:Y20', values: [
@@ -236,8 +248,8 @@ export function internPanel(staffSheet: string, first: number, last: number, rat
 // ─── งบรายสาขา sheet ──────────────────────────────────────────────
 
 export const BUDGET_HEADERS = [
-  'ที่', 'สาขา', 'รหัส', 'ระดับศักยภาพ', 'ตัวคูณ\nศักยภาพ', 'จำนวน\nแพทย์',
-  `ฐาน\n(${BASE.toLocaleString('en-US')} × จำนวน)`, 'หน่วยศักยภาพ\n(จำนวน × ตัวคูณ)',
+  'ที่', 'สาขา', 'รหัส', 'ระดับศักยภาพ', 'น้ำหนัก\nส่วนเพิ่ม', 'จำนวน\nแพทย์',
+  `ฐาน\n(${BASE.toLocaleString('en-US')} × จำนวน)`, 'หน่วย\n(จำนวน × น้ำหนัก)',
   'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'ส่วนเพิ่ม\nต่อตัวคูณ',
   'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
 ];
@@ -249,10 +261,10 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
   const rows: (string | number)[][] = DEPT_CAPACITY.map((d, k) => {
     const r = BUDGET_FIRST + k;
     return [
-      d.no, d.name, d.code, TIER_LABEL[d.cap.toFixed(2)], d.cap,
+      d.no, d.name, d.code, TIER_LABEL[d.cap.toFixed(2)], BONUS_WEIGHT[d.cap.toFixed(2)],
       `=COUNTIFS(${codes},C${r},${S}$L$${first}:$L$${last},">=0")`,       // F staff ≥ 2,200
       `=${BASE}*F${r}`,                                                    // G base 10,000 each
-      `=F${r}*E${r}`,                                                      // H capacity units
+      `=F${r}*E${r}`,                                                      // H units (staff × bonus weight)
       `=H${r}*${S}$Y$15`,                                                  // I add-on
       `=G${r}+I${r}`,                                                      // J dept budget
       `=SUMIF(${codes},C${r},${S}$U$${first}:$U$${last})`,                 // K Σ multipliers
@@ -267,7 +279,7 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
     { range: 'A1', values: [['งบ P4P staff รายสาขา (สูตรใหม่)']] },
     { range: 'A2', values: [[monthLabel]] },
     { range: 'A3', values: [[
-      `งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × (จำนวนแพทย์ × ตัวคูณศักยภาพ)      `
+      `งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × (จำนวนแพทย์ × น้ำหนักส่วนเพิ่ม 1.5 / 1 / 0.5)      `
       + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ`,
     ]] },
     { range: 'A4:N4', values: [BUDGET_HEADERS] },
