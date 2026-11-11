@@ -47,7 +47,7 @@ INTERN is calculated first and separately, as in the SK03 `intern_summary` sheet
 **Key properties:**
 - Interns with equal scores always get equal pay, and close scores get close pay (no tier cliffs).
 - The interns' floored remainder (a few baht) is not lost: it stays in the STAFF budget.
-- `perP4P` is `total_budget ÷ N (doc)` from [Monthly Budget Inputs](#monthly-budget-inputs); `N (doc)` includes doctors on study leave, so their share stays with STAFF.
+- `perP4P` is `total_budget ÷ N` from [Monthly Budget Inputs](#monthly-budget-inputs); `N` (from the allocation document) includes doctors on study leave, so their share stays with STAFF.
 
 ---
 
@@ -265,27 +265,29 @@ Six departments sit in each tier: สาขาขาดแคลน, shortage sp
 
 ## Monthly Budget Inputs
 
-`Budget` is `total_budget` and `perP4P` is the per-physician rate used in Step 1.1. `N (doc)` is the headcount perP4P is divided by; `N (actual)` is the number of physicians in that month's SK03 (staff + intern sheets).
+`Budget` is `total_budget` and `perP4P` is the per-physician rate used in Step 1.1. `N` is the headcount in the allocation document that Budget is divided by (it includes doctors on study leave, so it is larger than the number of doctors in the SK03).
 
-| Month | Budget | N (doc) | N (actual) | perP4P |
-|------|--------|---------|------------|--------|
-| 2568_05 | 2,113,551.36 | 216 | 194 | 9,784.96 |
-| 2568_06 | 2,102,336.65 | 215 | 188 | 9,778.31 |
-| 2568_07 | 2,123,888.28 | 219 | 194 | 9,698.12 |
-| 2568_08 | 2,156,973.75 | 225 | 197 | 9,586.55 |
-| 2568_09 | 2,151,499.84 | 224 | 197 | 9,604.91 |
-| 2568_10 | 2,213,270.80 | 221 | 193 | 10,014.80 |
-| 2568_11 | 2,204,138.20 | 220 | 193 | 10,018.81 |
-| 2568_12 | 2,206,831.00 | 220 | 192 | 10,031.05 |
-| 2569_01 | 2,219,107.41 | 221 | 193 | 10,041.21 |
-| 2569_02 | 2,211,228.80 | 220 | 193 | 10,051.04 |
-| 2569_03 | 2,191,518.72 | 216 | 192 | 10,145.92 |
-| 2569_04 | 2,144,594.88 | 216 | 191 | 9,928.68 |
-| 2569_05 | 2,139,791.04 | 216 | 190 | 9,906.44 |
-| 2569_06 | 2,159,731.84 | 224 | 199 | 9,641.66 |
-| 2569_08 | 2,189,874.33 | 229 | – | 9,562.77 |
-| 2569_09 | 2,210,764.71 | 231 | – | 9,570.41 |
+Workflow 2.2 reads this table on every run: `Budget` goes into staff Y9 and `perP4P` into intern W9 (`=W10*perP4P`) of that month's SK03. A month with no row, or a blank cell, leaves that cell empty (pay shows 0). If `perP4P` is blank but `Budget` and `N` are filled, 2.2 uses round(Budget ÷ N, 2). Keep the four columns and the `YYYY_MM` month format.
 
-**perP4P = round(Budget ÷ N (doc), 2)** for every month above.
+| Month | Budget | N | perP4P |
+|------|--------|---|--------|
+| 2568_05 | 2,113,551.36 | 216 | 9,784.96 |
+| 2568_06 | 2,102,336.65 | 215 | 9,778.31 |
+| 2568_07 | 2,123,888.28 | 219 | 9,698.12 |
+| 2568_08 | 2,156,973.75 | 225 | 9,586.55 |
+| 2568_09 | 2,151,499.84 | 224 | 9,604.91 |
+| 2568_10 | 2,213,270.80 | 221 | 10,014.80 |
+| 2568_11 | 2,204,138.20 | 220 | 10,018.81 |
+| 2568_12 | 2,206,831.00 | 220 | 10,031.05 |
+| 2569_01 | 2,219,107.41 | 221 | 10,041.21 |
+| 2569_02 | 2,211,228.80 | 220 | 10,051.04 |
+| 2569_03 | 2,191,518.72 | 216 | 10,145.92 |
+| 2569_04 | 2,144,594.88 | 216 | 9,928.68 |
+| 2569_05 | 2,139,791.04 | 216 | 9,906.44 |
+| 2569_06 | 2,159,731.84 | 224 | 9,641.66 |
+| 2569_08 | 2,189,874.33 | 229 | 9,562.77 |
+| 2569_09 | 2,210,764.71 | 231 | 9,570.41 |
 
-2569_08 and 2569_09 come from the hospital allocation document (จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N (doc), ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget). `N (actual)` is filled in when that month's SK03 is final. 2569_07 is added once its SK03 is final.
+**perP4P = round(Budget ÷ N, 2)** for every month above.
+
+2569_08 and 2569_09 come from the hospital allocation document (จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N, ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget). 2569_07 has no row yet, so its SK03 cells stay empty.
