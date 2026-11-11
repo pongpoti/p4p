@@ -55,7 +55,7 @@ const {
 const {
   DATA_START, BUDGET_SHEET, BUDGET_FIRST, BUDGET_LAST, BUDGET_TOTAL, DEPT_CAPACITY,
   STAFF_HEADERS, INTERN_HEADERS, deptCode, staffRowCells, internRowCells,
-  internMeanCell, staffPanel, internPanel, budgetSheet,
+  internMeanCell, staffPanel, internPanel, budgetSheet, FLOOR_PANEL,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
 const review = require('./review-build') as typeof import('./review-build');
@@ -651,9 +651,9 @@ function bordersReq(sheetId: number, r1: number, c1: number, r2: number, c2: num
 // ─── Overall sheet helpers (staff + intern share the same template) ─
 
 /**
- * Build the 22-column data rows (A..V) for an overall (staff/intern) sheet.
+ * Build the data rows for an overall sheet: A..W for staff, A..V for interns.
  * A..M and O..P mirror the appendRow loop in both GAS scripts. Pay (N) and
- * the helper columns Q..V use the new formula — see ./sk03-formula.ts.
+ * the helper columns Q..W use the new formula — see ./sk03-formula.ts.
  */
 function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolean): (string | number)[][] {
   const last = S + persons.length - 1;
@@ -678,7 +678,7 @@ function buildOverallRows(persons: SupabasePerson[], S: number, isIntern: boolea
       pay.N,                                                 // N: P4P pay
       `=M${r}+N${r}`,                                       // O
       ' ',                                                   // P: remark
-      ...pay.QtoV,                                           // Q..V: new-formula helpers
+      ...pay.QtoV,                                           // Q..W (staff) / Q..V (intern): new-formula helpers
     ];
   });
 }
@@ -861,7 +861,7 @@ async function formatOverallSheet(
   fmtReqs.push({ updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 5, endIndex: 6 }, properties: { pixelSize: 96 }, fields: 'pixelSize' } });
 
   // Helper columns on data rows: 14 pt, centred vertically, no wrapping
-  const helperLast = colIdx(isIntern ? 'T' : 'V');
+  const helperLast = colIdx(isIntern ? 'T' : 'W');
   fmtReqs.push({ repeatCell: {
     range: gridRange(sheetId, R8, colIdx('Q'), RLast, helperLast),
     cell: { userEnteredFormat: { textFormat: { fontSize: 14 }, verticalAlignment: 'MIDDLE', wrapStrategy: 'OVERFLOW_CELL' } },
@@ -891,12 +891,14 @@ async function formatOverallSheet(
   } else {
     fmtReqs.push(numFmtReq(sheetId, R8, colIdx('R'), RLast, colIdx('R'), FMT_BAHT));
     fmtReqs.push(numFmtReq(sheetId, R8, colIdx('S'), RLast, colIdx('U'), FMT_RATIO));
-    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('V'), RLast, colIdx('V'), FMT_BAHT));
-    fmtReqs.push(fillReq(sheetId, R8, colIdx('Q'), RLast, colIdx('V'), NEW_FORMULA_FILL));
+    fmtReqs.push(numFmtReq(sheetId, R8, colIdx('V'), RLast, colIdx('W'), FMT_BAHT));
+    fmtReqs.push(fillReq(sheetId, R8, colIdx('Q'), RLast, colIdx('W'), NEW_FORMULA_FILL));
     fmtReqs.push(alignReq(sheetId, R8, colIdx('Q'), RLast, colIdx('Q'), 'CENTER'));
-    fmtReqs.push(alignReq(sheetId, R8, colIdx('R'), RLast, colIdx('V'), 'RIGHT'));
-    fmtReqs.push(numFmtReq(sheetId, 7, colIdx('Y'), 24, colIdx('Y'), FMT_BAHT));             // panel values
+    fmtReqs.push(alignReq(sheetId, R8, colIdx('R'), RLast, colIdx('W'), 'RIGHT'));
+    fmtReqs.push(numFmtReq(sheetId, 7, colIdx('Y'), FLOOR_PANEL.raised - 1, colIdx('Y'), FMT_BAHT)); // panel values
     fmtReqs.push(numFmtReq(sheetId, 10, colIdx('Y'), 10, colIdx('Y'), '#,##0'));           // Y11 count
+    fmtReqs.push(numFmtReq(sheetId, FLOOR_PANEL.keep - 1, colIdx('Y'), FLOOR_PANEL.keep - 1, colIdx('Y'), FMT_RATIO)); // Y33 keep
+    fmtReqs.push(numFmtReq(sheetId, FLOOR_PANEL.raised - 1, colIdx('Y'), FLOOR_PANEL.raised - 1, colIdx('Y'), '#,##0')); // Y34 count
   }
   fmtReqs.push(fillReq(sheetId, R8, colIdx('N'), RLast, colIdx('N'), NEW_FORMULA_FILL));    // pay
 
@@ -909,15 +911,15 @@ async function formatOverallSheet(
   // Column widths (pixels) for the helper columns and the panel
   const widths: [string, number][] = isIntern
     ? [['Q', 87], ['R', 79], ['S', 95], ['T', 87], ['U', 32], ['V', 265], ['W', 166], ['X', 32], ['Y', 32]]
-    : [['Q', 55], ['R', 95], ['S', 87], ['T', 79], ['U', 87], ['V', 95], ['W', 32], ['X', 265], ['Y', 166]];
+    : [['Q', 55], ['R', 95], ['S', 87], ['T', 79], ['U', 87], ['V', 95], ['W', 95], ['X', 265], ['Y', 166]];
   widths.forEach(([col, px]) => fmtReqs.push(colWidthReq(sheetId, col, px)));
 
   // Side panel: label column / value column, grey header rows, bordered blocks
   const PL = colIdx(isIntern ? 'V' : 'X');
   const PV = PL + 1;
-  // Staff: rows 8,12,16,22 → 0-based 7,11,15,21
-  // Intern: rows 8,11,15   → 0-based 7,10,14
-  const hdrRows = isIntern ? [7, 10, 14] : [7, 11, 15, 21];
+  // Staff: rows 8,12,16,22,28 → 0-based 7,11,15,21,27
+  // Intern: rows 8,11,15      → 0-based 7,10,14
+  const hdrRows = isIntern ? [7, 10, 14] : [7, 11, 15, 21, FLOOR_PANEL.head - 1];
   hdrRows.forEach(r => {
     fmtReqs.push({ repeatCell: { range: gridRange(sheetId, r, PL, r, PV), cell: GRAY_CELL, fields: GRAY_FIELDS } });
     fmtReqs.push(bordersReq(sheetId, r, PL, r, PV));
@@ -947,6 +949,12 @@ async function formatOverallSheet(
     fmtReqs.push(...yellowBoxReqs(sheetId, 18, PV, 18, PV));   // Y19
     fmtReqs.push(fillReq(sheetId, 24, PL, 24, PL, NEW_FORMULA_FILL)); // X25 note
     [10, 12, 13, 14].forEach(r => fmtReqs.push(alignReq(sheetId, r, PL, r, PL, 'LEFT')));  // X11, X13:X15
+    // Staff floor block X29:Y34: the floor (Y29) is a setting, the rest new-formula cells
+    const F0 = FLOOR_PANEL.floor - 1, F1 = FLOOR_PANEL.raised - 1;
+    fmtReqs.push(...yellowBoxReqs(sheetId, F0, PV, F1, PV));                                 // Y29:Y34
+    fmtReqs.push(bordersReq(sheetId, F0, PL, F1, PV, true));                                 // X29:Y34
+    fmtReqs.push(alignReq(sheetId, F0, PL, F1, PL, 'LEFT'));
+    fmtReqs.push(alignReq(sheetId, F0, PV, F1, PV, 'CENTER'));
     fmtReqs.push({ repeatCell: {
       range: gridRange(sheetId, 24, PL, 25, PL),
       cell: { userEnteredFormat: { horizontalAlignment: 'LEFT', verticalAlignment: 'MIDDLE', textFormat: { fontSize: 14 } } },
@@ -1373,7 +1381,7 @@ async function createSK03(
   // Data rows
   const staffRows = buildOverallRows(staffArray, S, false);
   if (staffRows.length > 0) {
-    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:V${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
+    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:W${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
   }
   const staffLastRow = S + staffArray.length - 1;
 

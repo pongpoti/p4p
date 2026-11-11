@@ -9,15 +9,25 @@
  *   2. STAFF get the rest: staff budget = total budget − interns' actual pay.
  *      Each department's budget = 7,500 × its staff + the add-on pool shared by
  *      (staff × capacity multiplier). Multiplier as above but against the
- *      department's own mean. Pay = ROUNDDOWN(multiplier × dept budget ÷ dept Σ multipliers, 0).
- * Anyone below 2,200 (excess < 0) gets multiplier 0 and is not counted.
+ *      department's own mean. Before rounding: multiplier × dept budget ÷ dept Σ multipliers.
+ *   3. STAFF floor (Pong, 2026-11-11): nobody on staff gets less than 10,000.
+ *      Anyone under it is raised to it; the money comes from everyone above it,
+ *      whose part above the floor shrinks by the same share:
+ *        keep = 1 − (Σ shortfall under the floor) ÷ (Σ amount above the floor)
+ *        pay  = ROUNDDOWN(IF(before < floor, floor, floor + keep × (before − floor)), 0)
+ *      In a month where nobody is under the floor, keep = 1 and nothing changes.
+ *      If the staff budget cannot give everyone the floor, the floor used is the
+ *      staff budget ÷ staff count (everyone then gets the same).
+ * Anyone below 2,200 (excess < 0) gets multiplier 0, pay 0 and is not counted.
  *
  * The layout matches the reference workbook 2569_07_new_formula.xlsx (as the
  * trial workbook 2569_06_new_formula.xlsx and its Thai manuals): pay stays
  * in column N on both sheets, so the department sheets keep reading N.
- *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept per P4P
+ *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept per P4P ·
+ *          W pay before the floor
  *          panel X/Y: Y9 total budget (input) · Y10 staff budget · Y11 count ·
- *          Y13 guarantee · Y14 add-on · Y15 add-on per capacity unit · Y17-Y20 totals · X23 คงคืน
+ *          Y13 guarantee · Y14 add-on · Y15 add-on per capacity unit · Y17-Y20 totals · X23 คงคืน ·
+ *          Y29 floor · Y30 floor used · Y31 shortfall · Y32 above the floor · Y33 keep · Y34 staff raised
  *   intern Q ratio · R raw multiplier · S7 mean · T multiplier
  *          panel V/W: W9 pool = W10 × per P4P per intern (typed into the formula) ·
  *          W10 count · W12 sum point · W13 per P4P · W16 paid
@@ -29,6 +39,12 @@ export const GUARANTEE = 7500;
 export const SLOPE = 0.05;
 export const MULT_MIN = 0.95;
 export const MULT_MAX = 1.05;
+/** Lowest staff pay (Pong, 2026-11-11). Interns have no floor. */
+export const STAFF_FLOOR = 10000;
+
+/** Staff panel rows of the floor block (X28:Y34). */
+export const FLOOR_PANEL = { head: 28, floor: 29, used: 30, short: 31, over: 32, keep: 33, raised: 34 } as const;
+const FP = FLOOR_PANEL;
 
 /** First data row of the staff and intern sheets. */
 export const DATA_START = 8;
@@ -94,14 +110,15 @@ const q = (sheet: string) => `'${sheet.replace(/'/g, "''")}'!`;
 // ─── Data rows ────────────────────────────────────────────────────
 
 /**
- * Staff row r: pay (column N) and helpers Q..V.
+ * Staff row r: pay (column N) and helpers Q..W.
  * `first`/`last` are the first and last data rows of the staff sheet.
  */
 export function staffRowCells(r: number, code: string, first: number, last: number): { N: string; QtoV: (string | number)[] } {
   const L = `$L$${first}:$L$${last}`;
   const Q = `$Q$${first}:$Q$${last}`;
+  const F = `$Y$${FP.used}`;
   return {
-    N: `=ROUNDDOWN(U${r}*V${r},0)`,
+    N: `=IF(L${r}<0,0,ROUNDDOWN(IF(W${r}<${F},${F},${F}+$Y$${FP.keep}*(W${r}-${F})),0))`,
     QtoV: [
       code,                                                                 // Q  department code
       `=IFERROR(AVERAGEIFS(${L},${Q},Q${r},${L},">=0"),0)`,                 // R  dept mean excess (≥ 2,200 only)
@@ -109,6 +126,7 @@ export function staffRowCells(r: number, code: string, first: number, last: numb
       `=IF(L${r}<0,"",IF(R${r}=0,1,1+${SLOPE}*(S${r}-1)))`,                 // T  raw multiplier
       `=IF(L${r}<0,0,MIN(MAX(T${r},${MULT_MIN}),${MULT_MAX}))`,             // U  multiplier 0.95-1.05
       `=VLOOKUP(Q${r},${q(BUDGET_SHEET)}$C$${BUDGET_FIRST}:$L$${BUDGET_LAST},10,FALSE)`, // V  dept per P4P
+      `=IF(L${r}<0,0,U${r}*V${r})`,                                         // W  pay before the floor
     ],
   };
 }
@@ -139,6 +157,7 @@ export const STAFF_HEADERS: HeaderCell[] = [
   { col: 'T', text: 'ตัวคูณ\nก่อนจำกัด', bottom: 7 },
   { col: 'U', text: 'ตัวคูณ\n(0.95–1.05)', bottom: 7 },
   { col: 'V', text: 'per P4P\nของสาขา', bottom: 7 },
+  { col: 'W', text: 'ค่าตอบแทน\nก่อนขั้นต่ำ', bottom: 7 },
 ];
 
 export const INTERN_HEADERS: HeaderCell[] = [
@@ -188,6 +207,28 @@ export function staffPanel(internSheet: string, first: number, last: number, bud
       ['เซลล์สีเหลือง = สูตรใหม่ (ดูคู่มือการอ่านไฟล์ SK03 สูตรใหม่)'],
       [`per P4P ของแต่ละสาขา อยู่ในชีต ${BUDGET_SHEET}`],
     ]},
+    ...staffFloorPanel(first, last),
+  ];
+}
+
+/**
+ * Staff floor block (X28:Y34): anyone under the floor is raised to it, paid
+ * for by shrinking everyone's part above the floor by the same share (Y33).
+ */
+export function staffFloorPanel(first: number, last: number): CellWrite[] {
+  const L = `L${first}:L${last}`;
+  const W = `W${first}:W${last}`;
+  const F = `Y${FP.used}`;
+  return [
+    { range: `X${FP.head}:Y${FP.head}`, values: [['ขั้นต่ำ staff', '']] },
+    { range: `X${FP.floor}:Y${FP.raised}`, values: [
+      ['ขั้นต่ำต่อคน', STAFF_FLOOR],
+      ['ขั้นต่ำที่ใช้ (ไม่เกิน เฉพาะ staff ÷ จำนวน)', `=MAX(0,MIN(Y${FP.floor},IF(Y11=0,0,Y10/Y11)))`],
+      ['เงินที่เติมให้ถึงขั้นต่ำ', `=SUMPRODUCT((${L}>=0)*(${W}<${F})*(${F}-${W}))`],
+      ['ส่วนที่เกินขั้นต่ำ รวมทุกคน', `=SUMPRODUCT((${L}>=0)*(${W}>=${F})*(${W}-${F}))`],
+      ['สัดส่วนส่วนเกินที่คงไว้', `=IF(Y${FP.over}<=0,1,MAX(0,1-Y${FP.short}/Y${FP.over}))`],
+      ['จำนวน staff ที่ได้รับเงินเติม', `=SUMPRODUCT((${L}>=0)*(${W}<${F}))`],
+    ]},
   ];
 }
 
@@ -219,7 +260,7 @@ export const BUDGET_HEADERS = [
   'ที่', 'สาขา', 'รหัส', 'ระดับศักยภาพ', 'ตัวคูณ\nศักยภาพ', 'จำนวน\nแพทย์',
   `ฐานประกัน\n(${GUARANTEE.toLocaleString('en-US')} × จำนวน)`, 'หน่วยศักยภาพ\n(จำนวน × ตัวคูณ)',
   'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'per P4P\nของสาขา',
-  'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
+  'จ่ายจริง\n(หลังขั้นต่ำ)', 'เศษคงเหลือ\n(ติดลบ = รับเงินเติม)',
 ];
 
 /** Cells of the งบรายสาขา sheet (A1:N26). */
