@@ -285,9 +285,10 @@ Workflow 2.2 reads this table on every run: `Budget` goes into staff Y9 and `per
 | 2569_04 | 2,144,594.88 | 216 | 9,928.68 |
 | 2569_05 | 2,139,791.04 | 216 | 9,906.44 |
 | 2569_06 | 2,159,731.84 | 224 | 9,641.66 |
+| 2569_07 | 2,158,709.06 | 226 | 9,551.81 |
 | 2569_08 | 2,189,874.33 | 229 | 9,562.77 |
 | 2569_09 | 2,210,764.71 | 231 | 9,570.41 |
 
 **perP4P = round(Budget ÷ N, 2)** for every month above.
 
-2569_08 and 2569_09 come from the hospital allocation document (จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N, ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget). 2569_07 has no row yet, so its SK03 cells stay empty.
+2569_08 and 2569_09 come from the hospital allocation document (จัดสรร กค.-สค. 69, row 2.1 แพทย์: จำนวนคน = N, ค่ากลางวงเงิน = perP4P, รวมเงิน = Budget). 2569_07 comes from the final July SK03 (แบบฟอร์ม SK03 องค์กรแพทย์ เดือนกรกฎาคม 2569: staff Y9 งบทั้งหมด = Budget, intern W9 =31*9551.81 = perP4P).
