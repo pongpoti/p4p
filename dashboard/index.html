@@ -886,6 +886,28 @@
         .rv-remark-box textarea[aria-invalid="true"] { border: 2px solid #B42318; }
         @media (max-width: 900px) { .rv-review { grid-template-columns: 1fr; } .rv-people { position: static; max-height: none; } .rv-people-list { max-height: 40vh; } }
         @media (max-height: 560px) { .rv-decide-row { position: static; } }
+        /* Auditor: three columns that fill the window under the counts bar
+           (names | the doctor's sheet | checks and buttons); each scrolls
+           inside itself, so อนุมัติ never moves (review.ts auditor). */
+        #main:has(#review-view:not(.hidden) .rv-3col) { max-width: 1680px; }
+        .rv-review.rv-3col { grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(400px, 460px); align-items: stretch; height: var(--rv-work-h, calc(100dvh - 200px)); }
+        .rv-3col > * { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+        .rv-3col .rv-people { position: static; max-height: none; overflow: hidden; }
+        .rv-3col .rv-people-list { flex: 1 1 auto; min-height: 0; overscroll-behavior: contain; }
+        .rv-3col .rv-evidence { margin-top: 0; overflow: hidden; border-radius: var(--radius); padding: 12px 14px; }
+        .rv-3col .rv-evidence .rv-sheet { flex: 1 1 auto; min-height: 0; max-height: none; overscroll-behavior: contain; }
+        .rv-3col .rv-evidence .rv-sheet-cap { margin-bottom: 0; }
+        .rv-3col .rv-person { padding: 14px 16px; gap: 10px; }
+        .rv-3col .rv-person :is(button, a, input, textarea, select, [tabindex]) { scroll-margin-top: 0; }
+        .rv-3col .rv-decide-row { position: static; }
+        .rv-3col .rv-decide-nav { margin-left: 0; }
+        .rv-3col .rv-compare th, .rv-3col .rv-compare td { padding: 5px 6px; font-size: .92rem; }
+        @media (max-width: 1100px) {
+            .rv-review.rv-3col { grid-template-columns: minmax(220px, 260px) minmax(0, 1fr); grid-template-areas: "list panel" "list ev"; height: auto; }
+            .rv-3col > * { overflow: visible; }
+            .rv-3col .rv-people { grid-area: list; } .rv-3col .rv-person { grid-area: panel; } .rv-3col .rv-evidence { grid-area: ev; }
+            .rv-3col .rv-evidence .rv-sheet { max-height: 70vh; }
+        }
         .rv-issue { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
         .rv-issue.closed { opacity: .75; }
         .rv-issue > .btn-ghost { align-self: flex-start; }

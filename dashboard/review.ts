@@ -591,6 +591,11 @@
         }
         view.scrollTop = viewTop
         syncStick()
+        // A round first shown on the auditor side: straight to the three
+        // columns, with อนุมัติ on screen and no scrolling.
+        const work = body.querySelector(".rv-3col") ? s.month + ":" + (lr ? lr.round_no : "") : ""
+        if (work && work !== workKey) toWorkingSpot()
+        workKey = work
         markOpened(s)
     }
 
@@ -1506,6 +1511,7 @@
     let swapAt = 0 // when the panel last drew another person
     let shownPerson = "" // the person the panel last drew
     let lastDecided = "" // the person the "decided" note in the list names
+    let workKey = "" // the round the view last moved to the three columns for
 
     const roundKey = (s: State, r: Round): string => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix)
     async function loadPeople(s: State, r: Round): Promise<void> {
@@ -1619,8 +1625,13 @@
         out.push(finishBar(s, r))
         if (peopleErr) out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
         if (!people) { if (!peopleErr) out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
-        const wrap = el("div", "rv-review")
-        wrap.append(peopleList(), personPanel(s, r))
+        // Three columns that fit the window: names, the doctor's sheet, and
+        // the checks with the buttons. Each scrolls inside itself, so อนุมัติ
+        // stays at one place on the screen (Pong, 2026-11-11: still had to
+        // scroll down to approve on a 1536×730 screen).
+        const wrap = el("div", "rv-review rv-3col")
+        const sel = (people || []).find((x) => x.index === selected)
+        wrap.append(peopleList(), evidenceCol(s, r, sel), personPanel(s, r))
         out.push(wrap, issuesCard(s, "auditor"))
         return out
     }
@@ -1875,12 +1886,10 @@
         return side
     }
 
-    // One person on the auditor's side. Top to bottom: name, the one-line
-    // round-2 notes, the two checks, then the decision row (pinned under the
-    // counts bar while the auditor reads further down), any remark box, the
-    // earlier remark and reply, and last หลักฐาน: the doctor's sheet and the
-    // department row. The buttons come before the sheet so the auditor never
-    // scrolls past it to decide (Pong, 2026-11-11).
+    // One person on the auditor's side, the right-hand column. Top to
+    // bottom: name, the two checks, the decision row, any remark box, the
+    // round-2 notes and the earlier remark and reply. หลักฐาน (the doctor's
+    // sheet and the department row) is the middle column (evidenceCol).
     function personPanel(s: State, r: Round): HTMLElement {
         const panel = el("section", "rv-person glass")
         const p = (people || []).find((x) => x.index === selected)
@@ -1927,7 +1936,6 @@
             prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")))
             panel.append(prev)
         }
-        panel.append(evidence(s, r, p))
         // The next person still to check: their sheet is ready when the app moves on.
         const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
         if (next) loadDetail(s, r, next.index)
@@ -1960,6 +1968,8 @@
         const h = fin ? fin.offsetHeight : 0
         view.style.setProperty("--rv-fin", h + "px")
         view.style.setProperty("--rv-view-h", view.clientHeight + "px")
+        // The three columns fill the window under the counts bar.
+        view.style.setProperty("--rv-work-h", Math.max(360, view.clientHeight - h - 10 - 12) + "px")
         // Only the counts bar here: a larger padding would also scroll the
         // page whenever a control inside the pinned row itself gets focus.
         // What sits under the pinned row clears it with scroll-margin (CSS).
@@ -1981,6 +1991,8 @@
         const bar = body.querySelector<HTMLElement>(".rv-decide-row")
         const cmp = body.querySelector<HTMLElement>(".rv-compare")
         if (!bar || !cmp) return
+        // The three columns do not pin the row: it never leaves the screen.
+        if (getComputedStyle(bar).position !== "sticky") { bar.classList.remove("stuck", "tight"); return }
         const at = view.getBoundingClientRect().top + (parseFloat(getComputedStyle(bar).top) || 0)
         const stuck = cmp.getBoundingClientRect().bottom < at
         if (!force && stuck === bar.classList.contains("stuck")) return
@@ -2070,10 +2082,10 @@
                 + " อนุมัติไม่ได้ เขียนหมายเหตุแล้วกด บันทึก"
             out.push(why)
         } else if (!bothMatch(p)) {
-            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข")
+            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ทางซ้ายก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข")
             txt.id = "rv-approve-why-text"
             approve.setAttribute("aria-describedby", txt.id)
-            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↓")
+            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ←")
             goSheet.type = "button"
             goSheet.id = "rv-go-sheet"
             goSheet.addEventListener("click", showSheet)
@@ -2156,6 +2168,11 @@
 
     // ไปที่ชีต: the sheet straight under the pinned row, and the keyboard on it.
     function showSheet(): void {
+        if (body.querySelector(".rv-3col") && document.getElementById("rv-sheet")) {
+            const region = document.getElementById("rv-sheet") as HTMLElement
+            region.focus({ preventScroll: true })
+            return
+        }
         const h = document.getElementById("rv-ev-h")
         const bar = body.querySelector<HTMLElement>(".rv-decide-row")
         if (!h) return
@@ -2198,10 +2215,18 @@
     }
     const colLetters = (c: number): string => { let s2 = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s2 = String.fromCharCode(65 + m) + s2; n = Math.floor((n - 1) / 26) } return s2 }
 
+    // The middle column: หลักฐาน for the person on screen.
+    function evidenceCol(s: State, r: Round, p: Person | undefined): HTMLElement {
+        if (p) return evidence(s, r, p)
+        const box = el("section", "rv-evidence")
+        box.append(el("p", "rv-hint", "เลือกรายชื่อทางซ้าย"))
+        return box
+    }
+
     // หลักฐาน: the doctor's sheet first (the ไม่พบ people must read it), then
     // the department row.
     function evidence(s: State, r: Round, p: Person): HTMLElement {
-        const box = el("section", "rv-evidence")
+        const box = el("section", "rv-evidence glass")
         const h = el("h4", undefined, "หลักฐาน")
         h.id = "rv-ev-h"
         box.setAttribute("aria-labelledby", h.id)
