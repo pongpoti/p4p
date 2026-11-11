@@ -361,7 +361,7 @@
         details.clear(); detailErrs.clear(); detailLoading.clear(); detailSeq++
         selected = ""; lastRoundKey = ""
         rows = null; rowsKey = ""; rowsErr = ""; rowsSeq++; editing = ""; moreOpen = false
-        drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""
+        drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""; remarkOpen.clear(); lastDecided = ""
     }
     const monthStatus = (m: MonthRow): { kind: string; text: string; sr?: string } => {
         const r = m.round
@@ -539,7 +539,7 @@
         freshState = false
         const lr = liveRound(s)
         const scope = s.month + ":" + (lr ? lr.round_no + ":" + lr.status : "")
-        if (scope !== draftScope) { if (draftScope) { drafts.clear(); fieldErrs.clear() } draftScope = scope }
+        if (scope !== draftScope) { if (draftScope) { drafts.clear(); fieldErrs.clear(); remarkOpen.clear() } draftScope = scope }
         // A note stays while the screen it was written for is the one shown:
         // it takes the screen of the first state loaded after it, and a later
         // round step, build request or role switch clears it.
@@ -589,6 +589,7 @@
             }
         }
         view.scrollTop = viewTop
+        syncStick()
         markOpened(s)
     }
 
@@ -1669,6 +1670,12 @@
     const detailErrs = new Map<string, string>()
     const detailLoading = new Set<string>()
     let detailSeq = 0
+    // People whose ต้องแก้ไข box the auditor opened, kept outside the page so
+    // a re-render (the sheet arriving, a reload) leaves it open.
+    const remarkOpen = new Set<string>()
+    let swapAt = 0 // when the panel last drew another person
+    let shownPerson = "" // the person the panel last drew
+    let lastDecided = "" // the person the "decided" note in the list names
 
     const roundKey = (s: State, r: Round): string => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix)
     async function loadPeople(s: State, r: Round): Promise<void> {
@@ -2018,15 +2025,32 @@
             b.append(top, sub)
             if (p.scoreCheck === "mismatch" || p.moneyCheck === "mismatch") b.append(chip("bad", "ผลเทียบไม่ตรง"))
             else if (!bothMatch(p)) b.append(chip("miss", "ไม่พบข้อมูล"))
-            b.addEventListener("click", () => { selected = p.index; render(); const t = document.getElementById("rv-person-h"); if (t) t.focus() })
+            b.addEventListener("click", () => { openPerson(p.index) })
             li.append(b)
             ul.append(li)
         }
         if (!shown.length) ul.append(el("li", "rv-hint", filter === "todo" ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"))
-        side.append(tools, count, ul)
+        side.append(tools, count)
+        const dn = noteEl("decided")
+        const back = lastDecided ? (people || []).find((x) => x.index === lastDecided) : undefined
+        if (dn && back) {
+            const b = el("button", "rv-link", "เปิดดูอีกครั้ง")
+            b.type = "button"
+            b.id = "rv-decided-back"
+            b.addEventListener("click", () => { openPerson(back.index) })
+            dn.append(" ", b)
+        }
+        if (dn) side.append(dn)
+        side.append(ul)
         return side
     }
 
+    // One person on the auditor's side. Top to bottom: name, the one-line
+    // round-2 notes, the two checks, then the decision row (pinned under the
+    // counts bar while the auditor reads further down), any remark box, the
+    // earlier remark and reply, and last หลักฐาน: the doctor's sheet and the
+    // department row. The buttons come before the sheet so the auditor never
+    // scrolls past it to decide (Pong, 2026-11-11).
     function personPanel(s: State, r: Round): HTMLElement {
         const panel = el("section", "rv-person glass")
         const p = (people || []).find((x) => x.index === selected)
@@ -2036,27 +2060,20 @@
         h.tabIndex = -1
         panel.setAttribute("aria-labelledby", h.id)
         panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + (p.sk03Row ? " · SK03 แถว " + p.sk03Row : "") + " · " + decisionText(p)))
-        // 'check': a check is not ตรงกัน in the new build; say which kind.
-        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why)
-        if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText))
-        if (p.edit) panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")))
-        if (p.prev && (p.prev.remark || p.prev.reply)) {
-            const prev = el("div", "rv-prev")
-            if (p.prev.remark) prev.append(el("p", undefined, "รอบก่อน ผู้ตรวจสอบ: " + p.prev.remark))
-            prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")))
-            panel.append(prev)
-        }
+        // A person drawn for the first time starts the click guard (tooSoon).
+        if (p.index !== shownPerson) { shownPerson = p.index; swapAt = Date.now() }
+        // ผล comes second, so the eye goes from the result straight down to the buttons.
         const t = el("table", "rv-compare")
         const cap = el("caption", "sr-only", "ผลเทียบอัตโนมัติ")
         const head = el("tr")
-        for (const x of ["เรื่อง", "SK03", "เทียบกับ", "ผล"]) { const th = el("th", undefined, x); th.scope = "col"; head.append(th) }
+        for (const x of ["เรื่อง", "ผล", "SK03", "เทียบกับ"]) { const th = el("th", undefined, x); th.scope = "col"; head.append(th) }
         const row = (label: string, a: string, b: string, check: string): HTMLElement => {
             const tr = el("tr")
             const th = el("th", undefined, label)
             th.scope = "row"
             const res = el("td")
             res.append(chip(check === "match" ? "ok" : check === "missing" ? "miss" : "bad", CHECK_TEXT[check]))
-            tr.append(th, el("td", undefined, a), el("td", undefined, b), res)
+            tr.append(th, res, el("td", undefined, a), el("td", undefined, b))
             return tr
         }
         const thead = el("thead"), tbody = el("tbody")
@@ -2067,10 +2084,134 @@
             row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck),
         )
         t.append(cap, thead, tbody)
-        panel.append(t)
-        panel.append(sheetBox(s, r, p))
-        panel.append(decideBox(s, p))
-        const nav = el("div", "rv-actions")
+        panel.append(t, ...decideBox(s, p))
+        // Round 2's notes go under the buttons, so the buttons are at the
+        // same place for everyone.
+        // 'check': a check is not ตรงกัน in the new build; say which kind.
+        const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why)
+        if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText))
+        if (p.edit) panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")))
+        if (p.prev && (p.prev.remark || p.prev.reply)) {
+            const prev = el("div", "rv-prev")
+            if (p.prev.remark) prev.append(el("p", undefined, "รอบก่อน ผู้ตรวจสอบ: " + p.prev.remark))
+            prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")))
+            panel.append(prev)
+        }
+        panel.append(evidence(s, r, p))
+        // The next person still to check: their sheet is ready when the app moves on.
+        const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
+        if (next) loadDetail(s, r, next.index)
+        return panel
+    }
+
+    // Show another person: the list and panel just under the counts bar, so
+    // อนุมัติ is at the same place on the screen for everyone, and focus on
+    // their name (one Tab on is อนุมัติ).
+    function openPerson(index: string): void {
+        selected = index
+        render()
+        toWorkingSpot()
+        const h = document.getElementById("rv-person-h")
+        if (h) h.focus({ preventScroll: true })
+    }
+    function toWorkingSpot(): void {
+        const wrap = body.querySelector<HTMLElement>(".rv-review")
+        if (!wrap) return
+        const fin = body.querySelector<HTMLElement>(".rv-finish")
+        const top = wrap.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop
+        view.scrollTop = Math.max(0, top - (fin ? fin.offsetHeight : 0) - 10)
+        markStuck()
+    }
+    // The counts bar's height (it wraps on narrow windows) sets where the
+    // people list and the decision row stick, and how much of the top a
+    // focused control must clear.
+    function syncStick(): void {
+        const fin = body.querySelector<HTMLElement>(".rv-finish")
+        const h = fin ? fin.offsetHeight : 0
+        view.style.setProperty("--rv-fin", h + "px")
+        view.style.setProperty("--rv-view-h", view.clientHeight + "px")
+        // Only the counts bar here: a larger padding would also scroll the
+        // page whenever a control inside the pinned row itself gets focus.
+        // What sits under the pinned row clears it with scroll-margin (CSS).
+        view.style.scrollPaddingTop = h + 10 + "px"
+        const bar = body.querySelector<HTMLElement>(".rv-decide-row")
+        if (bar) {
+            view.style.setProperty("--rv-bar", bar.offsetHeight + "px")
+            // The sheet takes what is left under the pinned row, the
+            // หลักฐาน heading and the caption, so ไปที่ชีต shows all of it.
+            const ev = document.getElementById("rv-ev-h")
+            const cap = body.querySelector<HTMLElement>(".rv-sheet-cap")
+            const room = view.clientHeight - h - 8 - bar.offsetHeight - 10 - (ev ? ev.offsetHeight + 10 : 0) - (cap ? cap.offsetHeight + 10 : 0) - 36
+            view.style.setProperty("--rv-sheet-max", Math.max(280, Math.floor(room)) + "px")
+        }
+        markStuck(true)
+    }
+    // Once the checks have scrolled away, the pinned row also names the person.
+    function markStuck(force = false): void {
+        const bar = body.querySelector<HTMLElement>(".rv-decide-row")
+        const cmp = body.querySelector<HTMLElement>(".rv-compare")
+        if (!bar || !cmp) return
+        const at = view.getBoundingClientRect().top + (parseFloat(getComputedStyle(bar).top) || 0)
+        const stuck = cmp.getBoundingClientRect().bottom < at
+        if (!force && stuck === bar.classList.contains("stuck")) return
+        bar.classList.toggle("stuck", stuck)
+        // The name shown in the pinned row only when the row still fits on
+        // one line with it.
+        bar.classList.remove("tight")
+        const btns = bar.querySelector<HTMLElement>(".rv-decide-btns")
+        const nav = bar.querySelector<HTMLElement>(".rv-decide-nav")
+        if (stuck && btns && nav && nav.offsetTop > btns.offsetTop + 4) bar.classList.add("tight")
+    }
+    view.addEventListener("scroll", () => markStuck(), { passive: true })
+    window.addEventListener("resize", syncStick)
+    // The click that decided one person must not land on the next one's
+    // button: ignore pointer clicks for half a second after the panel shows
+    // another person, and the second click of a double-click. Keys (detail 0)
+    // always work.
+    const tooSoon = (ev: MouseEvent): boolean => ev.detail > 1 || (ev.detail === 1 && Date.now() - swapAt < 500)
+
+    // What the auditor would most likely write, ready to edit.
+    function suggestRemark(p: Person): string {
+        if (p.scoreCheck === "mismatch") return "คะแนนในไฟล์แพทย์ " + num(p.stated) + " แต่ SK03 " + num(p.score)
+        if (p.moneyCheck === "mismatch") return "เงินในชีตกลุ่มงาน " + num(p.deptPay) + " แต่ SK03 " + num(p.pay)
+        if (p.moneyCheck === "missing") return "ไม่พบเงินในชีตกลุ่มงาน" + (p.intern ? "" : " " + p.department)
+        return ""
+    }
+
+    function decideBox(s: State, p: Person): Node[] {
+        // Pay must be ตรงกัน. The score may be ตรงกัน, or ไม่พบ (the doctor's
+        // file has no saved total): then the auditor looks at the sheet and
+        // approves (Pong, 2026-11-10). ไม่ตรงกัน never approves.
+        const ok = p.moneyCheck === "match" && p.scoreCheck !== "mismatch"
+        const spot = "decide-" + p.index
+        const draftKey = "remark:" + p.index
+        const fe = fieldErrs.get(draftKey)
+        // The remark box is open when it is the only way on, when a remark is
+        // saved, or when the auditor opened it (kept across re-renders).
+        const forced = !ok || p.decision === "fix"
+        const open = forced || remarkOpen.has(p.index) || !!fe
+        const out: Node[] = []
+        const bar = el("div", "rv-decide-row")
+        bar.setAttribute("role", "group")
+        bar.setAttribute("aria-label", "ตัดสินผล " + p.name)
+        const btns = el("div", "rv-decide-btns")
+        const approve = el("button", "btn-primary" + (ok ? "" : " rv-off"), p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
+        approve.type = "button"
+        approve.id = "rv-approve"
+        const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""), p.decision === "fix" ? "✓ ต้องแก้ไขแล้ว" : "ต้องแก้ไข")
+        fix.type = "button"
+        fix.id = "rv-fix"
+        btns.append(approve, fix)
+        if (p.decision) {
+            const undo = el("button", "btn-ghost", "ยกเลิกผล")
+            undo.type = "button"
+            undo.id = "rv-undo"
+            undo.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", undo) })
+            btns.append(undo)
+        }
+        const who = el("span", "rv-decide-who", p.name)
+        who.setAttribute("aria-hidden", "true")
+        const nav = el("div", "rv-decide-nav")
         const list = visiblePeople()
         const i = list.findIndex((x) => x.index === p.index)
         const go = (d: number, text: string): HTMLButtonElement => {
@@ -2079,12 +2220,143 @@
             b.id = d < 0 ? "rv-prev-person" : "rv-next-person"
             const target = list[i + d]
             b.disabled = !target
-            b.addEventListener("click", () => { if (target) { selected = target.index; render(); const hh = document.getElementById("rv-person-h"); if (hh) hh.focus() } })
+            b.addEventListener("click", () => { if (target) openPerson(target.index) })
             return b
         }
         nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"))
-        panel.append(nav)
-        return panel
+        bar.append(btns, who, nav)
+        // A failed save shows in the row, which is on screen even when pinned.
+        const n = noteEl(spot)
+        if (n) bar.append(n)
+        out.push(bar)
+
+        const why = el("div", "rv-decide-hint")
+        why.id = "rv-approve-why"
+        if (!ok) {
+            approve.setAttribute("aria-disabled", "true")
+            approve.setAttribute("aria-describedby", why.id)
+            why.classList.add("bad")
+            why.textContent = (p.moneyCheck === "missing" && p.scoreCheck !== "mismatch" ? "ไม่พบเงินในชีตกลุ่มงาน" : "เทียบไม่ตรงกัน")
+                + " อนุมัติไม่ได้ เขียนหมายเหตุแล้วกด บันทึก"
+            out.push(why)
+        } else if (!bothMatch(p)) {
+            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข")
+            txt.id = "rv-approve-why-text"
+            approve.setAttribute("aria-describedby", txt.id)
+            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↓")
+            goSheet.type = "button"
+            goSheet.id = "rv-go-sheet"
+            goSheet.addEventListener("click", showSheet)
+            why.append(txt, goSheet)
+            out.push(why)
+        }
+        approve.addEventListener("click", (ev) => {
+            if (tooSoon(ev)) return
+            if (!ok) { say(why.textContent || ""); return }
+            void decide(s, p, "approve", "", approve)
+        })
+        fix.addEventListener("click", (ev) => {
+            if (tooSoon(ev)) return
+            remarkOpen.add(p.index)
+            if (!open) render()
+            const ta = document.getElementById("rv-remark")
+            if (ta) ta.focus()
+        })
+
+        let save: HTMLButtonElement | null = null
+        if (open) {
+            const box = el("div", "rv-remark-box")
+            box.id = "rv-remark-box"
+            const lab = el("label", undefined, p.decision === "fix" ? "หมายเหตุที่ส่งให้ผู้จัดทำ" : "หมายเหตุ ต้องแก้ไขอะไร")
+            lab.htmlFor = "rv-remark"
+            const ta = keep(el("textarea"), draftKey, p.decision === "fix" ? p.remark : suggestRemark(p))
+            ta.id = "rv-remark"
+            ta.rows = 2
+            ta.maxLength = 1000
+            const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "")
+            err.id = "rv-remark-e"
+            if (fe) ta.setAttribute("aria-invalid", "true")
+            ta.setAttribute("aria-describedby", err.id)
+            const sv = el("button", "btn-primary", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "บันทึก")
+            sv.type = "button"
+            sv.id = "rv-fix-save"
+            save = sv
+            sv.addEventListener("click", (ev) => {
+                if (tooSoon(ev)) return
+                if (!ta.value.trim()) {
+                    err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร"
+                    fieldErrs.set(draftKey, err.textContent)
+                    err.classList.remove("hidden")
+                    ta.setAttribute("aria-invalid", "true")
+                    ta.focus()
+                    return
+                }
+                fieldErrs.delete(draftKey)
+                void decide(s, p, "fix", ta.value, sv)
+            })
+            const acts = el("div", "rv-actions")
+            acts.append(sv)
+            // ยกเลิก drops the text; Esc only folds the box away (the text
+            // comes back with ต้องแก้ไข).
+            const close = (discard: boolean): void => {
+                remarkOpen.delete(p.index)
+                if (discard) drafts.delete(draftKey)
+                fieldErrs.delete(draftKey)
+                render()
+                const f = document.getElementById("rv-fix")
+                if (f) f.focus({ preventScroll: true })
+            }
+            if (!forced) {
+                const cancel = el("button", "btn-ghost", "ยกเลิก")
+                cancel.type = "button"
+                cancel.id = "rv-fix-cancel"
+                cancel.addEventListener("click", () => close(true))
+                acts.append(cancel)
+            }
+            ta.addEventListener("keydown", (ev) => {
+                if (ev.key === "Escape" && !forced) { ev.preventDefault(); close(false) }
+                else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); sv.click() }
+            })
+            box.append(lab, ta, err, acts)
+            out.push(box)
+        }
+        if (flying(s, spot)) for (const b of [approve, fix, save]) if (b) markBusy(b)
+        return out
+    }
+
+    // ไปที่ชีต: the sheet straight under the pinned row, and the keyboard on it.
+    function showSheet(): void {
+        const h = document.getElementById("rv-ev-h")
+        const bar = body.querySelector<HTMLElement>(".rv-decide-row")
+        if (!h) return
+        const at = (bar ? (parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight : 0) + 10
+        view.scrollTop += h.getBoundingClientRect().top - view.getBoundingClientRect().top - at
+        markStuck()
+        const region = document.getElementById("rv-sheet") || h
+        if (region === h && !h.hasAttribute("tabindex")) h.tabIndex = -1
+        region.focus({ preventScroll: true })
+    }
+
+    // Load one person's sheet and department row once; a failure is kept
+    // (shown with a retry) only for the person on screen, so a failed
+    // look-ahead just loads again when that person is opened.
+    function loadDetail(s: State, r: Round, index: string): void {
+        const key = s.month + ":" + r.round_no + ":" + index
+        if (details.has(key) || detailErrs.has(key) || detailLoading.has(key)) return
+        detailLoading.add(key)
+        const seq = detailSeq
+        void api<Detail>(monthApi(s) + "/person/" + r.round_no + "/" + index)
+            .then((x) => { if (seq === detailSeq) details.set(key, x) }, (e) => {
+                if (seq !== detailSeq || signedOut(e) || selected !== index) return
+                const msg = errText(e, "โหลดไม่สำเร็จ")
+                detailErrs.set(key, msg)
+                shout("โหลดชีตของแพทย์ไม่สำเร็จ: " + msg)
+            })
+            .then(() => {
+                if (seq !== detailSeq) return
+                detailLoading.delete(key)
+                if (selected === index) render()
+            })
     }
 
     function cellRC(name: string | null): [number, number] | null {
@@ -2096,35 +2368,86 @@
     }
     const colLetters = (c: number): string => { let s2 = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s2 = String.fromCharCode(65 + m) + s2; n = Math.floor((n - 1) / 26) } return s2 }
 
-    function sheetBox(s: State, r: Round, p: Person): HTMLElement {
-        const box = el("div", "rv-sheet-box")
+    // หลักฐาน: the doctor's sheet first (the ไม่พบ people must read it), then
+    // the department row.
+    function evidence(s: State, r: Round, p: Person): HTMLElement {
+        const box = el("section", "rv-evidence")
+        const h = el("h4", undefined, "หลักฐาน")
+        h.id = "rv-ev-h"
+        box.setAttribute("aria-labelledby", h.id)
+        box.append(h)
         const key = s.month + ":" + r.round_no + ":" + p.index
         const d = details.get(key)
         if (!d) {
             const de = detailErrs.get(key)
-            if (de) {
-                box.append(failBox("โหลดชีตของแพทย์ไม่สำเร็จ: " + de, "rv-retry-sheet", () => { detailErrs.delete(key); render() }))
-                return box
-            }
-            box.append(el("p", "rv-hint", "กำลังโหลดชีตของแพทย์…"))
-            // One request per person at a time, whatever re-renders meanwhile.
-            if (!detailLoading.has(key)) {
-                detailLoading.add(key)
-                const seq = detailSeq
-                void api<Detail>(monthApi(s) + "/person/" + r.round_no + "/" + p.index)
-                    .then((x) => { if (seq === detailSeq) details.set(key, x) }, (e) => {
-                        if (seq !== detailSeq || signedOut(e)) return
-                        const msg = errText(e, "โหลดไม่สำเร็จ")
-                        detailErrs.set(key, msg)
-                        if (selected === p.index) shout("โหลดชีตของแพทย์ไม่สำเร็จ: " + msg)
-                    })
-                    .then(() => {
-                        if (seq !== detailSeq) return
-                        detailLoading.delete(key)
-                        if (selected === p.index) render()
-                    })
-            }
+            if (de) box.append(failBox("โหลดชีตของแพทย์ไม่สำเร็จ: " + de, "rv-retry-sheet", () => { detailErrs.delete(key); render() }))
+            else { box.append(el("p", "rv-hint", "กำลังโหลดชีตของแพทย์…")); loadDetail(s, r, p.index) }
             return box
+        }
+        const g = d.grid
+        if (!g) box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู"))
+        else {
+            const hit = cellRC(p.statedCell)
+            const region = el("div", "rv-sheet")
+            region.id = "rv-sheet"
+            region.dataset.key = key
+            region.setAttribute("role", "region")
+            region.tabIndex = 0
+            const capId = "rv-sheet-cap"
+            region.setAttribute("aria-labelledby", capId)
+            const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)")
+            cap.id = capId
+            if (p.statedCell) cap.append(" ", el("span", "rv-cell-chip", "คะแนนอยู่ช่อง " + p.statedCell))
+            const tbl = el("table", "rv-xl")
+            const map = new Map<string, string | number>()
+            for (const [rr, cc, v] of g.cells) map.set(rr + ":" + cc, v)
+            const isHit = (rr: number, c: number): boolean => !!hit && hit[0] === rr && hit[1] === c
+            const blank = (rr: number, c: number): boolean => { const v = map.get(rr + ":" + c); return (v === undefined || v === "") && !isHit(rr, c) }
+            const hd = el("tr")
+            hd.append(el("th", "corner"))
+            for (let c = 0; c < g.cols; c++) { const th = el("th", undefined, colLetters(c)); th.scope = "col"; hd.append(th) }
+            const thead = el("thead"); thead.append(hd)
+            const tbody = el("tbody")
+            for (let rr = 0; rr < g.rows; rr++) {
+                const tr = el("tr")
+                const th = el("th", undefined, String(rr + 1)); th.scope = "row"
+                tr.append(th)
+                for (let c = 0; c < g.cols; c++) {
+                    const v = map.get(rr + ":" + c)
+                    const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v))
+                    if (isHit(rr, c)) { td.className += " hit"; td.setAttribute("aria-label", "คะแนนที่ใช้ " + (p.stated !== null ? num(p.stated) : String(v))) }
+                    // Text runs on over the empty cells to its right, as in
+                    // Excel, so a long title does not make its column wide.
+                    else if (typeof v === "string" && v !== "") {
+                        let span = 1
+                        while (c + span < g.cols && blank(rr, c + span)) span++
+                        if (span > 1) {
+                            td.colSpan = span
+                            td.className += " spill"
+                            td.replaceChildren(el("span", undefined, String(v)))
+                            c += span - 1
+                        }
+                    }
+                    tr.append(td)
+                }
+                tbody.append(tr)
+            }
+            tbl.append(thead, tbody)
+            region.append(tbl)
+            box.append(cap, region)
+            // Bring the cell used as the score into view (it is often far
+            // right / bottom): in the upper third, so the rows above it show,
+            // and sideways only as far as needed, so the activity names on
+            // the left stay in view when they fit. Not on a redraw of the
+            // sheet already open (render kept its scroll).
+            requestAnimationFrame(() => {
+                if (region.dataset.kept) return
+                const hc = tbl.querySelector("td.hit") as HTMLElement | null
+                if (!hc) return
+                region.scrollTop = Math.max(0, hc.offsetTop - region.clientHeight / 3)
+                const over = hc.offsetLeft + hc.offsetWidth + 24 - region.clientWidth
+                region.scrollLeft = over > 0 ? over : 0
+            })
         }
         if (d.deptRow) {
             const dt = el("table", "rv-dept")
@@ -2138,117 +2461,6 @@
             dt.append(cap, th2, tb)
             box.append(dt)
         }
-        const g = d.grid
-        if (!g) { box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู")); return box }
-        const hit = cellRC(p.statedCell)
-        const region = el("div", "rv-sheet")
-        region.id = "rv-sheet"
-        region.dataset.key = key
-        region.setAttribute("role", "region")
-        region.tabIndex = 0
-        const capId = "rv-sheet-cap"
-        region.setAttribute("aria-labelledby", capId)
-        const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)" + (p.statedCell ? " · ช่องที่ใช้เป็นคะแนน: " + p.statedCell : ""))
-        cap.id = capId
-        const tbl = el("table", "rv-xl")
-        const map = new Map<string, string | number>()
-        for (const [rr, cc, v] of g.cells) map.set(rr + ":" + cc, v)
-        const hd = el("tr")
-        hd.append(el("th", "corner"))
-        for (let c = 0; c < g.cols; c++) { const th = el("th", undefined, colLetters(c)); th.scope = "col"; hd.append(th) }
-        const thead = el("thead"); thead.append(hd)
-        const tbody = el("tbody")
-        for (let rr = 0; rr < g.rows; rr++) {
-            const tr = el("tr")
-            const th = el("th", undefined, String(rr + 1)); th.scope = "row"
-            tr.append(th)
-            for (let c = 0; c < g.cols; c++) {
-                const v = map.get(rr + ":" + c)
-                const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v))
-                if (hit && hit[0] === rr && hit[1] === c) { td.className += " hit"; td.setAttribute("aria-label", "คะแนนที่ใช้ " + (p.stated !== null ? num(p.stated) : String(v))) }
-                tr.append(td)
-            }
-            tbody.append(tr)
-        }
-        tbl.append(thead, tbody)
-        region.append(tbl)
-        box.append(cap, region)
-        // Bring the cell used as the score into view (it is often far right / bottom),
-        // unless this is a redraw of the sheet already open (render kept its scroll).
-        requestAnimationFrame(() => {
-            if (region.dataset.kept) return
-            const h = tbl.querySelector("td.hit") as HTMLElement | null
-            if (!h) return
-            region.scrollTop = Math.max(0, h.offsetTop - region.clientHeight / 2)
-            region.scrollLeft = Math.max(0, h.offsetLeft - region.clientWidth / 2)
-        })
-        return box
-    }
-
-    function decideBox(s: State, p: Person): HTMLElement {
-        const box = el("div", "rv-decide")
-        // Pay must be ตรงกัน. The score may be ตรงกัน, or ไม่พบ (the doctor's
-        // file has no saved total): then the auditor looks at the sheet and
-        // approves (Pong, 2026-11-10). ไม่ตรงกัน never approves.
-        const ok = p.moneyCheck === "match" && p.scoreCheck !== "mismatch"
-        const spot = "decide-" + p.index
-        const approve = el("button", "btn-primary", p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
-        approve.type = "button"
-        approve.id = "rv-approve"
-        const why = el("p", "rv-hint")
-        why.id = "rv-approve-why"
-        if (!ok) {
-            approve.setAttribute("aria-disabled", "true")
-            approve.setAttribute("aria-describedby", why.id)
-            why.textContent = (p.moneyCheck === "missing" && p.scoreCheck !== "mismatch" ? "ไม่พบเงินในชีตกลุ่มงาน" : "เทียบไม่ตรงกัน")
-                + " อนุมัติไม่ได้ ให้เลือก ต้องแก้ไข พร้อมหมายเหตุ"
-        } else if (!bothMatch(p)) {
-            approve.setAttribute("aria-describedby", why.id)
-            why.textContent = "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข"
-        }
-        approve.addEventListener("click", () => {
-            if (!ok) { say(why.textContent || ""); return }
-            void decide(s, p, "approve", "", approve)
-        })
-        const fixLabel = el("label", undefined, "หมายเหตุ (ต้องมีเมื่อเลือก ต้องแก้ไข)")
-        fixLabel.htmlFor = "rv-remark"
-        const ta = keep(el("textarea"), "remark:" + p.index, p.decision === "fix" ? p.remark : "")
-        ta.id = "rv-remark"
-        ta.rows = 2
-        ta.maxLength = 1000
-        const fe = fieldErrs.get("remark:" + p.index)
-        const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "")
-        err.id = "rv-remark-e"
-        if (fe) ta.setAttribute("aria-invalid", "true")
-        ta.setAttribute("aria-describedby", err.id)
-        const fix = el("button", "btn-ghost", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "ต้องแก้ไข")
-        fix.type = "button"
-        fix.id = "rv-fix"
-        fix.addEventListener("click", () => {
-            if (!ta.value.trim()) {
-                err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร"
-                fieldErrs.set("remark:" + p.index, err.textContent)
-                err.classList.remove("hidden")
-                ta.setAttribute("aria-invalid", "true")
-                ta.focus()
-                return
-            }
-            fieldErrs.delete("remark:" + p.index)
-            void decide(s, p, "fix", ta.value, fix)
-        })
-        const row = el("div", "rv-actions")
-        row.append(approve, fix)
-        if (p.decision) {
-            const undo = el("button", "btn-ghost", "ยกเลิกผล")
-            undo.type = "button"
-            undo.id = "rv-undo"
-            undo.addEventListener("click", () => { void decide(s, p, null, "", undo) })
-            row.append(undo)
-        }
-        if (flying(s, spot)) for (const b of [approve, fix]) markBusy(b)
-        box.append(fixLabel, ta, err, row, why)
-        const n = noteEl(spot) || noteEl("decided")
-        if (n) box.append(n)
         return box
     }
 
@@ -2257,27 +2469,45 @@
         if (!begin(s, spot, btn)) return
         notes.delete("decided")
         busy = true
+        let moved = false, failed = false
         try {
             await post(monthApi(s) + "/decisions/" + p.index, { decision, remark }, "PUT")
             p.decision = decision
             p.remark = decision === "fix" ? remark.trim() : ""
             p.carried = false
             forget(s, "remark:" + p.index)
+            fieldErrs.delete("remark:" + p.index)
+            if (decision !== "fix") remarkOpen.delete(p.index)
+            // Said in the people list, not under the next person's buttons,
+            // where it would read as their own result.
             tell(s, "decided", "ok", p.name + ": " + decisionText(p))
+            lastDecided = p.index
             // Straight on to the next person still to check.
             if (decision && s.month === month) {
                 const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
-                if (next) selected = next.index
+                if (next) { selected = next.index; moved = true }
             }
         } catch (e) {
+            failed = true
             tell(s, spot, "err", p.name + ": " + errText(e, "บันทึกไม่สำเร็จ"))
         } finally {
             busy = false
             end(s, spot)
         }
+        // Show the next person at once; the reload only refreshes counts.
+        const focusHead = (): void => {
+            const hh = document.getElementById("rv-person-h")
+            if (hh) hh.focus({ preventScroll: true })
+        }
+        if (moved && s.month === month) { render(); toWorkingSpot(); focusHead() }
+        const pressed = btn.id
         await reload()
-        const hh = s.month === month ? document.getElementById("rv-person-h") : null
-        if (hh) hh.focus()
+        if (s.month !== month) return
+        if (moved) { toWorkingSpot(); focusHead(); return }
+        // After a failure stay on the button that was pressed.
+        const back = failed && pressed ? document.getElementById(pressed) : null
+        if (back) back.focus({ preventScroll: true })
+        else focusHead()
     }
 
     // ปัญหาอื่น ๆ (both sides) ──────────────────────────────────────────────
