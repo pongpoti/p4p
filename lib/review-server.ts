@@ -20,11 +20,14 @@
  *   POST /dashboard/api/review/:month/rounds          send the newest build to the auditor
  *   POST /dashboard/api/review/:month/rounds/withdraw take it back before the auditor opens it
  *   POST /dashboard/api/review/:month/email           email the live round to the auditor (again)
+ *   PUT  /dashboard/api/review/email-mode             {test: true|false}: the email's test mode switch
  *
  * Sending a round queues an email to the auditor (scripts/review-email-2026-11.sql,
  * sent by the always-on relay, automation/review-email.ts); the month's
  * state carries the month's emails, newest first, as `emails` (null until
- * that file has been run).
+ * that file has been run), and the email's mode as `mail` ({test, testTo,
+ * recipients}: null until scripts/review-email-test-toggle-2026-11.sql has
+ * been run, and then the tab shows no switch).
  *
  * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
  * Google Drive (the state carries their ids, the tab links them view only),
@@ -103,6 +106,11 @@ const REFUSALS: [RegExp, number, string][] = [
   [/already emailed/, 409, "ส่งอีเมลรอบนี้ถึงผู้ตรวจสอบไปแล้ว"],
   [/reason is too long/, 400, "เหตุผลไม่เกิน 1,000 ตัวอักษร"],
   [/another round/, 409, "รอบที่ตรวจอยู่เปลี่ยนแล้ว โหลดหน้าใหม่ก่อน"],
+  [/an email is still going out/, 409, "มีอีเมลที่ยังส่งไม่เสร็จ รอให้ส่งเสร็จก่อน (ประมาณ 1 นาที) แล้วค่อยปิดโหมดทดสอบ"],
+  [/no recipients/, 409, "ยังไม่มีที่อยู่ผู้รับจริง ปิดโหมดทดสอบไม่ได้ (ตั้งใน review_email_settings ก่อน)"],
+  [/no test address/, 409, "ยังไม่มีที่อยู่ทดสอบ (ตั้งใน review_email_settings ก่อน)"],
+  [/no email settings/, 409, "ยังไม่ได้ตั้งค่าอีเมล (review_email_settings ว่าง)"],
+  [/bad switch/, 400, "ส่งค่าเปิดหรือปิดโหมดทดสอบมาไม่ถูก"],
   [/a check is not a match/, 409, "ยังมีคนที่รอตรวจที่ผลเทียบไม่ตรงกันหรือไม่พบ ตรวจรายคนก่อน"],
   [/nobody to approve/, 409, "ไม่มีคนที่รอตรวจแล้ว"],
 ]
@@ -127,6 +135,7 @@ const BUDGET_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้�
 // review_state says v: 2 once the second file has been run.
 const SQL_VERSION = 2
 const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการส่งอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-2026-11.sql ใน Supabase SQL editor"
+const MAIL_MODE_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งสวิตช์โหมดทดสอบอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-test-toggle-2026-11.sql ใน Supabase SQL editor"
 const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
 const APPROVE_ALL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งปุ่มอนุมัติทุกคนที่รอตรวจ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-approve-all-2026-11.sql ใน Supabase SQL editor"
 
@@ -183,6 +192,28 @@ export function mountReview(d: ReviewDeps): void {
     }
   }
 
+  // The email's mode, for the switch on the ผู้จัดทำ side: test mode
+  // (test_to set: every email to that one address only), the test address
+  // (kept in test_addr while off), and how many real recipients. Never the
+  // recipients' addresses. Null when scripts/review-email-test-toggle-2026-11.sql
+  // has not been run (no test_addr column) or the read fails: no switch.
+  type MailMode = { test: boolean; testTo: string; recipients: number }
+  const toMode = (row: any): MailMode | null => !row || typeof row !== "object" ? null : {
+    test: String(row.test_to || "") !== "",
+    testTo: String(row.test_to || row.test_addr || ""),
+    recipients: Array.isArray(row.recipients) ? row.recipients.length : Math.max(0, Number(row.recipients) || 0),
+  }
+  const mailMode = async (): Promise<MailMode | null> => {
+    try {
+      const r = await axios.get(rest("review_email_settings?select=recipients,test_to,test_addr&id=eq.1"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      return Array.isArray(r.data) ? toMode(r.data[0]) : null
+    } catch (e: any) {
+      if (!notInstalled(e)) console.error("[dashboard] review email mode failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      return null
+    }
+  }
+
   // No build may change once the auditor has it, or after approval.
   const auditeeTurn = (st: any): boolean => {
     const live = (st.rounds || []).find((r: any) => r.round_no === st.live)
@@ -207,7 +238,10 @@ export function mountReview(d: ReviewDeps): void {
       // Only the first SQL file run: the tab says the second is needed.
       if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
-      res.json({ installed: true, ...st, emails: await emails(g.month) })
+      // The email's mode (and its test address) is for the owner only: a
+      // dashboard user given the ผู้จัดทำ side alone gets no switch.
+      const [em, mail] = await Promise.all([emails(g.month), d.isDashOwner(g.s.sub) ? mailMode() : Promise.resolve(null)])
+      res.json({ installed: true, ...st, emails: em, mail })
     } catch (e: any) { fail(res, "state", e, true) }
   })
 
@@ -332,6 +366,29 @@ export function mountReview(d: ReviewDeps): void {
         res.status(503).json({ installed: false, error: EMAIL_NOT_INSTALLED_MSG }); return
       }
       fail(res, "email", e)
+    }
+  })
+
+  // The email's test mode switch (Pong, 2026-11-12: on the ผู้จัดทำ side,
+  // in the left column under the months). {test: true} sends every email
+  // to the test address only; {test: false} to the real recipients. The
+  // SQL refuses off with no recipients, or while an email is on its way
+  // (one queued as a test would otherwise go out for real).
+  app.put("/dashboard/api/review/email-mode", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const on = req.body ? req.body.test : undefined
+    if (typeof on !== "boolean") return res.status(400).json({ error: "ส่งค่าเปิดหรือปิดโหมดทดสอบมาไม่ถูก" })
+    try {
+      const row = await d.callServiceRpc("review_email_set_test", { p_on: on })
+      await d.audit(req, g.s, "review.email_mode", { test: on })
+      res.json({ ok: true, mail: toMode(row) })
+    } catch (e: any) {
+      if (notInstalled(e)) {
+        console.error("[dashboard] review email mode: not installed (" + String(pgError(e).code || "") + ")")
+        res.status(503).json({ installed: false, error: MAIL_MODE_NOT_INSTALLED_MSG }); return
+      }
+      fail(res, "email mode", e)
     }
   })
 

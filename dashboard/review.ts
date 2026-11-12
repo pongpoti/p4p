@@ -101,6 +101,14 @@
         live: number | null
         // Null or missing: the email SQL is not installed (nothing is shown).
         emails?: Email[] | null
+        // The email's test mode. Null or missing: the switch's SQL is not
+        // installed (no switch).
+        mail?: MailMode | null
+    }
+    interface MailMode {
+        test: boolean       // on: every email to testTo only, subject marked [ทดสอบ]
+        testTo: string      // the test address (kept while off)
+        recipients: number  // how many real addresses get it when off
     }
     interface MonthRow {
         month: string
@@ -254,17 +262,25 @@
     const inflight = new Set<string>()
     const flightKey = (s: State, spot: string): string => s.month + "|" + spot
     const flying = (s: State, spot: string): boolean => inflight.has(flightKey(s, spot))
-    function markBusy(b: HTMLElement): void { b.setAttribute("aria-disabled", "true"); b.setAttribute("aria-busy", "true") }
+    // A step on its way: the button is off and, when it is the one pressed,
+    // shows a spinner inside (Pong, 2026-11-12; the CSS draws it).
+    function markBusy(b: HTMLElement, spin = true): void {
+        b.setAttribute("aria-disabled", "true")
+        if (spin) b.setAttribute("aria-busy", "true")
+    }
+    // Which button started each step, so a redraw spins that one only.
+    const pressedFor = new Map<string, string>()
     function begin(s: State, spot: string, btn?: HTMLElement | null): boolean {
         if (flying(s, spot)) return false
         inflight.add(flightKey(s, spot))
+        if (btn && btn.id) pressedFor.set(flightKey(s, spot), btn.id)
         if (s.month === month) {
             for (const k of [spot, "top"]) { notes.delete(k); const n = document.getElementById(noteId(k)); if (n) n.remove() }
         }
         if (btn) markBusy(btn)
         return true
     }
-    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); dirty = true }
+    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true }
 
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text: string, id: string, retry: () => void): HTMLElement {
@@ -425,6 +441,8 @@
         st = s
         stJson = json
         loadError = ""
+        // A load that started before the switch was flipped brings the old mode.
+        if (s.mail !== undefined && !mailBusy && seq > mailSeq) mail = s.mail
         if (!(fromPoll && same)) { freshState = true; render() }
         clearTimeout(poll)
         poll = undefined
@@ -521,6 +539,7 @@
                 drawTabs()
                 render()
             }
+            drawMail()
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"))
         })
     }
@@ -598,6 +617,7 @@
         const main = role === "auditee" ? auditee(s) : auditor(s)
         side.replaceChildren(...sideOut)
         body.replaceChildren(...top, ...main)
+        drawMail()
         const list2 = body.querySelector(".rv-people-list")
         if (list2) list2.scrollTop = listTop
         if (inBody) {
@@ -1272,7 +1292,9 @@
         const odd = c ? Number(c.scoreMismatch) + Number(c.moneyMismatch) + Number(c.scoreMissing) + Number(c.moneyMissing) : 0
         const bits = [s.edits ? "แก้คะแนน " + int(s.edits) + " คน" : "", "ดึงกลับได้จนกว่าผู้ตรวจสอบจะเปิด"].filter(Boolean)
         kids.push(el("p", undefined, bits.join(" · ")))
-        if (s.emails) kids.push(el("p", "rv-hint", "ระบบจะส่งอีเมลถึงผู้ตรวจสอบ พร้อมไฟล์ SK03 และรวมค่าคะแนน"))
+        if (s.emails) kids.push(el("p", "rv-hint", mail && mail.test
+            ? "โหมดทดสอบ: ระบบจะส่งอีเมลถึง " + mail.testTo + " เท่านั้น พร้อมไฟล์ SK03 และรวมค่าคะแนน"
+            : "ระบบจะส่งอีเมลถึงผู้ตรวจสอบ พร้อมไฟล์ SK03 และรวมค่าคะแนน"))
         if (odd) kids.push(el("p", "rv-hint", "ผลเทียบไม่ตรงหรือไม่พบข้อมูล " + int(odd) + " รายการ · ผู้ตรวจสอบจะพิจารณา"))
         askConfirm(roundNo > 1 ? "ส่งรอบที่ " + roundNo + " ของ " + shortMonth(s.month) + "?" : "ส่ง " + shortMonth(s.month) + " ให้ผู้ตรวจสอบ?", kids, "ส่ง", () => doSubmit(s))
     }
@@ -1318,7 +1340,8 @@
     })
     // Sends a dialog's step: on success the dialog closes; on a refusal or
     // a network error it stays open with the reason inside it.
-    async function confirmRun(s: State, call: () => Promise<string>): Promise<boolean> {
+    // s null: a step of no month (the email switch): said, not noted.
+    async function confirmRun(s: State | null, call: () => Promise<string>): Promise<boolean> {
         if (confirmBusy) return false
         confirmBusy = true
         markBusy(confirmSend)
@@ -1329,12 +1352,14 @@
         try {
             const done = await call()
             if (confirmDlg.open && confirmAction === sent) confirmDlg.close()
-            tell(s, "top", "ok", done)
+            if (s) tell(s, "top", "ok", done)
+            else say(done)
             return true
         } catch (e) {
             const msg = errText(e, "ทำรายการไม่สำเร็จ")
             if (confirmDlg.open && confirmAction === sent && err && err.isConnected) setTimeout(() => { err.textContent = msg }, 50)
-            else { tell(s, "top", "err", msg); if (s.month === month) render() }
+            else if (s) { tell(s, "top", "err", msg); if (s.month === month) render() }
+            else shout(msg)
             return false
         } finally {
             confirmBusy = false
@@ -1438,7 +1463,7 @@
             w.append(box)
             button = "ส่งอีเมลอีกครั้ง"
         } else if (last && last.status === "sent" && last.test) {
-            w.append(el("p", "rv-hint", "ส่งอีเมลทดสอบแล้ว " + when(last.sent_at) + " · ถึงที่อยู่ทดสอบเท่านั้น"))
+            w.append(el("p", "rv-hint", "ส่งอีเมลทดสอบแล้ว " + when(last.sent_at) + (mail && !mail.test ? " · ยังไม่ได้ส่งจริง" : " · ถึงที่อยู่ทดสอบเท่านั้น")))
             button = "ส่งอีเมล"
         } else {
             w.append(el("p", "rv-hint", "ยังไม่ได้ส่งอีเมลถึงผู้ตรวจสอบ"))
@@ -1446,7 +1471,7 @@
         }
         if (button) {
             const row = el("div", "rv-actions")
-            const b = el("button", "btn-ghost", button)
+            const b = el("button", "btn-ghost", button + (mail && mail.test ? " (ทดสอบ)" : ""))
             b.type = "button"
             b.id = "rv-email-send"
             b.addEventListener("click", () => askEmail(s, r))
@@ -1458,9 +1483,12 @@
         return w
     }
     function askEmail(s: State, r: Round): void {
-        askConfirm("ส่งอีเมล " + shortMonth(s.month) + " รอบที่ " + r.round_no + " ถึงผู้ตรวจสอบ?",
-            [el("p", undefined, "แนบไฟล์ SK03 และรวมค่าคะแนนของรอบนี้ · ส่งจาก sakhonmso")],
-            "ส่งอีเมล", () => doEmail(s))
+        const m = mail
+        const kids: Node[] = [el("p", undefined, "แนบไฟล์ SK03 และรวมค่าคะแนนของรอบนี้ · ส่งจาก sakhonmso")]
+        if (m) kids.push(el("p", "rv-hint", m.test ? "โหมดทดสอบ: ส่งถึง " + m.testTo + " เท่านั้น · หัวเรื่องมี [ทดสอบ]"
+            : m.recipients ? "ส่งจริง" + realTo(m) : "ยังไม่มีที่อยู่ผู้รับ อีเมลจะรอจนกว่าจะตั้ง"))
+        askConfirm((m && m.test ? "ส่งอีเมลทดสอบ " : "ส่งอีเมล ") + shortMonth(s.month) + " รอบที่ " + r.round_no + (m && m.test ? "?" : " ถึงผู้ตรวจสอบ?"),
+            kids, m && m.test ? "ส่งอีเมลทดสอบ" : "ส่งอีเมล", () => doEmail(s))
     }
     async function doEmail(s: State): Promise<void> {
         await confirmRun(s, async () => {
@@ -1468,6 +1496,109 @@
             return "สั่งส่งอีเมลแล้ว ระบบจะส่งภายในประมาณ 1 นาที"
         })
         await reload()
+    }
+
+    // ── The email's test mode switch ─────────────────────────────────────
+    // Pong, 2026-11-12 (แบบ ก): on the ผู้จัดทำ side, in the left column under
+    // the months. On: every email to the test address only, its subject
+    // marked [ทดสอบ]. Turning it off asks first (the next emails go to the
+    // auditor for real); turning it on does not. Turning it off sends
+    // nothing by itself. mail comes with each month's state.
+    let mail: MailMode | null = null
+    let mailBusy = false
+    let mailErr = ""
+    let mailSeq = 0 // the last load started before the switch's last change
+    const mailBox = document.getElementById("review-mail") as HTMLElement | null
+    // "ถึงผู้ตรวจสอบ และอีก 3 ที่อยู่": the first address is the auditor's.
+    const realTo = (m: MailMode): string => m.recipients > 1 ? "ถึงผู้ตรวจสอบ และอีก " + int(m.recipients - 1) + " ที่อยู่"
+        : m.recipients === 1 ? "ถึงผู้ตรวจสอบ" : "ยังไม่มีที่อยู่ผู้รับ"
+    function drawMail(): void {
+        if (!mailBox) return
+        const m = role === "auditee" ? mail : null
+        const a = document.activeElement
+        const had = a instanceof HTMLElement && mailBox.contains(a) ? a.id : ""
+        if (!m) { mailBox.hidden = true; mailBox.replaceChildren(); return }
+        mailBox.hidden = false
+        const sw = el("button", "rv-switch")
+        sw.type = "button"
+        sw.id = "rv-mail-switch"
+        sw.setAttribute("role", "switch")
+        sw.setAttribute("aria-checked", String(m.test))
+        sw.setAttribute("aria-label", "โหมดทดสอบอีเมล")
+        sw.setAttribute("aria-describedby", "rv-mail-state")
+        const track = el("span", "rv-switch-track")
+        track.append(el("span", "rv-switch-knob"))
+        sw.append(track)
+        if (mailBusy) markBusy(sw)
+        sw.addEventListener("click", () => { if (!mailBusy) toggleMail() })
+        // Clicking the words flips it too.
+        const text = el("label", "rv-mail-text") as HTMLLabelElement
+        text.htmlFor = sw.id
+        text.id = "rv-mail-state"
+        text.append(el("b", "rv-mail-t " + (m.test ? "rv-mail-test" : "rv-mail-real"), m.test ? "โหมดทดสอบ" : "ส่งจริง"),
+            el("span", "rv-mail-hint", m.test ? "ส่งถึง " + m.testTo + " เท่านั้น · หัวเรื่องมี [ทดสอบ]" : realTo(m)))
+        const row = el("div", "rv-mail-row")
+        row.append(sw, text)
+        mailBox.replaceChildren(el("span", "rv-mail-h", "อีเมลถึงผู้ตรวจสอบ"), row)
+        if (mailErr) {
+            const p = el("p", "rv-note rv-note-err")
+            p.append(el("strong", undefined, "ไม่สำเร็จ "), mailErr)
+            mailBox.append(p)
+        }
+        if (had) { const f = document.getElementById(had); if (f) f.focus({ preventScroll: true }) }
+    }
+    async function putMail(on: boolean): Promise<string> {
+        const r = await post<{ mail: MailMode | null }>("/dashboard/api/review/email-mode", { test: on }, "PUT")
+        if (r && r.mail) mail = r.mail
+        mailSeq = loadSeq
+        mailErr = ""
+        const m = mail
+        if (!m) return on ? "เปิดโหมดทดสอบแล้ว" : "ปิดโหมดทดสอบแล้ว"
+        return on ? "เปิดโหมดทดสอบแล้ว อีเมลต่อไปส่งถึง " + m.testTo + " เท่านั้น"
+            : "ปิดโหมดทดสอบแล้ว อีเมลต่อไปส่งจริง" + realTo(m)
+    }
+    // After a switch: the email texts on the page follow the new mode.
+    const mailDrawn = (): void => { if (st) { dirty = true; render() } else drawMail() }
+    function toggleMail(): void {
+        const m = mail
+        if (!m) return
+        if (!m.test) { void mailOn(); return }
+        const g = el("div", "rv-kvs")
+        g.append(kv("ส่งถึง", realTo(m).replace(/^ถึง/, "")), kv("หัวเรื่อง", "เอกสาร P4P เดือน… (ไม่มี [ทดสอบ])"))
+        askConfirm("ปิดโหมดทดสอบ ส่งอีเมลจริง?", [
+            g,
+            el("p", undefined, "ปิดแล้วยังไม่ส่งอะไรทันที · ส่งจริงเมื่อกด ส่ง เดือนใหม่ หรือกด ส่งอีเมล"),
+            el("p", "rv-hint", "เปิดโหมดทดสอบกลับได้ตลอด ไม่ต้องยืนยัน"),
+        ], "ปิดโหมดทดสอบ", mailOff)
+    }
+    async function mailOff(): Promise<void> {
+        mailBusy = true
+        mailErr = ""
+        drawMail()
+        try {
+            await confirmRun(st, () => putMail(false))
+        } finally {
+            mailBusy = false
+            mailDrawn()
+        }
+    }
+    async function mailOn(): Promise<void> {
+        if (mailBusy) return
+        mailBusy = true
+        mailErr = ""
+        drawMail()
+        try {
+            const done = await putMail(true)
+            if (st) tell(st, "top", "ok", done)
+            else say(done)
+        } catch (e) {
+            if (signedOut(e)) return
+            mailErr = errText(e, "เปลี่ยนโหมดไม่สำเร็จ")
+            shout(mailErr)
+        } finally {
+            mailBusy = false
+            mailDrawn()
+        }
     }
 
     // Returned: what the auditor asked to fix, each with the score (edit it
@@ -2353,12 +2484,14 @@
         fix.setAttribute("aria-keyshortcuts", "F")
         fix.title = "ปุ่มลัด F"
         btns.append(approve, fix)
+        let undo: HTMLButtonElement | null = null
         if (p.decision) {
-            const undo = el("button", "btn-ghost", "ยกเลิกผล")
+            undo = el("button", "btn-ghost", "ยกเลิกผล")
             undo.type = "button"
             undo.id = "rv-undo"
-            undo.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", undo) })
-            btns.append(undo)
+            const u = undo
+            u.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", u) })
+            btns.append(u)
         }
         const who = el("span", "rv-decide-who", p.name)
         who.setAttribute("aria-hidden", "true")
@@ -2488,7 +2621,10 @@
             box.append(lab, line, err)
             out.push(box)
         }
-        if (flying(s, spot)) for (const b of [approve, fix, save]) if (b) markBusy(b)
+        if (flying(s, spot)) {
+            const pressed = pressedFor.get(flightKey(s, spot)) || "rv-approve"
+            for (const b of [approve, fix, save, undo]) if (b) markBusy(b, b.id === pressed)
+        }
         return out
     }
 

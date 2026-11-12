@@ -610,6 +610,32 @@
             animation: spin .8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* ตรวจสอบ tab: a button whose step is running shows a spinner in place
+           of its words (Pong, 2026-11-12), on both sides and in its confirm
+           dialog. The button keeps its size, so nothing around it moves. */
+        :is(#review-view, #review-confirm) :is(.btn-primary, .btn-ghost)[aria-busy="true"] { position: relative; color: transparent; cursor: progress; opacity: .85; }
+        :is(#review-view, #review-confirm) :is(.btn-primary, .btn-ghost)[aria-busy="true"]::before { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: spin .8s linear infinite; }
+        /* The email's test mode switch, under the months on the ผู้จัดทำ side
+           (Pong, 2026-11-12, แบบ ก). Amber when on (test), grey when off (real).
+           The button is 44 px tall around its track; while it runs, the knob spins. */
+        .rv-mail { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid rgba(63, 47, 36, .12); padding-top: 10px; }
+        .rv-mail[hidden] { display: none; }
+        .rv-mail-h { font-size: .85rem; font-weight: 700; color: var(--muted-foreground); }
+        .rv-mail-row { display: flex; align-items: center; gap: 8px; }
+        .rv-switch { flex: none; display: inline-flex; align-items: center; height: 44px; padding: 0 2px; border: 0; background: none; cursor: pointer; }
+        .rv-switch-track { display: flex; align-items: center; justify-content: flex-start; width: 46px; height: 26px; padding: 3px; box-sizing: border-box; border-radius: 999px; background: #8C7B6E; }
+        .rv-switch[aria-checked="true"] .rv-switch-track { justify-content: flex-end; background: #B76E00; }
+        .rv-switch-knob { width: 20px; height: 20px; box-sizing: border-box; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+        .rv-switch:focus-visible { outline: none; }
+        .rv-switch:focus-visible .rv-switch-track { outline: 2px solid var(--ring); outline-offset: 2px; }
+        .rv-switch[aria-busy="true"] { cursor: progress; }
+        .rv-switch[aria-busy="true"] .rv-switch-knob { border: 3px solid rgba(63, 47, 36, .2); border-top-color: #3F2F24; animation: spin .8s linear infinite; }
+        .rv-mail-text { display: flex; flex-direction: column; min-width: 0; cursor: pointer; }
+        .rv-mail-t { font-size: .95rem; } .rv-mail-test { color: #7A4700; } .rv-mail-real { color: #0B5E2B; }
+        .rv-mail-hint { font-size: .8rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+        .rv-mail .rv-note { font-size: .85rem; }
+        :is(#review-view, #review-confirm) .btn-ghost[aria-busy="true"]::before { border-color: rgba(63, 47, 36, .22); border-top-color: #3F2F24; }
+        :is(#review-view, #review-confirm) .btn-primary.rv-off[aria-busy="true"]::before { border-color: rgba(74, 61, 51, .25); border-top-color: #4A3D33; }
         @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
         .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
         .btn-ghost:hover { background: var(--accent); }
@@ -1219,6 +1245,8 @@
                         <button type="button" data-role="auditor" aria-pressed="false">ผู้ตรวจสอบ</button>
                     </div>
                     <div id="review-months" class="rv-months" role="group" aria-label="เดือน"></div>
+                    <!-- the email's test mode switch, ผู้จัดทำ side only (review.js) -->
+                    <div id="review-mail" class="rv-mail" hidden></div>
                 </div>
                 <div id="review-side" class="rv-side-body"></div>
             </aside>
