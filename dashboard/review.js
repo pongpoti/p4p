@@ -440,7 +440,7 @@
         poll = undefined;
         const r = liveRound(s);
         const pdfWaiting = !!(r && r.status === "approved" && (r.pdf_status === "queued" || r.pdf_status === "building"));
-        if (openRequest(s) || pdfWaiting)
+        if (openRequest(s) || pdfWaiting || emailWaiting(s))
             poll = window.setTimeout(() => { void refresh(); }, 15000);
     }
     // A failed load is shown: over the month's screen when it is still the
@@ -470,7 +470,7 @@
             return;
         const r = liveRound(st);
         const pdfWaiting = !!(r && r.status === "approved" && (r.pdf_status === "queued" || r.pdf_status === "building"));
-        if (!openRequest(st) && !pdfWaiting)
+        if (!openRequest(st) && !pdfWaiting && !emailWaiting(st))
             return;
         pollFails++;
         poll = window.setTimeout(() => { void refresh(); }, Math.min(15000 * Math.pow(2, pollFails), 120000));
@@ -1402,6 +1402,8 @@
         const odd = c ? Number(c.scoreMismatch) + Number(c.moneyMismatch) + Number(c.scoreMissing) + Number(c.moneyMissing) : 0;
         const bits = [s.edits ? "แก้คะแนน " + int(s.edits) + " คน" : "", "ดึงกลับได้จนกว่าผู้ตรวจสอบจะเปิด"].filter(Boolean);
         kids.push(el("p", undefined, bits.join(" · ")));
+        if (s.emails)
+            kids.push(el("p", "rv-hint", "ระบบจะส่งอีเมลถึงผู้ตรวจสอบ พร้อมไฟล์ SK03 และรวมค่าคะแนน"));
         if (odd)
             kids.push(el("p", "rv-hint", "ผลเทียบไม่ตรงหรือไม่พบข้อมูล " + int(odd) + " รายการ · ผู้ตรวจสอบจะพิจารณา"));
         askConfirm(roundNo > 1 ? "ส่งรอบที่ " + roundNo + " ของ " + shortMonth(s.month) + "?" : "ส่ง " + shortMonth(s.month) + " ให้ผู้ตรวจสอบ?", kids, "ส่ง", () => doSubmit(s));
@@ -1537,6 +1539,9 @@
         const n = noteEl("withdraw");
         if (n)
             c.append(n);
+        const mail = emailBox(s, r);
+        if (mail)
+            c.append(mail);
         return c;
     }
     async function doWithdraw(s, btn) {
@@ -1559,6 +1564,79 @@
         await reload();
         if (ok)
             focusTop();
+    }
+    // The round's email to the auditor (Pong, 2026-11-12): sending a round
+    // queues it and the always-on relay sends it within about a minute.
+    // ส่งอีเมล sends it (again) for a month sent before this existed, a
+    // failed email, or after a test; the SQL refuses once a real one went out.
+    const roundEmails = (s, r) => (s.emails || []).filter((e) => e.round_id === r.id);
+    function emailWaiting(s) {
+        const r = liveRound(s);
+        return !!r && roundEmails(s, r).some((e) => e.status === "queued" || e.status === "sending");
+    }
+    function emailBox(s, r) {
+        if (!s.emails)
+            return null;
+        const list = roundEmails(s, r);
+        const real = list.find((e) => e.status === "sent" && !e.test);
+        const open = list.find((e) => e.status === "queued" || e.status === "sending");
+        const last = list[0];
+        const w = el("div", "rv-email");
+        w.id = "rv-email";
+        let button = "";
+        if (real) {
+            const p = el("p", "rv-hint");
+            const mark = el("span", "rv-ok-mark", "✓ ");
+            mark.setAttribute("aria-hidden", "true");
+            p.append(mark, "ส่งอีเมลถึงผู้ตรวจสอบแล้ว " + when(real.sent_at) + (real.fix_no ? " · แก้ไขครั้งที่ " + real.fix_no : ""));
+            w.append(p);
+        }
+        else if (open) {
+            const p = el("p", "rv-loading", open.status === "sending" ? "กำลังส่งอีเมลถึงผู้ตรวจสอบ · หน้านี้อัปเดตเอง"
+                : open.attempts > 0 ? "ส่งอีเมลไม่สำเร็จ ระบบจะลองอีกครั้งใน 5 นาที" + (open.error ? " (" + open.error + ")" : "")
+                    : "รอส่งอีเมลถึงผู้ตรวจสอบ · หน้านี้อัปเดตเอง");
+            p.setAttribute("aria-busy", "true");
+            w.append(p);
+        }
+        else if (last && last.status === "failed") {
+            const box = el("div", "rv-alert");
+            box.append(el("strong", undefined, "ส่งอีเมลถึงผู้ตรวจสอบไม่สำเร็จ"));
+            if (last.error)
+                box.append(el("span", undefined, last.error));
+            w.append(box);
+            button = "ส่งอีเมลอีกครั้ง";
+        }
+        else if (last && last.status === "sent" && last.test) {
+            w.append(el("p", "rv-hint", "ส่งอีเมลทดสอบแล้ว " + when(last.sent_at) + " · ถึงที่อยู่ทดสอบเท่านั้น"));
+            button = "ส่งอีเมล";
+        }
+        else {
+            w.append(el("p", "rv-hint", "ยังไม่ได้ส่งอีเมลถึงผู้ตรวจสอบ"));
+            button = "ส่งอีเมล";
+        }
+        if (button) {
+            const row = el("div", "rv-actions");
+            const b = el("button", "btn-ghost", button);
+            b.type = "button";
+            b.id = "rv-email-send";
+            b.addEventListener("click", () => askEmail(s, r));
+            row.append(b);
+            w.append(row);
+        }
+        const n = noteEl("email");
+        if (n)
+            w.append(n);
+        return w;
+    }
+    function askEmail(s, r) {
+        askConfirm("ส่งอีเมล " + shortMonth(s.month) + " รอบที่ " + r.round_no + " ถึงผู้ตรวจสอบ?", [el("p", undefined, "แนบไฟล์ SK03 และรวมค่าคะแนนของรอบนี้ · ส่งจาก sakhonmso")], "ส่งอีเมล", () => doEmail(s));
+    }
+    async function doEmail(s) {
+        await confirmRun(s, async () => {
+            await post(monthApi(s) + "/email");
+            return "สั่งส่งอีเมลแล้ว ระบบจะส่งภายในประมาณ 1 นาที";
+        });
+        await reload();
     }
     // Returned: what the auditor asked to fix, each with the score (edit it
     // here) and the auditee's answer.
@@ -1924,6 +2002,9 @@
         const n = noteEl("pdf");
         if (n)
             c.append(n);
+        const mail = side === "auditee" ? emailBox(s, r) : null;
+        if (mail)
+            c.append(mail);
         const out = [c];
         if (side === "auditor") {
             const row = el("div", "rv-actions");

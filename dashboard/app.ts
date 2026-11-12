@@ -860,6 +860,7 @@
         "review.upload": "อัปโหลดไฟล์ตรวจสอบ",
         "review.submit": "ส่งให้ผู้ตรวจสอบ",
         "review.withdraw": "ดึงรอบที่ส่งกลับ",
+        "review.email": "ส่งอีเมลถึงผู้ตรวจสอบ",
         "review.decide": "ตรวจรายคน",
         "review.reply": "ตอบหมายเหตุผู้ตรวจสอบ",
         "review.return": "ส่งผลตรวจกลับให้ผู้จัดทำ",
@@ -959,6 +960,7 @@
                 break
             case "review.submit":
             case "review.withdraw":
+            case "review.email":
             case "review.return":
             case "review.unreturn":
             case "review.approve":

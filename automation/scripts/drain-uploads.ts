@@ -51,6 +51,7 @@ import { createGmailClient, type GmailClient } from "../gmail-client.js";
 import { sendUploadConfirmation } from "../confirmation-email.js";
 import { buildFailureBubble, displayMonth } from "../templates/line-receipt.js";
 import { reviewCheckDue, dispatchReviewBuild, dispatchReviewPdf } from "../review-dispatch.js";
+import { sendQueuedReviewEmail } from "../review-email.js";
 import { config as dotenvConfig } from "dotenv";
 import { pathToFileURL } from "node:url";
 import { errForLog, redactForLog } from "../log-safe.js";
@@ -484,11 +485,13 @@ async function main() {
     }
 
     // The dashboard's ตรวจสอบ tab: start a requested one-month SK03 build
-    // (workflow 2.2), and an approved month's PDF (workflow 2.8). Never throw.
+    // (workflow 2.2), and an approved month's PDF (workflow 2.8), and email
+    // the auditor a month the ผู้จัดทำ just sent. Never throw.
     if (reviewCheckDue(Date.now(), lastReviewCheck)) {
       lastReviewCheck = Date.now();
       await dispatchReviewBuild();
       await dispatchReviewPdf();
+      await sendQueuedReviewEmail();
     }
 
     // Archive first: it is the common case and the cheap one (no Claude, no
