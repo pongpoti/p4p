@@ -866,38 +866,20 @@
         .rv-person-h:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-why { color: #1D4ED8; font-weight: 600; }
         .rv-prev { border-left: 4px solid #8A7B6E; padding: 4px 10px; background: #fff; border-radius: 6px; }
-        .rv-compare, .rv-dept { border-collapse: collapse; width: 100%; background: #fff; }
-        .rv-compare th, .rv-compare td, .rv-dept th, .rv-dept td { border: 1px solid rgba(63, 47, 36, .18); padding: 6px 8px; text-align: left; vertical-align: top; }
-        .rv-compare thead th, .rv-dept thead th { background: #F3EBE1; font-size: .9rem; }
+        .rv-compare { border-collapse: collapse; width: 100%; background: #fff; }
+        .rv-compare th, .rv-compare td { border: 1px solid rgba(63, 47, 36, .18); padding: 6px 8px; text-align: left; vertical-align: top; }
+        .rv-compare thead th { background: #F3EBE1; font-size: .9rem; }
         .rv-compare td:nth-child(2) { white-space: nowrap; }
-        .rv-dept caption, .rv-sheet-cap { text-align: left; font-weight: 600; margin-bottom: 4px; }
-        .rv-dept td.num, .rv-xl td.num { text-align: right; }
-        .rv-evidence { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
-        .rv-evidence h4 { font-size: 1rem; }
-        .rv-evidence h4:focus { outline: none; }
-        .rv-evidence h4:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+        /* Each check: the number, then where it comes from in smaller text. */
+        .rv-compare tbody th { width: 22%; font-weight: 400; }
+        .rv-compare td:nth-child(3) { width: 25%; }
+        .rv-compare td:nth-child(2) .rv-src { white-space: nowrap; }
+        .rv-compare .rv-v { display: block; font-variant-numeric: tabular-nums; }
+        .rv-compare .rv-src { display: block; margin-top: 2px; font-size: .84rem; line-height: 1.35; color: var(--muted-foreground); white-space: normal; }
         /* Tabbing to a control under the pinned decision row scrolls it
            clear of the row (the view's own padding clears only the counts bar). */
         .rv-person :is(button, a, input, textarea, select, [tabindex]) { scroll-margin-top: calc(var(--rv-bar, 0px) + 18px); }
         .rv-person .rv-decide-row :is(button, a, input, textarea, select, [tabindex]) { scroll-margin-top: 0; }
-        .rv-cell-chip { display: inline-block; white-space: nowrap; margin-left: 4px; padding: 0 8px; border-radius: 999px; border: 1px solid #B42318; background: #FFF4D6; color: #8A1C12; font-weight: 700; }
-        /* The sheet fits under the pinned decision row, so one scroll shows all of it. */
-        .rv-sheet { position: relative; overflow: auto; max-height: max(280px, calc(100vh - 360px)); max-height: max(280px, var(--rv-sheet-max, calc(100dvh - 360px))); border: 1px solid rgba(63, 47, 36, .25); border-radius: 8px; background: #fff; }
-        /* Only the score's rows are drawn: sideways scrolling only. */
-        .rv-sheet.rv-crop { max-height: none; overflow-x: auto; overflow-y: hidden; }
-        .rv-sheet:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-        .rv-xl { border-collapse: collapse; font-size: .85rem; }
-        .rv-xl th { position: sticky; top: 0; background: #F3EBE1; font-weight: 600; padding: 2px 6px; border: 1px solid rgba(63, 47, 36, .15); }
-        .rv-xl tbody th { position: sticky; left: 0; top: auto; z-index: 1; }
-        .rv-xl thead th { z-index: 2; } .rv-xl thead th.corner { left: 0; z-index: 3; }
-        .rv-xl td { border: 1px solid rgba(63, 47, 36, .1); padding: 2px 6px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-        /* รายการ: pinned beside the row numbers (review.ts evidence). */
-        .rv-xl .lab { position: sticky; left: var(--rv-rowhead, 34px); z-index: 1; max-width: 13em; min-width: 7em; background: #FBF6EF; font-weight: 600; border-right: 2px solid rgba(63, 47, 36, .25); }
-        .rv-xl thead th.lab { z-index: 3; background: #F3EBE1; }
-        .rv-xl td.hit { outline: 3px solid #B42318; outline-offset: -3px; background: #FFF4D6; font-weight: 700; }
-        /* Text running into blank cells, as in Excel: it adds no width of its own. */
-        .rv-xl td.spill { max-width: none; }
-        .rv-xl td.spill > span { display: block; width: 0; overflow: visible; }
         /* The decision row: under the two checks, pinned under the counts bar
            while the auditor scrolls into the sheet. */
         .rv-decide-row { position: sticky; top: calc(var(--rv-fin, 64px) + 8px); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; border: 1px solid rgba(63, 47, 36, .22); border-radius: 12px; background: #FFFDF9; }
