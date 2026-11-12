@@ -1388,7 +1388,7 @@
     }
     function kvGrid(budget, doctors, perP4p, edits) {
         const g = el("div", "rv-kvs");
-        g.append(kv("งบประมาณ", budgetText(budget)), kv("N", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
+        g.append(kv("งบประมาณ", budgetText(budget)), kv("จำนวนแพทย์", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
         if (edits !== undefined)
             g.append(kv("แก้คะแนน", int(edits) + " คน"));
         return g;
