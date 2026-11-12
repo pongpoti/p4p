@@ -238,7 +238,9 @@ export function mountReview(d: ReviewDeps): void {
       // Only the first SQL file run: the tab says the second is needed.
       if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
-      const [em, mail] = await Promise.all([emails(g.month), mailMode()])
+      // The email's mode (and its test address) is for the owner only: a
+      // dashboard user given the ผู้จัดทำ side alone gets no switch.
+      const [em, mail] = await Promise.all([emails(g.month), d.isDashOwner(g.s.sub) ? mailMode() : Promise.resolve(null)])
       res.json({ installed: true, ...st, emails: em, mail })
     } catch (e: any) { fail(res, "state", e, true) }
   })
