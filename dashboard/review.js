@@ -269,8 +269,12 @@
         }
     }
     // A month the doctors have not all sent, with nothing sent to the
-    // auditor yet: the auditee side cannot open it (Pong, 2026-11-10).
-    const locked = (m) => role === "auditee" && !m.round && m.sent < m.total;
+    // auditor yet: the auditee side cannot open it (Pong, 2026-11-10). The
+    // auditor opens only a month พร้อมตรวจ, or one approved (its document
+    // and reopening live there) (Pong, 2026-11-12).
+    const locked = (m) => role === "auditee"
+        ? !m.round && m.sent < m.total
+        : !m.round || (m.round.status !== "submitted" && m.round.status !== "approved");
     // The oldest month not approved yet, else the newest, of those the side
     // shown can open.
     function defaultMonth() {
@@ -285,6 +289,8 @@
         again.type = "button";
         again.id = "rv-months-again";
         again.addEventListener("click", () => { void open(); });
+        if (role === "auditor")
+            return card("ยังไม่มีเดือนที่พร้อมตรวจ", [el("p", undefined, "เมื่อผู้จัดทำส่งแล้วจะเปิดได้"), again]);
         return card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน"), again]);
     }
     // One button per month, in time order; the status under it depends on
@@ -318,7 +324,7 @@
                     if (now && !locked(now))
                         pickMonth(m.month);
                     else
-                        say(shortMonth(m.month) + " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ");
+                        say(shortMonth(m.month) + (role === "auditor" ? " ยังไม่พร้อมตรวจ" : " ยังเปิดไม่ได้ แพทย์ยังส่งไม่ครบ"));
                 });
             });
             return b;
@@ -537,8 +543,9 @@
             catch (e) { /* ignore */ }
             for (const x of roleBtns)
                 x.setAttribute("aria-pressed", String(x.dataset.role === role));
-            // The auditee cannot stay on a month it cannot open; the auditor
-            // gets a month back after the auditee side had none to show.
+            // Neither side stays on a month it cannot open (each side locks
+            // its own months), and a side gets a month back after the
+            // other side had none to show.
             const shown = monthRows.find((m) => m.month === month);
             if (monthRows.length && (!shown || locked(shown))) {
                 const m = defaultMonth();
@@ -2117,7 +2124,10 @@
         h.id = "rv-person-h";
         h.tabIndex = -1;
         panel.setAttribute("aria-labelledby", h.id);
-        panel.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + " · " + decisionText(p)));
+        // Name and group on one line, to save height.
+        const top = el("div", "rv-person-top");
+        top.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + " · " + decisionText(p)));
+        panel.append(top);
         // A person drawn for the first time starts the click guard (tooSoon).
         if (p.index !== shownPerson) {
             shownPerson = p.index;
@@ -2173,9 +2183,9 @@
         const from = /^(คำนวณ|ผลบวก)/.test(how) ? how : "อ่านจาก" + how;
         const thead = el("thead"), tbody = el("tbody");
         thead.append(head);
-        tbody.append(row("เทียบคะแนน", "SK03 กับยอดรวมแถวสุดท้ายในแบบฟอร์มแพทย์", p.scoreCheck, gap(p.score, p.stated), cell(p.score === null ? "ไม่มี" : num(p.score), summary + " คอลัมน์ K"), p.stated === null
+        tbody.append(row("เทียบคะแนน", "กับยอดรวมในแบบฟอร์มแพทย์", p.scoreCheck, gap(p.score, p.stated), cell(p.score === null ? "ไม่มี" : num(p.score), summary + " คอลัมน์ K"), p.stated === null
             ? cell("ไม่พบ", form + " · " + how)
-            : cell(num(p.stated), form + (p.statedCell ? " ช่อง " + p.statedCell : "") + (rowName ? " แถว “" + rowName + "”" : "") + " · " + from)), row("เทียบเงิน", "SK03 กับเงินตามสัดส่วนวิชาชีพในชีตกลุ่มงาน", p.moneyCheck, gap(p.pay, p.deptPay), cell(p.pay === null ? "ไม่มี" : num(p.pay), summary + " คอลัมน์ N"), p.deptPay === null
+            : cell(num(p.stated), form + (p.statedCell ? " ช่อง " + p.statedCell : "") + (rowName ? " แถว “" + rowName + "”" : "") + " · " + from)), row("เทียบเงิน", "กับเงินตามสัดส่วนวิชาชีพ", p.moneyCheck, gap(p.pay, p.deptPay), cell(p.pay === null ? "ไม่มี" : num(p.pay), summary + " คอลัมน์ N"), p.deptPay === null
             ? cell("ไม่พบ", "ไม่พบชื่อใน SK03 ชีต " + deptSheet)
             : cell(num(p.deptPay), "SK03 ชีต " + deptSheet + (p.deptRow != null ? " แถว " + p.deptRow : "") + " คอลัมน์ F"
                 + (p.admin ? " · ไม่รวมงานบริหาร (E) " + num(p.admin) : ""))));
@@ -2201,6 +2211,7 @@
             panel.append(prev);
         }
         panel.append(foot);
+        panel.addEventListener("scroll", () => markStuck(), { passive: true });
         // The next person still to check: their detail is ready when the app moves on.
         const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index);
         if (next)
@@ -2249,8 +2260,11 @@
         const cmp = body.querySelector(".rv-compare");
         if (!bar || !cmp)
             return;
+        // The person panel scrolls itself when it fills the window.
+        const panel = cmp.closest(".rv-person");
+        const own = !!panel && panel.scrollHeight > panel.clientHeight + 1;
         const fin = body.querySelector(".rv-finish");
-        const at = view.getBoundingClientRect().top + (fin ? fin.offsetHeight : 0);
+        const at = own && panel ? panel.getBoundingClientRect().top : view.getBoundingClientRect().top + (fin ? fin.offsetHeight : 0);
         const stuck = cmp.getBoundingClientRect().bottom < at;
         if (!force && stuck === bar.classList.contains("stuck"))
             return;
@@ -2268,8 +2282,7 @@
     // Keys for the auditor (Pong picked them, 2026-11-12): A อนุมัติ,
     // F ต้องแก้ไข, ← / → the person before / after. By key position
     // (ev.code), so they work with the Thai layout on too; never while
-    // typing, in a dialog, with a modifier, or with the sheet focused (its
-    // arrows scroll it).
+    // typing, in a dialog, or with a modifier.
     document.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat || ev.defaultPrevented)
             return;
@@ -2425,7 +2438,7 @@
             lab.htmlFor = "rv-remark";
             const ta = keep(el("textarea"), draftKey, p.decision === "fix" ? p.remark : suggestRemark(p));
             ta.id = "rv-remark";
-            ta.rows = 2;
+            ta.rows = 1;
             ta.maxLength = 1000;
             const err = el("p", "rv-err" + (fe ? "" : " hidden"), fe || "");
             err.id = "rv-remark-e";
@@ -2481,7 +2494,10 @@
                     sv.click();
                 }
             });
-            box.append(lab, ta, err, acts);
+            // The text box and its buttons side by side, to save height.
+            const line = el("div", "rv-remark-line");
+            line.append(ta, acts);
+            box.append(lab, line, err);
             out.push(box);
         }
         if (flying(s, spot))

@@ -756,6 +756,9 @@
         #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
         /* The tab uses the window's width; the left column stays put while the main column scrolls. */
         #main:has(#review-view:not(.hidden)) { max-width: 1680px; }
+        /* No page scroll on this tab down to a 500px window (the other tabs
+           keep 560px): the view scrolls inside instead (Pong, 2026-11-12). */
+        main:has(#review-view:not(.hidden)) { min-height: 420px; }
         .rv-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; max-height: calc(var(--rv-view-h, 100dvh) - 8px); overflow-y: auto; overscroll-behavior: contain; padding-bottom: 4px; }
         .rv-side-body { display: flex; flex-direction: column; gap: 12px; }
         .rv-side-body:empty { display: none; }
@@ -862,6 +865,7 @@
         .rv-chip-bad { color: #B42318; background: #FDECEA; }
         .rv-person { border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .rv-person-h { font-size: 1.1rem; }
+        .rv-person-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
         .rv-person-h:focus { outline: none; }
         .rv-person-h:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-why { color: #1D4ED8; font-weight: 600; }
@@ -914,8 +918,23 @@
         .rv-remark-box label { font-weight: 600; }
         .rv-remark-box textarea, .rv-reply textarea { width: 100%; padding: 8px 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; resize: vertical; }
         .rv-remark-box textarea[aria-invalid="true"] { border: 2px solid #B42318; }
+        .rv-remark-line { display: flex; align-items: flex-start; gap: 8px; }
+        .rv-remark-line textarea { flex: 1 1 auto; min-width: 0; }
+        .rv-remark-line .rv-actions { flex: none; flex-wrap: nowrap; }
         @media (max-width: 900px) { .rv-review { grid-template-columns: 1fr; } .rv-people { position: static; max-height: none; } .rv-people-list { max-height: 40vh; } }
         @media (max-height: 560px) { .rv-decide-row, .rv-decide-foot { position: static; } }
+        /* Auditor checking: the names and the person fill the window, so
+           the page itself never scrolls (Pong, 2026-11-12). The names
+           scroll in their list; the person panel scrolls only if it is
+           taller than the window, with its buttons pinned at its bottom. */
+        @media (min-width: 1101px) {
+            #review-view:has(> #review-body > .rv-review) { padding-bottom: 4px; }
+            .rv-review { height: calc(var(--rv-view-h, 100dvh) - 8px); align-items: stretch; }
+            .rv-review > .rv-people { position: static; max-height: none; min-height: 0; }
+            .rv-review .rv-people-list { flex: 1 1 auto; }
+            .rv-review > .rv-person { min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: 10px; }
+            .rv-review .rv-decide-foot { position: sticky; bottom: -16px; margin-top: auto; }
+        }
         .rv-issue { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
         .rv-issue.closed { opacity: .75; }
         .rv-issue > .btn-ghost { align-self: flex-start; }
