@@ -52,57 +52,37 @@ export interface DeptCapacity {
   no: number;
   name: string; // department name as in Supabase / DEPT_COLORS
   code: string;
-  cap: number;  // capacity multiplier (tier label: 1.15 / 1.00 / 0.85)
+  cap: number;  // capacity multiplier
 }
 
 /**
- * FORMULA.md "Departments and Capacity Multipliers", in that table's order,
- * with the tiers used up to 2569_08. Later months: deptCapacity().
+ * FORMULA.md "Departments and Capacity Multipliers", in that table's order.
+ * Tier = doctors on staff ÷ doctors the department should have (FTE), from
+ * the hospital's staffing sheet: under 70% 1.15 สาขาขาดแคลน, 70% to under
+ * 90% 1.00 กึ่งขาดแคลน, 90% and over 0.85 เต็มศักยภาพ. Staffing sheet
+ * แพทย์ 27-8-69 (Pong, 2026-11-12; every build from then on, older months
+ * too when rebuilt).
  */
 export const DEPT_CAPACITY: DeptCapacity[] = [
   { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', cap: 0.85 },
   { no: 2,  name: 'จักษุวิทยา',                          code: 'EYE', cap: 1.00 },
-  { no: 3,  name: 'จิตเวชและยาเสพติด',                   code: 'PSY', cap: 1.00 },
+  { no: 3,  name: 'จิตเวชและยาเสพติด',                   code: 'PSY', cap: 0.85 },
   { no: 4,  name: 'เทคนิคการแพทย์และพยาธิวิทยาคลินิก',   code: 'CPT', cap: 0.85 },
   { no: 5,  name: 'นิติเวช',                             code: 'FOR', cap: 1.15 },
   { no: 6,  name: 'ผู้ป่วยนอก',                           code: 'OPD', cap: 0.85 },
   { no: 7,  name: 'พยาธิวิทยากายวิภาค',                  code: 'PAT', cap: 0.85 },
-  { no: 8,  name: 'รังสีวิทยา',                           code: 'RAD', cap: 1.00 },
+  { no: 8,  name: 'รังสีวิทยา',                           code: 'RAD', cap: 0.85 },
   { no: 9,  name: 'วิสัญญีวิทยา',                         code: 'ANS', cap: 1.15 },
   { no: 10, name: 'เวชกรรมฟื้นฟู',                        code: 'RHB', cap: 1.15 },
-  { no: 11, name: 'เวชกรรมสังคม',                         code: 'SOC', cap: 0.85 },
+  { no: 11, name: 'เวชกรรมสังคม',                         code: 'SOC', cap: 1.15 },
   { no: 12, name: 'เวชศาสตร์ฉุกเฉิน',                     code: 'EMR', cap: 0.85 },
   { no: 13, name: 'ศัลยกรรม',                            code: 'SUR', cap: 1.00 },
   { no: 14, name: 'ศัลยกรรมออร์โธปิดิกส์',                code: 'ORT', cap: 1.00 },
-  { no: 15, name: 'สูติ-นรีเวชกรรม',                      code: 'OBG', cap: 1.15 },
+  { no: 15, name: 'สูติ-นรีเวชกรรม',                      code: 'OBG', cap: 1.00 },
   { no: 16, name: 'โสต ศอ นาสิก',                         code: 'ENT', cap: 1.00 },
   { no: 17, name: 'อาชีวเวชกรรม',                         code: 'OCM', cap: 1.15 },
-  { no: 18, name: 'อายุรกรรม',                            code: 'MED', cap: 1.15 },
+  { no: 18, name: 'อายุรกรรม',                            code: 'MED', cap: 1.00 },
 ];
-
-/**
- * Tier changes, each used from its first month (YYYY_MM, Buddhist year) on;
- * a later change wins over an earlier one. A tier comes from the hospital's
- * doctor staffing sheet: doctors on staff (รวมอัตราตามจริง) ÷ doctors the
- * department should have (FTE). Under 70% สาขาขาดแคลน, 70% to under 90%
- * กึ่งขาดแคลน, 90% and over เต็มศักยภาพ.
- *
- * 2569_09: staffing sheet แพทย์ 27-8-69 (Pong, 2026-11-12). SOC 4/10 = 40%,
- * MED 35/47 = 74%, OBG 13/18 = 72%, RAD 15/15 = 100%, PSY 16/4 = 400%.
- */
-export const CAPACITY_CHANGES: { from: string; cap: Record<string, number> }[] = [
-  { from: '2569_09', cap: { SOC: 1.15, MED: 1.00, OBG: 1.00, RAD: 0.85, PSY: 0.85 } },
-];
-
-/** The departments with each one's tier for that month (monthKey YYYY_MM). */
-export function deptCapacity(monthKey: string): DeptCapacity[] {
-  const cap: Record<string, number> = {};
-  [...CAPACITY_CHANGES]
-    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
-    .filter(ch => ch.from <= monthKey)
-    .forEach(ch => Object.assign(cap, ch.cap));
-  return DEPT_CAPACITY.map(d => (d.code in cap ? { ...d, cap: cap[d.code] } : d));
-}
 
 /**
  * Weight of each capacity tier when the extra above BASE is split between
@@ -279,11 +259,11 @@ export const BUDGET_HEADERS = [
   'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
 ];
 
-/** Cells of the งบรายสาขา sheet (A1:N26), with the tiers of monthKey (YYYY_MM). */
-export function budgetSheet(staffSheet: string, first: number, last: number, monthLabel: string, monthKey: string): CellWrite[] {
+/** Cells of the งบรายสาขา sheet (A1:N26). */
+export function budgetSheet(staffSheet: string, first: number, last: number, monthLabel: string): CellWrite[] {
   const S = q(staffSheet);
   const codes = `${S}$Q$${first}:$Q$${last}`;
-  const rows: (string | number)[][] = deptCapacity(monthKey).map((d, k) => {
+  const rows: (string | number)[][] = DEPT_CAPACITY.map((d, k) => {
     const r = BUDGET_FIRST + k;
     return [
       d.no, d.name, d.code, TIER_LABEL[d.cap.toFixed(2)], BONUS_WEIGHT[d.cap.toFixed(2)],
