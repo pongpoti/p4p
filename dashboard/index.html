@@ -855,11 +855,44 @@
         .rv-mini { display: flex; flex-direction: column; gap: 2px; font-size: .9rem; font-weight: 600; }
         .rv-mini select, .rv-mini input { height: 40px; padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
         .rv-people-list { list-style: none; overflow-y: auto; flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; gap: 4px; }
-        .rv-person-btn { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
+        .rv-person-btn { width: 100%; text-align: left; display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
         .rv-person-btn:hover { background: var(--accent); }
-        .rv-person-btn.current { border: 2px solid var(--primary); background: #F6EEE4; }
-        .rv-pname { font-weight: 600; }
-        .rv-psub { font-size: .88rem; color: var(--muted-foreground); }
+        .rv-person-btn.current { border: 2px solid var(--primary); background: #F6EEE4; padding: 5px 9px 5px 7px; }
+        .rv-ptext { display: flex; flex-direction: column; gap: 0; min-width: 0; flex: 1 1 auto; }
+        .rv-pline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .rv-pline .rv-chip { flex: none; align-self: center; }
+        .rv-pname { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .rv-psub { font-size: .85rem; color: var(--muted-foreground); }
+        /* The decision as a round mark (rv-dmark; rv-mark is the auditee's check label): รอตรวจ hollow, อนุมัติ ✓, ต้องแก้ไข ! */
+        .rv-dmark { flex: none; width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 800; line-height: 1; }
+        .rv-dmark-wait { border: 2px solid #A8998C; background: #fff; }
+        .rv-dmark-ok { background: #157F3D; color: #fff; }
+        .rv-dmark-fix { background: #C2410C; color: #fff; }
+        /* Status tiles above the names: each status type, its count, the filter. */
+        .rv-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+        .rv-st { display: flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 4px 8px 5px; min-height: 46px; border: 1px solid rgba(63, 47, 36, .18); border-left: 4px solid var(--st, #A8998C); border-radius: 8px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; text-align: left; }
+        .rv-st:hover { background: #FBF6F0; }
+        .rv-st:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+        .rv-st[aria-pressed="true"] { background: var(--st-bg, #F6EEE4); border-color: var(--st, var(--primary)); box-shadow: inset 0 0 0 1px var(--st, var(--primary)); }
+        .rv-st-label { display: inline-flex; align-items: center; gap: 4px; font-size: .78rem; font-weight: 600; color: var(--muted-foreground); white-space: nowrap; }
+        .rv-st-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st, #A8998C); flex: none; }
+        .rv-st-n { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--st-ink, var(--foreground)); line-height: 1.25; }
+        .rv-st-zero .rv-st-n { color: #9A8C80; font-weight: 600; }
+        .rv-st-wait { --st: #8C7B6E; --st-bg: #F3EDE6; }
+        .rv-st-ok { --st: #157F3D; --st-bg: #E7F4EC; --st-ink: #0B5E2B; }
+        .rv-st-fix { --st: #C2410C; --st-bg: #FFEDD5; --st-ink: #9A3412; }
+        .rv-st-bad { --st: #B42318; --st-bg: #FDECEA; --st-ink: #B42318; }
+        .rv-st-miss { --st: #B76E00; --st-bg: #FBEBD0; --st-ink: #7A4700; }
+        .rv-st-all { --st: var(--primary); --st-bg: #F6EEE4; }
+        .rv-st-zero:not([aria-pressed="true"]) { --st-ink: #9A8C80; }
+        .rv-people-search input { width: 100%; }
+        .rv-people-count { margin: 0; }
+        /* อนุมัติทุกคนที่รอตรวจ in the left column. */
+        .rv-approve-all { display: flex; flex-direction: column; gap: 4px; }
+        .rv-side .rv-approve-all .btn-primary { width: 100%; }
+        .rv-approve-all-why { margin: 0; font-size: .82rem; line-height: 1.45; }
+        .rv-inline-link { background: none; border: 0; padding: 0; font: inherit; color: var(--ring); text-decoration: underline; cursor: pointer; }
+        .rv-inline-link:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-chip { display: inline-block; white-space: nowrap; align-self: flex-start; padding: 0 8px; border-radius: 999px; font-size: .8rem; font-weight: 700; border: 1px solid; }
         .rv-chip-ok { color: #0B5E2B; background: #E7F4EC; }
         .rv-chip-bad { color: #B42318; background: #FDECEA; }

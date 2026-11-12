@@ -1897,17 +1897,18 @@
         if (r.edits)
             info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"));
         bar.append(info);
-        const counts = el("ul", "rv-countlist rv-counts");
-        counts.setAttribute("aria-label", "สรุปรอบนี้");
-        const cnt = (label, v) => { const li = el("li"); li.append(el("span", undefined, label), el("b", undefined, v)); counts.append(li); };
-        cnt("รอตรวจ", int(c.waiting));
-        cnt("อนุมัติ", int(c.approve) + (c.carried ? " (คงผล " + int(c.carried) + ")" : ""));
-        cnt("ต้องแก้ไข", int(c.fix));
-        // ปัญหาอื่น ๆ is gone (Pong, 2026-11-12); only a reopened month
-        // still has one open, and then it is counted.
-        if (openIssues)
-            cnt("ปัญหาอื่นที่เปิดอยู่", int(openIssues));
-        bar.append(counts);
+        // The counts of each status are the tiles above the names now (Pong,
+        // 2026-11-12). ปัญหาอื่น ๆ is gone; only a reopened month still has
+        // one open, and then it is counted here.
+        if (openIssues) {
+            const counts = el("ul", "rv-countlist rv-counts");
+            const li = el("li");
+            li.append(el("span", undefined, "ปัญหาอื่นที่เปิดอยู่"), el("b", undefined, int(openIssues)));
+            counts.append(li);
+            bar.append(counts);
+        }
+        if (c.waiting > 0)
+            bar.append(approveAllBox(s, r));
         const btn = el("button", "btn-primary");
         btn.type = "button";
         btn.id = "rv-finish";
@@ -1950,6 +1951,88 @@
         }
         bar.append(btn, why);
         return bar;
+    }
+    // อนุมัติทุกคนที่รอตรวจ (Pong, 2026-11-12): one press approves everyone
+    // still to check, usable only when none of them has a ไม่ตรงกัน or ไม่พบ
+    // result (those are checked one by one first). Anyone already decided
+    // keeps their result. scripts/review-approve-all-2026-11.sql checks the
+    // same again.
+    function approveAllBox(s, r) {
+        const box = el("div", "rv-approve-all");
+        const waiting = people ? people.filter((p) => p.decision === null) : null;
+        const n = waiting ? waiting.length : r.counts.waiting;
+        const b = el("button", "btn-primary", "อนุมัติ " + int(n) + " คนที่รอตรวจ…");
+        b.type = "button";
+        b.id = "rv-approve-all";
+        const why = el("p", "rv-hint rv-approve-all-why");
+        why.id = "rv-approve-all-why";
+        const blocked = waiting ? waiting.filter((p) => !bothMatch(p)) : [];
+        if (!waiting || blocked.length) {
+            b.setAttribute("aria-disabled", "true");
+            b.setAttribute("aria-describedby", why.id);
+            if (!waiting)
+                why.textContent = "กำลังโหลดรายชื่อ…";
+            else {
+                // Which ones, each a link to that group in the names.
+                why.append("ใช้ได้เมื่อตรวจคนที่ ");
+                const mm = blocked.filter(isMismatch).length;
+                const parts = [["mismatch", "ไม่ตรงกัน", mm], ["missing", "ไม่พบ", blocked.length - mm]];
+                let first = true;
+                for (const [key, label, k] of parts) {
+                    if (!k)
+                        continue;
+                    if (!first)
+                        why.append(" และ ");
+                    first = false;
+                    const a = el("button", "rv-link rv-inline-link", label + " " + int(k) + " คน");
+                    a.type = "button";
+                    a.addEventListener("click", () => {
+                        filter = key;
+                        const p = (people || []).find((x) => x.decision === null && (key === "mismatch" ? isMismatch(x) : isMissing(x)));
+                        if (p)
+                            openPerson(p.index);
+                        else
+                            render();
+                    });
+                    why.append(a);
+                }
+                why.append(" แล้ว");
+            }
+            b.addEventListener("click", () => say(why.textContent || ""));
+        }
+        else {
+            b.addEventListener("click", () => {
+                askConfirm("อนุมัติทุกคนที่รอตรวจ", [
+                    el("p", undefined, "อนุมัติ " + int(n) + " คนที่รอตรวจ เดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
+                    el("p", undefined, "ทุกคนผลเทียบคะแนนและเทียบเงิน ตรงกัน คนที่ตัดสินแล้ว (อนุมัติ " + int(r.counts.approve) + " · ต้องแก้ไข " + int(r.counts.fix) + ") ไม่เปลี่ยน"),
+                    el("p", "rv-hint", "ยกเลิกผลรายคนได้ภายหลัง แล้วจึงกด อนุมัติทั้งหมด เพื่อทำเอกสารเบิกจ่าย"),
+                ], "อนุมัติ " + int(n) + " คน", () => approveAll(s, r));
+            });
+        }
+        box.append(b, why);
+        return box;
+    }
+    async function approveAll(s, r) {
+        const ok = await confirmRun(s, async () => {
+            const res = await post(monthApi(s) + "/approve-all", { round: r.round_no });
+            return "อนุมัติแล้ว " + int(Number(res && res.approved) || 0) + " คน";
+        });
+        if (ok) {
+            // Said above the names, like a single decision, so the window
+            // keeps its height and the buttons stay in view.
+            const n = notes.get("top");
+            if (n && s.month === month) {
+                notes.delete("top");
+                notes.set("decided", n);
+                lastDecided = "";
+            }
+            if (s.month === month) {
+                peopleKey = "";
+                issuesKey = "";
+            }
+            await loadMonths().catch(() => false);
+        }
+        await reload();
     }
     // ── Approved: the document, a retry, and reopening ───────────────────
     function approvedView(s, r, side) {
@@ -2110,48 +2193,88 @@
         }
         await reload();
     }
+    // The status types (Pong, 2026-11-12: "display status types of user").
+    // The first three are the auditor's decision, the last two the checks'
+    // result; each tile filters the names. ไม่ตรงกัน wins over ไม่พบ when a
+    // person has one of each.
+    const isMismatch = (p) => p.scoreCheck === "mismatch" || p.moneyCheck === "mismatch";
+    const isMissing = (p) => !bothMatch(p) && !isMismatch(p);
+    const STATUSES = [
+        { key: "todo", label: "รอตรวจ", tone: "wait", test: (p) => p.decision === null },
+        { key: "approve", label: "อนุมัติ", tone: "ok", test: (p) => p.decision === "approve" },
+        { key: "fix", label: "ต้องแก้ไข", tone: "fix", test: (p) => p.decision === "fix" },
+        { key: "mismatch", label: "ไม่ตรงกัน", tone: "bad", test: isMismatch },
+        { key: "missing", label: "ไม่พบ", tone: "miss", test: isMissing },
+        { key: "all", label: "ทุกคน", tone: "all", test: () => true },
+    ];
     function visiblePeople() {
         const q = search.trim().toLowerCase();
+        const st = STATUSES.find((x) => x.key === filter) || STATUSES[0];
         return (people || []).filter((p) => {
             if (q && !(p.name.toLowerCase().includes(q) || p.department.toLowerCase().includes(q)))
                 return false;
-            if (filter === "todo")
-                return p.decision === null;
-            if (filter === "diff")
-                return !bothMatch(p);
-            if (filter === "fix")
-                return p.decision === "fix";
-            if (filter === "approve")
-                return p.decision === "approve";
-            return true;
+            return st.test(p);
         });
+    }
+    // The decision as a small round mark at the start of a name's row.
+    function decisionMark(p) {
+        const kind = p.decision === "approve" ? "ok" : p.decision === "fix" ? "fix" : "wait";
+        const m = el("span", "rv-dmark rv-dmark-" + kind, p.decision === "approve" ? "✓" : p.decision === "fix" ? "!" : "");
+        m.setAttribute("aria-hidden", "true");
+        return m;
     }
     function peopleList() {
         const side = el("div", "rv-people glass");
-        const tools = el("div", "rv-people-tools");
-        const fl = el("label", "rv-mini", "แสดง");
-        const sel = el("select");
-        sel.id = "rv-filter";
-        for (const [v, t] of [["todo", "รอตรวจ"], ["diff", "ไม่ตรงหรือไม่พบ"], ["fix", "ต้องแก้ไข"], ["approve", "อนุมัติแล้ว"], ["all", "ทุกคน"]]) {
-            const o = el("option", undefined, t);
-            o.value = v;
-            sel.append(o);
+        const all = people || [];
+        // Status tiles: the count of each type, and the filter.
+        const tiles = el("div", "rv-status");
+        tiles.setAttribute("role", "group");
+        tiles.setAttribute("aria-label", "สถานะ: เลือกเพื่อแสดงเฉพาะกลุ่มนั้น");
+        for (const st of STATUSES) {
+            const n = all.filter(st.test).length;
+            const b = el("button", "rv-st rv-st-" + st.tone + (n === 0 && st.key !== "all" ? " rv-st-zero" : ""));
+            b.type = "button";
+            b.id = "rv-st-" + st.key;
+            b.dataset.filter = st.key;
+            b.setAttribute("aria-pressed", String(filter === st.key));
+            const lab = el("span", "rv-st-label");
+            if (st.tone !== "all") {
+                const dot = el("span", "rv-st-dot");
+                dot.setAttribute("aria-hidden", "true");
+                lab.append(dot);
+            }
+            lab.append(st.label);
+            b.append(lab, el("b", "rv-st-n", int(n)));
+            b.addEventListener("click", () => {
+                filter = st.key;
+                // The panel follows: the first of the group when the person
+                // on screen is not in it.
+                const list = visiblePeople();
+                if (list.length && !list.some((x) => x.index === selected))
+                    selected = list[0].index;
+                render();
+                say(st.label + " " + int(n) + " คน");
+            });
+            tiles.append(b);
         }
-        sel.value = filter;
-        sel.addEventListener("change", () => { filter = sel.value; render(); });
-        fl.append(sel);
-        const sl = el("label", "rv-mini", "ค้นหา");
+        const sl = el("label", "rv-search rv-people-search");
+        sl.append(el("span", "sr-only", "ค้นหาชื่อหรือกลุ่มงาน"));
         const si = el("input");
         si.type = "search";
         si.id = "rv-search";
+        si.placeholder = "ค้นหาชื่อหรือกลุ่มงาน";
         si.value = search;
         si.autocomplete = "off";
         si.addEventListener("input", () => { search = si.value; render(); });
         sl.append(si);
-        tools.append(fl, sl);
         const shown = visiblePeople();
-        const count = el("p", "rv-hint", int(shown.length) + " คน");
-        count.setAttribute("aria-live", "polite");
+        side.append(tiles, sl);
+        // With a search, how many of the group it leaves.
+        if (search.trim()) {
+            const count = el("p", "rv-hint rv-people-count", "พบ " + int(shown.length) + " คน");
+            count.setAttribute("aria-live", "polite");
+            side.append(count);
+        }
         const ul = el("ul", "rv-people-list");
         ul.setAttribute("aria-label", "รายชื่อในรอบนี้");
         for (const p of shown) {
@@ -2161,20 +2284,21 @@
             b.id = "rv-p-" + p.index;
             if (p.index === selected)
                 b.setAttribute("aria-current", "true");
-            const top = el("span", "rv-pname", p.name);
-            const sub = el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + " · " + decisionText(p));
-            b.append(top, sub);
-            if (p.scoreCheck === "mismatch" || p.moneyCheck === "mismatch")
-                b.append(chip("bad", "ผลเทียบไม่ตรง"));
-            else if (!bothMatch(p))
-                b.append(chip("miss", "ไม่พบข้อมูล"));
+            const line = el("span", "rv-pline");
+            line.append(el("span", "rv-pname", p.name));
+            if (isMismatch(p))
+                line.append(chip("bad", "ไม่ตรงกัน"));
+            else if (isMissing(p))
+                line.append(chip("miss", "ไม่พบ"));
+            const text = el("span", "rv-ptext");
+            text.append(line, el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + (p.carried ? " · คงผลรอบก่อน" : "")));
+            b.append(decisionMark(p), text, el("span", "sr-only", " · " + decisionText(p)));
             b.addEventListener("click", () => { openPerson(p.index); });
             li.append(b);
             ul.append(li);
         }
         if (!shown.length)
-            ul.append(el("li", "rv-hint", filter === "todo" ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"));
-        side.append(tools, count);
+            ul.append(el("li", "rv-hint", filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"));
         const dn = noteEl("decided");
         const back = lastDecided ? (people || []).find((x) => x.index === lastDecided) : undefined;
         if (dn && back) {
