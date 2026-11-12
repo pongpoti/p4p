@@ -146,10 +146,12 @@ function css(fonts: { regular: string; bold: string }): string {
 @font-face { font-family: 'SarabunPSK-PDF'; font-weight: 700; src: url(data:font/ttf;base64,${fonts.bold}) format('truetype'); }
 @page { size: A4 landscape; margin: 0; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { font-family: 'SarabunPSK-PDF', sans-serif; color: #111; font-size: 15pt; line-height: 1.35; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html, body { font-family: 'SarabunPSK-PDF', sans-serif; color: #111; font-size: 15pt; line-height: 1.2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .page { position: relative; width: 297mm; height: 209.5mm; overflow: hidden; page-break-after: always; break-after: page; }
 .page:last-child { page-break-after: auto; break-after: auto; }
-.body { position: absolute; top: 10mm; left: 12mm; right: 12mm; bottom: 24mm; overflow: hidden; }
+.body { position: absolute; top: 10mm; left: 12mm; right: 12mm; bottom: 21mm; overflow: hidden; }
+.body.cover { font-size: 14pt; }
+.body.cover td, .body.cover th { line-height: 1.1; }
 .body[data-tight="1"] { font-size: 14pt; }
 .body[data-tight="2"] { font-size: 13pt; }
 .body[data-tight="3"] { font-size: 12pt; }
@@ -174,13 +176,16 @@ td.c { text-align: center; }
 .two tr.sum td { background: #EDEDED; font-weight: 700; border-bottom: 0.25mm solid #111; }
 .info th { text-align: left; width: 21%; }
 .info td { width: 29%; }
-.head { text-align: center; margin-bottom: 3mm; }
-.head .t1 { font-size: 1.4em; font-weight: 700; line-height: 1.3; }
-.head .t2 { font-size: 1.2em; font-weight: 700; line-height: 1.3; }
-.sheet { table-layout: fixed; }
-.sheet th, .sheet td { padding-left: 1.5mm; padding-right: 1.5mm; }
-.sheet td.rm { white-space: nowrap; overflow: hidden; }
-.sheet td { height: 9.6mm; }
+.head { text-align: center; margin-bottom: 2mm; }
+.head .t1 { font-size: 1.4em; font-weight: 700; line-height: 1.2; }
+.head .t2 { font-size: 1.2em; font-weight: 700; line-height: 1.2; }
+.sheet { table-layout: fixed; font-size: var(--sheet-pt, 1em); }
+.body[data-tight="1"] .sheet { font-size: calc(var(--sheet-pt, 15pt) - 1pt); }
+.body[data-tight="2"] .sheet { font-size: calc(var(--sheet-pt, 15pt) - 2pt); }
+.body[data-tight="3"] .sheet { font-size: calc(var(--sheet-pt, 15pt) - 3pt); }
+.sheet th, .sheet td { padding-left: 1.2mm; padding-right: 1.2mm; }
+.sheet td.one { white-space: nowrap; overflow: hidden; }
+.sheet td { height: 9.2mm; }
 .sheet tr.sum td { background: #EDEDED; font-weight: 700; }
 .signs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; margin-top: 13mm; text-align: center; }
 .signs .line { border-top: 0.3mm solid #111; margin: 0 8mm 1.5mm; }
@@ -229,7 +234,7 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
     `ผู้ตรวจสอบ ${esc(d.approvedBy || '—')} อนุมัติครบ: ${esc(thaiDateTime(d.approvedAt, true))}`,
   ].filter(Boolean).join(' · ');
 
-  const cover = `<section class="page"><div class="body">
+  const cover = `<section class="page"><div class="body cover">
 <h1>เอกสารเบิกจ่ายค่าตอบแทนตามผลการปฏิบัติงาน (P4P) ${HOSPITAL}</h1>
 <p class="sub">ประจำเดือน ${esc(monthTitle(d.month))}</p>
 <p class="stamp"><span>${CHECK_SVG} ผู้ตรวจสอบอนุมัติครบ ${d.approvedPeople.toLocaleString('en-US')} คน · เมื่อ ${esc(stamp)}</span></p>
@@ -245,13 +250,12 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 </tbody></table>
 </div>${footer(1, pages, stamp)}</section>`;
 
-  // Widths fit the longest August 2569 values on one line at 15 pt (Pong,
-  // 2026-11-12: หมายเหตุ such as "ผู้ช่วยผู้อำนวยการด้านสุขภาพดิจิทัล" on one line).
-  // A longer remark is set smaller by renderPdf until it fits.
+  // Starting widths only: renderPdf sizes every column from its longest value
+  // (fitSheetColumns) so names and remarks stay on one line (Pong, 2026-11-12).
   const sheetHead = `<colgroup><col style="width:4.2%"><col style="width:18.7%"><col style="width:15.8%"><col style="width:12.1%">` +
     `<col style="width:6.6%"><col style="width:6.6%"><col style="width:6.6%"><col style="width:10%"><col style="width:19.4%"></colgroup>` +
     `<thead><tr><th rowspan="2">ลำดับ</th><th rowspan="2">ชื่อ-สกุล</th><th rowspan="2">ตำแหน่ง</th><th rowspan="2">ประเภท</th>` +
-    `<th colspan="3">ค่าตอบแทนตามผลการปฏิบัติงาน (บาท)</th><th rowspan="2">ลายมือชื่อผู้รับเงิน</th><th rowspan="2">หมายเหตุ</th></tr>` +
+    `<th colspan="3">ค่าตอบแทนตามผลการปฏิบัติงาน<br>(บาท)</th><th rowspan="2">ลายมือชื่อ<br>ผู้รับเงิน</th><th rowspan="2">หมายเหตุ</th></tr>` +
     `<tr><th>งาน<br>บริหาร</th><th>ตามสัดส่วน<br>วิชาชีพ</th><th>รวมเป็น<br>เงิน</th></tr></thead>`;
   const signs = ['หัวหน้างาน/กลุ่มงาน/ฝ่าย', 'หัวหน้ากลุ่มภารกิจ', 'ประธานคณะกรรมการตรวจสอบค่าคะแนน'].map((role) =>
     `<div><div class="line"></div><p>( ...................................... )</p><p>${role}</p><p>วันที่ ......../......../........</p></div>`).join('');
@@ -269,9 +273,9 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
       const last = i === sizes.length - 1;
       const rows = dept.rows.slice(at, at + size).map((r) => {
         const c = (k: number): unknown => (r ?? [])[k];
-        return `<tr><td class="c">${esc(squash(c(0)))}</td><td>${esc(squash(c(1)))}</td><td>${esc(squash(c(2)))}</td>` +
-          `<td>${esc(squash(c(3)))}</td><td class="n">${money(c(4))}</td><td class="n">${money(c(5))}</td>` +
-          `<td class="n">${money(c(6))}</td><td>${esc(squash(c(7)))}</td><td class="rm">${esc(squash(c(8)))}</td></tr>`;
+        return `<tr><td class="c">${esc(squash(c(0)))}</td><td class="one">${esc(squash(c(1)))}</td><td class="one">${esc(squash(c(2)))}</td>` +
+          `<td class="one">${esc(squash(c(3)))}</td><td class="n">${money(c(4))}</td><td class="n">${money(c(5))}</td>` +
+          `<td class="n">${money(c(6))}</td><td>${esc(squash(c(7)))}</td><td class="one">${esc(squash(c(8)))}</td></tr>`;
       }).join('');
       at += size;
       const sum = last
@@ -303,6 +307,58 @@ export function loadFonts(): { regular: string; bold: string } {
   return { regular: read('THSarabunPSK-Regular.ttf'), bold: read('THSarabunPSK-Bold.ttf') };
 }
 
+/** Browser script for renderPdf: sizes the department sheet columns (see there). */
+export const FIT_SHEET_COLUMNS = `(() => {
+  const tables = [...document.querySelectorAll('table.sheet')];
+  if (!tables.length) return;
+  const PX_PER_MM = 96 / 25.4, PAD = 2.4 * PX_PER_MM + 2, SIGN_MIN = 22 * PX_PER_MM;
+  const ctx = document.createElement('canvas').getContext('2d');
+  const family = getComputedStyle(tables[0]).fontFamily;
+  // [text, bold] per column, from the body rows and each line of the header
+  // cells (the money columns' spanning header may take two lines).
+  const cols = Array.from({ length: 9 }, () => []);
+  for (const t of tables) {
+    for (const tr of t.tBodies[0].rows) [...tr.cells].forEach((td, k) => {
+      const s = td.textContent.trim();
+      if (s) cols[k].push([s, tr.classList.contains('sum')]);
+    });
+    const h1 = t.tHead.rows[0];
+    let k = 0;
+    for (const th of h1.cells) {
+      if (th.colSpan === 1) th.innerText.split('\\n').forEach((s) => cols[k].push([s.trim(), true]));
+      k += th.colSpan;
+    }
+    [...t.tHead.rows[1].cells].forEach((th, i) => th.innerText.split('\\n').forEach((s) => cols[4 + i].push([s.trim(), true])));
+  }
+  const avail = tables[0].clientWidth;
+  const money = tables[0].tHead.rows[0].cells[4].innerText.split('\\n').map((s) => s.trim());
+  const text = (s, b, pt) => { ctx.font = (b ? '700 ' : '400 ') + pt + 'pt ' + family; return ctx.measureText(s).width; };
+  const need = (pt) => {
+    const w = cols.map((list) => Math.max(0, ...list.map(([s, b]) => text(s, b, pt))) + PAD);
+    // The three money columns together hold each line of their spanning header.
+    const short = Math.max(...money.map((s) => text(s, true, pt))) + PAD - (w[4] + w[5] + w[6]);
+    if (short > 0) for (const k of [4, 5, 6]) w[k] += short / 3;
+    return w;
+  };
+  let pt = 16, w = need(pt);
+  const fits = (w) => w.reduce((a, b, k) => a + (k === 7 ? Math.max(b, SIGN_MIN) : b), 0) <= avail;
+  while (!fits(w) && pt > 14) { pt -= 0.5; w = need(pt); }
+  if (fits(w)) {
+    w[7] = avail - w.reduce((a, b, k) => a + (k === 7 ? 0 : b), 0);
+    for (const t of tables) {
+      t.style.setProperty('--sheet-pt', pt + 'pt');
+      [...t.querySelectorAll('col')].forEach((c, k) => { c.style.width = (w[k] / avail * 100).toFixed(3) + '%'; });
+    }
+  } else {
+    for (const t of tables) t.style.setProperty('--sheet-pt', '14pt');
+  }
+  document.querySelectorAll('td.one').forEach((td) => {
+    let size = parseFloat(getComputedStyle(td).fontSize) * 0.75;
+    while (td.scrollWidth > td.clientWidth && size > 9) { size -= 0.5; td.style.fontSize = size + 'pt'; }
+    if (td.scrollWidth > td.clientWidth) { td.style.whiteSpace = 'normal'; td.style.fontSize = ''; }
+  });
+})()`;
+
 /**
  * HTML → PDF. A page whose content does not fit is set a size smaller (up to
  * three times); one that still does not fit fails the job rather than cut a
@@ -315,15 +371,12 @@ export async function renderPdf(html: string, pages: number): Promise<Uint8Array
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
     await page.evaluate('document.fonts.ready.then(() => true)');
-    // หมายเหตุ stays on one line: a remark wider than its column is set
-    // smaller, down to 9 pt; past that it wraps rather than being cut off.
-    await page.evaluate(`(() => {
-      document.querySelectorAll('td.rm').forEach((td) => {
-        let pt = parseFloat(getComputedStyle(td).fontSize) * 0.75;
-        while (td.scrollWidth > td.clientWidth && pt > 9) { pt -= 0.5; td.style.fontSize = pt + 'pt'; }
-        if (td.scrollWidth > td.clientWidth) { td.style.whiteSpace = 'normal'; td.style.fontSize = ''; }
-      });
-    })()`);
+    // Department sheets: every column as wide as its longest value, at the
+    // largest row size (16 pt down to 14 pt) where all of them fit across the
+    // page; what is left goes to the signature column. Every sheet page uses
+    // the same widths. A value still too wide (none in Aug 2569) is set
+    // smaller, down to 9 pt, then wraps rather than being cut off.
+    await page.evaluate(FIT_SHEET_COLUMNS);
     const tooFull = await page.evaluate(`(() => {
       const out = [];
       document.querySelectorAll('.body').forEach((b, i) => {
