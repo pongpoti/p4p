@@ -527,7 +527,18 @@
             }
         }
     }
+    // A dashboard user who is not the owner is the ผู้จัดทำ only (Pong,
+    // 2026-11-12): no switch, and never the auditor's side (its routes
+    // answer 404 for them). app.js sets this from the session before the
+    // tab is first drawn.
+    const auditeeOnly = () => document.body.dataset.reviewSide === "auditee";
     async function open() {
+        if (auditeeOnly()) {
+            role = "auditee";
+            const sw = document.getElementById("review-role");
+            if (sw)
+                sw.classList.add("hidden");
+        }
         loadingLine("กำลังโหลด…");
         try {
             if (!(await loadMonths(true))) {
@@ -549,6 +560,8 @@
     window.addEventListener("dashboard:review", () => { void open(); });
     for (const b of roleBtns) {
         b.addEventListener("click", () => {
+            if (auditeeOnly())
+                return;
             role = b.dataset.role === "auditor" ? "auditor" : "auditee";
             try {
                 localStorage.setItem(ROLE_KEY, role);

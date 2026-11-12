@@ -1,8 +1,9 @@
 /**
  * lib/review-server.ts
  *
- * The /dashboard/ ตรวจสอบ (review) tab's API, owner only like รายชื่อ and
- * ประวัติการใช้งาน (anyone else gets 404). Mounted from main.ts with its
+ * The /dashboard/ ตรวจสอบ (review) tab's API. The owner has both sides; the
+ * other dashboard users have the ผู้จัดทำ (auditee) side only (Pong,
+ * 2026-11-12). Routes that are not theirs answer 404. Mounted from main.ts with its
  * helpers passed in, so this file has no secrets or settings of its own.
  *
  * Tables, functions and the private bucket review-files come from
@@ -63,6 +64,8 @@ export interface ReviewDeps {
   listRosterTables(): Promise<string[]>
   dashSession(req: Request): (Actor & { exp: number }) | null
   isDashOwner(sub: string): boolean
+  // A dashboard user who gets the ตรวจสอบ tab's ผู้จัดทำ side only.
+  isReviewAuditee(sub: string): boolean
   audit(req: Request, actor: Actor, action: string, target?: Record<string, unknown>): Promise<void>
 }
 
@@ -145,19 +148,24 @@ export function mountReview(d: ReviewDeps): void {
   const storage = (p: string): string => d.supabaseUrl + "/storage/v1/" + p
   const json = (extra: Record<string, string> = {}) => ({ ...d.serviceHeaders(), "Content-Type": "application/json", ...extra })
 
-  // Owner only, a real roster month, and the tables installed.
-  const gate = async (req: Request, res: Response): Promise<{ s: Actor; month: string } | null> => {
+  // Signed in, allowed this side, a real roster month, and the tables
+  // installed. The owner has both sides; the other dashboard users are
+  // ผู้จัดทำ only (Pong, 2026-11-12: "Add Dada as auditee"), so a route is
+  // owner only unless it says "auditee". A route that is not open to them
+  // answers 404, as the owner-only tabs do.
+  const gate = async (req: Request, res: Response, side: "owner" | "auditee" = "owner"): Promise<{ s: Actor; month: string; owner: boolean } | null> => {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) { res.status(401).json({ error: "not authenticated" }); return null }
-    if (!d.isDashOwner(s.sub)) { res.status(404).json({ error: "not found" }); return null }
+    const owner = d.isDashOwner(s.sub)
+    if (!owner && !(side === "auditee" && d.isReviewAuditee(s.sub))) { res.status(404).json({ error: "not found" }); return null }
     const month = String(req.params.month || "")
     if (req.params.month !== undefined) {
       if (!core.parseMonth(month) || month < FIRST_MONTH || !(await d.listRosterTables()).includes(month)) {
         res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null
       }
     }
-    return { s: { sub: s.sub, name: s.name }, month }
+    return { s: { sub: s.sub, name: s.name }, month, owner }
   }
 
   // Only the two loads (load = true) answer a missing install with 200
@@ -221,7 +229,7 @@ export function mountReview(d: ReviewDeps): void {
   }
 
   app.get("/dashboard/api/review/months", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort()
@@ -231,7 +239,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.get("/dashboard/api/review/:month", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const st = await state(g.month)
@@ -256,7 +264,8 @@ export function mountReview(d: ReviewDeps): void {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) return res.status(401).json({ error: "not authenticated" })
-    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
+    // Typing budget and N is the ผู้จัดทำ's job, so they get it too.
+    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) return res.status(404).json({ error: "not found" })
     const month = String(req.params.month || "")
     if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)
@@ -289,7 +298,7 @@ export function mountReview(d: ReviewDeps): void {
   // roster edit (so History shows it with the รายชื่อ tab's edits), and a
   // fresh build is queued. Only on the auditee's turn (the SQL checks).
   app.put("/dashboard/api/review/:month/scores/:index", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const index = String(req.params.index)
     if (!UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้" })
@@ -311,7 +320,7 @@ export function mountReview(d: ReviewDeps): void {
 
   // Everyone in the newest build: the auditee's list.
   app.get("/dashboard/api/review/:month/list", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       res.json(await d.callServiceRpc("review_auditee_people", { p_month: g.month }))
@@ -319,7 +328,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/rebuild", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const st = await state(g.month)
@@ -331,7 +340,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/rounds", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const round = await d.callServiceRpc("review_submit_round", { p_month: g.month, p_actor: g.s.name })
@@ -341,7 +350,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/rounds/withdraw", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const roundNo = await d.callServiceRpc("review_withdraw_round", { p_month: g.month, p_actor: g.s.name })
@@ -354,7 +363,7 @@ export function mountReview(d: ReviewDeps): void {
   // the email SQL, a failed email, or a test). The SQL refuses while one is
   // on its way or once a real one went out.
   app.post("/dashboard/api/review/:month/email", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const e = await d.callServiceRpc("review_email_queue", { p_month: g.month, p_actor: g.s.name })
@@ -419,7 +428,7 @@ export function mountReview(d: ReviewDeps): void {
   }
 
   app.get("/dashboard/api/review/:month/people", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const round = /^[1-9][0-9]{0,3}$/.test(String(req.query.round || "")) ? Number(req.query.round) : null
     try {
@@ -428,7 +437,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.get("/dashboard/api/review/:month/person/:round/:index", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const round = String(req.params.round), index = String(req.params.index)
     if (!/^[1-9][0-9]{0,3}$/.test(round) || !UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
@@ -438,10 +447,11 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/opened", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const role = req.body && req.body.role
     if (role !== "auditor" && role !== "auditee") return res.status(400).json({ error: "bad role" })
+    if (role === "auditor" && !g.owner) return res.status(404).json({ error: "not found" })
     try {
       await d.callServiceRpc("review_mark_opened", { p_month: g.month, p_role: role })
       res.json({ ok: true })
@@ -466,7 +476,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.put("/dashboard/api/review/:month/replies/:index", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const index = String(req.params.index)
     const reply = typeof (req.body && req.body.reply) === "string" ? req.body.reply.trim() : ""
@@ -516,7 +526,7 @@ export function mountReview(d: ReviewDeps): void {
 
   // The approval document (process/review-pdf.ts, workflow 2.8).
   app.get("/dashboard/api/review/:month/pdf", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const r = await axios.get(rest("review_rounds?select=round_no,pdf_status,pdf_path&month=eq." + g.month + "&status=eq.approved"),
@@ -534,7 +544,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       const round = await d.callServiceRpc("review_retry_pdf", { p_month: g.month, p_actor: g.s.name })
@@ -562,7 +572,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     try {
       res.json({ issues: (await d.callServiceRpc("review_issue_list", { p_month: g.month })) || [] })
@@ -583,7 +593,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/issues/:id/replies", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditee")
     if (!g) return
     const id = String(req.params.id)
     const role = req.body && req.body.role
@@ -591,6 +601,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!/^[1-9][0-9]{0,17}$/.test(id) || (role !== "auditor" && role !== "auditee") || !body) {
       return res.status(400).json({ error: "พิมพ์คำตอบ (ไม่เกิน 2,000 ตัวอักษร)" })
     }
+    if (role === "auditor" && !g.owner) return res.status(404).json({ error: "not found" })
     try {
       await d.callServiceRpc("review_issue_reply", { p_month: g.month, p_issue: Number(id), p_role: role, p_body: body, p_actor: g.s.name })
       await d.audit(req, g.s, "review.issue_reply", { month: g.month, id: Number(id), role, body })

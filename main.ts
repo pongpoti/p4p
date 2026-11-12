@@ -705,6 +705,10 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 // (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
 // dashboard admins never see the tab and get 404 from its API.
 const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
+// The ตรวจสอบ tab's ผู้จัดทำ (auditee) side, and the overview's งบ button:
+// every dashboard user who is not the owner (Pong, 2026-11-12: "Add Dada as
+// auditee"; Dada is the only other one). The owner has both sides.
+const isReviewAuditee = (sub: string): boolean => DASHBOARD_LINE_USER_IDS.has(sub) && !isDashOwner(sub)
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -838,7 +842,7 @@ app.get("/dashboard/api/session", (req: Request, res: Response) => {
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
   setDashCookie(res, s.sub, s.name, s.exp)
-  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: isDashOwner(s.sub) })
+  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: isDashOwner(s.sub), reviewAuditee: isReviewAuditee(s.sub) })
 })
 
 // Excel submission status for the six months before the current one
@@ -877,11 +881,12 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    // The owner also gets each month's budget and N (review_inputs), for the
-    // budget button on the month cards. Others get none, and no button.
-    const owner = isDashOwner(s.sub)
+    // The owner and the ผู้จัดทำ also get each month's budget and N
+    // (review_inputs), for the budget button on the month cards. Others get
+    // none, and no button.
+    const canBudget = isDashOwner(s.sub) || isReviewAuditee(s.sub)
     const budgets: Record<string, unknown> = {}
-    if (owner) {
+    if (canBudget) {
       try {
         const keys = months.map((m) => m.key).join(",")
         const r = await axios.get(
@@ -896,7 +901,7 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
         console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
       }
     }
-    res.json({ months: owner ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null })) : months, canBudget: owner })
+    res.json({ months: canBudget ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null })) : months, canBudget })
   } catch (e: any) {
     console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load overview" })
@@ -1248,6 +1253,7 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   listRosterTables: async (): Promise<string[]> => (await callServiceRpc("admin_list_roster_tables")) || [],
   dashSession,
   isDashOwner,
+  isReviewAuditee,
   audit,
 })
 
