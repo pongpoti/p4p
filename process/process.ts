@@ -912,11 +912,18 @@ async function formatOverallSheet(
   fmtReqs.push(bordersReq(sheetId, R8, 4,  RLast, 15, true));
   fmtReqs.push(alignReq(sheetId, R8, 0, RLast, 0, 'CENTER'));                                // A sequence no.
 
-  // Column widths (pixels) for the helper columns and the panel
+  // Column widths (pixels). A..P come from the Google template, whose widths
+  // are 1.375x the hospital SK03 form; set them to the form's widths (the
+  // ones in Pong's 2569_07_new_formula.xlsx). Then the helper columns and
+  // the panel.
+  const formWidths: [string, number][] = [
+    ['A', 33], ['B', 37], ['C', 122], ['D', 146], ['E', 92], ['F', 184], ['G', 195], ['H', 74],
+    ['I', 100], ['J', isIntern ? 85 : 82], ['K', 100], ['L', 88], ['M', 106], ['N', 100], ['O', 100], ['P', 72],
+  ];
   const widths: [string, number][] = isIntern
     ? [['Q', 87], ['R', 79], ['S', 95], ['T', 87], ['U', 32], ['V', 265], ['W', 166], ['X', 32], ['Y', 32]]
     : [['Q', 55], ['R', 95], ['S', 87], ['T', 79], ['U', 87], ['V', 95], ['W', 32], ['X', 265], ['Y', 166]];
-  widths.forEach(([col, px]) => fmtReqs.push(colWidthReq(sheetId, col, px)));
+  [...formWidths, ...widths].forEach(([col, px]) => fmtReqs.push(colWidthReq(sheetId, col, px)));
 
   // Side panel: label column / value column, grey header rows, bordered blocks
   const PL = colIdx(isIntern ? 'V' : 'X');
@@ -1103,6 +1110,16 @@ async function writeOverallSignature(
  * rowNumMap key: "prefix firstname  lastname" (double space before lastname)
  * rowNumMap value: 1-based row number in staff or intern sheet
  */
+// Department sheet widths A..J in pixels: the hospital SK03 form's.
+const DEPT_COL_PX = [46, 271, 221, 276, 116, 151, 130, 144, 156, 100];
+// Rough width of a line of TH SarabunPSK 16 text: about 7 px per character
+// that takes space (Thai vowel and tone marks above/below take none), plus
+// cell padding.
+function thaiTextPx(text: string): number {
+  const spacing = [...text.trim()].filter(ch => !/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/.test(ch)).length;
+  return spacing === 0 ? 0 : Math.ceil(spacing * 7 + 14);
+}
+
 async function buildDeptSheets(
   sheets: sheets_v4.Sheets,
   ssId: string,
@@ -1213,9 +1230,15 @@ async function buildDeptSheets(
     // Borders + number format (mirrors GAS dep: A6:I with inner, E6:G number format)
     const R_S = D - 1; // 0-based data start
     const R_E = lastRow - 1;
+    // Column widths: the dep_template's are 1.375x the hospital form; use the
+    // form's (Pong's 2569_07_new_formula.xlsx). หมายเหตุ (I) grows to fit the
+    // longest remark, as Pong widened it by hand for long remarks.
+    const remarkPx = Math.max(DEPT_COL_PX[8], ...rows.map(r => thaiTextPx(String(r[8] ?? ''))));
+    const deptWidths = DEPT_COL_PX.map((px, c) => colWidthReq(sheetId, String.fromCharCode(65 + c), c === 8 ? remarkPx : px));
     await withRetry(() => sheets.spreadsheets.batchUpdate({
       spreadsheetId: ssId,
       requestBody: { requests: [
+        ...deptWidths,
         bordersReq(sheetId, R_S, 0, R_E, 8, true),
         alignReq(sheetId, R_S, 0, R_E, 0, 'CENTER'),             // A sequence no.
         { repeatCell: {
