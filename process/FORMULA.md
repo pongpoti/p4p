@@ -189,7 +189,7 @@ for each department d:
 
 total_weighted_units = Σ weighted_units_d
 ```
-Each department's tier and `weight_d` for the month are in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers) (the tiers changed from 2569_09). The tier names keep their capacity multipliers (1.15 / 1.00 / 0.85); only the split of the extra uses the wider weights 1.5 / 1.0 / 0.5 (Pong, 2026-11-11), so the tier still counts when the extra is small.
+Each department's tier and `weight_d` are in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers). The tier names keep their capacity multipliers (1.15 / 1.00 / 0.85); only the split of the extra uses the wider weights 1.5 / 1.0 / 0.5 (Pong, 2026-11-11), so the tier still counts when the extra is small.
 
 **3.3 — Share the extra pool between departments**
 ```
@@ -220,17 +220,16 @@ If `extra_pool < 0` (only possible when `total_budget < 10,000 × N_staff`), eve
 
 In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, 10000 + U × V), 0))`.
 
-**Results (2569_07 and 2569_08: weights 1.5 / 1 / 0.5, score ±50%)**
+**Results (2569_07 and 2569_08: weights 1.5 / 1 / 0.5, score ±50%, tiers from 27-8-69)**
 
 | | สาขาขาดแคลน (1.5) | สาขากึ่งขาดแคลน (1.0) | สาขาเต็มศักยภาพ (0.5) |
 |---|---|---|---|
-| 2569_07 (180 STAFF, extra ฿62,603) | ฿10,263–10,751, avg ฿10,493 | ฿10,168–10,513, avg ฿10,328 | ฿10,096–10,233, avg ฿10,164 |
-| 2569_08 (181 STAFF, extra ฿83,445) | ฿10,334–10,997, avg ฿10,657 | ฿10,230–10,690, avg ฿10,438 | ฿10,119–10,312, avg ฿10,219 |
+| 2569_07 (180 STAFF, extra ฿62,603) | ฿10,338–10,753, avg ฿10,574 | ฿10,197–10,597, avg ฿10,382 | ฿10,098–10,276, avg ฿10,191 |
+| 2569_08 (181 STAFF, extra ฿83,445) | ฿10,414–11,084, avg ฿10,760 | ฿10,258–10,799, avg ฿10,507 | ฿10,142–10,349, avg ฿10,253 |
 
-- The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿30 and ฿22).
+- The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿62 and ฿65; with the tiers before 2026-11-12 it was ฿30 and ฿22).
 - No overlap holds as long as 1.5 × (1 − 0.5) > 0.5 × (1 + 0.5), i.e. 0.75 > 0.75 — exactly at the edge, so the margin comes only from department averages; a narrower score band widens it.
 - Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
-- With the 2569_09 tiers on the same 2569_08 data: สาขาขาดแคลน ฿10,414–11,084 (avg ฿10,760), สาขากึ่งขาดแคลน ฿10,258–10,799 (avg ฿10,507), สาขาเต็มศักยภาพ ฿10,142–10,349 (avg ฿10,253); the no-overlap margin grows to ฿65.
 
 ---
 
@@ -240,9 +239,9 @@ Used in Step 3.2: each STAFF department's tier sets its bonus weight (1.5 / 1.0 
 
 A department's tier comes from the hospital's doctor staffing sheet: **% = doctors on staff (รวมอัตราตามจริง) ÷ doctors the department should have (จำนวนที่ควรมี, FTE)**. Under 70% is สาขาขาดแคลน, 70% to under 90% is สาขากึ่งขาดแคลน, and 90% or more is สาขาเต็มศักยภาพ. Doctors hired by the day (ลจ.ชั่วคราว รายวัน) are not counted. The first tier table did not write these lines down; they are the ones that fit it.
 
-**From 2569_09** the tiers come from the staffing sheet แพทย์ 27-8-69 (Pong, 2026-11-12). Months up to 2569_08 keep the earlier tiers (last column), so a rebuild of an older month does not change its pay. In code: `CAPACITY_CHANGES` and `deptCapacity(monthKey)` in [`sk03-formula.ts`](./sk03-formula.ts).
+The numbers below are from the staffing sheet แพทย์ 27-8-69 (Pong, 2026-11-12). Every SK03 build from then on uses these tiers, including a rebuild of an older month (2569_08 too). The last column is the tier each department had before.
 
-| # | Department | Abbrev | FTE | On staff | % | Capacity tier (from 2569_09) | Multiplier | Bonus weight | Up to 2569_08 |
+| # | Department | Abbrev | FTE | On staff | % | Capacity tier | Multiplier | Bonus weight | Before 2026-11-12 |
 |:-:|---|:-:|:-:|:-:|:-:|---|:-:|:-:|---|
 | 1 | กุมารเวชกรรม | PED | 19 | 21 | 110.5% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
 | 2 | จักษุวิทยา | EYE | 9 | 8 | 88.9% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
@@ -264,7 +263,7 @@ A department's tier comes from the hospital's doctor staffing sheet: **% = docto
 | 18 | อายุรกรรม | MED | 47 | 35 | 74.5% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
 | 19 | INTERN | INT | — | — | — | — (own pool, Step 2) | — | — | — |
 
-From 2569_09: 5 departments are สาขาขาดแคลน, shortage specialty (1.15); 6 are สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and 7 are สาขาเต็มศักยภาพ, full-capacity specialty (0.85). Up to 2569_08 there were 6 in each.
+5 departments are สาขาขาดแคลน, shortage specialty (1.15); 6 are สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and 7 are สาขาเต็มศักยภาพ, full-capacity specialty (0.85). Before 2026-11-12 there were 6 in each.
 
 Notes on the 27-8-69 sheet:
 - SOC also has 18 doctors hired by the day. Counted in, SOC would be at 220% (เต็มศักยภาพ).
