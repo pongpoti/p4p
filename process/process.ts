@@ -309,9 +309,9 @@ async function uploadFileToDrive(
   drive: drive_v3.Drive,
   folderId: string,
   fileName: string,
-  buffer: Buffer
+  buffer: Buffer,
+  mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ): Promise<drive_v3.Schema$File> {
-  const mime     = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const safeName = fileName.replace(/'/g, "\\'");
   const existing = await driveListAll(drive, {
     q: `'${folderId}' in parents and name='${safeName}' and trashed=false`,
@@ -1304,6 +1304,36 @@ async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promi
   }
 }
 
+/**
+ * Saves "sk03 - YYYY_MM.pdf" next to the SK03 Sheet, laid out to print on A4
+ * landscape (Pong, 2026-11-12): every sheet scaled to the page width, frozen
+ * header rows repeated on each page, no gridlines, sheet names or page
+ * numbers. The Sheets API has no print settings, so this uses the Sheet's
+ * PDF export URL with those options. Re-runs overwrite the same PDF. A
+ * failure keeps the Sheet and only warns.
+ */
+async function exportSK03Pdf(drive: drive_v3.Drive, ssId: string, monthKey: string): Promise<void> {
+  const params = new URLSearchParams({
+    format: 'pdf', size: 'A4', portrait: 'false',
+    fitw: 'true', scale: '2',            // fit to width; long sheets run on to more pages
+    fzr: 'true',                          // repeat frozen rows on every page
+    gridlines: 'false', printtitle: 'false', sheetnames: 'false', pagenum: 'UNDEFINED',
+    horizontal_alignment: 'CENTER', vertical_alignment: 'TOP',
+    top_margin: '0.4', bottom_margin: '0.4', left_margin: '0.3', right_margin: '0.3',
+  });
+  const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(ssId)}/export?${params}`;
+  try {
+    const auth = createAuth();
+    const res = await withRetry(() => auth.request<ArrayBuffer>({ url, responseType: 'arraybuffer' }));
+    const pdf = Buffer.from(res.data);
+    if (pdf.subarray(0, 4).toString() !== '%PDF') throw new Error('export did not return a PDF');
+    const up = await uploadFileToDrive(drive, CONFIG.sk03FolderId, `sk03 - ${monthKey}.pdf`, pdf, 'application/pdf');
+    log(`  [SK03] ✓ A4 landscape PDF saved (${Math.round(pdf.length / 1024)} KB, id ${up.id})`);
+  } catch (err: any) {
+    log(`  [SK03] ⚠ A4 PDF export failed (Sheet kept): ${err.message}`, 'warn');
+  }
+}
+
 async function createSK03(
   drive: drive_v3.Drive,
   sheets: sheets_v4.Sheets,
@@ -1725,6 +1755,7 @@ async function main(): Promise<void> {
       const input = await review.loadReviewInput(supabase, key);
       log(`  [Step 6] Creating SK03 spreadsheet… (budget ${input ? `${input.budget} · per P4P ${input.per_p4p}` : 'none saved → empty'})`);
       const sk03 = await createSK03(drive, sheets, sbData, key, supabase, input);
+      await exportSK03Pdf(drive, sk03.ssId, key);
       // Pong's Telegram when the numbers saved on the overview page are in.
       await notifyBudgetBuilt(supabase, key, input, sk03.ssId);
 
