@@ -19,6 +19,12 @@
  *   POST /dashboard/api/review/:month/rebuild         a fresh build (workflow 2.2 via the relay)
  *   POST /dashboard/api/review/:month/rounds          send the newest build to the auditor
  *   POST /dashboard/api/review/:month/rounds/withdraw take it back before the auditor opens it
+ *   POST /dashboard/api/review/:month/email           email the live round to the auditor (again)
+ *
+ * Sending a round queues an email to the auditor (scripts/review-email-2026-11.sql,
+ * sent by the always-on relay, automation/review-email.ts); the month's
+ * state carries the month's emails, newest first, as `emails` (null until
+ * that file has been run).
  *
  * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
  * Google Drive (the state carries their ids, the tab links them view only),
@@ -92,6 +98,9 @@ const REFUSALS: [RegExp, number, string][] = [
   [/not approved/, 409, "เดือนนี้ยังไม่ได้อนุมัติ"],
   [/has not failed/, 409, "เอกสารไม่ได้สร้างไม่สำเร็จ ไม่ต้องสร้างใหม่"],
   [/a reopen needs a reason/, 400, "เขียนเหตุผลก่อน"],
+  [/no round to email/, 409, "ยังไม่มีรอบที่ส่งให้ผู้ตรวจสอบ"],
+  [/an email is on its way/, 409, "อีเมลรอบนี้กำลังจะส่งอยู่แล้ว"],
+  [/already emailed/, 409, "ส่งอีเมลรอบนี้ถึงผู้ตรวจสอบไปแล้ว"],
   [/reason is too long/, 400, "เหตุผลไม่เกิน 1,000 ตัวอักษร"],
 ]
 
@@ -114,6 +123,8 @@ const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งส�
 const BUDGET_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการบันทึกงบประมาณ ผู้ดูแลระบบต้องรันไฟล์ scripts/budget-inputs-2026-11.sql (PART 2) ใน Supabase SQL editor"
 // review_state says v: 2 once the second file has been run.
 const SQL_VERSION = 2
+const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการส่งอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-2026-11.sql ใน Supabase SQL editor"
+const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
 
 export function mountReview(d: ReviewDeps): void {
   const { app, axios } = d
@@ -155,6 +166,19 @@ export function mountReview(d: ReviewDeps): void {
 
   const state = (month: string): Promise<any> => d.callServiceRpc("review_state", { p_month: month })
 
+  // The month's emails to the auditor, newest first. Null when the email
+  // SQL is not installed or the read fails: the month still loads.
+  const emails = async (month: string): Promise<any[] | null> => {
+    try {
+      const r = await axios.get(rest("review_emails?select=" + EMAIL_COLS + "&month=eq." + month + "&order=id.desc&limit=20"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      return Array.isArray(r.data) ? r.data : null
+    } catch (e: any) {
+      if (!notInstalled(e)) console.error("[dashboard] review emails failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      return null
+    }
+  }
+
   // No build may change once the auditor has it, or after approval.
   const auditeeTurn = (st: any): boolean => {
     const live = (st.rounds || []).find((r: any) => r.round_no === st.live)
@@ -179,7 +203,7 @@ export function mountReview(d: ReviewDeps): void {
       // Only the first SQL file run: the tab says the second is needed.
       if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
       if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
-      res.json({ installed: true, ...st })
+      res.json({ installed: true, ...st, emails: await emails(g.month) })
     } catch (e: any) { fail(res, "state", e, true) }
   })
 
@@ -286,6 +310,25 @@ export function mountReview(d: ReviewDeps): void {
       await d.audit(req, g.s, "review.withdraw", { month: g.month, round: roundNo })
       res.json({ ok: true })
     } catch (e: any) { fail(res, "withdraw", e) }
+  })
+
+  // The ส่งอีเมล button: the live round's email again (a month sent before
+  // the email SQL, a failed email, or a test). The SQL refuses while one is
+  // on its way or once a real one went out.
+  app.post("/dashboard/api/review/:month/email", async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    try {
+      const e = await d.callServiceRpc("review_email_queue", { p_month: g.month, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.email", { month: g.month, round: e && e.round_no })
+      res.json({ ok: true, email: e })
+    } catch (e: any) {
+      if (notInstalled(e)) {
+        console.error("[dashboard] review email: not installed (" + String(pgError(e).code || "") + ")")
+        res.status(503).json({ installed: false, error: EMAIL_NOT_INSTALLED_MSG }); return
+      }
+      fail(res, "email", e)
+    }
   })
 
   // ── The auditor's side, and the auditee's answers ─────────────────────

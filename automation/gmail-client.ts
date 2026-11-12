@@ -6,6 +6,7 @@
  */
 
 import { google, type gmail_v1 } from "googleapis";
+import { PassThrough } from "node:stream";
 import type { OAuth2Client } from "google-auth-library";
 import type { GmailAttachment, DecodedMessage, MessageWithAttachments } from "./types.js";
 
@@ -46,7 +47,12 @@ export interface SendMessageOpts {
   from?: string;
   replyToMessageId?: string;
   attachments?: SendMessageAttachment[];
+  /** Extra X- headers (e.g. a tag to find this mail again in Sent); other names are ignored. */
+  headers?: Record<string, string>;
 }
+
+/** Above this size a mail goes through Gmail's upload form: a plain send carries the whole mail in one JSON request. */
+export const UPLOAD_SEND_BYTES = 4 * 1024 * 1024;
 
 export interface GmailClient {
   listMessages(opts?: ListMessagesOpts): Promise<gmail_v1.Schema$Message[]>;
@@ -173,7 +179,7 @@ export function createGmailClient(): GmailClient {
    * @param opts.from              Defaults to authenticated account
    * @param opts.replyToMessageId  Thread reply support
    */
-  async function sendMessage({ to, subject, body, html, bcc, from, replyToMessageId, attachments = [] }: SendMessageOpts): Promise<gmail_v1.Schema$Message> {
+  async function sendMessage({ to, subject, body, html, bcc, from, replyToMessageId, attachments = [], headers = {} }: SendMessageOpts): Promise<gmail_v1.Schema$Message> {
     if (!to || !subject || (!body && !html)) throw new Error("`to`, `subject`, and `body` or `html` are required.");
 
     // Strip CR/LF before these reach a raw header line. None of `to`,
@@ -186,6 +192,10 @@ export function createGmailClient(): GmailClient {
     subject = stripCrlf(subject);
     from    = from ? stripCrlf(from) : from;
     bcc     = bcc ? stripCrlf(bcc) : bcc;
+    // Only X- names, and plain ASCII values: they go on a raw header line.
+    const extraHeaders = Object.entries(headers)
+      .filter(([k, v]) => /^X-[A-Za-z0-9-]{1,60}$/.test(k) && /^[\x20-\x7E]*$/.test(String(v)))
+      .map(([k, v]) => `${k}: ${stripCrlf(v)}`);
 
     // Encode non-ASCII header values per RFC 2047 (e.g. Thai text in subject)
     const encodeHeader = (str: string) =>
@@ -250,6 +260,7 @@ export function createGmailClient(): GmailClient {
         `Subject: ${encodeHeader(subject)}`,
         ...(bcc ? [`Bcc: ${encodeAddressList(bcc)}`] : []),
         ...(from ? [`From: ${encodeAddressHeader(from)}`] : []),
+        ...extraHeaders,
       ];
 
       const threadId = await resolveThreadHeaders(headerLines);
@@ -281,7 +292,19 @@ export function createGmailClient(): GmailClient {
       }
       mime += `--${outerBnd}--`;
 
-      const raw = Buffer.from(mime).toString("base64")
+      const bytes = Buffer.from(mime);
+      if (bytes.length > UPLOAD_SEND_BYTES) {
+        // A big mail (the ตรวจสอบ tab's files are several MB) goes as an
+        // upload: the mail itself as message/rfc822, the thread as metadata.
+        const res = await gmail.users.messages.send({
+          userId: "me",
+          requestBody: threadId ? { threadId } : {},
+          // A stream: googleapis pipes the media part (a Buffer has no pipe()).
+          media: { mimeType: "message/rfc822", body: new PassThrough().end(bytes) },
+        });
+        return res.data;
+      }
+      const raw = bytes.toString("base64")
         .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
       const res = await gmail.users.messages.send({
@@ -301,6 +324,7 @@ export function createGmailClient(): GmailClient {
         `Subject: ${encodeHeader(subject)}`,
         ...(bcc ? [`Bcc: ${encodeAddressList(bcc)}`] : []),
         ...(from ? [`From: ${encodeAddressHeader(from)}`] : []),
+        ...extraHeaders,
       ];
 
       const threadId = await resolveThreadHeaders(headerLines);
@@ -340,6 +364,7 @@ export function createGmailClient(): GmailClient {
 
     if (bcc)  headerLines.push(`Bcc: ${encodeAddressList(bcc)}`);
     if (from) headerLines.push(`From: ${encodeAddressHeader(from)}`);
+    headerLines.push(...extraHeaders);
 
     const threadId = await resolveThreadHeaders(headerLines);
 
