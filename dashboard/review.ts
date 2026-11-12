@@ -1839,10 +1839,16 @@
             b.addEventListener("click", () => say(why.textContent || ""))
         } else {
             b.addEventListener("click", () => {
+                // Short labelled lines (Pong, 2026-11-12: the sentences
+                // were hard to read).
+                const done = r.counts.approve + r.counts.fix
+                const g = el("div", "rv-kvs")
+                g.append(kv("เดือน", monthName(s.month) + " รอบที่ " + r.round_no), kv("อนุมัติครั้งนี้", int(n) + " คน"),
+                    kv("ตัดสินแล้ว (คงเดิม)", done ? int(done) + " คน" : "–"))
                 askConfirm("อนุมัติทุกคนที่รอตรวจ", [
-                    el("p", undefined, "อนุมัติ " + int(n) + " คนที่รอตรวจ เดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
-                    el("p", undefined, "ทุกคนผลเทียบคะแนนและเทียบเงิน ตรงกัน คนที่ตัดสินแล้ว (อนุมัติ " + int(r.counts.approve) + " · ต้องแก้ไข " + int(r.counts.fix) + ") ไม่เปลี่ยน"),
-                    el("p", "rv-hint", "ยกเลิกผลรายคนได้ภายหลัง แล้วจึงกด อนุมัติทั้งหมด เพื่อทำเอกสารเบิกจ่าย"),
+                    g,
+                    el("p", undefined, "✓ ทุกคนที่จะอนุมัติ เทียบคะแนนและเทียบเงินตรงกัน"),
+                    el("p", "rv-hint", "ยกเลิกผลรายคนได้ภายหลัง · ขั้นต่อไป: กด อนุมัติทั้งหมด เพื่อทำเอกสารเบิกจ่าย"),
                 ], "อนุมัติ " + int(n) + " คน", () => approveAll(s, r))
             })
         }
