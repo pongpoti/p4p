@@ -1055,7 +1055,7 @@ const AUDIT_GROUPS: Record<string, string> = {
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
-    "review.pdf_retry,review.reopen,review.email,review.approve_all)",
+    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all)",
   refused: "action=eq.login.refused",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/

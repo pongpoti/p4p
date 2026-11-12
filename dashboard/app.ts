@@ -861,6 +861,7 @@
         "review.submit": "ส่งให้ผู้ตรวจสอบ",
         "review.withdraw": "ดึงรอบที่ส่งกลับ",
         "review.email": "ส่งอีเมลถึงผู้ตรวจสอบ",
+        "review.email_mode": "เปลี่ยนโหมดอีเมลถึงผู้ตรวจสอบ",
         "review.approve_all": "อนุมัติทุกคนที่รอตรวจ",
         "review.decide": "ตรวจรายคน",
         "review.reply": "ตอบหมายเหตุผู้ตรวจสอบ",
@@ -967,6 +968,9 @@
             case "review.approve":
             case "review.pdf_retry":
                 add(monthLabel(t.month)); if (t.round) add("รอบที่ " + t.round)
+                break
+            case "review.email_mode":
+                add(t.test ? "เปิดโหมดทดสอบ" : "ปิดโหมดทดสอบ (ส่งจริง)")
                 break
             case "review.reopen":
                 add(monthLabel(t.month)); if (t.round) add("รอบที่ " + t.round); add("เหตุผล: " + (t.reason || ""))
