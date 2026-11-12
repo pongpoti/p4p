@@ -388,7 +388,7 @@
         details.clear(); detailErrs.clear(); detailLoading.clear(); detailSeq++
         selected = ""; lastRoundKey = ""
         rows = null; rowsKey = ""; rowsErr = ""; rowsSeq++; editing = ""; moreOpen = false
-        drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""; remarkOpen.clear(); lastDecided = ""
+        drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""; remarkOpen.clear(); kept.clear()
     }
     const monthStatus = (m: MonthRow): { kind: string; text: string; sr?: string } => {
         const r = m.round
@@ -1604,7 +1604,10 @@
     const remarkOpen = new Set<string>()
     let swapAt = 0 // when the panel last drew another person
     let shownPerson = "" // the person the panel last drew
-    let lastDecided = "" // the person the "decided" note in the list names
+    // People decided while this filter is on stay in the list where they
+    // were, their row showing the result, instead of a green note above the
+    // names (Pong, 2026-11-12). Cleared when the filter changes.
+    const kept = new Set<string>()
 
     const roundKey = (s: State, r: Round): string => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix)
     async function loadPeople(s: State, r: Round): Promise<void> {
@@ -1829,6 +1832,7 @@
                     a.type = "button"
                     a.addEventListener("click", () => {
                         filter = key
+                        kept.clear()
                         const p = (people || []).find((x) => x.decision === null && (key === "mismatch" ? isMismatch(x) : isMissing(x)))
                         if (p) openPerson(p.index)
                         else render()
@@ -1857,16 +1861,22 @@
     }
 
     async function approveAll(s: State, r: Round): Promise<void> {
+        let said = ""
+        const waiting = (people || []).filter((x) => x.decision === null).map((x) => x.index)
         const ok = await confirmRun(s, async () => {
             const res = await post<{ approved: number }>(monthApi(s) + "/approve-all", { round: r.round_no })
-            return "อนุมัติแล้ว " + int(Number(res && res.approved) || 0) + " คน"
+            said = "อนุมัติแล้ว " + int(Number(res && res.approved) || 0) + " คน"
+            return said
         })
         if (ok) {
-            // Said above the names, like a single decision, so the window
-            // keeps its height and the buttons stay in view.
-            const n = notes.get("top")
-            if (n && s.month === month) { notes.delete("top"); notes.set("decided", n); lastDecided = "" }
-            if (s.month === month) { peopleKey = ""; issuesKey = "" }
+            // No note above the names: everyone just approved stays in the
+            // list with an approved row, and the tiles show the new counts.
+            if (s.month === month) {
+                notes.delete("top")
+                for (const i of waiting) kept.add(i)
+                peopleKey = ""; issuesKey = ""
+            }
+            say(said)
             await loadMonths().catch(() => false)
         }
         await reload()
@@ -2034,7 +2044,7 @@
         const st = STATUSES.find((x) => x.key === filter) || STATUSES[0]
         return (people || []).filter((p) => {
             if (q && !(p.name.toLowerCase().includes(q) || p.department.toLowerCase().includes(q))) return false
-            return st.test(p)
+            return st.test(p) || kept.has(p.index)
         })
     }
 
@@ -2066,6 +2076,7 @@
             b.append(lab, el("b", "rv-st-n", int(n)))
             b.addEventListener("click", () => {
                 filter = st.key
+                kept.clear()
                 // The panel follows: the first of the group when the person
                 // on screen is not in it.
                 const list = visiblePeople()
@@ -2097,7 +2108,8 @@
         ul.setAttribute("aria-label", "รายชื่อในรอบนี้")
         for (const p of shown) {
             const li = el("li")
-            const b = el("button", "rv-person-btn" + (p.index === selected ? " current" : ""))
+            const tone = p.decision === "approve" ? " rv-p-ok" : p.decision === "fix" ? " rv-p-fix" : ""
+            const b = el("button", "rv-person-btn" + tone + (p.index === selected ? " current" : ""))
             b.type = "button"
             b.id = "rv-p-" + p.index
             if (p.index === selected) b.setAttribute("aria-current", "true")
@@ -2105,24 +2117,20 @@
             line.append(el("span", "rv-pname", p.name))
             if (isMismatch(p)) line.append(chip("bad", "ไม่ตรงกัน"))
             else if (isMissing(p)) line.append(chip("miss", "ไม่พบ"))
+            // The result in the row itself (Pong, 2026-11-12): a soft green
+            // or orange row, and อนุมัติ / ต้องแก้ไข after the department.
+            const sub = el("span", "rv-psub", p.intern ? "อินเทิร์น" : p.department)
+            if (p.decision) sub.append(" · ", el("span", "rv-pdec rv-pdec-" + (p.decision === "approve" ? "ok" : "fix"), p.decision === "approve" ? "อนุมัติ" : "ต้องแก้ไข"))
+            if (p.carried) sub.append(" · คงผลรอบก่อน")
             const text = el("span", "rv-ptext")
-            text.append(line, el("span", "rv-psub", (p.intern ? "อินเทิร์น" : p.department) + (p.carried ? " · คงผลรอบก่อน" : "")))
-            b.append(decisionMark(p), text, el("span", "sr-only", " · " + decisionText(p)))
+            text.append(line, sub)
+            b.append(decisionMark(p), text)
+            if (!p.decision) b.append(el("span", "sr-only", " · รอตรวจ"))
             b.addEventListener("click", () => { openPerson(p.index) })
             li.append(b)
             ul.append(li)
         }
         if (!shown.length) ul.append(el("li", "rv-hint", filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"))
-        const dn = noteEl("decided")
-        const back = lastDecided ? (people || []).find((x) => x.index === lastDecided) : undefined
-        if (dn && back) {
-            const b = el("button", "rv-link", "เปิดดูอีกครั้ง")
-            b.type = "button"
-            b.id = "rv-decided-back"
-            b.addEventListener("click", () => { openPerson(back.index) })
-            dn.append(" ", b)
-        }
-        if (dn) side.append(dn)
         side.append(ul)
         return side
     }
@@ -2527,7 +2535,6 @@
     async function decide(s: State, p: Person, decision: "approve" | "fix" | null, remark: string, btn: HTMLButtonElement): Promise<void> {
         const spot = "decide-" + p.index
         if (!begin(s, spot, btn)) return
-        notes.delete("decided")
         busy = true
         let moved = false, failed = false
         try {
@@ -2538,13 +2545,17 @@
             forget(s, "remark:" + p.index)
             fieldErrs.delete("remark:" + p.index)
             if (decision !== "fix") remarkOpen.delete(p.index)
-            // Said in the people list, not under the next person's buttons,
-            // where it would read as their own result.
-            tell(s, "decided", "ok", p.name + ": " + decisionText(p))
-            lastDecided = p.index
-            // Straight on to the next person still to check.
+            // The row shows the result and stays where it was; the words are
+            // only read out.
+            if (s.month === month) kept.add(p.index)
+            say(p.name + ": " + decisionText(p))
+            // Straight on to the next person still to check, after this one
+            // in the list (then from the top).
             if (decision && s.month === month) {
-                const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
+                const list = visiblePeople()
+                const at = list.findIndex((x) => x.index === p.index)
+                const order = at < 0 ? list : list.slice(at + 1).concat(list.slice(0, at))
+                const next = order.find((x) => x.decision === null && x.index !== p.index)
                 if (next) { selected = next.index; moved = true }
             }
         } catch (e) {
