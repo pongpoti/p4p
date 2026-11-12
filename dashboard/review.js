@@ -633,7 +633,7 @@
         const list = body.querySelector(".rv-people-list");
         const listTop = list ? list.scrollTop : 0;
         const sheet = body.querySelector(".rv-sheet");
-        const sheetAt = sheet ? { key: sheet.dataset.key || "", top: sheet.scrollTop, left: sheet.scrollLeft } : null;
+        const sheetAt = sheet ? { key: sheet.dataset.key || "", placed: sheet.dataset.placed === "1", top: sheet.scrollTop, left: sheet.scrollLeft } : null;
         refreshLists(s);
         const top = [];
         if (loadError)
@@ -646,8 +646,11 @@
         if (list2)
             list2.scrollTop = listTop;
         const sheet2 = body.querySelector(".rv-sheet");
-        if (sheet2 && sheetAt && sheet2.dataset.key === sheetAt.key) {
+        // Kept only once the old sheet was brought to the score cell: a
+        // redraw before that frame would keep its unscrolled start.
+        if (sheet2 && sheetAt && sheetAt.placed && sheet2.dataset.key === sheetAt.key) {
             sheet2.dataset.kept = "1";
+            sheet2.dataset.placed = "1";
             sheet2.scrollTop = sheetAt.top;
             sheet2.scrollLeft = sheetAt.left;
         }
@@ -2456,14 +2459,24 @@
             box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู"));
         else {
             const hit = cellRC(p.statedCell);
-            const region = el("div", "rv-sheet");
+            // Only the rows around the score, so the sheet never scrolls up
+            // or down (Pong, 2026-11-12): 3 rows above the score cell and 1
+            // below; with no cell (a total rebuilt from the days, or none
+            // found), the last 5 rows that have something in them.
+            let lastRow = 0;
+            for (const [rr0, , v0] of g.cells)
+                if (v0 !== "" && v0 !== null && rr0 > lastRow)
+                    lastRow = rr0;
+            const r1 = Math.min(g.rows - 1, hit ? hit[0] + 1 : lastRow);
+            const r0 = Math.max(0, hit ? hit[0] - 3 : lastRow - 4);
+            const region = el("div", "rv-sheet rv-crop");
             region.id = "rv-sheet";
             region.dataset.key = key;
             region.setAttribute("role", "region");
             region.tabIndex = 0;
             const capId = "rv-sheet-cap";
             region.setAttribute("aria-labelledby", capId);
-            const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)");
+            const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม แถว " + (r0 + 1) + "–" + (r1 + 1) + " (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)");
             cap.id = capId;
             if (p.statedCell)
                 cap.append(" ", el("span", "rv-cell-chip", "คะแนนอยู่ช่อง " + p.statedCell));
@@ -2483,7 +2496,7 @@
             const thead = el("thead");
             thead.append(hd);
             const tbody = el("tbody");
-            for (let rr = 0; rr < g.rows; rr++) {
+            for (let rr = r0; rr <= r1; rr++) {
                 const tr = el("tr");
                 const th = el("th", undefined, String(rr + 1));
                 th.scope = "row";
@@ -2516,19 +2529,18 @@
             region.append(tbl);
             box.append(cap, region);
             // Bring the cell used as the score into view (it is often far
-            // right / bottom): in the upper third, so the rows above it show,
-            // and sideways only as far as needed, so the activity names on
+            // right): sideways only as far as needed, so the activity names on
             // the left stay in view when they fit. Not on a redraw of the
             // sheet already open (render kept its scroll).
             requestAnimationFrame(() => {
-                if (region.dataset.kept)
+                if (region.dataset.kept || !region.isConnected)
                     return;
                 const hc = tbl.querySelector("td.hit");
-                if (!hc)
-                    return;
-                region.scrollTop = Math.max(0, hc.offsetTop - region.clientHeight / 3);
-                const over = hc.offsetLeft + hc.offsetWidth + 24 - region.clientWidth;
-                region.scrollLeft = over > 0 ? over : 0;
+                if (hc) {
+                    const over = hc.offsetLeft + hc.offsetWidth + 24 - region.clientWidth;
+                    region.scrollLeft = over > 0 ? over : 0;
+                }
+                region.dataset.placed = "1";
             });
         }
         if (d.deptRow) {

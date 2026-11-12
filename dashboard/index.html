@@ -848,6 +848,8 @@
         .rv-cell-chip { display: inline-block; white-space: nowrap; margin-left: 4px; padding: 0 8px; border-radius: 999px; border: 1px solid #B42318; background: #FFF4D6; color: #8A1C12; font-weight: 700; }
         /* The sheet fits under the pinned decision row, so one scroll shows all of it. */
         .rv-sheet { position: relative; overflow: auto; max-height: max(280px, calc(100vh - 360px)); max-height: max(280px, var(--rv-sheet-max, calc(100dvh - 360px))); border: 1px solid rgba(63, 47, 36, .25); border-radius: 8px; background: #fff; }
+        /* Only the score's rows are drawn: sideways scrolling only. */
+        .rv-sheet.rv-crop { max-height: none; overflow-x: auto; overflow-y: hidden; }
         .rv-sheet:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
         .rv-xl { border-collapse: collapse; font-size: .85rem; }
         .rv-xl th { position: sticky; top: 0; background: #F3EBE1; font-weight: 600; padding: 2px 6px; border: 1px solid rgba(63, 47, 36, .15); }
