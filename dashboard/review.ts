@@ -1615,11 +1615,9 @@
         }
         if (r.status === "approved") return approvedView(s, r, "auditor")
         ensure(s, r)
-        const out: Node[] = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true),
-            "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
-            " · งบประมาณ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
-            (r.edits ? " · ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน" : ""))]
-        out.push(finishBar(s, r))
+        // No separate ถึงคิวคุณ card: the round's line rides in the counts
+        // bar, so the names and the checks start higher (Pong, 2026-11-12).
+        const out: Node[] = [finishBar(s, r)]
         if (peopleErr) out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
         if (!people) { if (!peopleErr) out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
         const wrap = el("div", "rv-review")
@@ -1633,6 +1631,12 @@
         // Not known until the issues load: no "0 open" and no approve-all before that.
         const openIssues = issues ? issues.filter((i) => i.status === "open").length : null
         const bar = el("div", "rv-finish glass")
+        const info = el("p", "rv-round-line", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true) +
+            " · ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
+            " · งบประมาณ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
+            (r.edits ? " · ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน" : ""))
+        info.prepend(el("span", "rv-tag", "ถึงคิวคุณ"), " ")
+        bar.append(info)
         bar.append(el("p", "rv-counts", "รอตรวจ " + int(c.waiting) + " · อนุมัติ " + int(c.approve) +
             (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " +
             (openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "กำลังโหลด…") : int(openIssues))))
@@ -1994,6 +1998,26 @@
     }
     view.addEventListener("scroll", () => markStuck(), { passive: true })
     window.addEventListener("resize", syncStick)
+    // Keys for the auditor (Pong picked them, 2026-11-12): A อนุมัติ,
+    // F ต้องแก้ไข, ← / → the person before / after. By key position
+    // (ev.code), so they work with the Thai layout on too; never while
+    // typing, in a dialog, with a modifier, or with the sheet focused (its
+    // arrows scroll it).
+    document.addEventListener("keydown", (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat || ev.defaultPrevented) return
+        if (role !== "auditor" || view.classList.contains("hidden") || !body.querySelector(".rv-decide-row")) return
+        if (document.querySelector("dialog[open]")) return
+        const t = ev.target as HTMLElement | null
+        if (t && (t.closest("input, textarea, select, [contenteditable], .rv-sheet"))) return
+        const id = ev.code === "KeyA" ? "rv-approve" : ev.code === "KeyF" ? "rv-fix"
+            : ev.code === "ArrowLeft" ? "rv-prev-person" : ev.code === "ArrowRight" ? "rv-next-person" : ""
+        if (!id) return
+        const b = document.getElementById(id) as HTMLButtonElement | null
+        if (!b || b.disabled) return
+        ev.preventDefault()
+        b.click()
+    })
+
     // The click that decided one person must not land on the next one's
     // button: ignore pointer clicks for half a second after the panel shows
     // another person, and the second click of a double-click. Keys (detail 0)
@@ -2028,9 +2052,13 @@
         const approve = el("button", "btn-primary" + (ok ? "" : " rv-off"), p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
         approve.type = "button"
         approve.id = "rv-approve"
+        approve.setAttribute("aria-keyshortcuts", "A")
+        approve.title = "ปุ่มลัด A"
         const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""), p.decision === "fix" ? "✓ ต้องแก้ไขแล้ว" : "ต้องแก้ไข")
         fix.type = "button"
         fix.id = "rv-fix"
+        fix.setAttribute("aria-keyshortcuts", "F")
+        fix.title = "ปุ่มลัด F"
         btns.append(approve, fix)
         if (p.decision) {
             const undo = el("button", "btn-ghost", "ยกเลิกผล")
@@ -2048,13 +2076,17 @@
             const b = el("button", "btn-ghost", text)
             b.type = "button"
             b.id = d < 0 ? "rv-prev-person" : "rv-next-person"
+            b.setAttribute("aria-keyshortcuts", d < 0 ? "ArrowLeft" : "ArrowRight")
+            b.title = "ปุ่มลัด " + (d < 0 ? "←" : "→")
             const target = list[i + d]
             b.disabled = !target
             b.addEventListener("click", () => { if (target) openPerson(target.index) })
             return b
         }
         nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"))
-        bar.append(btns, who, nav)
+        const keys = el("span", "rv-keys", "ปุ่มลัด A · F · ← →")
+        keys.setAttribute("aria-hidden", "true")
+        bar.append(btns, who, keys, nav)
         // A failed save shows in the row, which is on screen even when pinned.
         const n = noteEl(spot)
         if (n) bar.append(n)
@@ -2241,8 +2273,18 @@
             for (const [rr, cc, v] of g.cells) map.set(rr + ":" + cc, v)
             const isHit = (rr: number, c: number): boolean => !!hit && hit[0] === rr && hit[1] === c
             const blank = (rr: number, c: number): boolean => { const v = map.get(rr + ":" + c); return (v === undefined || v === "") && !isHit(rr, c) }
+            // The score is often far right: then a รายการ column, pinned
+            // beside the row numbers, keeps each row's name (its first text
+            // in columns A–C) next to the numbers (Pong, 2026-11-12).
+            const labelOf = (rr: number): string => {
+                for (let c = 0; c < Math.min(3, g.cols); c++) { const v = map.get(rr + ":" + c); if (typeof v === "string" && v.trim()) return v.trim() }
+                return ""
+            }
+            const pinLabel = !!hit && hit[1] >= 6
+            if (pinLabel) region.classList.add("rv-pinlab")
             const hd = el("tr")
             hd.append(el("th", "corner"))
+            if (pinLabel) { const th = el("th", "lab", "รายการ"); th.scope = "col"; hd.append(th) }
             for (let c = 0; c < g.cols; c++) { const th = el("th", undefined, colLetters(c)); th.scope = "col"; hd.append(th) }
             const thead = el("thead"); thead.append(hd)
             const tbody = el("tbody")
@@ -2250,6 +2292,7 @@
                 const tr = el("tr")
                 const th = el("th", undefined, String(rr + 1)); th.scope = "row"
                 tr.append(th)
+                if (pinLabel) { const lt = labelOf(rr); const lb = el("td", "lab", lt); lb.title = lt; tr.append(lb) }
                 for (let c = 0; c < g.cols; c++) {
                     const v = map.get(rr + ":" + c)
                     const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v))
@@ -2278,6 +2321,8 @@
             // the left stay in view when they fit. Not on a redraw of the
             // sheet already open (render kept its scroll).
             requestAnimationFrame(() => {
+                const rh = tbl.querySelector("tbody th") as HTMLElement | null
+                if (rh) region.style.setProperty("--rv-rowhead", rh.offsetWidth + "px")
                 if (region.dataset.kept || !region.isConnected) return
                 const hc = tbl.querySelector("td.hit") as HTMLElement | null
                 if (hc) {
