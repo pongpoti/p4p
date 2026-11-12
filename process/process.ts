@@ -1327,8 +1327,8 @@ async function exportSK03Pdf(drive: drive_v3.Drive, ssId: string, monthKey: stri
     const res = await withRetry(() => auth.request<ArrayBuffer>({ url, responseType: 'arraybuffer' }));
     const pdf = Buffer.from(res.data);
     if (pdf.subarray(0, 4).toString() !== '%PDF') throw new Error('export did not return a PDF');
-    const up = await uploadFileToDrive(drive, CONFIG.sk03FolderId, `sk03 - ${monthKey}.pdf`, pdf, 'application/pdf');
-    log(`  [SK03] ✓ A4 landscape PDF saved (${Math.round(pdf.length / 1024)} KB, id ${up.id})`);
+    await uploadFileToDrive(drive, CONFIG.sk03FolderId, `sk03 - ${monthKey}.pdf`, pdf, 'application/pdf');
+    log(`  [SK03] ✓ A4 landscape PDF saved (${Math.round(pdf.length / 1024)} KB)`);
   } catch (err: any) {
     log(`  [SK03] ⚠ A4 PDF export failed (Sheet kept): ${err.message}`, 'warn');
   }
