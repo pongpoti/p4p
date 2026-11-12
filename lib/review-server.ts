@@ -102,6 +102,9 @@ const REFUSALS: [RegExp, number, string][] = [
   [/an email is on its way/, 409, "อีเมลรอบนี้กำลังจะส่งอยู่แล้ว"],
   [/already emailed/, 409, "ส่งอีเมลรอบนี้ถึงผู้ตรวจสอบไปแล้ว"],
   [/reason is too long/, 400, "เหตุผลไม่เกิน 1,000 ตัวอักษร"],
+  [/another round/, 409, "รอบที่ตรวจอยู่เปลี่ยนแล้ว โหลดหน้าใหม่ก่อน"],
+  [/a check is not a match/, 409, "ยังมีคนที่รอตรวจที่ผลเทียบไม่ตรงกันหรือไม่พบ ตรวจรายคนก่อน"],
+  [/nobody to approve/, 409, "ไม่มีคนที่รอตรวจแล้ว"],
 ]
 
 const pgError = (e: any): { code?: string; message?: string } => (e && e.response && e.response.data) || {}
@@ -125,6 +128,7 @@ const BUDGET_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้�
 const SQL_VERSION = 2
 const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการส่งอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-2026-11.sql ใน Supabase SQL editor"
 const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
+const APPROVE_ALL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งปุ่มอนุมัติทุกคนที่รอตรวจ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-approve-all-2026-11.sql ใน Supabase SQL editor"
 
 export function mountReview(d: ReviewDeps): void {
   const { app, axios } = d
@@ -337,6 +341,7 @@ export function mountReview(d: ReviewDeps): void {
   //   POST /dashboard/api/review/:month/opened           {role} the auditor / auditee opened the round
   //   PUT  /dashboard/api/review/:month/decisions/:index {decision: approve|fix|null, remark}
   //   PUT  /dashboard/api/review/:month/replies/:index   {reply} the auditee's answer to a ต้องแก้ไข
+  //   POST /dashboard/api/review/:month/approve-all     {round} อนุมัติทุกคนที่รอตรวจ (all checks ตรงกัน)
   //   POST /dashboard/api/review/:month/return | unreturn | approve
   //   GET  /dashboard/api/review/:month/issues
   //   POST /dashboard/api/review/:month/issues           {index?, body}
@@ -427,6 +432,27 @@ export function mountReview(d: ReviewDeps): void {
       } catch (e: any) { fail(res, path, e) }
     })
   }
+  // Everyone still to check, approved at once; refused while any of them
+  // has a check that is not ตรงกัน (scripts/review-approve-all-2026-11.sql).
+  // round: the round on the auditor's screen, so a newer one is not touched.
+  app.post("/dashboard/api/review/:month/approve-all", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res)
+    if (!g) return
+    const round = req.body ? req.body.round : undefined
+    if (!Number.isInteger(round) || round < 1 || round > 9999) return res.status(400).json({ error: "bad round" })
+    try {
+      const n = await d.callServiceRpc("review_approve_all", { p_month: g.month, p_round: round, p_actor: g.s.name })
+      await d.audit(req, g.s, "review.approve_all", { month: g.month, round, count: n })
+      res.json({ ok: true, approved: n })
+    } catch (e: any) {
+      if (notInstalled(e)) {
+        console.error("[dashboard] review approve-all: not installed (" + String(pgError(e).code || "") + ")")
+        res.status(503).json({ installed: false, error: APPROVE_ALL_NOT_INSTALLED_MSG }); return
+      }
+      fail(res, "approve-all", e)
+    }
+  })
+
   roundAction("return", "review_return_round", "review.return")
   roundAction("unreturn", "review_unreturn_round", "review.unreturn")
   roundAction("approve", "review_approve_round", "review.approve")

@@ -861,6 +861,7 @@
         "review.submit": "ส่งให้ผู้ตรวจสอบ",
         "review.withdraw": "ดึงรอบที่ส่งกลับ",
         "review.email": "ส่งอีเมลถึงผู้ตรวจสอบ",
+        "review.approve_all": "อนุมัติทุกคนที่รอตรวจ",
         "review.decide": "ตรวจรายคน",
         "review.reply": "ตอบหมายเหตุผู้ตรวจสอบ",
         "review.return": "ส่งผลตรวจกลับให้ผู้จัดทำ",
@@ -969,6 +970,9 @@
                 break
             case "review.reopen":
                 add(monthLabel(t.month)); if (t.round) add("รอบที่ " + t.round); add("เหตุผล: " + (t.reason || ""))
+                break
+            case "review.approve_all":
+                add(monthLabel(t.month)); if (t.round) add("รอบที่ " + t.round); if (t.count != null) add(Number(t.count).toLocaleString("th-TH") + " คน")
                 break
             case "review.decide":
                 add(monthLabel(t.month)); add(t.physician)
