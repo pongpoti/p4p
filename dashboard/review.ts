@@ -254,17 +254,25 @@
     const inflight = new Set<string>()
     const flightKey = (s: State, spot: string): string => s.month + "|" + spot
     const flying = (s: State, spot: string): boolean => inflight.has(flightKey(s, spot))
-    function markBusy(b: HTMLElement): void { b.setAttribute("aria-disabled", "true"); b.setAttribute("aria-busy", "true") }
+    // A step on its way: the button is off and, when it is the one pressed,
+    // shows a spinner inside (Pong, 2026-11-12; the CSS draws it).
+    function markBusy(b: HTMLElement, spin = true): void {
+        b.setAttribute("aria-disabled", "true")
+        if (spin) b.setAttribute("aria-busy", "true")
+    }
+    // Which button started each step, so a redraw spins that one only.
+    const pressedFor = new Map<string, string>()
     function begin(s: State, spot: string, btn?: HTMLElement | null): boolean {
         if (flying(s, spot)) return false
         inflight.add(flightKey(s, spot))
+        if (btn && btn.id) pressedFor.set(flightKey(s, spot), btn.id)
         if (s.month === month) {
             for (const k of [spot, "top"]) { notes.delete(k); const n = document.getElementById(noteId(k)); if (n) n.remove() }
         }
         if (btn) markBusy(btn)
         return true
     }
-    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); dirty = true }
+    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true }
 
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text: string, id: string, retry: () => void): HTMLElement {
@@ -2353,12 +2361,14 @@
         fix.setAttribute("aria-keyshortcuts", "F")
         fix.title = "ปุ่มลัด F"
         btns.append(approve, fix)
+        let undo: HTMLButtonElement | null = null
         if (p.decision) {
-            const undo = el("button", "btn-ghost", "ยกเลิกผล")
+            undo = el("button", "btn-ghost", "ยกเลิกผล")
             undo.type = "button"
             undo.id = "rv-undo"
-            undo.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", undo) })
-            btns.append(undo)
+            const u = undo
+            u.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", u) })
+            btns.append(u)
         }
         const who = el("span", "rv-decide-who", p.name)
         who.setAttribute("aria-hidden", "true")
@@ -2488,7 +2498,10 @@
             box.append(lab, line, err)
             out.push(box)
         }
-        if (flying(s, spot)) for (const b of [approve, fix, save]) if (b) markBusy(b)
+        if (flying(s, spot)) {
+            const pressed = pressedFor.get(flightKey(s, spot)) || "rv-approve"
+            for (const b of [approve, fix, save, undo]) if (b) markBusy(b, b.id === pressed)
+        }
         return out
     }
 

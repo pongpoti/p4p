@@ -197,11 +197,21 @@
     const inflight = new Set();
     const flightKey = (s, spot) => s.month + "|" + spot;
     const flying = (s, spot) => inflight.has(flightKey(s, spot));
-    function markBusy(b) { b.setAttribute("aria-disabled", "true"); b.setAttribute("aria-busy", "true"); }
+    // A step on its way: the button is off and, when it is the one pressed,
+    // shows a spinner inside (Pong, 2026-11-12; the CSS draws it).
+    function markBusy(b, spin = true) {
+        b.setAttribute("aria-disabled", "true");
+        if (spin)
+            b.setAttribute("aria-busy", "true");
+    }
+    // Which button started each step, so a redraw spins that one only.
+    const pressedFor = new Map();
     function begin(s, spot, btn) {
         if (flying(s, spot))
             return false;
         inflight.add(flightKey(s, spot));
+        if (btn && btn.id)
+            pressedFor.set(flightKey(s, spot), btn.id);
         if (s.month === month) {
             for (const k of [spot, "top"]) {
                 notes.delete(k);
@@ -214,7 +224,7 @@
             markBusy(btn);
         return true;
     }
-    const end = (s, spot) => { inflight.delete(flightKey(s, spot)); dirty = true; };
+    const end = (s, spot) => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true; };
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text, id, retry) {
         const box = el("div", "rv-fail");
@@ -2560,13 +2570,15 @@
         fix.setAttribute("aria-keyshortcuts", "F");
         fix.title = "ปุ่มลัด F";
         btns.append(approve, fix);
+        let undo = null;
         if (p.decision) {
-            const undo = el("button", "btn-ghost", "ยกเลิกผล");
+            undo = el("button", "btn-ghost", "ยกเลิกผล");
             undo.type = "button";
             undo.id = "rv-undo";
-            undo.addEventListener("click", (ev) => { if (!tooSoon(ev))
-                void decide(s, p, null, "", undo); });
-            btns.append(undo);
+            const u = undo;
+            u.addEventListener("click", (ev) => { if (!tooSoon(ev))
+                void decide(s, p, null, "", u); });
+            btns.append(u);
         }
         const who = el("span", "rv-decide-who", p.name);
         who.setAttribute("aria-hidden", "true");
@@ -2714,10 +2726,12 @@
             box.append(lab, line, err);
             out.push(box);
         }
-        if (flying(s, spot))
-            for (const b of [approve, fix, save])
+        if (flying(s, spot)) {
+            const pressed = pressedFor.get(flightKey(s, spot)) || "rv-approve";
+            for (const b of [approve, fix, save, undo])
                 if (b)
-                    markBusy(b);
+                    markBusy(b, b.id === pressed);
+        }
         return out;
     }
     // Load one person's detail once (only the score row's name is used now).

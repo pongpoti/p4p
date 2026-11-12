@@ -610,6 +610,13 @@
             animation: spin .8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* ตรวจสอบ tab: a button whose step is running shows a spinner in place
+           of its words (Pong, 2026-11-12), on both sides and in its confirm
+           dialog. The button keeps its size, so nothing around it moves. */
+        :is(#review-view, #review-confirm) :is(.btn-primary, .btn-ghost)[aria-busy="true"] { position: relative; color: transparent; cursor: progress; opacity: .85; }
+        :is(#review-view, #review-confirm) :is(.btn-primary, .btn-ghost)[aria-busy="true"]::before { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: spin .8s linear infinite; }
+        :is(#review-view, #review-confirm) .btn-ghost[aria-busy="true"]::before { border-color: rgba(63, 47, 36, .22); border-top-color: #3F2F24; }
+        :is(#review-view, #review-confirm) .btn-primary.rv-off[aria-busy="true"]::before { border-color: rgba(74, 61, 51, .25); border-top-color: #4A3D33; }
         @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
         .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
         .btn-ghost:hover { background: var(--accent); }
