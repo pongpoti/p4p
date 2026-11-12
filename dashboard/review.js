@@ -24,6 +24,12 @@
     "use strict";
     const view = document.getElementById("review-view");
     const body = document.getElementById("review-body");
+    // The left column under the months: each side's summary and main
+    // button. render() fills it; everything else that draws the body alone
+    // (loading, a failure, no month) empties it, so no stale button stays.
+    const side = document.getElementById("review-side");
+    let sideOut = [];
+    const show = (...nodes) => { side.replaceChildren(); body.replaceChildren(...nodes); };
     const monthBox = document.getElementById("review-months");
     const roleBtns = Array.from(document.querySelectorAll("#review-role button"));
     const live = document.getElementById("review-live");
@@ -329,7 +335,7 @@
         month = m;
         resetMonth();
         drawTabs();
-        body.replaceChildren(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
+        show(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
         void loadState(true).catch(loadFailed);
     }
     // Everything on screen belongs to one month: a switch drops the old
@@ -377,8 +383,9 @@
             return { kind: "ok", text: "อนุมัติแล้ว" };
         if (r && r.status === "returned")
             return me ? { kind: "fix", text: "ต้องแก้ " + int(r.fix || 0) } : { kind: "wait", text: "รอผู้จัดทำ" };
+        // Not "ถึงคิวคุณ": a softer word for the auditor (Pong, 2026-11-12).
         if (r)
-            return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "ถึงคิวคุณ" };
+            return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "พร้อมตรวจ" };
         if (m.sent < m.total)
             return { kind: "wait", text: "ส่ง " + int(m.sent) + "/" + int(m.total), sr: "แพทย์ส่งแล้ว " + int(m.sent) + " จาก " + int(m.total) + " คน" };
         return me ? { kind: "you", text: "ตรวจสอบ" } : { kind: "wait", text: "รอผู้จัดทำ" };
@@ -443,7 +450,7 @@
             keepLooking();
             return;
         }
-        body.replaceChildren(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
+        show(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
             loadingLine("กำลังโหลด…");
             void loadState(true).catch(loadFailed);
         }));
@@ -464,10 +471,10 @@
     }
     // The loading line takes the focus a pressed retry button had.
     function loadingLine(text) {
-        const hadFocus = body.contains(document.activeElement);
+        const hadFocus = body.contains(document.activeElement) || side.contains(document.activeElement);
         const p = el("p", "rv-loading", text);
         p.tabIndex = -1;
-        body.replaceChildren(p);
+        show(p);
         if (hadFocus)
             p.focus();
     }
@@ -506,7 +513,7 @@
         try {
             if (!(await loadMonths(true))) {
                 if (body.querySelector(".rv-loading"))
-                    body.replaceChildren(noMonthCard());
+                    show(noMonthCard());
                 return;
             }
         }
@@ -515,7 +522,7 @@
                 return;
             const msg = errText(e, "โหลดข้อมูลไม่สำเร็จ");
             shout(msg);
-            body.replaceChildren(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(); }));
+            show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(); }));
             return;
         }
         await loadState(true).catch(loadFailed);
@@ -541,7 +548,7 @@
                     month = "";
                     resetMonth();
                     drawTabs();
-                    body.replaceChildren(noMonthCard());
+                    show(noMonthCard());
                 }
             }
             else {
@@ -577,7 +584,7 @@
         return li;
     }
     function renderNotInstalled() {
-        body.replaceChildren(card("ยังเปิดใช้แท็บนี้ไม่ได้", [
+        show(card("ยังเปิดใช้แท็บนี้ไม่ได้", [
             el("p", undefined, "ฐานข้อมูลยังไม่มีตารางของแท็บตรวจสอบ หรือยังเป็นรุ่นเก่า ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql แล้วตามด้วย scripts/review-tab-2026-11-auditee.sql ใน Supabase SQL editor แล้วรีเฟรชหน้านี้"),
         ]));
     }
@@ -617,10 +624,10 @@
                 notes.delete(k);
         }
         const a = document.activeElement;
-        const inBody = !!a && a !== body && body.contains(a);
+        const inBody = !!a && a !== body && a !== side && (body.contains(a) || side.contains(a));
         const focusId = inBody && a ? a.id : "";
         const holder = inBody && a ? a.closest("[aria-labelledby]") : null;
-        const holderId = holder && body.contains(holder) ? holder.getAttribute("aria-labelledby") || "" : "";
+        const holderId = holder && (body.contains(holder) || side.contains(holder)) ? holder.getAttribute("aria-labelledby") || "" : "";
         let selA = null, selB = null;
         if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) {
             try {
@@ -633,7 +640,7 @@
         const list = body.querySelector(".rv-people-list");
         const listTop = list ? list.scrollTop : 0;
         const sheet = body.querySelector(".rv-sheet");
-        const sheetAt = sheet ? { key: sheet.dataset.key || "", top: sheet.scrollTop, left: sheet.scrollLeft } : null;
+        const sheetAt = sheet ? { key: sheet.dataset.key || "", placed: sheet.dataset.placed === "1", top: sheet.scrollTop, left: sheet.scrollLeft } : null;
         refreshLists(s);
         const top = [];
         if (loadError)
@@ -641,13 +648,19 @@
         const tn = noteEl("top");
         if (tn)
             top.push(tn);
-        body.replaceChildren(...top, ...(role === "auditee" ? auditee(s) : auditor(s)));
+        sideOut = [];
+        const main = role === "auditee" ? auditee(s) : auditor(s);
+        side.replaceChildren(...sideOut);
+        body.replaceChildren(...top, ...main);
         const list2 = body.querySelector(".rv-people-list");
         if (list2)
             list2.scrollTop = listTop;
         const sheet2 = body.querySelector(".rv-sheet");
-        if (sheet2 && sheetAt && sheet2.dataset.key === sheetAt.key) {
+        // Kept only once the old sheet was brought to the score cell: a
+        // redraw before that frame would keep its unscrolled start.
+        if (sheet2 && sheetAt && sheetAt.placed && sheet2.dataset.key === sheetAt.key) {
             sheet2.dataset.kept = "1";
+            sheet2.dataset.placed = "1";
             sheet2.scrollTop = sheetAt.top;
             sheet2.scrollLeft = sheetAt.left;
         }
@@ -703,28 +716,30 @@
         if (r && r.status === "approved")
             return approvedView(s, r, "auditee");
         const complete = s.roster.total > 0 && s.roster.sent >= s.roster.total;
+        // Budget, N, per P4P and the Drive files sit in the left column,
+        // with ส่ง under them (Pong, 2026-11-12: save screen height).
+        sideOut.push(inputsCard(s));
         if (!r && !complete)
-            return [waitingCard(s), inputsCard(s)];
+            return [waitingCard(s)];
         const out = [];
         if (r && r.status === "returned") {
             out.push(returnedCard(s, r), issuesCard(s, "auditee"));
             const more = el("section", "rv-card glass rv-more");
-            const h = el("h2", "rv-card-h", "งบประมาณ ไฟล์ และรายชื่อทั้งหมด");
+            const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด");
             h.id = "rv-h-more";
             more.setAttribute("aria-labelledby", h.id);
             const row = el("div", "rv-actions");
-            const sum = el("span", "rv-hint", s.inputs ? "งบ " + budgetText(s.inputs.budget) + " · N " + (s.inputs.doctors ? int(s.inputs.doctors) : "–") + " · per P4P " + baht(s.inputs.per_p4p) : "ยังไม่ได้กรอกงบประมาณ");
             const t = el("button", "btn-ghost", moreOpen ? "ซ่อน" : "แสดง");
             t.type = "button";
             t.id = "rv-more-toggle";
             t.setAttribute("aria-expanded", String(moreOpen));
             t.setAttribute("aria-controls", "rv-more-body");
             t.addEventListener("click", () => { moreOpen = !moreOpen; render(); });
-            row.append(sum, t);
+            row.append(t);
             const inner = el("div", "rv-stack");
             inner.id = "rv-more-body";
             if (moreOpen)
-                inner.append(inputsCard(s), ...buildAlerts(s), listCard(s));
+                inner.append(...buildAlerts(s), listCard(s));
             else
                 inner.hidden = true;
             more.append(h, row, inner);
@@ -733,9 +748,9 @@
                 out.push(...buildAlerts(s).filter((n) => n.dataset.blocking === "1"));
         }
         else {
-            out.push(inputsCard(s), ...buildAlerts(s), listCard(s));
+            out.push(...buildAlerts(s), listCard(s));
         }
-        out.push(sendBar(s));
+        sideOut.push(sendBar(s));
         return out;
     }
     let moreOpen = false;
@@ -1770,10 +1785,10 @@
         if (r.status === "approved")
             return approvedView(s, r, "auditor");
         ensure(s, r);
-        const out = [turn("you", "ถึงคิวคุณ", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true), "ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
-                " · งบประมาณ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
-                (r.edits ? " · ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน" : ""))];
-        out.push(finishBar(s, r));
+        // The round, the counts and ส่งผลตรวจ sit in the left column, so the
+        // names and the checks start at the top (Pong, 2026-11-12).
+        sideOut.push(finishBar(s, r));
+        const out = [];
         if (peopleErr)
             out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople));
         if (!people) {
@@ -1791,9 +1806,20 @@
         // Not known until the issues load: no "0 open" and no approve-all before that.
         const openIssues = issues ? issues.filter((i) => i.status === "open").length : null;
         const bar = el("div", "rv-finish glass");
-        bar.append(el("p", "rv-counts", "รอตรวจ " + int(c.waiting) + " · อนุมัติ " + int(c.approve) +
-            (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " +
-            (openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "กำลังโหลด…") : int(openIssues))));
+        const info = el("div", "rv-round-line");
+        // The month chip above already says พร้อมตรวจ.
+        info.append(el("span", undefined, "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "ส่งมา " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "")), el("span", undefined, "งบ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
+        if (r.edits)
+            info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"));
+        bar.append(info);
+        const counts = el("ul", "rv-countlist rv-counts");
+        counts.setAttribute("aria-label", "สรุปรอบนี้");
+        const cnt = (label, v) => { const li = el("li"); li.append(el("span", undefined, label), el("b", undefined, v)); counts.append(li); };
+        cnt("รอตรวจ", int(c.waiting));
+        cnt("อนุมัติ", int(c.approve) + (c.carried ? " (คงผล " + int(c.carried) + ")" : ""));
+        cnt("ต้องแก้ไข", int(c.fix));
+        cnt("ปัญหาอื่นที่เปิดอยู่", openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "…") : int(openIssues));
+        bar.append(counts);
         const btn = el("button", "btn-primary");
         btn.type = "button";
         btn.id = "rv-finish";
@@ -2107,9 +2133,13 @@
         tbody.append(row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
             : num(p.stated) + (p.statedCell ? " ช่อง " + p.statedCell : "") + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
         t.append(cap, thead, tbody);
-        panel.append(t, ...decideBox(s, p));
-        // Round 2's notes go under the buttons, so the buttons are at the
-        // same place for everyone.
+        panel.append(t);
+        // The buttons live in a bar pinned to the bottom of the window
+        // (Pong, 2026-11-12: "Approve btn stay btm"), at the end of the
+        // panel: any hint and the remark box above them, the buttons last.
+        const [bar, ...rest] = decideBox(s, p);
+        const foot = el("div", "rv-decide-foot");
+        foot.append(...rest, bar);
         // 'check': a check is not ตรงกัน in the new build; say which kind.
         const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why);
         if (p.why)
@@ -2123,7 +2153,7 @@
             prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")));
             panel.append(prev);
         }
-        panel.append(evidence(s, r, p));
+        panel.append(evidence(s, r, p), foot);
         // The next person still to check: their sheet is ready when the app moves on.
         const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index);
         if (next)
@@ -2158,29 +2188,22 @@
         const h = fin ? fin.offsetHeight : 0;
         view.style.setProperty("--rv-fin", h + "px");
         view.style.setProperty("--rv-view-h", view.clientHeight + "px");
-        // Only the counts bar here: a larger padding would also scroll the
-        // page whenever a control inside the pinned row itself gets focus.
-        // What sits under the pinned row clears it with scroll-margin (CSS).
+        // Focus never lands under the counts bar at the top or the
+        // buttons bar pinned at the bottom.
         view.style.scrollPaddingTop = h + 10 + "px";
-        const bar = body.querySelector(".rv-decide-row");
-        if (bar) {
-            view.style.setProperty("--rv-bar", bar.offsetHeight + "px");
-            // The sheet takes what is left under the pinned row, the
-            // หลักฐาน heading and the caption, so ไปที่ชีต shows all of it.
-            const ev = document.getElementById("rv-ev-h");
-            const cap = body.querySelector(".rv-sheet-cap");
-            const room = view.clientHeight - h - 8 - bar.offsetHeight - 10 - (ev ? ev.offsetHeight + 10 : 0) - (cap ? cap.offsetHeight + 10 : 0) - 36;
-            view.style.setProperty("--rv-sheet-max", Math.max(280, Math.floor(room)) + "px");
-        }
+        const foot = body.querySelector(".rv-decide-foot");
+        view.style.scrollPaddingBottom = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
         markStuck(true);
     }
-    // Once the checks have scrolled away, the pinned row also names the person.
+    // Once the checks have scrolled up out of sight, the bottom bar also
+    // names the person.
     function markStuck(force = false) {
         const bar = body.querySelector(".rv-decide-row");
         const cmp = body.querySelector(".rv-compare");
         if (!bar || !cmp)
             return;
-        const at = view.getBoundingClientRect().top + (parseFloat(getComputedStyle(bar).top) || 0);
+        const fin = body.querySelector(".rv-finish");
+        const at = view.getBoundingClientRect().top + (fin ? fin.offsetHeight : 0);
         const stuck = cmp.getBoundingClientRect().bottom < at;
         if (!force && stuck === bar.classList.contains("stuck"))
             return;
@@ -2195,6 +2218,31 @@
     }
     view.addEventListener("scroll", () => markStuck(), { passive: true });
     window.addEventListener("resize", syncStick);
+    // Keys for the auditor (Pong picked them, 2026-11-12): A อนุมัติ,
+    // F ต้องแก้ไข, ← / → the person before / after. By key position
+    // (ev.code), so they work with the Thai layout on too; never while
+    // typing, in a dialog, with a modifier, or with the sheet focused (its
+    // arrows scroll it).
+    document.addEventListener("keydown", (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat || ev.defaultPrevented)
+            return;
+        if (role !== "auditor" || view.classList.contains("hidden") || !body.querySelector(".rv-decide-row"))
+            return;
+        if (document.querySelector("dialog[open]"))
+            return;
+        const t = ev.target;
+        if (t && (t.closest("input, textarea, select, [contenteditable], .rv-sheet")))
+            return;
+        const id = ev.code === "KeyA" ? "rv-approve" : ev.code === "KeyF" ? "rv-fix"
+            : ev.code === "ArrowLeft" ? "rv-prev-person" : ev.code === "ArrowRight" ? "rv-next-person" : "";
+        if (!id)
+            return;
+        const b = document.getElementById(id);
+        if (!b || b.disabled)
+            return;
+        ev.preventDefault();
+        b.click();
+    });
     // The click that decided one person must not land on the next one's
     // button: ignore pointer clicks for half a second after the panel shows
     // another person, and the second click of a double-click. Keys (detail 0)
@@ -2230,9 +2278,13 @@
         const approve = el("button", "btn-primary" + (ok ? "" : " rv-off"), p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ");
         approve.type = "button";
         approve.id = "rv-approve";
+        approve.setAttribute("aria-keyshortcuts", "A");
+        approve.title = "ปุ่มลัด A";
         const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""), p.decision === "fix" ? "✓ ต้องแก้ไขแล้ว" : "ต้องแก้ไข");
         fix.type = "button";
         fix.id = "rv-fix";
+        fix.setAttribute("aria-keyshortcuts", "F");
+        fix.title = "ปุ่มลัด F";
         btns.append(approve, fix);
         if (p.decision) {
             const undo = el("button", "btn-ghost", "ยกเลิกผล");
@@ -2251,6 +2303,8 @@
             const b = el("button", "btn-ghost", text);
             b.type = "button";
             b.id = d < 0 ? "rv-prev-person" : "rv-next-person";
+            b.setAttribute("aria-keyshortcuts", d < 0 ? "ArrowLeft" : "ArrowRight");
+            b.title = "ปุ่มลัด " + (d < 0 ? "←" : "→");
             const target = list[i + d];
             b.disabled = !target;
             b.addEventListener("click", () => { if (target)
@@ -2258,7 +2312,9 @@
             return b;
         };
         nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"));
-        bar.append(btns, who, nav);
+        const keys = el("span", "rv-keys", "ปุ่มลัด A · F · ← →");
+        keys.setAttribute("aria-hidden", "true");
+        bar.append(btns, who, keys, nav);
         // A failed save shows in the row, which is on screen even when pinned.
         const n = noteEl(spot);
         if (n)
@@ -2275,10 +2331,10 @@
             out.push(why);
         }
         else if (!bothMatch(p)) {
-            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข");
+            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านบนก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข");
             txt.id = "rv-approve-why-text";
             approve.setAttribute("aria-describedby", txt.id);
-            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↓");
+            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↑");
             goSheet.type = "button";
             goSheet.id = "rv-go-sheet";
             goSheet.addEventListener("click", showSheet);
@@ -2377,13 +2433,13 @@
                     markBusy(b);
         return out;
     }
-    // ไปที่ชีต: the sheet straight under the pinned row, and the keyboard on it.
+    // ไปที่ชีต: the sheet straight under the counts bar, and the keyboard on it.
     function showSheet() {
         const h = document.getElementById("rv-ev-h");
-        const bar = body.querySelector(".rv-decide-row");
+        const fin = body.querySelector(".rv-finish");
         if (!h)
             return;
-        const at = (bar ? (parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight : 0) + 10;
+        const at = (fin ? fin.offsetHeight : 0) + 10;
         view.scrollTop += h.getBoundingClientRect().top - view.getBoundingClientRect().top - at;
         markStuck();
         const region = document.getElementById("rv-sheet") || h;
@@ -2456,14 +2512,24 @@
             box.append(el("p", "rv-hint", "ไม่มีชีตของแพทย์ให้ดู"));
         else {
             const hit = cellRC(p.statedCell);
-            const region = el("div", "rv-sheet");
+            // Only the rows around the score, so the sheet never scrolls up
+            // or down (Pong, 2026-11-12): 3 rows above the score cell and 1
+            // below; with no cell (a total rebuilt from the days, or none
+            // found), the last 5 rows that have something in them.
+            let lastRow = 0;
+            for (const [rr0, , v0] of g.cells)
+                if (v0 !== "" && v0 !== null && rr0 > lastRow)
+                    lastRow = rr0;
+            const r1 = Math.min(g.rows - 1, hit ? hit[0] + 1 : lastRow);
+            const r0 = Math.max(0, hit ? hit[0] - 3 : lastRow - 4);
+            const region = el("div", "rv-sheet rv-crop");
             region.id = "rv-sheet";
             region.dataset.key = key;
             region.setAttribute("role", "region");
             region.tabIndex = 0;
             const capId = "rv-sheet-cap";
             region.setAttribute("aria-labelledby", capId);
-            const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)");
+            const cap = el("p", "rv-sheet-cap", "ชีต \"" + (p.sheet || g.sheet) + "\" ในไฟล์รวม แถว " + (r0 + 1) + "–" + (r1 + 1) + " (ค่าที่บันทึกไว้ในไฟล์ของแพทย์)");
             cap.id = capId;
             if (p.statedCell)
                 cap.append(" ", el("span", "rv-cell-chip", "คะแนนอยู่ช่อง " + p.statedCell));
@@ -2473,8 +2539,27 @@
                 map.set(rr + ":" + cc, v);
             const isHit = (rr, c) => !!hit && hit[0] === rr && hit[1] === c;
             const blank = (rr, c) => { const v = map.get(rr + ":" + c); return (v === undefined || v === "") && !isHit(rr, c); };
+            // The score is often far right: then a รายการ column, pinned
+            // beside the row numbers, keeps each row's name (its first text
+            // in columns A–C) next to the numbers (Pong, 2026-11-12).
+            const labelOf = (rr) => {
+                for (let c = 0; c < Math.min(3, g.cols); c++) {
+                    const v = map.get(rr + ":" + c);
+                    if (typeof v === "string" && v.trim())
+                        return v.trim();
+                }
+                return "";
+            };
+            const pinLabel = !!hit && hit[1] >= 6;
+            if (pinLabel)
+                region.classList.add("rv-pinlab");
             const hd = el("tr");
             hd.append(el("th", "corner"));
+            if (pinLabel) {
+                const th = el("th", "lab", "รายการ");
+                th.scope = "col";
+                hd.append(th);
+            }
             for (let c = 0; c < g.cols; c++) {
                 const th = el("th", undefined, colLetters(c));
                 th.scope = "col";
@@ -2483,11 +2568,17 @@
             const thead = el("thead");
             thead.append(hd);
             const tbody = el("tbody");
-            for (let rr = 0; rr < g.rows; rr++) {
+            for (let rr = r0; rr <= r1; rr++) {
                 const tr = el("tr");
                 const th = el("th", undefined, String(rr + 1));
                 th.scope = "row";
                 tr.append(th);
+                if (pinLabel) {
+                    const lt = labelOf(rr);
+                    const lb = el("td", "lab", lt);
+                    lb.title = lt;
+                    tr.append(lb);
+                }
                 for (let c = 0; c < g.cols; c++) {
                     const v = map.get(rr + ":" + c);
                     const td = el("td", typeof v === "number" ? "num" : "", v === undefined ? "" : typeof v === "number" ? num(v) : String(v));
@@ -2516,19 +2607,21 @@
             region.append(tbl);
             box.append(cap, region);
             // Bring the cell used as the score into view (it is often far
-            // right / bottom): in the upper third, so the rows above it show,
-            // and sideways only as far as needed, so the activity names on
+            // right): sideways only as far as needed, so the activity names on
             // the left stay in view when they fit. Not on a redraw of the
             // sheet already open (render kept its scroll).
             requestAnimationFrame(() => {
-                if (region.dataset.kept)
+                const rh = tbl.querySelector("tbody th");
+                if (rh)
+                    region.style.setProperty("--rv-rowhead", rh.offsetWidth + "px");
+                if (region.dataset.kept || !region.isConnected)
                     return;
                 const hc = tbl.querySelector("td.hit");
-                if (!hc)
-                    return;
-                region.scrollTop = Math.max(0, hc.offsetTop - region.clientHeight / 3);
-                const over = hc.offsetLeft + hc.offsetWidth + 24 - region.clientWidth;
-                region.scrollLeft = over > 0 ? over : 0;
+                if (hc) {
+                    const over = hc.offsetLeft + hc.offsetWidth + 24 - region.clientWidth;
+                    region.scrollLeft = over > 0 ? over : 0;
+                }
+                region.dataset.placed = "1";
             });
         }
         if (d.deptRow) {
