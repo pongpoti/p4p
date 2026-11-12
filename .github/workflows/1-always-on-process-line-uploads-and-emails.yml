@@ -78,8 +78,10 @@ jobs:
           # 3-1-manual-email-read-submission-emails.yml used to do hourly). "0" turns it off.
           EMAIL_POLL_MS         : "60000"
           # Starts workflow 2.2 for a month when the dashboard's ตรวจสอบ tab
-          # asks for a fresh build (automation/review-dispatch.ts). Needs the
-          # job's actions: write, like "Hand over" below.
+          # asks for a fresh build (automation/review-dispatch.ts), and a full
+          # 2.2 run in office hours when new scores came in
+          # (automation/timed-build.ts; TIMED_BUILDS: "0" turns that off).
+          # Needs the job's actions: write, like "Hand over" below.
           GH_TOKEN              : ${{ github.token }}
         run: npx tsx scripts/drain-uploads.ts
 
