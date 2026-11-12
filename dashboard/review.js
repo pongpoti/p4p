@@ -2110,9 +2110,13 @@
         tbody.append(row("เทียบคะแนน", num(p.score) + " (คอลัมน์ K)", p.stated === null ? "ไม่พบในชีตของแพทย์ (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")"
             : num(p.stated) + (p.statedCell ? " ช่อง " + p.statedCell : "") + " ชีต \"" + (p.sheet || "") + "\" (" + (HOW_TEXT[p.statedHow] || p.statedHow) + ")", p.scoreCheck), row("เทียบเงิน", num(p.pay) + " (คอลัมน์ N)", p.deptPay === null ? "ไม่พบในชีตกลุ่มงาน" : num(p.deptPay) + " ชีตกลุ่มงาน" + (p.deptRow != null ? " แถว " + p.deptRow : "") + " (ตามสัดส่วนวิชาชีพ)", p.moneyCheck));
         t.append(cap, thead, tbody);
-        panel.append(t, ...decideBox(s, p));
-        // Round 2's notes go under the buttons, so the buttons are at the
-        // same place for everyone.
+        panel.append(t);
+        // The buttons live in a bar pinned to the bottom of the window
+        // (Pong, 2026-11-12: "Approve btn stay btm"), at the end of the
+        // panel: any hint and the remark box above them, the buttons last.
+        const [bar, ...rest] = decideBox(s, p);
+        const foot = el("div", "rv-decide-foot");
+        foot.append(...rest, bar);
         // 'check': a check is not ตรงกัน in the new build; say which kind.
         const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why);
         if (p.why)
@@ -2126,7 +2130,7 @@
             prev.append(el("p", undefined, "คำตอบผู้จัดทำ: " + (p.prev.reply || "ไม่มีคำตอบ")));
             panel.append(prev);
         }
-        panel.append(evidence(s, r, p));
+        panel.append(evidence(s, r, p), foot);
         // The next person still to check: their sheet is ready when the app moves on.
         const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index);
         if (next)
@@ -2161,29 +2165,22 @@
         const h = fin ? fin.offsetHeight : 0;
         view.style.setProperty("--rv-fin", h + "px");
         view.style.setProperty("--rv-view-h", view.clientHeight + "px");
-        // Only the counts bar here: a larger padding would also scroll the
-        // page whenever a control inside the pinned row itself gets focus.
-        // What sits under the pinned row clears it with scroll-margin (CSS).
+        // Focus never lands under the counts bar at the top or the
+        // buttons bar pinned at the bottom.
         view.style.scrollPaddingTop = h + 10 + "px";
-        const bar = body.querySelector(".rv-decide-row");
-        if (bar) {
-            view.style.setProperty("--rv-bar", bar.offsetHeight + "px");
-            // The sheet takes what is left under the pinned row, the
-            // หลักฐาน heading and the caption, so ไปที่ชีต shows all of it.
-            const ev = document.getElementById("rv-ev-h");
-            const cap = body.querySelector(".rv-sheet-cap");
-            const room = view.clientHeight - h - 8 - bar.offsetHeight - 10 - (ev ? ev.offsetHeight + 10 : 0) - (cap ? cap.offsetHeight + 10 : 0) - 36;
-            view.style.setProperty("--rv-sheet-max", Math.max(280, Math.floor(room)) + "px");
-        }
+        const foot = body.querySelector(".rv-decide-foot");
+        view.style.scrollPaddingBottom = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
         markStuck(true);
     }
-    // Once the checks have scrolled away, the pinned row also names the person.
+    // Once the checks have scrolled up out of sight, the bottom bar also
+    // names the person.
     function markStuck(force = false) {
         const bar = body.querySelector(".rv-decide-row");
         const cmp = body.querySelector(".rv-compare");
         if (!bar || !cmp)
             return;
-        const at = view.getBoundingClientRect().top + (parseFloat(getComputedStyle(bar).top) || 0);
+        const fin = body.querySelector(".rv-finish");
+        const at = view.getBoundingClientRect().top + (fin ? fin.offsetHeight : 0);
         const stuck = cmp.getBoundingClientRect().bottom < at;
         if (!force && stuck === bar.classList.contains("stuck"))
             return;
@@ -2278,10 +2275,10 @@
             out.push(why);
         }
         else if (!bothMatch(p)) {
-            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านล่างก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข");
+            const txt = el("span", undefined, "ไม่พบยอดรวมในไฟล์แพทย์ ดูชีตของแพทย์ด้านบนก่อน แล้วอนุมัติหรือเลือก ต้องแก้ไข");
             txt.id = "rv-approve-why-text";
             approve.setAttribute("aria-describedby", txt.id);
-            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↓");
+            const goSheet = el("button", "btn-ghost", "ไปที่ชีต ↑");
             goSheet.type = "button";
             goSheet.id = "rv-go-sheet";
             goSheet.addEventListener("click", showSheet);
@@ -2380,13 +2377,13 @@
                     markBusy(b);
         return out;
     }
-    // ไปที่ชีต: the sheet straight under the pinned row, and the keyboard on it.
+    // ไปที่ชีต: the sheet straight under the counts bar, and the keyboard on it.
     function showSheet() {
         const h = document.getElementById("rv-ev-h");
-        const bar = body.querySelector(".rv-decide-row");
+        const fin = body.querySelector(".rv-finish");
         if (!h)
             return;
-        const at = (bar ? (parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight : 0) + 10;
+        const at = (fin ? fin.offsetHeight : 0) + 10;
         view.scrollTop += h.getBoundingClientRect().top - view.getBoundingClientRect().top - at;
         markStuck();
         const region = document.getElementById("rv-sheet") || h;

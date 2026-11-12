@@ -877,6 +877,14 @@
         .rv-decide-row.stuck .rv-decide-who { display: block; flex: 1 1 0; min-width: 7em; text-align: right; }
         .rv-decide-row.stuck.tight .rv-decide-who { display: none; }
         .rv-decide-row.stuck .rv-decide-nav { margin-left: 0; }
+        /* The buttons bar, pinned to the bottom of the window (Pong,
+           2026-11-12); any hint and the remark box ride above it.
+           bottom -32px: sticky stops at the view's 32px bottom padding. */
+        .rv-decide-foot { position: sticky; bottom: -32px; z-index: 5; display: flex; flex-direction: column; gap: 8px; margin: 0 -18px -16px; padding: 10px 18px 12px; background: #FCF9F4; border-top: 1px solid rgba(63, 47, 36, .18); border-radius: 0 0 var(--radius) var(--radius); box-shadow: 0 -8px 18px rgba(63, 47, 36, .10); }
+        .rv-decide-foot .rv-decide-row { position: static; }
+        .rv-decide-foot .rv-decide-row.stuck { box-shadow: none; border-radius: 12px; }
+        .rv-decide-foot .rv-decide-row.stuck::before { display: none; }
+        .rv-person .rv-decide-foot :is(button, a, input, textarea, select, [tabindex]) { scroll-margin-top: 0; }
         .btn-primary.rv-off, .btn-primary.rv-off[aria-disabled="true"], .btn-primary.rv-off:hover { opacity: 1; background: #EFE7DE; color: #4A3D33; border: 1px dashed #8A7B6E; box-shadow: none; cursor: not-allowed; }
         .btn-ghost.rv-pressed { background: #F3EBE1; border: 2px solid var(--primary); }
         .rv-decide-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(150, 88, 0, .25); border-left: 4px solid var(--warning); background: var(--warning-bg); color: #5C3A00; font-weight: 600; font-size: .95rem; }
@@ -887,7 +895,7 @@
         .rv-remark-box textarea, .rv-reply textarea { width: 100%; padding: 8px 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; resize: vertical; }
         .rv-remark-box textarea[aria-invalid="true"] { border: 2px solid #B42318; }
         @media (max-width: 900px) { .rv-review { grid-template-columns: 1fr; } .rv-people { position: static; max-height: none; } .rv-people-list { max-height: 40vh; } }
-        @media (max-height: 560px) { .rv-decide-row { position: static; } }
+        @media (max-height: 560px) { .rv-decide-row, .rv-decide-foot { position: static; } }
         .rv-issue { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
         .rv-issue.closed { opacity: .75; }
         .rv-issue > .btn-ghost { align-self: flex-start; }
