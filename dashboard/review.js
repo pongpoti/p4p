@@ -1388,7 +1388,7 @@
     }
     function kvGrid(budget, doctors, perP4p, edits) {
         const g = el("div", "rv-kvs");
-        g.append(kv("งบประมาณ", budgetText(budget)), kv("N", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
+        g.append(kv("งบประมาณ", budgetText(budget)), kv("จำนวนแพทย์", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)));
         if (edits !== undefined)
             g.append(kv("แก้คะแนน", int(edits) + " คน"));
         return g;
@@ -1893,7 +1893,7 @@
         const info = el("div", "rv-round-line");
         // The month chip above already says พร้อมตรวจ; who sent it and when
         // are left out (Pong, 2026-11-12).
-        info.append(el("span", undefined, "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "งบ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
+        info.append(el("span", undefined, "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "งบ " + budgetText(r.budget)), el("span", undefined, "จำนวนแพทย์ " + (r.doctors ? int(r.doctors) : "–")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
         if (r.edits)
             info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"));
         bar.append(info);
@@ -2002,10 +2002,14 @@
         }
         else {
             b.addEventListener("click", () => {
+                // Short labelled lines (Pong, 2026-11-12: the sentences
+                // were hard to read).
+                const done = r.counts.approve + r.counts.fix;
+                const g = el("div", "rv-kvs");
+                g.append(kv("เดือน", monthName(s.month) + " รอบที่ " + r.round_no), kv("อนุมัติครั้งนี้", int(n) + " คน"), kv("ตัดสินแล้ว (คงเดิม)", done ? int(done) + " คน" : "–"));
                 askConfirm("อนุมัติทุกคนที่รอตรวจ", [
-                    el("p", undefined, "อนุมัติ " + int(n) + " คนที่รอตรวจ เดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
-                    el("p", undefined, "ทุกคนผลเทียบคะแนนและเทียบเงิน ตรงกัน คนที่ตัดสินแล้ว (อนุมัติ " + int(r.counts.approve) + " · ต้องแก้ไข " + int(r.counts.fix) + ") ไม่เปลี่ยน"),
-                    el("p", "rv-hint", "ยกเลิกผลรายคนได้ภายหลัง แล้วจึงกด อนุมัติทั้งหมด เพื่อทำเอกสารเบิกจ่าย"),
+                    g,
+                    el("p", undefined, "✓ ทุกคนที่จะอนุมัติ เทียบคะแนนและเทียบเงินตรงกัน"),
                 ], "อนุมัติ " + int(n) + " คน", () => approveAll(s, r));
             });
         }
