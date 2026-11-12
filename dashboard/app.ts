@@ -223,6 +223,8 @@
     let canBudget = false
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false
+    // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
+    let reviewAuditee = false
     const auditView = document.getElementById("audit-view") as HTMLElement
     const rosterView = document.getElementById("roster-view") as HTMLElement
     const reviewView = document.getElementById("review-view") as HTMLElement
@@ -231,7 +233,7 @@
     if (location.hash === "#audit") history.replaceState(null, "", "#history")
     const currentView = (): string =>
         location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
-            : location.hash === "#review" && isOwner ? "review"
+            : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview"
     // ตรวจสอบ is drawn by review.js, which listens for this.
     const showReview = (): void => { window.dispatchEvent(new CustomEvent("dashboard:review")) }
@@ -1593,14 +1595,17 @@
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" })
             if (r.status === 401) { location.href = "/dashboard/login"; return }
             if (r.ok) {
-                const session: { name?: string; isOwner?: boolean } = await r.json()
+                const session: { name?: string; isOwner?: boolean; reviewAuditee?: boolean } = await r.json()
                 const name = session.name || ""
                 userName.textContent = name
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : ""
                 isOwner = session.isOwner === true
+                reviewAuditee = !isOwner && session.reviewAuditee === true
+                // review.js reads this before drawing: ผู้จัดทำ only, no switch.
+                if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
                 auditNav.classList.toggle("hidden", !isOwner)
                 rosterNav.classList.toggle("hidden", !isOwner)
-                reviewNav.classList.toggle("hidden", !isOwner)
+                reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee)
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.

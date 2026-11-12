@@ -198,6 +198,8 @@
     let canBudget = false;
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false;
+    // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
+    let reviewAuditee = false;
     const auditView = document.getElementById("audit-view");
     const rosterView = document.getElementById("roster-view");
     const reviewView = document.getElementById("review-view");
@@ -206,7 +208,7 @@
     if (location.hash === "#audit")
         history.replaceState(null, "", "#history");
     const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
-        : location.hash === "#review" && isOwner ? "review"
+        : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview";
     // ตรวจสอบ is drawn by review.js, which listens for this.
     const showReview = () => { window.dispatchEvent(new CustomEvent("dashboard:review")); };
@@ -1672,9 +1674,13 @@
                 userName.textContent = name;
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : "";
                 isOwner = session.isOwner === true;
+                reviewAuditee = !isOwner && session.reviewAuditee === true;
+                // review.js reads this before drawing: ผู้จัดทำ only, no switch.
+                if (reviewAuditee)
+                    document.body.dataset.reviewSide = "auditee";
                 auditNav.classList.toggle("hidden", !isOwner);
                 rosterNav.classList.toggle("hidden", !isOwner);
-                reviewNav.classList.toggle("hidden", !isOwner);
+                reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee);
             }
         }
         catch (e) {
