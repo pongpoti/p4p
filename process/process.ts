@@ -980,10 +980,11 @@ async function writeBudgetSheet(
   sheetId: number,
   staffSheetName: string,
   staffLastRow: number,
-  monthLabel: string
+  monthLabel: string,
+  monthKey: string
 ): Promise<void> {
   const sh = `'${BUDGET_SHEET}'!`;
-  const cells = budgetSheet(staffSheetName, DATA_START, staffLastRow, monthLabel);
+  const cells = budgetSheet(staffSheetName, DATA_START, staffLastRow, monthLabel, monthKey);
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: ssId,
     requestBody: {
@@ -1520,7 +1521,7 @@ async function createSK03(
   //  2b. งบรายสาขา sheet (new formula: per-department staff budget)
   // ══════════════════════════════════════════════════════════════════
   log(`  [SK03] ${BUDGET_SHEET} sheet (${DEPT_CAPACITY.length} departments)…`);
-  await writeBudgetSheet(sheets, ssId, budgetSheetId, staffSheetName, staffLastRow, `ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`);
+  await writeBudgetSheet(sheets, ssId, budgetSheetId, staffSheetName, staffLastRow, `ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`, monthKey);
 
   // ══════════════════════════════════════════════════════════════════
   //  3. Department sheets

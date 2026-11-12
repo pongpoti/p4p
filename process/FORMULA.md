@@ -189,7 +189,7 @@ for each department d:
 
 total_weighted_units = Σ weighted_units_d
 ```
-Each department's tier and `weight_d` are in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers). The tier names keep their capacity multipliers (1.15 / 1.00 / 0.85); only the split of the extra uses the wider weights 1.5 / 1.0 / 0.5 (Pong, 2026-11-11), so the tier still counts when the extra is small.
+Each department's tier and `weight_d` for the month are in [Departments and Capacity Multipliers](#departments-and-capacity-multipliers) (the tiers changed from 2569_09). The tier names keep their capacity multipliers (1.15 / 1.00 / 0.85); only the split of the extra uses the wider weights 1.5 / 1.0 / 0.5 (Pong, 2026-11-11), so the tier still counts when the extra is small.
 
 **3.3 — Share the extra pool between departments**
 ```
@@ -230,6 +230,7 @@ In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and col
 - The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿30 and ฿22).
 - No overlap holds as long as 1.5 × (1 − 0.5) > 0.5 × (1 + 0.5), i.e. 0.75 > 0.75 — exactly at the edge, so the margin comes only from department averages; a narrower score band widens it.
 - Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
+- With the 2569_09 tiers on the same 2569_08 data: สาขาขาดแคลน ฿10,414–11,084 (avg ฿10,760), สาขากึ่งขาดแคลน ฿10,258–10,799 (avg ฿10,507), สาขาเต็มศักยภาพ ฿10,142–10,349 (avg ฿10,253); the no-overlap margin grows to ฿65.
 
 ---
 
@@ -237,29 +238,38 @@ In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and col
 
 Used in Step 3.2: each STAFF department's tier sets its bonus weight (1.5 / 1.0 / 0.5) and so its share of the extra pool above ฿10,000. INTERN is paid from its own pool (Step 2) and has no capacity multiplier. `Abbrev` is each department's short code.
 
-| # | Department | Abbrev | Capacity tier | Multiplier | Bonus weight |
-|:-:|---|:-:|---|:-:|:-:|
-| 1 | กุมารเวชกรรม | PED | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 2 | จักษุวิทยา | EYE | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 3 | จิตเวชและยาเสพติด | PSY | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 5 | นิติเวช | FOR | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 6 | ผู้ป่วยนอก | OPD | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 7 | พยาธิวิทยากายวิภาค | PAT | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 8 | รังสีวิทยา | RAD | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 9 | วิสัญญีวิทยา | ANS | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 10 | เวชกรรมฟื้นฟู | RHB | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 11 | เวชกรรมสังคม | SOC | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 12 | เวชศาสตร์ฉุกเฉิน | EMR | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 |
-| 13 | ศัลยกรรม | SUR | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 15 | สูติ-นรีเวชกรรม | OBG | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 16 | โสต ศอ นาสิก | ENT | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 |
-| 17 | อาชีวเวชกรรม | OCM | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 18 | อายุรกรรม | MED | สาขาขาดแคลน (shortage) | 1.15 | 1.5 |
-| 19 | INTERN | INT | — (own pool, Step 2) | — |
+A department's tier comes from the hospital's doctor staffing sheet: **% = doctors on staff (รวมอัตราตามจริง) ÷ doctors the department should have (จำนวนที่ควรมี, FTE)**. Under 70% is สาขาขาดแคลน, 70% to under 90% is สาขากึ่งขาดแคลน, and 90% or more is สาขาเต็มศักยภาพ. Doctors hired by the day (ลจ.ชั่วคราว รายวัน) are not counted. The first tier table did not write these lines down; they are the ones that fit it.
 
-Six departments sit in each tier: สาขาขาดแคลน, shortage specialty (1.15); สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and สาขาเต็มศักยภาพ, full-capacity specialty (0.85).
+**From 2569_09** the tiers come from the staffing sheet แพทย์ 27-8-69 (Pong, 2026-11-12). Months up to 2569_08 keep the earlier tiers (last column), so a rebuild of an older month does not change its pay. In code: `CAPACITY_CHANGES` and `deptCapacity(monthKey)` in [`sk03-formula.ts`](./sk03-formula.ts).
+
+| # | Department | Abbrev | FTE | On staff | % | Capacity tier (from 2569_09) | Multiplier | Bonus weight | Up to 2569_08 |
+|:-:|---|:-:|:-:|:-:|:-:|---|:-:|:-:|---|
+| 1 | กุมารเวชกรรม | PED | 19 | 21 | 110.5% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
+| 2 | จักษุวิทยา | EYE | 9 | 8 | 88.9% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
+| 3 | จิตเวชและยาเสพติด | PSY | 4 | 16 | 400.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
+| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
+| 5 | นิติเวช | FOR | 3 | 2 | 66.7% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
+| 6 | ผู้ป่วยนอก | OPD | 5 | 14 | 280.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
+| 7 | พยาธิวิทยากายวิภาค | PAT | 2 | 3 | 150.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
+| 8 | รังสีวิทยา | RAD | 15 | 15 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
+| 9 | วิสัญญีวิทยา | ANS | 15 | 9 | 60.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
+| 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 66.7% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
+| 11 | เวชกรรมสังคม | SOC | 10 | 4 | 40.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | สาขาเต็มศักยภาพ (0.85) |
+| 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
+| 13 | ศัลยกรรม | SUR | 39 | 35 | 89.7% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
+| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 88.2% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
+| 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 72.2% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
+| 16 | โสต ศอ นาสิก | ENT | 9 | 8 | 88.9% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
+| 17 | อาชีวเวชกรรม | OCM | 5 | 3 | 60.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
+| 18 | อายุรกรรม | MED | 47 | 35 | 74.5% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
+| 19 | INTERN | INT | — | — | — | — (own pool, Step 2) | — | — | — |
+
+From 2569_09: 5 departments are สาขาขาดแคลน, shortage specialty (1.15); 6 are สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and 7 are สาขาเต็มศักยภาพ, full-capacity specialty (0.85). Up to 2569_08 there were 6 in each.
+
+Notes on the 27-8-69 sheet:
+- SOC also has 18 doctors hired by the day. Counted in, SOC would be at 220% (เต็มศักยภาพ).
+- PSY (16) and OPD (14) list more doctors than the SK03 has (2569_08: 4 and 3). PSY is เต็มศักยภาพ either way (4 ÷ 4 = 100%).
+- SUR is at 89.7%, just under the 90% line.
 
 ---
 
