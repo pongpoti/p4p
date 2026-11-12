@@ -24,6 +24,12 @@
     "use strict";
     const view = document.getElementById("review-view");
     const body = document.getElementById("review-body");
+    // The left column under the months: each side's summary and main
+    // button. render() fills it; everything else that draws the body alone
+    // (loading, a failure, no month) empties it, so no stale button stays.
+    const side = document.getElementById("review-side");
+    let sideOut = [];
+    const show = (...nodes) => { side.replaceChildren(); body.replaceChildren(...nodes); };
     const monthBox = document.getElementById("review-months");
     const roleBtns = Array.from(document.querySelectorAll("#review-role button"));
     const live = document.getElementById("review-live");
@@ -329,7 +335,7 @@
         month = m;
         resetMonth();
         drawTabs();
-        body.replaceChildren(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
+        show(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
         void loadState(true).catch(loadFailed);
     }
     // Everything on screen belongs to one month: a switch drops the old
@@ -377,8 +383,9 @@
             return { kind: "ok", text: "อนุมัติแล้ว" };
         if (r && r.status === "returned")
             return me ? { kind: "fix", text: "ต้องแก้ " + int(r.fix || 0) } : { kind: "wait", text: "รอผู้จัดทำ" };
+        // Not "ถึงคิวคุณ": a softer word for the auditor (Pong, 2026-11-12).
         if (r)
-            return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "ถึงคิวคุณ" };
+            return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "พร้อมตรวจ" };
         if (m.sent < m.total)
             return { kind: "wait", text: "ส่ง " + int(m.sent) + "/" + int(m.total), sr: "แพทย์ส่งแล้ว " + int(m.sent) + " จาก " + int(m.total) + " คน" };
         return me ? { kind: "you", text: "ตรวจสอบ" } : { kind: "wait", text: "รอผู้จัดทำ" };
@@ -443,7 +450,7 @@
             keepLooking();
             return;
         }
-        body.replaceChildren(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
+        show(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
             loadingLine("กำลังโหลด…");
             void loadState(true).catch(loadFailed);
         }));
@@ -464,10 +471,10 @@
     }
     // The loading line takes the focus a pressed retry button had.
     function loadingLine(text) {
-        const hadFocus = body.contains(document.activeElement);
+        const hadFocus = body.contains(document.activeElement) || side.contains(document.activeElement);
         const p = el("p", "rv-loading", text);
         p.tabIndex = -1;
-        body.replaceChildren(p);
+        show(p);
         if (hadFocus)
             p.focus();
     }
@@ -506,7 +513,7 @@
         try {
             if (!(await loadMonths(true))) {
                 if (body.querySelector(".rv-loading"))
-                    body.replaceChildren(noMonthCard());
+                    show(noMonthCard());
                 return;
             }
         }
@@ -515,7 +522,7 @@
                 return;
             const msg = errText(e, "โหลดข้อมูลไม่สำเร็จ");
             shout(msg);
-            body.replaceChildren(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(); }));
+            show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(); }));
             return;
         }
         await loadState(true).catch(loadFailed);
@@ -541,7 +548,7 @@
                     month = "";
                     resetMonth();
                     drawTabs();
-                    body.replaceChildren(noMonthCard());
+                    show(noMonthCard());
                 }
             }
             else {
@@ -577,7 +584,7 @@
         return li;
     }
     function renderNotInstalled() {
-        body.replaceChildren(card("ยังเปิดใช้แท็บนี้ไม่ได้", [
+        show(card("ยังเปิดใช้แท็บนี้ไม่ได้", [
             el("p", undefined, "ฐานข้อมูลยังไม่มีตารางของแท็บตรวจสอบ หรือยังเป็นรุ่นเก่า ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql แล้วตามด้วย scripts/review-tab-2026-11-auditee.sql ใน Supabase SQL editor แล้วรีเฟรชหน้านี้"),
         ]));
     }
@@ -617,10 +624,10 @@
                 notes.delete(k);
         }
         const a = document.activeElement;
-        const inBody = !!a && a !== body && body.contains(a);
+        const inBody = !!a && a !== body && a !== side && (body.contains(a) || side.contains(a));
         const focusId = inBody && a ? a.id : "";
         const holder = inBody && a ? a.closest("[aria-labelledby]") : null;
-        const holderId = holder && body.contains(holder) ? holder.getAttribute("aria-labelledby") || "" : "";
+        const holderId = holder && (body.contains(holder) || side.contains(holder)) ? holder.getAttribute("aria-labelledby") || "" : "";
         let selA = null, selB = null;
         if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) {
             try {
@@ -641,7 +648,10 @@
         const tn = noteEl("top");
         if (tn)
             top.push(tn);
-        body.replaceChildren(...top, ...(role === "auditee" ? auditee(s) : auditor(s)));
+        sideOut = [];
+        const main = role === "auditee" ? auditee(s) : auditor(s);
+        side.replaceChildren(...sideOut);
+        body.replaceChildren(...top, ...main);
         const list2 = body.querySelector(".rv-people-list");
         if (list2)
             list2.scrollTop = listTop;
@@ -706,28 +716,30 @@
         if (r && r.status === "approved")
             return approvedView(s, r, "auditee");
         const complete = s.roster.total > 0 && s.roster.sent >= s.roster.total;
+        // Budget, N, per P4P and the Drive files sit in the left column,
+        // with ส่ง under them (Pong, 2026-11-12: save screen height).
+        sideOut.push(inputsCard(s));
         if (!r && !complete)
-            return [waitingCard(s), inputsCard(s)];
+            return [waitingCard(s)];
         const out = [];
         if (r && r.status === "returned") {
             out.push(returnedCard(s, r), issuesCard(s, "auditee"));
             const more = el("section", "rv-card glass rv-more");
-            const h = el("h2", "rv-card-h", "งบประมาณ ไฟล์ และรายชื่อทั้งหมด");
+            const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด");
             h.id = "rv-h-more";
             more.setAttribute("aria-labelledby", h.id);
             const row = el("div", "rv-actions");
-            const sum = el("span", "rv-hint", s.inputs ? "งบ " + budgetText(s.inputs.budget) + " · N " + (s.inputs.doctors ? int(s.inputs.doctors) : "–") + " · per P4P " + baht(s.inputs.per_p4p) : "ยังไม่ได้กรอกงบประมาณ");
             const t = el("button", "btn-ghost", moreOpen ? "ซ่อน" : "แสดง");
             t.type = "button";
             t.id = "rv-more-toggle";
             t.setAttribute("aria-expanded", String(moreOpen));
             t.setAttribute("aria-controls", "rv-more-body");
             t.addEventListener("click", () => { moreOpen = !moreOpen; render(); });
-            row.append(sum, t);
+            row.append(t);
             const inner = el("div", "rv-stack");
             inner.id = "rv-more-body";
             if (moreOpen)
-                inner.append(inputsCard(s), ...buildAlerts(s), listCard(s));
+                inner.append(...buildAlerts(s), listCard(s));
             else
                 inner.hidden = true;
             more.append(h, row, inner);
@@ -736,9 +748,9 @@
                 out.push(...buildAlerts(s).filter((n) => n.dataset.blocking === "1"));
         }
         else {
-            out.push(inputsCard(s), ...buildAlerts(s), listCard(s));
+            out.push(...buildAlerts(s), listCard(s));
         }
-        out.push(sendBar(s));
+        sideOut.push(sendBar(s));
         return out;
     }
     let moreOpen = false;
@@ -1773,9 +1785,10 @@
         if (r.status === "approved")
             return approvedView(s, r, "auditor");
         ensure(s, r);
-        // No separate ถึงคิวคุณ card: the round's line rides in the counts
-        // bar, so the names and the checks start higher (Pong, 2026-11-12).
-        const out = [finishBar(s, r)];
+        // The round, the counts and ส่งผลตรวจ sit in the left column, so the
+        // names and the checks start at the top (Pong, 2026-11-12).
+        sideOut.push(finishBar(s, r));
+        const out = [];
         if (peopleErr)
             out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople));
         if (!people) {
@@ -1793,15 +1806,20 @@
         // Not known until the issues load: no "0 open" and no approve-all before that.
         const openIssues = issues ? issues.filter((i) => i.status === "open").length : null;
         const bar = el("div", "rv-finish glass");
-        const info = el("p", "rv-round-line", "ตรวจรอบที่ " + r.round_no + " เดือน " + monthName(s.month, true) +
-            " · ส่งมาเมื่อ " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "") +
-            " · งบประมาณ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "") + " · per P4P " + baht(r.per_p4p) +
-            (r.edits ? " · ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน" : ""));
-        info.prepend(el("span", "rv-tag", "ถึงคิวคุณ"), " ");
+        const info = el("div", "rv-round-line");
+        // The month chip above already says พร้อมตรวจ.
+        info.append(el("span", undefined, "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "ส่งมา " + when(r.submitted_at) + (r.submitted_by ? " โดย " + r.submitted_by : "")), el("span", undefined, "งบ " + budgetText(r.budget) + (r.doctors ? " · N " + int(r.doctors) : "")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
+        if (r.edits)
+            info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"));
         bar.append(info);
-        bar.append(el("p", "rv-counts", "รอตรวจ " + int(c.waiting) + " · อนุมัติ " + int(c.approve) +
-            (c.carried ? " (คงผลรอบก่อน " + int(c.carried) + ")" : "") + " · ต้องแก้ไข " + int(c.fix) + " · ปัญหาอื่นที่เปิดอยู่ " +
-            (openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "กำลังโหลด…") : int(openIssues))));
+        const counts = el("ul", "rv-countlist rv-counts");
+        counts.setAttribute("aria-label", "สรุปรอบนี้");
+        const cnt = (label, v) => { const li = el("li"); li.append(el("span", undefined, label), el("b", undefined, v)); counts.append(li); };
+        cnt("รอตรวจ", int(c.waiting));
+        cnt("อนุมัติ", int(c.approve) + (c.carried ? " (คงผล " + int(c.carried) + ")" : ""));
+        cnt("ต้องแก้ไข", int(c.fix));
+        cnt("ปัญหาอื่นที่เปิดอยู่", openIssues === null ? (issuesErr ? "โหลดไม่สำเร็จ" : "…") : int(openIssues));
+        bar.append(counts);
         const btn = el("button", "btn-primary");
         btn.type = "button";
         btn.id = "rv-finish";

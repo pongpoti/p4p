@@ -753,7 +753,38 @@
         .req-row .reject:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
 
         /* ── ตรวจสอบ tab (dashboard/review.ts) ─────────────────────────── */
-        #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: flex; flex-direction: column; gap: 14px; }
+        #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
+        /* The tab uses the window's width; the left column stays put while the main column scrolls. */
+        #main:has(#review-view:not(.hidden)) { max-width: 1680px; }
+        .rv-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; max-height: calc(var(--rv-view-h, 100dvh) - 8px); overflow-y: auto; overscroll-behavior: contain; padding-bottom: 4px; }
+        .rv-side-body { display: flex; flex-direction: column; gap: 12px; }
+        .rv-side-body:empty { display: none; }
+        .rv-side .rv-head { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 10px; padding: 14px; }
+        .rv-side .rv-title { font-size: 1rem; }
+        .rv-side .rv-role { margin-left: 0; display: flex; }
+        .rv-side .rv-role button { flex: 1 1 0; height: 40px; padding: 0 8px; }
+        .rv-side .rv-mtab { padding: 4px 10px; min-height: 44px; }
+        .rv-side .rv-mtab[aria-pressed="true"] { padding: 3px 9px; }
+        .rv-side .rv-card { padding: 14px; gap: 8px; }
+        /* ผู้ตรวจสอบ: the round, the counts and ส่งผลตรวจ, stacked. */
+        .rv-side .rv-finish { position: static; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; padding: 14px; }
+        .rv-side .rv-round-line { font-size: .88rem; display: flex; flex-direction: column; gap: 2px; }
+        .rv-side .rv-counts { margin: 0; }
+        .rv-side .rv-countlist { list-style: none; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: .92rem; }
+        .rv-side .rv-countlist li { display: contents; }
+        .rv-side .rv-countlist b { text-align: right; font-variant-numeric: tabular-nums; }
+        .rv-side #rv-finish, .rv-side #rv-send { width: 100%; }
+        /* ผู้จัดทำ: งบ / N / per P4P, the Drive files, then ส่ง. */
+        .rv-side .rv-ro { display: grid; grid-template-columns: 1fr; gap: 4px; }
+        .rv-side .rv-ro .rv-kv { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 8px; }
+        .rv-side .rv-ro .rv-kv b { font-size: 1rem; }
+        .rv-side .rv-ro .rv-go { margin: 6px 0 0; justify-content: center; }
+        .rv-side .rv-files .rv-actions { gap: 6px 12px; }
+        /* ส่ง stays at the bottom of the left column when the column is taller than the window. */
+        .rv-side .rv-sendbar { position: sticky; bottom: 0; flex-direction: column; align-items: stretch; justify-content: flex-start; padding: 12px 14px; background: #FCF9F4; }
+        .rv-side .rv-ro .rv-go { height: 34px; }
+        .rv-side .rv-sendbar .rv-hint:empty { display: none; }
+        @media (max-width: 1100px) { #review-view { grid-template-columns: minmax(0, 1fr); } .rv-side { position: static; max-height: none; } }
         .rv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 18px; border-radius: var(--radius); }
         .rv-title { font-size: 1.15rem; }
         .rv-field input { height: 44px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); }
@@ -761,7 +792,7 @@
         .rv-role button { height: 44px; padding: 0 16px; border: 0; background: transparent; font: inherit; font-weight: 600; color: var(--foreground); cursor: pointer; }
         .rv-role button[aria-pressed="true"] { background: var(--primary); color: #fff; }
         .rv-role button + button { border-left: 1px solid rgba(63, 47, 36, .35); }
-        #review-body { display: flex; flex-direction: column; gap: 14px; }
+        #review-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
         .rv-loading { color: var(--muted-foreground); padding: 12px 4px; }
         .rv-turn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 14px 18px; border-radius: var(--radius); border: 1px solid var(--border); background: #fff; }
         .rv-turn:focus { outline: 2px solid var(--ring); outline-offset: 2px; }
@@ -928,9 +959,7 @@
         .rv-dialog-in { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
         .rv-dialog h2 { font-size: 1.1rem; }
         /* layout v5: month tabs, the auditee's card, list and send bar */
-        /* Title, months and the role switch share one row when they fit. */
         .rv-months { display: flex; flex-wrap: wrap; gap: 6px; }
-        .rv-role { margin-left: auto; }
         .rv-mtab { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 48px; padding: 5px 14px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 10px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
         .rv-mtab:hover { background: var(--accent); }
         .rv-mtab[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
@@ -963,7 +992,7 @@
         .rv-flt { min-height: 36px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .3); border-radius: 999px; background: #fff; font: inherit; font-size: .9rem; font-weight: 600; color: var(--foreground); cursor: pointer; }
         .rv-flt[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
         .rv-search input { height: 38px; width: min(260px, 100%); padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
-        .rv-table-box { position: relative; overflow: auto; max-height: 62vh; border: 1px solid rgba(63, 47, 36, .18); border-radius: 10px; background: #fff; }
+        .rv-table-box { position: relative; overflow: auto; max-height: max(260px, calc(var(--rv-view-h, 100dvh) - 120px)); border: 1px solid rgba(63, 47, 36, .18); border-radius: 10px; background: #fff; }
         .rv-table { border-collapse: collapse; width: 100%; font-size: .95rem; }
         .rv-table th, .rv-table td { padding: 7px 10px; border-bottom: 1px solid rgba(63, 47, 36, .1); text-align: left; vertical-align: top; }
         .rv-table thead th { position: sticky; top: 0; z-index: 1; background: #F3EBE1; font-size: .88rem; }
@@ -1135,14 +1164,20 @@
 
         <!-- ตรวจสอบ: owner only (lib/review-server.ts returns 404 to anyone else); filled by review.js -->
         <section id="review-view" class="hidden" aria-labelledby="review-title">
-            <div class="rv-head glass">
-                <h2 id="review-title" class="rv-title">ตรวจสอบ SK03 ก่อนเบิกจ่าย</h2>
-                <div id="review-months" class="rv-months" role="group" aria-label="เดือน"></div>
-                <div id="review-role" class="rv-role" role="group" aria-label="มุมมอง">
-                    <button type="button" data-role="auditee" aria-pressed="true">ผู้จัดทำ</button>
-                    <button type="button" data-role="auditor" aria-pressed="false">ผู้ตรวจสอบ</button>
+            <!-- The left column (Pong, 2026-11-12: save screen height): the
+                 title, the role switch, the months, then the side's summary
+                 and its main button (review.js fills #review-side). -->
+            <aside class="rv-side" aria-label="ตรวจสอบ: เดือนและสรุป">
+                <div class="rv-head glass">
+                    <h2 id="review-title" class="rv-title">ตรวจสอบ SK03 ก่อนเบิกจ่าย</h2>
+                    <div id="review-role" class="rv-role" role="group" aria-label="มุมมอง">
+                        <button type="button" data-role="auditee" aria-pressed="true">ผู้จัดทำ</button>
+                        <button type="button" data-role="auditor" aria-pressed="false">ผู้ตรวจสอบ</button>
+                    </div>
+                    <div id="review-months" class="rv-months" role="group" aria-label="เดือน"></div>
                 </div>
-            </div>
+                <div id="review-side" class="rv-side-body"></div>
+            </aside>
             <div id="review-body"></div>
             <p id="review-live" class="sr-only" role="status" aria-live="polite"></p>
             <!-- failures are announced here at once; review.js also shows them next to the control -->
