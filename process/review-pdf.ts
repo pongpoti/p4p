@@ -16,8 +16,8 @@
  *               each of these pages has the form's name (SK02_FORM) at the
  *               top right, as the hospital's SK02 form prints it in its header
  *
- * A4 landscape, full Sarabun (src/fonts/Sarabun-*.ttf; the .woff2 files there
- * are Thai-only subsets), and the approval date and time (Bangkok) at the
+ * A4 landscape, TH SarabunPSK (src/fonts/THSarabunPSK-*.ttf, the government's
+ * standard font; Pong, 2026-11-12), 15 pt body, and the approval date and time (Bangkok) at the
  * bottom right of every page. The PDF goes to the private Storage bucket
  * review-files (pdf/<month>/...) and the round is marked ready
  * (review_pdf_done) or failed (review_pdf_failed). Nothing is emailed or put
@@ -142,20 +142,20 @@ const CHECK_SVG = '<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><pat
 
 function css(fonts: { regular: string; bold: string }): string {
   return `
-@font-face { font-family: 'SarabunPDF'; font-weight: 400; src: url(data:font/ttf;base64,${fonts.regular}) format('truetype'); }
-@font-face { font-family: 'SarabunPDF'; font-weight: 700; src: url(data:font/ttf;base64,${fonts.bold}) format('truetype'); }
+@font-face { font-family: 'SarabunPSK-PDF'; font-weight: 400; src: url(data:font/ttf;base64,${fonts.regular}) format('truetype'); }
+@font-face { font-family: 'SarabunPSK-PDF'; font-weight: 700; src: url(data:font/ttf;base64,${fonts.bold}) format('truetype'); }
 @page { size: A4 landscape; margin: 0; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { font-family: 'SarabunPDF', sans-serif; color: #111; font-size: 13.5px; line-height: 1.35; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html, body { font-family: 'SarabunPSK-PDF', sans-serif; color: #111; font-size: 15pt; line-height: 1.35; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .page { position: relative; width: 297mm; height: 209.5mm; overflow: hidden; page-break-after: always; break-after: page; }
 .page:last-child { page-break-after: auto; break-after: auto; }
 .body { position: absolute; top: 10mm; left: 12mm; right: 12mm; bottom: 24mm; overflow: hidden; }
-.body[data-tight="1"] { font-size: 12.5px; }
-.body[data-tight="2"] { font-size: 11.5px; }
-.body[data-tight="3"] { font-size: 10.5px; }
+.body[data-tight="1"] { font-size: 14pt; }
+.body[data-tight="2"] { font-size: 13pt; }
+.body[data-tight="3"] { font-size: 12pt; }
 .body[data-tight="2"] td, .body[data-tight="2"] th, .body[data-tight="3"] td, .body[data-tight="3"] th { padding-top: 1px; padding-bottom: 1px; }
-.form { position: absolute; top: 4.5mm; right: 12mm; font-size: 11px; line-height: 1; white-space: nowrap; }
-footer { position: absolute; left: 12mm; right: 12mm; bottom: 10mm; height: 9mm; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; font-size: 12.5px; }
+.form { position: absolute; top: 4.5mm; right: 12mm; font-size: 12pt; line-height: 1; white-space: nowrap; }
+footer { position: absolute; left: 12mm; right: 12mm; bottom: 10mm; height: 9mm; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; font-size: 14pt; }
 footer .pg { grid-column: 2; padding-bottom: 1mm; }
 footer .ok { grid-column: 3; justify-self: end; border-top: 0.35mm solid #111; padding: 1.2mm 0 0 18mm; font-weight: 700; white-space: nowrap; }
 h1 { font-size: 1.75em; text-align: center; line-height: 1.3; }
@@ -178,6 +178,8 @@ td.c { text-align: center; }
 .head .t1 { font-size: 1.4em; font-weight: 700; line-height: 1.3; }
 .head .t2 { font-size: 1.2em; font-weight: 700; line-height: 1.3; }
 .sheet { table-layout: fixed; }
+.sheet th, .sheet td { padding-left: 1.5mm; padding-right: 1.5mm; }
+.sheet td.rm { white-space: nowrap; overflow: hidden; }
 .sheet td { height: 9.6mm; }
 .sheet tr.sum td { background: #EDEDED; font-weight: 700; }
 .signs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8mm; margin-top: 13mm; text-align: center; }
@@ -243,8 +245,11 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 </tbody></table>
 </div>${footer(1, pages, stamp)}</section>`;
 
-  const sheetHead = `<colgroup><col style="width:5%"><col style="width:19%"><col style="width:17%"><col style="width:9.5%">` +
-    `<col style="width:8%"><col style="width:10%"><col style="width:9.5%"><col style="width:12%"><col style="width:10%"></colgroup>` +
+  // Widths fit the longest August 2569 values on one line at 15 pt (Pong,
+  // 2026-11-12: หมายเหตุ such as "ผู้ช่วยผู้อำนวยการด้านสุขภาพดิจิทัล" on one line).
+  // A longer remark is set smaller by renderPdf until it fits.
+  const sheetHead = `<colgroup><col style="width:4.2%"><col style="width:18.7%"><col style="width:15.8%"><col style="width:12.1%">` +
+    `<col style="width:6.6%"><col style="width:6.6%"><col style="width:6.6%"><col style="width:10%"><col style="width:19.4%"></colgroup>` +
     `<thead><tr><th rowspan="2">ลำดับ</th><th rowspan="2">ชื่อ-สกุล</th><th rowspan="2">ตำแหน่ง</th><th rowspan="2">ประเภท</th>` +
     `<th colspan="3">ค่าตอบแทนตามผลการปฏิบัติงาน (บาท)</th><th rowspan="2">ลายมือชื่อผู้รับเงิน</th><th rowspan="2">หมายเหตุ</th></tr>` +
     `<tr><th>งาน<br>บริหาร</th><th>ตามสัดส่วน<br>วิชาชีพ</th><th>รวมเป็น<br>เงิน</th></tr></thead>`;
@@ -266,7 +271,7 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
         const c = (k: number): unknown => (r ?? [])[k];
         return `<tr><td class="c">${esc(squash(c(0)))}</td><td>${esc(squash(c(1)))}</td><td>${esc(squash(c(2)))}</td>` +
           `<td>${esc(squash(c(3)))}</td><td class="n">${money(c(4))}</td><td class="n">${money(c(5))}</td>` +
-          `<td class="n">${money(c(6))}</td><td>${esc(squash(c(7)))}</td><td>${esc(squash(c(8)))}</td></tr>`;
+          `<td class="n">${money(c(6))}</td><td>${esc(squash(c(7)))}</td><td class="rm">${esc(squash(c(8)))}</td></tr>`;
       }).join('');
       at += size;
       const sum = last
@@ -295,7 +300,7 @@ export function countPdfPages(pdf: Uint8Array): number {
 
 export function loadFonts(): { regular: string; bold: string } {
   const read = (f: string): string => fs.readFileSync(path.join(FONT_DIR, f)).toString('base64');
-  return { regular: read('Sarabun-Regular.ttf'), bold: read('Sarabun-Bold.ttf') };
+  return { regular: read('THSarabunPSK-Regular.ttf'), bold: read('THSarabunPSK-Bold.ttf') };
 }
 
 /**
@@ -310,6 +315,15 @@ export async function renderPdf(html: string, pages: number): Promise<Uint8Array
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
     await page.evaluate('document.fonts.ready.then(() => true)');
+    // หมายเหตุ stays on one line: a remark wider than its column is set
+    // smaller, down to 9 pt; past that it wraps rather than being cut off.
+    await page.evaluate(`(() => {
+      document.querySelectorAll('td.rm').forEach((td) => {
+        let pt = parseFloat(getComputedStyle(td).fontSize) * 0.75;
+        while (td.scrollWidth > td.clientWidth && pt > 9) { pt -= 0.5; td.style.fontSize = pt + 'pt'; }
+        if (td.scrollWidth > td.clientWidth) { td.style.whiteSpace = 'normal'; td.style.fontSize = ''; }
+      });
+    })()`);
     const tooFull = await page.evaluate(`(() => {
       const out = [];
       document.querySelectorAll('.body').forEach((b, i) => {
