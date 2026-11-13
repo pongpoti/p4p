@@ -1011,12 +1011,12 @@ async function writeBudgetSheet(
       fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)',
     }},
     bordersReq(sheetId, 3, 0, T, 13, true),
-    // formula cells yellow, inputs (A..E) plain
-    fillReq(sheetId, F1, 5, FL, 13, NEW_FORMULA_FILL),
+    // formula cells yellow (D..N), department inputs (A..C) plain
+    fillReq(sheetId, F1, 3, FL, 13, NEW_FORMULA_FILL),
     { repeatCell: { range: gridRange(sheetId, F1, 0, FL, 13), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
     { repeatCell: { range: gridRange(sheetId, F1, 1, FL, 1), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    { repeatCell: { range: gridRange(sheetId, F1, 3, FL, 3), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    numFmtReq(sheetId, F1, 4, FL, 4, '0.00'),
+    numFmtReq(sheetId, F1, 3, FL, 3, '0.0%'),               // D share short
+    numFmtReq(sheetId, F1, 4, FL, 4, '0.00'),               // E department multiplier
     numFmtReq(sheetId, F1, 5, T, 5, '#,##0'),
     numFmtReq(sheetId, F1, 6, T, 6, FMT_BAHT),
     numFmtReq(sheetId, F1, 7, T, 7, '0.00'),
@@ -1038,7 +1038,7 @@ async function writeBudgetSheet(
     // label), and that refusal used to fail this whole batch: the sheet was
     // left unformatted and the department sheets were never built.
     { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 5, frozenColumnCount: 0, hideGridlines: true } }, fields: 'gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)' } },
-    ...([40, 270, 56, 143, 79, 71, 119, 127, 119, 119, 95, 103, 111, 95] as const).map((px, c) => ({
+    ...([40, 270, 56, 111, 103, 71, 119, 127, 119, 119, 95, 103, 111, 95] as const).map((px, c) => ({
       updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS' as const, startIndex: c, endIndex: c + 1 }, properties: { pixelSize: px }, fields: 'pixelSize' },
     })),
     { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 3, endIndex: 5 }, properties: { pixelSize: 40 }, fields: 'pixelSize' } },
@@ -1642,7 +1642,7 @@ async function main(): Promise<void> {
   }
   log('[Pre-flight] ✓ Template OK');
 
-  // Pre-flight: every staff department needs a capacity multiplier (new formula)
+  // Pre-flight: every staff department needs a department multiplier (new formula)
   for (const dept of Object.keys(DEPT_COLORS)) {
     if (dept !== 'INTERN') deptCode(dept); // throws on a department missing from DEPT_CAPACITY
   }
