@@ -79,10 +79,10 @@ extra_pool  = staff_budget − 10,000 × N_staff
 lack_d      = max(0, 1 − on_staff_d / FTE_d)                     from the staffing sheet
 dept_mult_d = 1 + 5 × lack_d
 dept_extra  = extra_pool × (count_d × dept_mult_d) / Σ (count × dept_mult)
-payment_i   = ⌊ 10,000 + dept_extra × mult_i / Σ mult_d ⌋
+payment_i   = ⌊ min(15,000, 10,000 + dept_extra × mult_i / Σ mult_d) ⌋     anything above 15,000 goes to the rest of the department (Step 3.6)
 ```
 
-Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by the department multiplier, then inside each department by score. The department multiplier grows in proportion to how short of doctors the department is (`lack_d`, the share of its FTE not filled): every 10 points of lack adds 0.5, so a fully staffed department is 1.00, one 20% short 2.00 and one 60% short 4.00. A physician's average extra share grows the same way: a department at 4.00 gets 4 times the extra per physician of one at 1.00. There are no tiers or groups (Pong, 2026-11-13). The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
+Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by the department multiplier, then inside each department by score. The department multiplier grows in proportion to how short of doctors the department is (`lack_d`, the share of its FTE not filled): every 10 points of lack adds 0.5, so a fully staffed department is 1.00, one 20% short 2.00 and one 60% short 4.00. A physician's average extra share grows the same way: a department at 4.00 gets 4 times the extra per physician of one at 1.00. There are no tiers or groups (Pong, 2026-11-13). Nobody is paid more than ฿15,000 (Pong's 15,000 check): what a physician's share would put above it goes to the other physicians of the same department, so each department's total and average stay as above. The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
 
 If `staff_budget < 10,000 × N_staff` even after the intern pool is cut to 0 (`total_budget < 10,000 × N_staff`), ฿10,000 each is not affordable: every STAFF physician gets `⌊staff_budget / N_staff⌋`.
 
@@ -212,16 +212,27 @@ for each physician i in department d:
 ```
 Uses `score_adj` from Step 0, computed only over physicians remaining after omission. If `mean_score_adj_d = 0` → `mult_i = 1.00` for everyone.
 
-**3.5 — Pay**
+**3.5 — Pay before the cap**
 ```
-extra_rate_d = dept_extra_d / Σ mult_i                              งบรายสาขา column L, staff_summary V
-payment_i    = ⌊ 10,000 + extra_rate_d × mult_i ⌋                   staff_summary N
+extra_rate_d = dept_extra_d / Σ mult_i                              งบรายสาขา column L
+pay_i        = 10,000 + extra_rate_d × mult_i
 ```
+
+**3.6 — 15,000 cap, then pay**
+```
+over_d       = Σ max(0, pay_i − 15,000)  over physicians in d      งบรายสาขา column O
+under_d      = Σ mult_i over physicians in d with pay_i ≤ 15,000    งบรายสาขา column P
+rate_d       = extra_rate_d + over_d / under_d                      งบรายสาขา column Q, staff_summary V
+               (extra_rate_d if under_d = 0)
+payment_i    = ⌊ min(15,000, 10,000 + rate_d × mult_i) ⌋            staff_summary N
+```
+Nobody is paid more than ฿15,000. What a physician's share would put above it goes once to the physicians of the same department who are under it, in proportion to their multiplier, so the department's total and average do not change and Step 3.3 still holds. If that one pass put someone else above 15,000, they would be held at 15,000 and the rest would stay unspent; this has not happened in any month 2568_05–2569_08. The cap only applies in 2569_01, 2569_02 and 2569_05, each time in SOC (฿926, ฿67 and ฿180 passed on to the other SOC physicians).
+
 The fractional remainder is not redistributed — it stays unspent for that department this month.
 
 If `extra_pool < 0` (only possible when `total_budget < 10,000 × N_staff`), every STAFF physician gets `⌊staff_budget / N_staff⌋` instead.
 
-In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, 10000 + U × V), 0))`.
+In SK03 `staff_summary`: column U = `mult_i`, column V = `rate_d` (งบรายสาขา Q), and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, MIN(15000, 10000 + U × V)), 0))`.
 
 **Results (2569_07 and 2569_08: department multiplier 1 + 5 × lack from the staffing sheet 13-11-69, score ±50%)**
 
@@ -235,9 +246,10 @@ In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and col
 - Nobody is paid less than ฿10,000, and with the budgets of 2568_05–2569_08 everyone is paid more (lowest ฿10,122, in 2569_07): every department multiplier is at least 1 and every score multiplier at least 0.5, so every share of a positive extra pool is above 0.
 - The average extra per physician is `extra_per_unit × dept_mult_d`, a straight line in the department's lack (2569_08: ฿263 at 1.00, ฿542 at 2.06, ฿1,052 at 4.00).
 - Score still counts inside each department (±50% of the extra), so pay ranges of departments with close multipliers overlap: a high scorer in a slightly short department can be paid more than a low scorer in a shorter one. Department averages follow the multiplier order.
-- There is no upper limit. With the larger extra of 2568_05–2569_06 (฿1,074–1,705 per head), the highest payment would go over ฿15,000 if 2569_01, 2569_02 or 2569_05 were rebuilt (top ฿15,926).
+- Nobody is paid more than ฿15,000 (Step 3.6). In 2569_07 and 2569_08 the cap changes nothing (highest ฿11,037 and ฿11,499). Without it, the larger extra of 2569_01, 2569_02 and 2569_05 (฿1,458–1,705 per head) would have paid one or two SOC physicians up to ฿15,926.
+- Checked on all 8 months with เวชกรรมสังคม (2569_01–2569_08, Pong, 2026-11-13): everyone above ฿10,000 (lowest ฿10,122–10,535), nobody above ฿15,000, nobody below that month's intern average, ฿80–93 unspent, and in every month SOC's average extra is 4.00 times that of the fully staffed departments.
 - Replaces the capacity tiers (bonus weight 1.5 สาขาขาดแคลน / 1.0 กึ่งขาดแคลน / 0.5 เต็มศักยภาพ, Pong, 2026-11-11), at Pong's request on 2026-11-13: a department's share follows how short it is, without groups.
-- Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
+- Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (the former Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
 
 ---
 

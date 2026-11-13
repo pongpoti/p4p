@@ -14,7 +14,8 @@
  *      1 + LACK_K × share of the department's FTE not filled),
  *      then inside a department by score: multiplier = clip(1 + 0.5 × (excess
  *      ÷ dept mean excess − 1), 0.5, 1.5).
- *      Pay = ROUNDDOWN(10,000 + multiplier × dept extra ÷ dept Σ multipliers, 0).
+ *      Pay = ROUNDDOWN(MIN(15,000, 10,000 + multiplier × dept extra ÷ dept Σ multipliers), 0);
+ *      what a doctor would get above 15,000 goes to the rest of the department.
  *      If the staff budget cannot give 10,000 each, every staff member gets
  *      staff budget ÷ staff.
  * Anyone below 2,200 (excess < 0) gets multiplier 0 and is not counted.
@@ -22,7 +23,7 @@
  * The layout matches the reference workbook 2569_07_new_formula.xlsx (as the
  * trial workbook 2569_06_new_formula.xlsx and its Thai manuals): pay stays
  * in column N on both sheets, so the department sheets keep reading N.
- *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept extra per multiplier
+ *   staff  Q code · R dept mean · S ratio · T raw multiplier · U multiplier · V dept extra per multiplier (after the 15,000 cap)
  *          panel X/Y: Y9 total budget (input) · Y10 staff budget · Y11 count ·
  *          Y13 base 10,000 × staff · Y14 extra · Y15 extra per unit (staff × department multiplier) · Y17-Y20 totals · X23 คงคืน
  *   intern Q ratio · R raw multiplier · S7 mean · T multiplier
@@ -34,6 +35,13 @@
 
 /** Every staff member's base pay; only the money above it is shared by department and score. */
 export const BASE = 10000;
+/**
+ * No staff payment above this (Pong's 15,000 check). What a doctor's share
+ * would put above it goes to the other doctors of the same department, in
+ * proportion to their multiplier (one pass, งบรายสาขา O..Q); MIN() keeps
+ * everyone at or below it, so the department average is unchanged.
+ */
+export const PAY_CAP = 15000;
 /** Staff score band on the part above BASE: multiplier 0.5-1.5. */
 export const STAFF_SLOPE = 0.5;
 export const STAFF_MULT_MIN = 0.5;
@@ -126,22 +134,22 @@ const q = (sheet: string) => `'${sheet.replace(/'/g, "''")}'!`;
 
 /**
  * Staff row r: pay (column N) and helpers Q..V. Pay = 10,000 + multiplier ×
- * the department's extra per multiplier (V); everyone equal if the staff
- * budget is below 10,000 each (Y14 < 0).
+ * the department's extra per multiplier after the 15,000 cap (V), at most
+ * 15,000; everyone equal if the staff budget is below 10,000 each (Y14 < 0).
  * `first`/`last` are the first and last data rows of the staff sheet.
  */
 export function staffRowCells(r: number, code: string, first: number, last: number): { N: string; QtoV: (string | number)[] } {
   const L = `$L$${first}:$L$${last}`;
   const Q = `$Q$${first}:$Q$${last}`;
   return {
-    N: `=IF(L${r}<0,0,ROUNDDOWN(IF($Y$14<0,$Y$10/$Y$11,${BASE}+U${r}*V${r}),0))`,
+    N: `=IF(L${r}<0,0,ROUNDDOWN(IF($Y$14<0,$Y$10/$Y$11,MIN(${PAY_CAP},${BASE}+U${r}*V${r})),0))`,
     QtoV: [
       code,                                                                 // Q  department code
       `=IFERROR(AVERAGEIFS(${L},${Q},Q${r},${L},">=0"),0)`,                 // R  dept mean excess (≥ 2,200 only)
       `=IF(OR(L${r}<0,R${r}=0),"",L${r}/R${r})`,                            // S  times the dept mean
       `=IF(L${r}<0,"",IF(R${r}=0,1,1+${STAFF_SLOPE}*(S${r}-1)))`,           // T  raw multiplier
       `=IF(L${r}<0,0,MIN(MAX(T${r},${STAFF_MULT_MIN}),${STAFF_MULT_MAX}))`, // U  multiplier 0.5-1.5
-      `=VLOOKUP(Q${r},${q(BUDGET_SHEET)}$C$${BUDGET_FIRST}:$L$${BUDGET_LAST},10,FALSE)`, // V  dept extra per multiplier
+      `=VLOOKUP(Q${r},${q(BUDGET_SHEET)}$C$${BUDGET_FIRST}:$Q$${BUDGET_LAST},15,FALSE)`, // V  dept extra per multiplier after the cap (งบรายสาขา Q)
     ],
   };
 }
@@ -257,12 +265,15 @@ export const BUDGET_HEADERS = [
   `ฐาน\n(${BASE.toLocaleString('en-US')} × จำนวน)`, 'หน่วย\n(จำนวน × ตัวคูณ)',
   'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'ส่วนเพิ่ม\nต่อตัวคูณ',
   'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
+  `ส่วนที่เกิน\n${PAY_CAP.toLocaleString('en-US')}`, `sum point\nคนที่ไม่ถึง\n${PAY_CAP.toLocaleString('en-US')}`,
+  `ส่วนเพิ่มต่อตัวคูณ\nหลังจำกัด\n${PAY_CAP.toLocaleString('en-US')}`,
 ];
 
-/** Cells of the งบรายสาขา sheet (A1:N26). */
+/** Cells of the งบรายสาขา sheet (A1:Q26). */
 export function budgetSheet(staffSheet: string, first: number, last: number, monthLabel: string): CellWrite[] {
   const S = q(staffSheet);
   const codes = `${S}$Q$${first}:$Q$${last}`;
+  const mults = `${S}$U$${first}:$U$${last}`;
   const rows: (string | number)[][] = DEPT_CAPACITY.map((d, k) => {
     const r = BUDGET_FIRST + k;
     return [
@@ -278,6 +289,11 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
       `=IF(OR(K${r}=0,${S}$Y$10<=0),0,I${r}/K${r})`,                       // L extra per multiplier (0 until the budget is typed in)
       `=SUMIF(${codes},C${r},${S}$N$${first}:$N$${last})`,                 // M paid
       `=J${r}-M${r}`,                                                      // N remainder
+      // 15,000 cap: what the department's doctors would get above it (O) goes to
+      // its doctors under it, in proportion to their multiplier (P = their Σ).
+      `=SUMPRODUCT((${codes}=C${r})*(${mults}*L${r}+${BASE}>${PAY_CAP})*(${mults}*L${r}+${BASE}-${PAY_CAP}))`, // O over the cap
+      `=SUMPRODUCT((${codes}=C${r})*(${mults}*L${r}+${BASE}<=${PAY_CAP})*${mults})`,                            // P Σ multipliers under it
+      `=IF(P${r}=0,L${r},L${r}+O${r}/P${r})`,                                                                  // Q extra per multiplier after the cap
     ];
   });
   const T = BUDGET_TOTAL;
@@ -287,13 +303,13 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
     { range: 'A2', values: [[monthLabel]] },
     { range: 'A3', values: [[
       `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − แพทย์ที่มีจริง ÷ FTE (ไม่ต่ำกว่า 0; อัตรากำลัง 13-11-69)      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
-      + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ`,
+      + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ (ไม่เกิน ${PAY_CAP.toLocaleString('en-US')}: ส่วนที่เกินแบ่งให้คนอื่นในสาขาเดียวกันตามตัวคูณ)`,
     ]] },
-    { range: 'A4:N4', values: [BUDGET_HEADERS] },
-    { range: `A${BUDGET_FIRST}:N${BUDGET_LAST}`, values: rows },
-    { range: `A${T}:N${T}`, values: [[
+    { range: 'A4:Q4', values: [BUDGET_HEADERS] },
+    { range: `A${BUDGET_FIRST}:Q${BUDGET_LAST}`, values: rows },
+    { range: `A${T}:Q${T}`, values: [[
       'รวม staff', '', '', '', '',
-      sum('F'), sum('G'), sum('H'), sum('I'), sum('J'), sum('K'), '', sum('M'), sum('N'),
+      sum('F'), sum('G'), sum('H'), sum('I'), sum('J'), sum('K'), '', sum('M'), sum('N'), sum('O'), '', '',
     ]] },
     { range: `B${T + 2}`, values: [['เช็ก: รวมงบสาขา = เฉพาะ staff']] },
     { range: `J${T + 2}:K${T + 2}`, values: [[`=J${T}-${S}Y10`, '← ต้องเป็น 0']] },
