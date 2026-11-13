@@ -2067,7 +2067,7 @@
         const info = el("div", "rv-round-line");
         // The month chip above already says พร้อมตรวจ; who sent it and when
         // are left out (Pong, 2026-11-12).
-        info.append(el("span", undefined, "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "งบ " + budgetText(r.budget)), el("span", undefined, "จำนวนแพทย์ " + (r.doctors ? int(r.doctors) : "–")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
+        info.append(el("span", "rv-round-title", "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), el("span", undefined, "งบ " + budgetText(r.budget)), el("span", undefined, "จำนวนแพทย์ " + (r.doctors ? int(r.doctors) : "–")), el("span", undefined, "per P4P " + baht(r.per_p4p)));
         if (r.edits)
             info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"));
         bar.append(info);
@@ -2630,7 +2630,9 @@
         const fin = body.querySelector(".rv-finish");
         const h = fin ? fin.offsetHeight : 0;
         view.style.setProperty("--rv-fin", h + "px");
-        view.style.setProperty("--rv-view-h", view.clientHeight + "px");
+        // Rounded down: clientHeight can round a fractional height up (a
+        // zoomed window), and the half pixel over would bring a scrollbar.
+        view.style.setProperty("--rv-view-h", Math.floor(view.getBoundingClientRect().height) + "px");
         // Focus never lands under the counts bar at the top or the
         // buttons bar pinned at the bottom.
         view.style.scrollPaddingTop = h + 10 + "px";

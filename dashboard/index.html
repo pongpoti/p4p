@@ -798,6 +798,8 @@
         /* ผู้ตรวจสอบ: the round, the counts and ส่งผลตรวจ, stacked. */
         .rv-side .rv-finish { position: static; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; padding: 14px; }
         .rv-side .rv-round-line { font-size: .88rem; display: flex; flex-direction: column; gap: 2px; }
+        /* The round and month lead the block (Pong, 2026-11-13). */
+        .rv-side .rv-round-line .rv-round-title { font-size: 1rem; font-weight: 700; color: var(--foreground); margin-bottom: 2px; }
         .rv-side .rv-counts { margin: 0; }
         .rv-side .rv-countlist { list-style: none; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: .92rem; }
         .rv-side .rv-countlist li { display: contents; }
@@ -880,6 +882,11 @@
         .rv-people-tools { display: flex; flex-direction: column; gap: 6px; }
         .rv-mini { display: flex; flex-direction: column; gap: 2px; font-size: .9rem; font-weight: 600; }
         .rv-mini select, .rv-mini input { height: 40px; padding: 0 10px; border: 1px solid rgba(63, 47, 36, .35); border-radius: 8px; font: inherit; background: #fff; }
+        /* The two inner scrollers are positioned so the screen-reader-only
+           text in their rows (.sr-only is position: absolute) is clipped by
+           them; otherwise it hangs below the window and makes the whole view
+           scroll into empty space (Pong, 2026-11-13). */
+        .rv-people-list, .rv-person { position: relative; }
         .rv-people-list { list-style: none; overflow-y: auto; flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; gap: 4px; }
         .rv-person-btn { width: 100%; text-align: left; display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font: inherit; color: var(--foreground); cursor: pointer; }
         .rv-person-btn:hover { background: var(--accent); }
