@@ -60,8 +60,8 @@ export interface DeptCapacity {
  * Tier = doctors on staff ÷ doctors the department should have (FTE), from
  * the hospital's staffing sheet: under 70% 1.15 สาขาขาดแคลน, 70% to under
  * 90% 1.00 กึ่งขาดแคลน, 90% and over 0.85 เต็มศักยภาพ. Staffing sheet
- * แพทย์ 27-8-69 (Pong, 2026-11-12; every build from then on, older months
- * too when rebuilt).
+ * อัตรากำลัง แพทย์ 13-11-69 (Pong, 2026-11-13; every build from then on,
+ * older months too when rebuilt).
  */
 export const DEPT_CAPACITY: DeptCapacity[] = [
   { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', cap: 0.85 },

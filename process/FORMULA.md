@@ -220,14 +220,14 @@ If `extra_pool < 0` (only possible when `total_budget < 10,000 × N_staff`), eve
 
 In SK03 `staff_summary`: column U = `mult_i`, column V = `extra_rate_d`, and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, 10000 + U × V), 0))`.
 
-**Results (2569_07 and 2569_08: weights 1.5 / 1 / 0.5, score ±50%, tiers from 27-8-69)**
+**Results (2569_07 and 2569_08: weights 1.5 / 1 / 0.5, score ±50%, tiers from the staffing sheet 13-11-69)**
 
 | | สาขาขาดแคลน (1.5) | สาขากึ่งขาดแคลน (1.0) | สาขาเต็มศักยภาพ (0.5) |
 |---|---|---|---|
 | 2569_07 (180 STAFF, extra ฿62,603) | ฿10,338–10,753, avg ฿10,574 | ฿10,197–10,597, avg ฿10,382 | ฿10,098–10,276, avg ฿10,191 |
 | 2569_08 (181 STAFF, extra ฿83,445) | ฿10,414–11,084, avg ฿10,760 | ฿10,258–10,799, avg ฿10,507 | ฿10,142–10,349, avg ฿10,253 |
 
-- The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿62 and ฿65; with the tiers before 2026-11-12 it was ฿30 and ฿22).
+- The lowest สาขาขาดแคลน payment is above the highest สาขาเต็มศักยภาพ payment in both months (by ฿62 and ฿65; with the tiers before 2026-11-13 it was ฿30 and ฿22).
 - No overlap holds as long as 1.5 × (1 − 0.5) > 0.5 × (1 + 0.5), i.e. 0.75 > 0.75 — exactly at the edge, so the margin comes only from department averages; a narrower score band widens it.
 - Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
 
@@ -239,36 +239,37 @@ Used in Step 3.2: each STAFF department's tier sets its bonus weight (1.5 / 1.0 
 
 A department's tier comes from the hospital's doctor staffing sheet: **% = doctors on staff (รวมอัตราตามจริง) ÷ doctors the department should have (จำนวนที่ควรมี, FTE)**. Under 70% is สาขาขาดแคลน, 70% to under 90% is สาขากึ่งขาดแคลน, and 90% or more is สาขาเต็มศักยภาพ. Doctors hired by the day (ลจ.ชั่วคราว รายวัน) are not counted. The first tier table did not write these lines down; they are the ones that fit it.
 
-The numbers below are from the staffing sheet แพทย์ 27-8-69 (Pong, 2026-11-12). Every SK03 build from then on uses these tiers, including a rebuild of an older month (2569_08 too). The last column is the tier each department had before.
+The numbers below are from the staffing sheet อัตรากำลัง แพทย์ 13-11-69 (Pong, 2026-11-13; it replaces แพทย์ 27-8-69, which gave the same tiers). Every SK03 build from then on uses these tiers, including a rebuild of an older month (2569_08 too). The last column is the tier each department had before.
 
-| # | Department | Abbrev | FTE | On staff | % | Capacity tier | Multiplier | Bonus weight | Before 2026-11-12 |
+| # | Department | Abbrev | FTE | On staff | % | Capacity tier | Multiplier | Bonus weight | Before 2026-11-13 |
 |:-:|---|:-:|:-:|:-:|:-:|---|:-:|:-:|---|
 | 1 | กุมารเวชกรรม | PED | 19 | 21 | 110.5% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
 | 2 | จักษุวิทยา | EYE | 9 | 8 | 88.9% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
-| 3 | จิตเวชและยาเสพติด | PSY | 4 | 16 | 400.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
+| 3 | จิตเวชและยาเสพติด | PSY | 4 | 4 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
 | 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
 | 5 | นิติเวช | FOR | 3 | 2 | 66.7% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
 | 6 | ผู้ป่วยนอก | OPD | 5 | 14 | 280.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
 | 7 | พยาธิวิทยากายวิภาค | PAT | 2 | 3 | 150.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
-| 8 | รังสีวิทยา | RAD | 15 | 15 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
+| 8 | รังสีวิทยา | RAD | 15 | 14 | 93.3% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | สาขากึ่งขาดแคลน (1.00) |
 | 9 | วิสัญญีวิทยา | ANS | 15 | 9 | 60.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
 | 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 66.7% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
 | 11 | เวชกรรมสังคม | SOC | 10 | 4 | 40.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | สาขาเต็มศักยภาพ (0.85) |
 | 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 100.0% | สาขาเต็มศักยภาพ (full capacity) | 0.85 | 0.5 | same |
-| 13 | ศัลยกรรม | SUR | 39 | 35 | 89.7% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
+| 13 | ศัลยกรรม | SUR | 39 | 34 | 87.2% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
 | 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 88.2% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
 | 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 72.2% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
 | 16 | โสต ศอ นาสิก | ENT | 9 | 8 | 88.9% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | same |
 | 17 | อาชีวเวชกรรม | OCM | 5 | 3 | 60.0% | สาขาขาดแคลน (shortage) | 1.15 | 1.5 | same |
-| 18 | อายุรกรรม | MED | 47 | 35 | 74.5% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
+| 18 | อายุรกรรม | MED | 47 | 37 | 78.7% | สาขากึ่งขาดแคลน (semi-shortage) | 1.00 | 1.0 | สาขาขาดแคลน (1.15) |
 | 19 | INTERN | INT | — | — | — | — (own pool, Step 2) | — | — | — |
 
-5 departments are สาขาขาดแคลน, shortage specialty (1.15); 6 are สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and 7 are สาขาเต็มศักยภาพ, full-capacity specialty (0.85). Before 2026-11-12 there were 6 in each.
+5 departments are สาขาขาดแคลน, shortage specialty (1.15); 6 are สาขากึ่งขาดแคลน, semi-shortage specialty (1.00); and 7 are สาขาเต็มศักยภาพ, full-capacity specialty (0.85). Before 2026-11-13 there were 6 in each.
 
-Notes on the 27-8-69 sheet:
-- SOC also has 18 doctors hired by the day. Counted in, SOC would be at 220% (เต็มศักยภาพ).
-- PSY (16) and OPD (14) list more doctors than the SK03 has (2569_08: 4 and 3). PSY is เต็มศักยภาพ either way (4 ÷ 4 = 100%).
-- SUR is at 89.7%, just under the 90% line.
+Notes on the 13-11-69 sheet:
+- The sheet also lists กลุ่มงานการแพทย์แผนไทยฯ (FTE 1, 0 on staff) and three dental groups; none of them is a P4P department.
+- SOC also has 15 doctors hired by the day. Counted in, SOC would be at 190% (เต็มศักยภาพ).
+- OPD (14) lists more doctors than the SK03 has (2569_08: 3); OPD is เต็มศักยภาพ either way.
+- EYE and ENT (88.9%) and ORT (88.2%) are just under the 90% line.
 
 ---
 
