@@ -62,6 +62,9 @@ const {
   internMeanCell, staffPanel, internPanel, budgetSheet,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
+const { fitSheet, overallSpec, budgetSpec, deptSpec } = require('./sk03-fit') as typeof import('./sk03-fit');
+type FitSpec = import('./sk03-fit').FitSpec;
+type FitGrid = import('./sk03-fit').Grid;
 const review = require('./review-build') as typeof import('./review-build');
 const { statedScoreFromWorkbook } = require('./fill-score') as typeof import('./fill-score');
 type ReviewInput = import('./review-build').ReviewInput;
@@ -915,7 +918,8 @@ async function formatOverallSheet(
   // Column widths (pixels). A..P come from the Google template, whose widths
   // are 1.375x the hospital SK03 form; set them to the form's widths (the
   // ones in Pong's 2569_07_new_formula.xlsx). Then the helper columns and
-  // the panel.
+  // the panel. fitSK03Columns narrows them all to their content at the end;
+  // these stay only if that pass fails.
   const formWidths: [string, number][] = [
     ['A', 33], ['B', 37], ['C', 122], ['D', 146], ['E', 92], ['F', 184], ['G', 195], ['H', 74],
     ['I', 100], ['J', isIntern ? 85 : 82], ['K', 100], ['L', 88], ['M', 106], ['N', 100], ['O', 100], ['P', 72],
@@ -1130,8 +1134,9 @@ async function buildDeptSheets(
   staffSheetName: string,
   internSheetName: string,
   rowNumMap: Record<string, number>
-): Promise<void> {
+): Promise<{ title: string; sheetId: number; lastRow: number }[]> {
   const D = 6; // first data row in dep_template (rows 1-5 are header)
+  const built: { title: string; sheetId: number; lastRow: number }[] = [];
 
   for (const dept of Object.keys(DEPT_COLORS)) {
     const persons = allPersons
@@ -1197,6 +1202,7 @@ async function buildDeptSheets(
     }));
 
     const lastRow      = D + persons.length - 1;
+    built.push({ title: dept, sheetId, lastRow });
     const isInternDept = dept === 'INTERN';
     const formulaData: sheets_v4.Schema$ValueRange[] = [];
 
@@ -1232,7 +1238,8 @@ async function buildDeptSheets(
     const R_E = lastRow - 1;
     // Column widths: the dep_template's are 1.375x the hospital form; use the
     // form's (Pong's 2569_07_new_formula.xlsx). หมายเหตุ (I) grows to fit the
-    // longest remark, as Pong widened it by hand for long remarks.
+    // longest remark, as Pong widened it by hand for long remarks. These are
+    // the fallback: fitSK03Columns sizes every column to its content at the end.
     const remarkPx = Math.max(DEPT_COL_PX[8], ...rows.map(r => thaiTextPx(String(r[8] ?? ''))));
     const deptWidths = DEPT_COL_PX.map((px, c) => colWidthReq(sheetId, String.fromCharCode(65 + c), c === 8 ? remarkPx : px));
     await withRetry(() => sheets.spreadsheets.batchUpdate({
@@ -1291,6 +1298,7 @@ async function buildDeptSheets(
     await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties!.sheetId! } }] } }));
     log('  [SK03] Deleted default "ชีต1" sheet');
   }
+  return built;
 }
 
 // ─── Master orchestrator ──────────────────────────────────────────
@@ -1324,6 +1332,66 @@ async function normaliseSK03Fonts(sheets: sheets_v4.Sheets, ssId: string): Promi
     log(`  [SK03] Font set to ${SK03_FONT} on ${requests.length} sheets`);
   } catch (err: any) {
     log(`  [SK03] ⚠ font pass failed (file kept): ${err.message}`, 'warn');
+  }
+}
+
+// Pong, 2026-11-13: the columns were far wider than what is in them. Once
+// every sheet is built (formulas included, so pay and totals have their
+// values), each column is set as wide as its longest value on one line, in
+// TH SarabunPSK as Sheets draws it (./sk03-fit.ts). Headers may wrap: no
+// column is narrower than the longest word of its header, and header rows
+// grow when a header needs more lines. The widths set while building each
+// sheet stay as the fallback: a failure here only logs, the file is done.
+interface FitPlan { title: string; sheetId: number; spec: FitSpec; lastRow: number }
+async function fitSK03Columns(sheets: sheets_v4.Sheets, ssId: string, plan: FitPlan[]): Promise<void> {
+  try {
+    const quote = (t: string) => `'${t.replace(/'/g, "''")}'!`;
+    const res = await withRetry(() => sheets.spreadsheets.get({
+      spreadsheetId: ssId,
+      includeGridData: true,
+      ranges: plan.map(p => `${quote(p.title)}A1:Z${p.lastRow}`),
+      fields: 'sheets(properties(sheetId,title),merges,data(startRow,startColumn,rowData(values(formattedValue,effectiveFormat(textFormat(fontSize,bold)))),rowMetadata(pixelSize),columnMetadata(pixelSize)))',
+    }));
+    const requests: sheets_v4.Schema$Request[] = [];
+    const texts: sheets_v4.Schema$ValueRange[] = [];
+    const dim = (sheetId: number, dimension: 'ROWS' | 'COLUMNS', i: number, pixelSize: number): sheets_v4.Schema$Request =>
+      ({ updateDimensionProperties: { range: { sheetId, dimension, startIndex: i, endIndex: i + 1 }, properties: { pixelSize }, fields: 'pixelSize' } });
+    for (const p of plan) {
+      const sh = res.data.sheets?.find(x => x.properties?.sheetId === p.sheetId);
+      const data = sh?.data?.[0];
+      if (!sh || !data) { log(`  [SK03] ⚠ column fit: no data for one sheet`, 'warn'); continue; }
+      const r0 = data.startRow ?? 0;
+      const c0 = data.startColumn ?? 0;
+      const grid: FitGrid = {
+        cell: (r, c) => {
+          const v = data.rowData?.[r - r0]?.values?.[c - c0];
+          if (!v) return null;
+          const tf = v.effectiveFormat?.textFormat;
+          return { text: v.formattedValue ?? '', sizePt: tf?.fontSize ?? 10, bold: tf?.bold ?? false };
+        },
+        // The API leaves out zero indices.
+        merges: (sh.merges ?? []).map(m => ({
+          r1: m.startRowIndex ?? 0, c1: m.startColumnIndex ?? 0,
+          r2: (m.endRowIndex ?? 1) - 1, c2: (m.endColumnIndex ?? 1) - 1,
+        })),
+        colPx: c => data.columnMetadata?.[c - c0]?.pixelSize ?? 100,
+        rowPx: r => data.rowMetadata?.[r - r0]?.pixelSize ?? 21,
+      };
+      const fit = fitSheet(grid, p.spec);
+      for (const [c, px] of fit.widths) requests.push(dim(p.sheetId, 'COLUMNS', c, px));
+      for (const [r, px] of fit.heights) requests.push(dim(p.sheetId, 'ROWS', r, px));
+      for (const w of fit.wraps) requests.push({ repeatCell: {
+        range: gridRange(p.sheetId, w.r, w.c, w.r, w.c),
+        cell: { userEnteredFormat: { wrapStrategy: 'WRAP' } },
+        fields: 'userEnteredFormat.wrapStrategy',
+      }});
+      for (const t of fit.texts) texts.push({ range: `${quote(p.title)}${String.fromCharCode(65 + t.c)}${t.r + 1}`, values: [[t.text]] });
+    }
+    if (requests.length) await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests } }));
+    if (texts.length) await withRetry(() => sheets.spreadsheets.values.batchUpdate({ spreadsheetId: ssId, requestBody: { valueInputOption: 'RAW', data: texts } }));
+    log(`  [SK03] Columns fitted to their content on ${plan.length} sheets`);
+  } catch (err: any) {
+    log(`  [SK03] ⚠ column fit failed (form widths kept): ${err.message}`, 'warn');
   }
 }
 
@@ -1535,9 +1603,17 @@ async function createSK03(
   staffArray.forEach( (p, i) => addToRowNumMap(p, S + i));
   internArray.forEach((p, i) => addToRowNumMap(p, S + i));
 
-  await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
+  const deptBuilt = await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
   await normaliseSK03Fonts(sheets, ssId);
+
+  await fitSK03Columns(sheets, ssId, [
+    // Read down to the signature lines, and at least to the side panel's last row.
+    { title: staffSheetName, sheetId: staffSheetId, spec: overallSpec(false, S, staffTotalRow), lastRow: Math.max(staffTotalRow + 5, 23) },
+    { title: internSheetName, sheetId: internSheetId, spec: overallSpec(true, S, internTotalRow), lastRow: Math.max(internTotalRow + 5, 16) },
+    { title: BUDGET_SHEET, sheetId: budgetSheetId, spec: budgetSpec(BUDGET_FIRST, BUDGET_TOTAL), lastRow: BUDGET_TOTAL + 2 },
+    ...deptBuilt.map(d => ({ title: d.title, sheetId: d.sheetId, spec: deptSpec(d.lastRow), lastRow: d.lastRow + 5 })),
+  ]);
 
   log(`  [SK03] ✓ Done`);
   return { ssId, staffSheetName, internSheetName };
