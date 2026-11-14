@@ -57,7 +57,7 @@ const {
   createAuth, createDriveClient, driveListAll, listFolders, listExcelFiles,
 } = require('./lib') as typeof import('./lib');
 const {
-  DATA_START, BUDGET_SHEET, BUDGET_FIRST, BUDGET_LAST, BUDGET_TOTAL, DEPT_CAPACITY,
+  DATA_START, BUDGET_SHEET, BUDGET_FIRST, BUDGET_LAST, BUDGET_TOTAL, BUDGET_HEADERS, DEPT_CAPACITY,
   STAFF_HEADERS, INTERN_HEADERS, deptCode, staffRowCells, internRowCells,
   internMeanCell, staffPanel, internPanel, budgetSheet,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
@@ -976,7 +976,8 @@ async function formatOverallSheet(
 
 /**
  * Write and format the งบรายสาขา sheet (per-department staff budget and
- * per P4P). The staff sheet's column V reads its column L.
+ * per P4P). The staff sheet's column V reads its column Q (the extra per
+ * multiplier after the 15,000 cap).
  */
 async function writeBudgetSheet(
   sheets: sheets_v4.Sheets,
@@ -999,28 +1000,29 @@ async function writeBudgetSheet(
   const F1 = BUDGET_FIRST - 1;   // 0-based first dept row
   const FL = BUDGET_LAST - 1;    // 0-based last dept row
   const T  = BUDGET_TOTAL - 1;   // 0-based total row
+  const LC = BUDGET_HEADERS.length - 1; // 0-based last column (Q)
   const font = (size: number, bold = false): sheets_v4.Schema$CellFormat => ({ textFormat: { fontFamily: 'TH SarabunPSK', fontSize: size, bold } });
   const reqs: sheets_v4.Schema$Request[] = [
-    { repeatCell: { range: gridRange(sheetId, 0, 0, T + 2, 13), cell: { userEnteredFormat: { ...font(14), verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat(textFormat,verticalAlignment)' } },
-    { repeatCell: { range: gridRange(sheetId, 0, 0, 0, 13), cell: { userEnteredFormat: font(20, true) }, fields: 'userEnteredFormat.textFormat' } },
-    { repeatCell: { range: gridRange(sheetId, 1, 0, 1, 13), cell: { userEnteredFormat: font(16) }, fields: 'userEnteredFormat.textFormat' } },
-    // title rows 1-3 merged across A:N and centred
-    ...[0, 1, 2].map(r => ({ mergeCells: { range: gridRange(sheetId, r, 0, r, 13), mergeType: 'MERGE_ALL' as const } })),
-    alignReq(sheetId, 0, 0, 2, 13, 'CENTER'),
+    { repeatCell: { range: gridRange(sheetId, 0, 0, T + 2, LC), cell: { userEnteredFormat: { ...font(14), verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat(textFormat,verticalAlignment)' } },
+    { repeatCell: { range: gridRange(sheetId, 0, 0, 0, LC), cell: { userEnteredFormat: font(20, true) }, fields: 'userEnteredFormat.textFormat' } },
+    { repeatCell: { range: gridRange(sheetId, 1, 0, 1, LC), cell: { userEnteredFormat: font(16) }, fields: 'userEnteredFormat.textFormat' } },
+    // title rows 1-3 merged across A:Q and centred
+    ...[0, 1, 2].map(r => ({ mergeCells: { range: gridRange(sheetId, r, 0, r, LC), mergeType: 'MERGE_ALL' as const } })),
+    alignReq(sheetId, 0, 0, 2, LC, 'CENTER'),
     // header rows 4-5: each column merged over both rows
-    ...Array.from({ length: 14 }, (_, c) => ({ mergeCells: { range: gridRange(sheetId, 3, c, 4, c), mergeType: 'MERGE_ALL' as const } })),
+    ...Array.from({ length: LC + 1 }, (_, c) => ({ mergeCells: { range: gridRange(sheetId, 3, c, 4, c), mergeType: 'MERGE_ALL' as const } })),
     { repeatCell: {
-      range: gridRange(sheetId, 3, 0, 4, 13),
+      range: gridRange(sheetId, 3, 0, 4, LC),
       cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, ...font(14, true), horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
       fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)',
     }},
-    bordersReq(sheetId, 3, 0, T, 13, true),
-    // formula cells yellow, inputs (A..E) plain
-    fillReq(sheetId, F1, 5, FL, 13, NEW_FORMULA_FILL),
-    { repeatCell: { range: gridRange(sheetId, F1, 0, FL, 13), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
+    bordersReq(sheetId, 3, 0, T, LC, true),
+    // formula cells yellow (D..Q), department inputs (A..C) plain
+    fillReq(sheetId, F1, 3, FL, LC, NEW_FORMULA_FILL),
+    { repeatCell: { range: gridRange(sheetId, F1, 0, FL, LC), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
     { repeatCell: { range: gridRange(sheetId, F1, 1, FL, 1), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    { repeatCell: { range: gridRange(sheetId, F1, 3, FL, 3), cell: { userEnteredFormat: { horizontalAlignment: 'LEFT' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
-    numFmtReq(sheetId, F1, 4, FL, 4, '0.00'),
+    numFmtReq(sheetId, F1, 3, FL, 3, '0.0%'),               // D share short
+    numFmtReq(sheetId, F1, 4, FL, 4, '0.00'),               // E department multiplier
     numFmtReq(sheetId, F1, 5, T, 5, '#,##0'),
     numFmtReq(sheetId, F1, 6, T, 6, FMT_BAHT),
     numFmtReq(sheetId, F1, 7, T, 7, '0.00'),
@@ -1029,6 +1031,9 @@ async function writeBudgetSheet(
     numFmtReq(sheetId, F1, 11, T, 11, FMT_BAHT),
     numFmtReq(sheetId, F1, 12, T, 12, '#,##0'),
     numFmtReq(sheetId, F1, 13, T, 13, FMT_BAHT),
+    numFmtReq(sheetId, F1, 14, T, 14, FMT_BAHT),            // O over 15,000
+    numFmtReq(sheetId, F1, 15, T, 15, FMT_RATIO),           // P Σ multipliers under 15,000
+    numFmtReq(sheetId, F1, 16, T, 16, FMT_BAHT),            // Q extra per multiplier after the cap
     numFmtReq(sheetId, T + 2, 9, T + 2, 9, FMT_BAHT),
     bordersReq(sheetId, T + 2, 9, T + 2, 9),                 // J26 check cell
     alignReq(sheetId, T + 2, 9, T + 2, 9, 'CENTER'),
@@ -1036,13 +1041,13 @@ async function writeBudgetSheet(
     alignReq(sheetId, T + 2, 10, T + 2, 10, 'LEFT'),
     // total row
     { mergeCells: { range: gridRange(sheetId, T, 0, T, 4), mergeType: 'MERGE_ALL' } },
-    { repeatCell: { range: gridRange(sheetId, T, 0, T, 13), cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, ...font(14, true), horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } },
+    { repeatCell: { range: gridRange(sheetId, T, 0, T, LC), cell: { userEnteredFormat: { backgroundColor: NEW_HEADER_FILL, ...font(14, true), horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } },
     // Freeze the title and header rows only. Google Sheets refuses to freeze
-    // columns through a merged cell (here A1:N1-A3:N3 and the A24:E24 total
+    // columns through a merged cell (here A1:Q1-A3:Q3 and the A24:E24 total
     // label), and that refusal used to fail this whole batch: the sheet was
     // left unformatted and the department sheets were never built.
     { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 5, frozenColumnCount: 0, hideGridlines: true } }, fields: 'gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)' } },
-    ...([40, 270, 56, 143, 79, 71, 119, 127, 119, 119, 95, 103, 111, 95] as const).map((px, c) => ({
+    ...([40, 270, 56, 111, 103, 71, 119, 127, 119, 119, 95, 103, 111, 95, 95, 95, 119] as const).map((px, c) => ({
       updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS' as const, startIndex: c, endIndex: c + 1 }, properties: { pixelSize: px }, fields: 'pixelSize' },
     })),
     { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 3, endIndex: 5 }, properties: { pixelSize: 40 }, fields: 'pixelSize' } },
@@ -1718,7 +1723,7 @@ async function main(): Promise<void> {
   }
   log('[Pre-flight] ✓ Template OK');
 
-  // Pre-flight: every staff department needs a capacity multiplier (new formula)
+  // Pre-flight: every staff department needs a department multiplier (new formula)
   for (const dept of Object.keys(DEPT_COLORS)) {
     if (dept !== 'INTERN') deptCode(dept); // throws on a department missing from DEPT_CAPACITY
   }

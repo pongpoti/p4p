@@ -323,21 +323,23 @@ export function overallSpec(isIntern: boolean, firstRow: number, totalRow: numbe
   };
 }
 
-/** งบรายสาขา sheet: department rows, the total row and the J26 check cell. */
+/** งบรายสาขา sheet (A..Q, the 15,000-cap columns O..Q included): department rows, the total row and the J26 check cell. */
 export function budgetSpec(firstRow: number, totalRow: number): FitSpec {
   return {
     body: [
-      { rows: [firstRow - 1, totalRow - 1], cols: range(0, 13) },
+      { rows: [firstRow - 1, totalRow - 1], cols: range(0, 16) },
       { rows: [totalRow + 1, totalRow + 1], cols: [9] },
     ],
     header: [firstRow - 3, firstRow - 2],
     flexRow: firstRow - 2,
-    cols: range(0, 13),
+    cols: range(0, 16),
     floor: {
       8: { text: '000,000.00', sizePt: 14, bold: true },
       11: { text: '0,000.00', sizePt: 14 },
       12: { text: '0,000,000', sizePt: 14, bold: true },
       13: { text: '0,000.00', sizePt: 14, bold: true },
+      14: { text: '0,000.00', sizePt: 14, bold: true },
+      16: { text: '0,000.00', sizePt: 14 },
     },
     titleRows: [0, 1, 2],
   };

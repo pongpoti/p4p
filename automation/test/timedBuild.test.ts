@@ -67,6 +67,9 @@ test("a full run is a cron run or one titled for the latest 2 months", () => {
 test("2.2's run-name gives full runs the title the relay looks for", () => {
   const yml = readFileSync(resolve(workflows, BUILD_WORKFLOW), "utf8");
   const runName = /^run-name:\s*(.+)$/m.exec(yml)?.[1] ?? "";
+  // Unquoted, the ": " in the titles made the whole file invalid YAML, and
+  // GitHub ran neither the cron nor any dispatch (2026-11-12 to 11-14).
+  assert.match(runName, /^"\$\{\{[^"]*\}\}"$/, "run-name is one double-quoted expression");
   assert.ok(runName.includes(`'${FULL_RUN_TITLE}'`), runName);
   assert.match(runName, /inputs\.month && format\('[^']*\{0\}[^']*', inputs\.month\)/, "one-month runs get their own title");
   assert.doesNotMatch(runName.replace(`'${FULL_RUN_TITLE}'`, ""), new RegExp(FULL_RUN_TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "only full runs carry the full title");
