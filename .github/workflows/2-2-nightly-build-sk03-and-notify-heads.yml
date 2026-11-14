@@ -3,7 +3,9 @@ name: "2.2 Nightly: build SK03 files and notify department heads"
 # The title each run shows in the Actions list. The always-on relay
 # (automation/timed-build.ts) tells a full run from a one-month run by it,
 # so keep "2.2 SK03 build: latest 2 months" in step with FULL_RUN_TITLE there.
-run-name: ${{ inputs.month && format('2.2 SK03 build: {0} only', inputs.month) || '2.2 SK03 build: latest 2 months' }}
+# Keep the value in double quotes: unquoted, its ": " makes the whole file
+# invalid YAML and GitHub runs neither the cron nor any dispatch.
+run-name: "${{ inputs.month && format('2.2 SK03 build: {0} only', inputs.month) || '2.2 SK03 build: latest 2 months' }}"
 
 on:
   schedule:
