@@ -1288,8 +1288,10 @@ async function buildDeptSheets(
       ]},
     }));
 
-    // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one)
-    const blankRows: string[][] = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
+    // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one).
+    // A..I only: a value in J (even a space) puts J in the printed range, so
+    // the page shrinks and the table sits off-centre (Pong, 2026-11-15).
+    const blankRows: string[][] = Array.from({ length: 5 }, () => Array.from({ length: 9 }, () => ' '));
     await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${lastRow + 1}`,
@@ -1321,6 +1323,24 @@ async function buildDeptSheets(
         { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig2-1, 8), cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 16 } } }, fields: 'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize' } },
       ]},
     }));
+
+    // Print (Pong, 2026-11-15: print or save as PDF straight away, A4
+    // landscape). dep_template already carries A4, landscape, one page wide
+    // and centred, and copyTo keeps it. Freezing the form's name, titles and
+    // column headers (rows 1-6) lets Google's print repeat them on every page
+    // ("Repeat frozen rows"), as the approval PDF does. On its own request:
+    // a refused freeze must not stop the build (see #251).
+    try {
+      await withRetry(() => sheets.spreadsheets.batchUpdate({
+        spreadsheetId: ssId,
+        requestBody: { requests: [{ updateSheetProperties: {
+          properties: { sheetId, gridProperties: { frozenRowCount: D - 1 } },
+          fields: 'gridProperties.frozenRowCount',
+        }}]},
+      }));
+    } catch (err: any) {
+      log(`  [SK03] ⚠ header rows not frozen on one department sheet: ${err.message}`, 'warn');
+    }
   }
 
   // Delete "ชีต1" if still present (created with the spreadsheet, normally deleted in staff step)
