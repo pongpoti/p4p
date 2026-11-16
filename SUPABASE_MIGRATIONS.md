@@ -252,6 +252,20 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     (`scripts/review-tab-2026-11-auditee.sql`, for the `doctors` column and
     `review_request_build`). Each PART can be pasted on its own; safe to
     re-run.
+26. `scripts/dept-staffing-2026-11.sql` — **not applied yet; paste it.**
+    PART 1 makes `dept_staffing` (service_role only), one row per STAFF
+    department code with FTE, on staff and daily hires, filled with the
+    physician staffing sheet of 13-11-69, and ends with a check query (18
+    departments, 234 FTE, 204 on staff, 52 daily, 0 edited); re-running it
+    never overwrites a number saved on the dashboard. PART 2 adds
+    `staffing_save` (service_role only) behind the dashboard's อัตรากำลัง
+    tab: it saves one department and, when a number changed, queues a
+    build (`review_request_build`, reason 'inputs') of every ตรวจสอบ month
+    from 2569_08 still on the auditee's side. Workflow 2.2 reads the table
+    on every SK03 build; until PART 1 is run it uses the starting numbers of
+    `lib/dept-staffing.ts` with a warning. The queueing needs step 23 and
+    the review-tab auditee file and is skipped without them. Each PART can be
+    pasted on its own, PART 1 first; safe to re-run.
 
 ## Superseded — do NOT run
 
