@@ -3,8 +3,9 @@
  *
  * The /dashboard/ อัตรากำลัง (Staffing) tab's API (Pong, 2026-11-16): each
  * STAFF department's physician staffing and its department multiplier, and
- * the owner's edits to the numbers. Mounted from main.ts with its helpers
- * passed in, so this file has no secrets or settings of its own.
+ * the owner's edits to the numbers (the tab locks FTE and sends it
+ * unchanged; the API still takes all three). Mounted from main.ts with its
+ * helpers passed in, so this file has no secrets or settings of its own.
  *
  *   GET /dashboard/api/staffing         every department, in the SK03 order
  *                                       (?view=1 logs the visit); any

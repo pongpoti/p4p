@@ -1722,7 +1722,10 @@
     const sfError = document.getElementById("staffing-error");
     const sfSave = document.getElementById("staffing-save");
     const sfCloses = Array.from(sfDlg.querySelectorAll("[data-close]"));
-    for (const i of [sfFte, sfStaff, sfDaily])
+    // FTE is shown but locked (Pong, 2026-11-16): only on staff and daily
+    // hires are edited; the save sends the department's FTE unchanged.
+    sfFte.disabled = true;
+    for (const i of [sfStaff, sfDaily])
         wholeField(i, false, 3);
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy)
@@ -1933,7 +1936,7 @@
         if (!sfBusy)
             sfSave.disabled = sfSame(v, d);
     };
-    for (const i of [sfFte, sfStaff, sfDaily])
+    for (const i of [sfStaff, sfDaily])
         i.addEventListener("input", paintStaffing);
     function openStaffing(d) {
         if (sfBusy)
@@ -1950,8 +1953,8 @@
         sfMeta.classList.remove("hidden");
         paintStaffing();
         sfDlg.showModal();
-        sfFte.focus();
-        sfFte.select();
+        sfStaff.focus();
+        sfStaff.select();
     }
     sfForm.addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -1961,7 +1964,7 @@
         const label = sfSave.textContent;
         const busy = (on) => {
             sfBusy = on;
-            for (const i of [sfFte, sfStaff, sfDaily])
+            for (const i of [sfStaff, sfDaily])
                 i.readOnly = on;
             for (const b of sfCloses)
                 b.disabled = on;

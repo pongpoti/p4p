@@ -1622,7 +1622,8 @@
 
     // ── อัตรากำลัง: each department's staffing and multiplier ────────────
     // Every dashboard user sees the list (lib/staffing-server.ts); the owner
-    // gets an edit button on each row (Pong, 2026-11-16). A save that changes
+    // gets an edit button on each row for on staff and daily hires; FTE is
+    // locked (Pong, 2026-11-16). A save that changes
     // a number queues a new SK03 build of each ตรวจสอบ month still with the
     // ผู้จัดทำ; any other month reads the new numbers on its next build.
     interface StaffingDept {
@@ -1666,7 +1667,10 @@
     const sfError = document.getElementById("staffing-error") as HTMLElement
     const sfSave  = document.getElementById("staffing-save") as HTMLButtonElement
     const sfCloses = Array.from(sfDlg.querySelectorAll<HTMLButtonElement>("[data-close]"))
-    for (const i of [sfFte, sfStaff, sfDaily]) wholeField(i, false, 3)
+    // FTE is shown but locked (Pong, 2026-11-16): only on staff and daily
+    // hires are edited; the save sends the department's FTE unchanged.
+    sfFte.disabled = true
+    for (const i of [sfStaff, sfDaily]) wholeField(i, false, 3)
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy) sfDlg.close() })
     sfDlg.addEventListener("cancel", (ev) => { if (sfBusy) ev.preventDefault() })
@@ -1868,7 +1872,7 @@
         sfMult.append(document.createTextNode(next))
         if (!sfBusy) sfSave.disabled = sfSame(v, d)
     }
-    for (const i of [sfFte, sfStaff, sfDaily]) i.addEventListener("input", paintStaffing)
+    for (const i of [sfStaff, sfDaily]) i.addEventListener("input", paintStaffing)
 
     function openStaffing(d: StaffingDept): void {
         if (sfBusy) return
@@ -1884,8 +1888,8 @@
         sfMeta.classList.remove("hidden")
         paintStaffing()
         sfDlg.showModal()
-        sfFte.focus()
-        sfFte.select()
+        sfStaff.focus()
+        sfStaff.select()
     }
 
     sfForm.addEventListener("submit", async (ev) => {
@@ -1895,7 +1899,7 @@
         const label = sfSave.textContent
         const busy = (on: boolean): void => {
             sfBusy = on
-            for (const i of [sfFte, sfStaff, sfDaily]) i.readOnly = on
+            for (const i of [sfStaff, sfDaily]) i.readOnly = on
             for (const b of sfCloses) b.disabled = on
         }
         busy(true)
