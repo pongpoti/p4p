@@ -57,42 +57,23 @@ export const DATA_START = 8;
 
 export const BUDGET_SHEET = 'งบรายสาขา';
 
-export interface DeptCapacity {
-  no: number;
-  name: string;  // department name as in Supabase / DEPT_COLORS
-  code: string;
-  fte: number;   // doctors the department should have (จำนวนที่ควรมี, FTE)
-  staff: number; // doctors on staff (รวมอัตราตามจริง)
-  daily: number; // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
-}
+// The departments, their starting staffing numbers and the multiplier rule
+// live in lib/dept-staffing.ts, shared with the dashboard's อัตรากำลัง tab
+// (Pong, 2026-11-16: the owner edits the numbers there; they are saved in
+// the Supabase table dept_staffing and every build reads them).
+const staffing = require('../lib/dept-staffing') as typeof import('../lib/dept-staffing');
+
+export type DeptCapacity = import('../lib/dept-staffing').DeptStaffing;
 
 /**
- * FORMULA.md "Departments and Capacity Multipliers", in that table's order,
- * with the numbers of the physician staffing sheet of 13 Nov 2026 (13-11-69:
+ * FORMULA.md "Departments and Multipliers", in that table's order, with the
+ * starting numbers: the physician staffing sheet of 13 Nov 2026 (13-11-69:
  * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
- * ขนาด a, 691 เตียง; Pong, 2026-11-13; every build from then on, older months
- * too when rebuilt). Daily hires (รายวัน) count as staff since 2026-11-16 (Pong).
+ * ขนาด a, 691 เตียง; Pong, 2026-11-13). Daily hires (รายวัน) count as staff
+ * since 2026-11-16 (Pong). A build uses the numbers saved on the dashboard
+ * (process.ts loadDeptStaffing), these only for a department never edited.
  */
-export const DEPT_CAPACITY: DeptCapacity[] = [
-  { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', fte: 19, staff: 21, daily: 1 },
-  { no: 2,  name: 'จักษุวิทยา',                          code: 'EYE', fte: 9,  staff: 8,  daily: 0 },
-  { no: 3,  name: 'จิตเวชและยาเสพติด',                   code: 'PSY', fte: 4,  staff: 4,  daily: 2 },
-  { no: 4,  name: 'เทคนิคการแพทย์และพยาธิวิทยาคลินิก',   code: 'CPT', fte: 1,  staff: 1,  daily: 0 },
-  { no: 5,  name: 'นิติเวช',                             code: 'FOR', fte: 3,  staff: 2,  daily: 0 },
-  { no: 6,  name: 'ผู้ป่วยนอก',                           code: 'OPD', fte: 5,  staff: 14, daily: 27 },
-  { no: 7,  name: 'พยาธิวิทยากายวิภาค',                  code: 'PAT', fte: 2,  staff: 3,  daily: 0 },
-  { no: 8,  name: 'รังสีวิทยา',                           code: 'RAD', fte: 15, staff: 14, daily: 0 },
-  { no: 9,  name: 'วิสัญญีวิทยา',                         code: 'ANS', fte: 15, staff: 9,  daily: 0 },
-  { no: 10, name: 'เวชกรรมฟื้นฟู',                        code: 'RHB', fte: 6,  staff: 4,  daily: 0 },
-  { no: 11, name: 'เวชกรรมสังคม',                         code: 'SOC', fte: 10, staff: 4,  daily: 15 },
-  { no: 12, name: 'เวชศาสตร์ฉุกเฉิน',                     code: 'EMR', fte: 10, staff: 10, daily: 0 },
-  { no: 13, name: 'ศัลยกรรม',                            code: 'SUR', fte: 39, staff: 34, daily: 1 },
-  { no: 14, name: 'ศัลยกรรมออร์โธปิดิกส์',                code: 'ORT', fte: 17, staff: 15, daily: 0 },
-  { no: 15, name: 'สูติ-นรีเวชกรรม',                      code: 'OBG', fte: 18, staff: 13, daily: 2 },
-  { no: 16, name: 'โสต ศอ นาสิก',                         code: 'ENT', fte: 9,  staff: 8,  daily: 0 },
-  { no: 17, name: 'อาชีวเวชกรรม',                         code: 'OCM', fte: 5,  staff: 3,  daily: 0 },
-  { no: 18, name: 'อายุรกรรม',                            code: 'MED', fte: 47, staff: 37, daily: 4 },
-];
+export const DEPT_CAPACITY: DeptCapacity[] = staffing.DEPT_STAFFING_DEFAULTS;
 
 /**
  * Department multiplier = 1 + LACK_K × lack,
@@ -103,17 +84,13 @@ export const DEPT_CAPACITY: DeptCapacity[] = [
  * 12.8%) 1.64, a fully staffed department 1.00. Over-staffed departments
  * count as 0% short, so no multiplier is below 1 (SOC: 4 + 15 of 10).
  */
-export const LACK_K = 5;
+export const LACK_K = staffing.LACK_K;
 
 /** Share of the department's FTE not filled by staff and daily hires (0 when fully or over-staffed). */
-export function deptLack(d: DeptCapacity): number {
-  return Math.max(0, 1 - (d.staff + d.daily) / d.fte);
-}
+export const deptLack = (d: DeptCapacity): number => staffing.deptLack(d);
 
 /** The department's multiplier on the extra above BASE: 1 + LACK_K × lack. */
-export function deptMultiplier(d: DeptCapacity): number {
-  return 1 + LACK_K * deptLack(d);
-}
+export const deptMultiplier = (d: DeptCapacity): number => staffing.deptMultiplier(d);
 
 const DEPT_CODE_BY_NAME: Record<string, string> = Object.fromEntries(DEPT_CAPACITY.map(d => [d.name, d.code]));
 
@@ -276,15 +253,22 @@ export const BUDGET_HEADERS = [
 ];
 
 /** Cells of the งบรายสาขา sheet (A1:Q26). */
-export function budgetSheet(staffSheet: string, first: number, last: number, monthLabel: string): CellWrite[] {
+export function budgetSheet(
+  staffSheet: string, first: number, last: number, monthLabel: string,
+  capacity: DeptCapacity[] = DEPT_CAPACITY, staffingNote: string = staffing.STAFFING_SOURCE,
+): CellWrite[] {
+  // One row per department, in the fixed order (BUDGET_FIRST..BUDGET_LAST).
+  if (capacity.length !== DEPT_CAPACITY.length || capacity.some((d, k) => d.code !== DEPT_CAPACITY[k].code)) {
+    throw new Error('budgetSheet: the staffing list must be the ' + DEPT_CAPACITY.length + ' departments in DEPT_CAPACITY order');
+  }
   const S = q(staffSheet);
   const codes = `${S}$Q$${first}:$Q$${last}`;
   const mults = `${S}$U$${first}:$U$${last}`;
-  const rows: (string | number)[][] = DEPT_CAPACITY.map((d, k) => {
+  const rows: (string | number)[][] = capacity.map((d, k) => {
     const r = BUDGET_FIRST + k;
     return [
       d.no, d.name, d.code,
-      `=MAX(0,1-(${d.staff}+${d.daily})/${d.fte})`,                        // D share short ((on staff + daily hires) ÷ FTE, 13-11-69)
+      `=MAX(0,1-(${d.staff}+${d.daily})/${d.fte})`,                        // D share short ((on staff + daily hires) ÷ FTE)
       `=1+${LACK_K}*D${r}`,                                                // E department multiplier
       `=COUNTIFS(${codes},C${r},${S}$L$${first}:$L$${last},">=0")`,       // F staff ≥ 2,200
       `=${BASE}*F${r}`,                                                    // G base 10,000 each
@@ -308,7 +292,7 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
     { range: 'A1', values: [['งบ P4P staff รายสาขา (สูตรใหม่)']] },
     { range: 'A2', values: [[monthLabel]] },
     { range: 'A3', values: [[
-      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − (แพทย์ที่มีจริง + จ้างรายวัน) ÷ FTE (ไม่ต่ำกว่า 0; อัตรากำลัง 13-11-69)      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
+      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − (แพทย์ที่มีจริง + จ้างรายวัน) ÷ FTE (ไม่ต่ำกว่า 0; ${staffingNote})      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
       + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ (ไม่เกิน ${PAY_CAP.toLocaleString('en-US')}: ส่วนที่เกินแบ่งให้คนอื่นในสาขาเดียวกันตามตัวคูณ)`,
     ]] },
     { range: 'A4:Q4', values: [BUDGET_HEADERS] },

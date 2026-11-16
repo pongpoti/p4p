@@ -1056,11 +1056,11 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
 const AUDIT_GROUPS: Record<string, string> = {
   login: "action=like.login.*",
   session: "action=like.session.*",
-  view: "action=in.(view.overview,view.followup,view.roster,view.review,pending.open,followup.history,audit.view,review.download)",
+  view: "action=in.(view.overview,view.followup,view.roster,view.review,view.staffing,pending.open,followup.history,audit.view,review.download)",
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
-    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all)",
+    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save)",
   refused: "action=eq.login.refused",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -1254,6 +1254,22 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   dashSession,
   isDashOwner,
   isReviewAuditee,
+  audit,
+})
+
+// ── อัตรากำลัง tab: each department's staffing and multiplier ─────────────
+// Routes live in lib/staffing-server.ts; every dashboard user reads, the
+// owner edits. The table comes from scripts/dept-staffing-2026-11.sql
+// (pasted by hand); until then the tab shows the 13-11-69 numbers.
+;(require("./lib/staffing-server") as { mountStaffing(deps: Record<string, unknown>): void }).mountStaffing({
+  app,
+  express,
+  axios,
+  supabaseUrl: SUPABASE_URL,
+  serviceHeaders: SERVICE_HEADERS,
+  callServiceRpc,
+  dashSession,
+  isDashOwner,
   audit,
 })
 

@@ -145,7 +145,7 @@
         #header .container {
             display: flex;
             align-items: center;
-            gap: 24px;
+            gap: 16px;
             height: 76px;
         }
         #brand {
@@ -178,18 +178,20 @@
         #brand:hover .logo-mark { filter: brightness(1.25); }
         #brand:hover > span:last-child { color: var(--primary); }
 
-        #nav { display: flex; gap: 8px; }
+        /* Five tabs for the owner since อัตรากำลัง (2026-11-16): the buttons
+           are a little smaller so the header still fits the content width. */
+        #nav { display: flex; gap: 6px; }
         /* shadcn "ghost" button; the current page gets the solid brown
            "default" fill so it stands out from the white header. */
         .nav-btn {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            height: 48px;
-            padding: 0 14px;
+            height: 46px;
+            padding: 0 10px;
             border-radius: 12px;
             white-space: nowrap;
-            font-size: 1.125rem;
+            font-size: 1rem;
             font-weight: 500;
             color: var(--muted-foreground);
             text-decoration: none;
@@ -216,6 +218,10 @@
             font-weight: 500;
             color: var(--muted-foreground);
         }
+        /* A long LINE name is cut (the whole name is the tooltip); on a
+           narrow window only the initial shows. */
+        #user-name { max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        @media (max-width: 1180px) { #user-name { display: none; } }
         #user-avatar {
             width: 34px; height: 34px;
             border-radius: 50%;
@@ -778,6 +784,70 @@
         .req-row .btn-primary, .req-row .btn-ghost { height: 38px; padding: 0 14px; }
         .req-row .reject:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
 
+        /* ── อัตรากำลัง: each department's staffing and multiplier ───────── */
+        /* Same frame as รายชื่อ: a summary card, then the table scrolls inside. */
+        #staffing-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+        .sf-head {
+            display: flex; align-items: center; justify-content: space-between; gap: 16px 28px; flex-wrap: wrap;
+            padding: 14px 18px; border-radius: var(--radius); margin-bottom: clamp(12px, 2.2vh, 20px); flex-shrink: 0;
+        }
+        .sf-intro { min-width: 0; flex: 1 1 420px; }
+        .sf-intro h2 { font-size: 1.125rem; font-weight: 700; }
+        .sf-formula { font-size: .9375rem; font-variant-numeric: tabular-nums; }
+        .sf-formula .sf-dot { margin: 0 10px; color: var(--muted-foreground); }
+        .sf-sub { font-size: .875rem; color: var(--muted-foreground); }
+        .sf-stats { display: flex; gap: 10px; margin: 0; }
+        .sf-stats div { padding: 8px 14px; border-radius: 12px; background: #F6EFE6; min-width: 112px; }
+        .sf-stats dt { font-size: .8125rem; font-weight: 600; color: var(--muted-foreground); white-space: nowrap; }
+        .sf-stats dd { margin: 0; font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .sf-stats dd small { font-size: .8125rem; font-weight: 500; color: var(--muted-foreground); }
+        .sf-alert, .sf-ok { flex-shrink: 0; margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; font-size: .9375rem; }
+        .sf-alert { color: #7A4300; background: rgba(255, 244, 222, .9); border: 1px solid rgba(217, 140, 0, .35); }
+        .sf-alert.error { color: #8A1C12; background: rgba(253, 236, 234, .85); border-color: rgba(192, 57, 43, .25); }
+        .sf-ok { border-left: 4px solid var(--success); background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
+        .staffing-table col.c-sno { width: 48px; }
+        .staffing-table col.c-code { width: 60px; }
+        .staffing-table col.c-n { width: 64px; }
+        .staffing-table col.c-daily { width: 92px; }
+        .staffing-table col.c-lack { width: 84px; }
+        .staffing-table col.c-mult { width: 160px; }
+        .staffing-table col.c-upd { width: 190px; }
+        .staffing-table col.c-edit { width: 56px; }
+        .staffing-table th, .staffing-table td { padding-left: 10px; padding-right: 10px; }
+        .staffing-table td { height: 40px; }
+        .staffing-table td.mult { text-overflow: clip; }
+        .staffing-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .staffing-table th.num { text-align: right; }
+        .staffing-table .muted { color: var(--muted-foreground); }
+        .staffing-table .name { font-weight: 600; }
+        .staffing-table .code { font-size: .8125rem; font-weight: 600; letter-spacing: .02em; color: var(--muted-foreground); }
+        .staffing-table .total { font-weight: 600; }
+        .staffing-table tr.short .lack { color: var(--warning); font-weight: 600; }
+        .staffing-table .mult { white-space: nowrap; }
+        .staffing-table .mv { display: inline-block; min-width: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .staffing-table tr:not(.short) .mv { font-weight: 500; color: var(--muted-foreground); }
+        /* The bar is the department's lack: full width would be 100% short (multiplier 1 + K). */
+        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 80px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
+        .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #E2A33A, #C2410C); }
+        .staffing-table .upd { font-size: .875rem; }
+        .staffing-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
+        .staffing-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
+        .staffing-table .acts .icon-btn svg { width: 18px; height: 18px; }
+        .staffing-table .acts .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+        .staffing-table tbody tr { scroll-margin-top: 48px; scroll-margin-bottom: 48px; }
+        .staffing-table tr.flash td { background: rgba(21, 127, 61, .09); }
+        .staffing-table tfoot td { position: sticky; bottom: 0; background: #FCF9F4; border-top: 1px solid var(--border); border-bottom: 0; font-weight: 600; }
+        .staffing-table td.audit-empty { height: 88px; }
+        .sf-dialog { width: min(600px, 94vw); }
+        .sf-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .sf-form .bd-field label small { font-weight: 400; }
+        .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
+        .sf-preview { align-items: center; }
+        .sf-preview .k output { margin-left: 6px; font-size: 1.15rem; font-weight: 700; color: var(--foreground); font-variant-numeric: tabular-nums; }
+        .sf-preview .k .v { font-size: 1.6rem; }
+        .sf-preview .was { font-size: 1rem; font-weight: 500; color: var(--muted-foreground); }
+        @media (max-width: 520px) { .sf-form { grid-template-columns: 1fr; } }
+
         /* ── ตรวจสอบ tab (dashboard/review.ts) ─────────────────────────── */
         #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
         /* The tab uses the window's width; the left column stays put while the main column scrolls. */
@@ -1147,6 +1217,16 @@
                     </svg>
                     รายชื่อ
                 </a>
+                <a class="nav-btn" href="/dashboard/#staffing" data-view="staffing" id="staffing-nav">
+                    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 3v18h18" />
+                        <path d="M7 16v-5" />
+                        <path d="M12 16V7" />
+                        <path d="M17 16v-8" />
+                    </svg>
+                    อัตรากำลัง
+                </a>
                 <a class="nav-btn hidden" href="/dashboard/#review" data-view="review" id="review-nav">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1235,6 +1315,31 @@
                         <tr><th scope="col" class="num">ลำดับ</th><th scope="col">ชื่อ-นามสกุล</th><th scope="col">กลุ่มงาน</th><th scope="col">ประเภท · ระดับ</th><th scope="col" class="score">คะแนน</th><th scope="col">ส่งไฟล์</th><th scope="col"><span class="sr-only">แก้ไข / ลบ</span></th></tr>
                     </thead>
                     <tbody id="roster-rows"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- อัตรากำลัง: every dashboard user sees each department's staffing and
+             multiplier; only the owner gets the edit buttons (lib/staffing-server.ts) -->
+        <section id="staffing-view" class="hidden" aria-labelledby="staffing-title">
+            <div class="sf-head glass">
+                <div class="sf-intro">
+                    <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
+                    <p class="sf-formula">ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาด<span class="sf-dot" aria-hidden="true">·</span>ขาด = 1 − (มีจริง + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</p>
+                    <p id="staffing-sub" class="sf-sub"></p>
+                </div>
+                <dl id="staffing-stats" class="sf-stats"></dl>
+            </div>
+            <p id="staffing-alert" class="sf-alert hidden" role="alert"></p>
+            <p id="staffing-ok" class="sf-ok hidden" role="status"></p>
+            <div class="audit-table-wrap glass">
+                <table class="audit-table staffing-table">
+                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-daily"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-upd"><col class="c-edit"></colgroup>
+                    <thead>
+                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="รวมอัตราตามจริง">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้างรายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายวัน">รวม</th><th scope="col" class="num">ขาด</th><th scope="col">ตัวคูณสาขา</th><th scope="col">แก้ไขล่าสุด</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
+                    </thead>
+                    <tbody id="staffing-rows"></tbody>
+                    <tfoot id="staffing-foot"></tfoot>
                 </table>
             </div>
         </section>
@@ -1397,6 +1502,46 @@
             <div class="log-actions">
                 <button type="button" class="btn-ghost" data-close>ยกเลิก</button>
                 <button type="submit" id="roster-save" class="btn-primary">บันทึก</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- อัตรากำลัง: one department's FTE, on staff and daily hires (owner only) -->
+    <dialog id="staffing-dialog" class="log-dialog sf-dialog" aria-labelledby="staffing-dialog-title" aria-describedby="staffing-dialog-sub">
+        <div class="log-header">
+            <div>
+                <h2 id="staffing-dialog-title">แก้ไขอัตรากำลัง</h2>
+                <p id="staffing-dialog-sub"></p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <form id="staffing-form" class="bd-form sf-form" novalidate>
+            <div class="bd-field">
+                <label for="staffing-fte">FTE <small>ควรมี</small></label>
+                <input id="staffing-fte" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+            </div>
+            <div class="bd-field">
+                <label for="staffing-staff">มีจริง <small>อัตราตามจริง</small></label>
+                <input id="staffing-staff" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+            </div>
+            <div class="bd-field">
+                <label for="staffing-daily">จ้างรายวัน</label>
+                <input id="staffing-daily" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+            </div>
+            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม: FTE 1–999, มีจริงและจ้างรายวัน 0–999</p>
+            <div class="bd-rate sf-preview" aria-live="polite">
+                <span class="k">ขาด <output id="staffing-lack" for="staffing-fte staffing-staff staffing-daily">–</output></span>
+                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-daily">–</output></span>
+            </div>
+            <p id="staffing-meta" class="bd-meta hidden"></p>
+            <p class="bd-meta">บันทึกแล้วยังไม่สร้าง SK03 ใหม่ทันที: SK03 ที่สร้างครั้งถัดไปของทุกเดือนจะใช้ตัวเลขนี้</p>
+            <p id="staffing-error" class="error-text hidden" role="alert"></p>
+            <div class="log-actions">
+                <button type="button" class="btn-ghost" data-close>ยกเลิก</button>
+                <button type="submit" id="staffing-save" class="btn-primary" disabled>บันทึก</button>
             </div>
         </form>
     </dialog>

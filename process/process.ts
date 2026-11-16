@@ -59,9 +59,11 @@ const {
 const {
   DATA_START, BUDGET_SHEET, BUDGET_FIRST, BUDGET_LAST, BUDGET_TOTAL, BUDGET_HEADERS, DEPT_CAPACITY,
   STAFF_HEADERS, INTERN_HEADERS, deptCode, staffRowCells, internRowCells,
-  internMeanCell, staffPanel, internPanel, budgetSheet,
+  internMeanCell, staffPanel, internPanel, budgetSheet, deptMultiplier,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
+type DeptCapacity = import('./sk03-formula').DeptCapacity;
+const staffingLib = require('../lib/dept-staffing') as typeof import('../lib/dept-staffing');
 const { fitSheet, overallSpec, budgetSpec, deptSpec, DEPT_FIRST_ROW } = require('./sk03-fit') as typeof import('./sk03-fit');
 const { SK02_FORM } = require('./review-pdf') as typeof import('./review-pdf');
 type FitSpec = import('./sk03-fit').FitSpec;
@@ -216,6 +218,46 @@ async function loadManagementStipends(supabase: SupabaseClient): Promise<void> {
 function getMgmt(person: { firstname: string; lastname: string }): MgmtEntry | null {
   const key = normaliseName(`${person.firstname} ${person.lastname}`);
   return MGMT_LOOKUP[key] ?? null;
+}
+
+// Each department's staffing (FTE, on staff, daily hires) for the
+// department multiplier, as saved on the dashboard's อัตรากำลัง tab (Supabase
+// dept_staffing, scripts/dept-staffing-2026-11.sql; Pong, 2026-11-16). Read
+// once per run by loadDeptStaffing() in main(); until then, and when the
+// table is not there yet, the starting numbers of lib/dept-staffing.ts.
+let DEPT_STAFFING: DeptCapacity[] = DEPT_CAPACITY;
+let STAFFING_NOTE: string = staffingLib.STAFFING_SOURCE;
+
+const THAI_MONTHS_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+/** "2026-11-16T12:00:00Z" → "16 พ.ย. 2569" (Bangkok day). */
+function thaiDate(iso: string): string {
+  const t = new Date(Date.parse(iso) + 7 * 3600 * 1000);
+  return `${t.getUTCDate()} ${THAI_MONTHS_SHORT[t.getUTCMonth()]} ${t.getUTCFullYear() + 543}`;
+}
+
+/**
+ * Fetch dept_staffing into DEPT_STAFFING / STAFFING_NOTE. A table that is not
+ * there yet (the SQL file not run) leaves the starting numbers, with a
+ * warning; any other read error stops the run, so a build never quietly
+ * uses numbers other than the saved ones.
+ */
+async function loadDeptStaffing(supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase.from('dept_staffing').select('code, fte, staff, daily, updated_at, updated_by');
+  if (error && !['42P01', 'PGRST205'].includes(String(error.code))) throw new Error(`dept_staffing read error: ${error.message}`);
+  if (error) {
+    log(`  [Staffing] ⚠ dept_staffing not installed (${error.code}) — using the starting numbers (${staffingLib.STAFFING_SOURCE}); run scripts/dept-staffing-2026-11.sql`, 'warn');
+    return;
+  }
+  const merged = staffingLib.mergeStaffing(data);
+  DEPT_STAFFING = merged.list.map(({ no, name, code, fte, staff, daily }) => ({ no, name, code, fte, staff, daily }));
+  const edited = merged.list.map((d) => d.updated_at).filter((t): t is string => !!t).sort();
+  STAFFING_NOTE = edited.length
+    ? `${staffingLib.STAFFING_SOURCE} แก้ไขในแดชบอร์ดล่าสุด ${thaiDate(edited[edited.length - 1])}`
+    : staffingLib.STAFFING_SOURCE;
+  if (merged.missing.length) log(`  [Staffing] ⚠ no saved row for ${merged.missing.join(', ')} — starting numbers used`, 'warn');
+  if (merged.bad.length) log(`  [Staffing] ⚠ out-of-range numbers for ${merged.bad.join(', ')} — starting numbers used`, 'warn');
+  if (merged.unknown.length) log(`  [Staffing] ⚠ rows for unknown codes ignored: ${merged.unknown.join(', ')}`, 'warn');
+  log(`  [Staffing] ${DEPT_STAFFING.map((d) => `${d.code} ${d.staff}+${d.daily}/${d.fte} ×${deptMultiplier(d).toFixed(2)}`).join(' · ')}`);
 }
 
 const DEPT_ORDER: Record<string, number> = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
@@ -989,7 +1031,7 @@ async function writeBudgetSheet(
   monthLabel: string
 ): Promise<void> {
   const sh = `'${BUDGET_SHEET}'!`;
-  const cells = budgetSheet(staffSheetName, DATA_START, staffLastRow, monthLabel);
+  const cells = budgetSheet(staffSheetName, DATA_START, staffLastRow, monthLabel, DEPT_STAFFING, STAFFING_NOTE);
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: ssId,
     requestBody: {
@@ -1755,6 +1797,8 @@ async function main(): Promise<void> {
   // Management stipend data is the same across every month in this run —
   // fetch it once here rather than per month.
   await loadManagementStipends(supabase);
+  // The department multipliers' staffing numbers, also once per run.
+  await loadDeptStaffing(supabase);
 
   // Pre-flight: verify SK03 template has required sheets before processing any month
   log('[Pre-flight] Verifying SK03 template sheets…');
