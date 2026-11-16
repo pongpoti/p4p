@@ -11,7 +11,8 @@
  *   2. STAFF get the rest: staff budget = total budget − interns' actual pay.
  *      Every staff member gets the 10,000 base. The extra (staff budget −
  *      10,000 × staff) goes to departments by (staff × department multiplier,
- *      1 + LACK_K × share of the department's FTE not filled),
+ *      1 + LACK_K × share of the department's FTE not filled, daily hires
+ *      counted as staff),
  *      then inside a department by score: multiplier = clip(1 + 0.5 × (excess
  *      ÷ dept mean excess − 1), 0.5, 1.5).
  *      Pay = ROUNDDOWN(MIN(15,000, 10,000 + multiplier × dept extra ÷ dept Σ multipliers), 0);
@@ -61,47 +62,52 @@ export interface DeptCapacity {
   name: string;  // department name as in Supabase / DEPT_COLORS
   code: string;
   fte: number;   // doctors the department should have (จำนวนที่ควรมี, FTE)
-  staff: number; // doctors on staff (รวมอัตราตามจริง; daily hires not counted)
+  staff: number; // doctors on staff (รวมอัตราตามจริง)
+  daily: number; // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
 }
 
 /**
  * FORMULA.md "Departments and Capacity Multipliers", in that table's order,
- * with the numbers of the hospital's staffing sheet อัตรากำลัง แพทย์ 13-11-69
- * (Pong, 2026-11-13; every build from then on, older months too when rebuilt).
+ * with the numbers of the physician staffing sheet of 13 Nov 2026 (13-11-69:
+ * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
+ * ขนาด a, 691 เตียง; Pong, 2026-11-13; every build from then on, older months
+ * too when rebuilt). Daily hires (รายวัน) count as staff since 2026-11-16 (Pong).
  */
 export const DEPT_CAPACITY: DeptCapacity[] = [
-  { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', fte: 19, staff: 21 },
-  { no: 2,  name: 'จักษุวิทยา',                          code: 'EYE', fte: 9,  staff: 8 },
-  { no: 3,  name: 'จิตเวชและยาเสพติด',                   code: 'PSY', fte: 4,  staff: 4 },
-  { no: 4,  name: 'เทคนิคการแพทย์และพยาธิวิทยาคลินิก',   code: 'CPT', fte: 1,  staff: 1 },
-  { no: 5,  name: 'นิติเวช',                             code: 'FOR', fte: 3,  staff: 2 },
-  { no: 6,  name: 'ผู้ป่วยนอก',                           code: 'OPD', fte: 5,  staff: 14 },
-  { no: 7,  name: 'พยาธิวิทยากายวิภาค',                  code: 'PAT', fte: 2,  staff: 3 },
-  { no: 8,  name: 'รังสีวิทยา',                           code: 'RAD', fte: 15, staff: 14 },
-  { no: 9,  name: 'วิสัญญีวิทยา',                         code: 'ANS', fte: 15, staff: 9 },
-  { no: 10, name: 'เวชกรรมฟื้นฟู',                        code: 'RHB', fte: 6,  staff: 4 },
-  { no: 11, name: 'เวชกรรมสังคม',                         code: 'SOC', fte: 10, staff: 4 },
-  { no: 12, name: 'เวชศาสตร์ฉุกเฉิน',                     code: 'EMR', fte: 10, staff: 10 },
-  { no: 13, name: 'ศัลยกรรม',                            code: 'SUR', fte: 39, staff: 34 },
-  { no: 14, name: 'ศัลยกรรมออร์โธปิดิกส์',                code: 'ORT', fte: 17, staff: 15 },
-  { no: 15, name: 'สูติ-นรีเวชกรรม',                      code: 'OBG', fte: 18, staff: 13 },
-  { no: 16, name: 'โสต ศอ นาสิก',                         code: 'ENT', fte: 9,  staff: 8 },
-  { no: 17, name: 'อาชีวเวชกรรม',                         code: 'OCM', fte: 5,  staff: 3 },
-  { no: 18, name: 'อายุรกรรม',                            code: 'MED', fte: 47, staff: 37 },
+  { no: 1,  name: 'กุมารเวชกรรม',                        code: 'PED', fte: 19, staff: 21, daily: 1 },
+  { no: 2,  name: 'จักษุวิทยา',                          code: 'EYE', fte: 9,  staff: 8,  daily: 0 },
+  { no: 3,  name: 'จิตเวชและยาเสพติด',                   code: 'PSY', fte: 4,  staff: 4,  daily: 2 },
+  { no: 4,  name: 'เทคนิคการแพทย์และพยาธิวิทยาคลินิก',   code: 'CPT', fte: 1,  staff: 1,  daily: 0 },
+  { no: 5,  name: 'นิติเวช',                             code: 'FOR', fte: 3,  staff: 2,  daily: 0 },
+  { no: 6,  name: 'ผู้ป่วยนอก',                           code: 'OPD', fte: 5,  staff: 14, daily: 27 },
+  { no: 7,  name: 'พยาธิวิทยากายวิภาค',                  code: 'PAT', fte: 2,  staff: 3,  daily: 0 },
+  { no: 8,  name: 'รังสีวิทยา',                           code: 'RAD', fte: 15, staff: 14, daily: 0 },
+  { no: 9,  name: 'วิสัญญีวิทยา',                         code: 'ANS', fte: 15, staff: 9,  daily: 0 },
+  { no: 10, name: 'เวชกรรมฟื้นฟู',                        code: 'RHB', fte: 6,  staff: 4,  daily: 0 },
+  { no: 11, name: 'เวชกรรมสังคม',                         code: 'SOC', fte: 10, staff: 4,  daily: 15 },
+  { no: 12, name: 'เวชศาสตร์ฉุกเฉิน',                     code: 'EMR', fte: 10, staff: 10, daily: 0 },
+  { no: 13, name: 'ศัลยกรรม',                            code: 'SUR', fte: 39, staff: 34, daily: 1 },
+  { no: 14, name: 'ศัลยกรรมออร์โธปิดิกส์',                code: 'ORT', fte: 17, staff: 15, daily: 0 },
+  { no: 15, name: 'สูติ-นรีเวชกรรม',                      code: 'OBG', fte: 18, staff: 13, daily: 2 },
+  { no: 16, name: 'โสต ศอ นาสิก',                         code: 'ENT', fte: 9,  staff: 8,  daily: 0 },
+  { no: 17, name: 'อาชีวเวชกรรม',                         code: 'OCM', fte: 5,  staff: 3,  daily: 0 },
+  { no: 18, name: 'อายุรกรรม',                            code: 'MED', fte: 47, staff: 37, daily: 4 },
 ];
 
 /**
- * Department multiplier = 1 + LACK_K × lack, lack = max(0, 1 − on staff ÷ FTE)
+ * Department multiplier = 1 + LACK_K × lack,
+ * lack = max(0, 1 − (on staff + daily hires) ÷ FTE)
  * (Pong, 2026-11-13: the effect grows in proportion to how short the
- * department is; no groups). Every 10 points short adds 0.5: SOC (60% short)
- * 4.00, MED (21.3%) 2.06, a fully staffed department 1.00. Over-staffed
- * departments count as 0% short, so no multiplier is below 1.
+ * department is; no groups. Pong, 2026-11-16: daily hires count too).
+ * Every 10 points short adds 0.5: ANS (40% short) 3.00, MED (37 + 4 of 47,
+ * 12.8%) 1.64, a fully staffed department 1.00. Over-staffed departments
+ * count as 0% short, so no multiplier is below 1 (SOC: 4 + 15 of 10).
  */
 export const LACK_K = 5;
 
-/** Share of the department's FTE that is not filled (0 when fully or over-staffed). */
+/** Share of the department's FTE not filled by staff and daily hires (0 when fully or over-staffed). */
 export function deptLack(d: DeptCapacity): number {
-  return Math.max(0, 1 - d.staff / d.fte);
+  return Math.max(0, 1 - (d.staff + d.daily) / d.fte);
 }
 
 /** The department's multiplier on the extra above BASE: 1 + LACK_K × lack. */
@@ -261,7 +267,7 @@ export function internPanel(staffSheet: string, first: number, last: number, rat
 // ─── งบรายสาขา sheet ──────────────────────────────────────────────
 
 export const BUDGET_HEADERS = [
-  'ที่', 'สาขา', 'รหัส', 'ขาด\n(1 − มีจริง ÷ FTE)', `ตัวคูณสาขา\n(1 + ${LACK_K} × ขาด)`, 'จำนวน\nแพทย์',
+  'ที่', 'สาขา', 'รหัส', 'ขาด\n(1 − (มีจริง + รายวัน) ÷ FTE)', `ตัวคูณสาขา\n(1 + ${LACK_K} × ขาด)`, 'จำนวน\nแพทย์',
   `ฐาน\n(${BASE.toLocaleString('en-US')} × จำนวน)`, 'หน่วย\n(จำนวน × ตัวคูณ)',
   'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'ส่วนเพิ่ม\nต่อตัวคูณ',
   'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
@@ -278,7 +284,7 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
     const r = BUDGET_FIRST + k;
     return [
       d.no, d.name, d.code,
-      `=MAX(0,1-${d.staff}/${d.fte})`,                                     // D share short (on staff ÷ FTE, 13-11-69)
+      `=MAX(0,1-(${d.staff}+${d.daily})/${d.fte})`,                        // D share short ((on staff + daily hires) ÷ FTE, 13-11-69)
       `=1+${LACK_K}*D${r}`,                                                // E department multiplier
       `=COUNTIFS(${codes},C${r},${S}$L$${first}:$L$${last},">=0")`,       // F staff ≥ 2,200
       `=${BASE}*F${r}`,                                                    // G base 10,000 each
@@ -302,7 +308,7 @@ export function budgetSheet(staffSheet: string, first: number, last: number, mon
     { range: 'A1', values: [['งบ P4P staff รายสาขา (สูตรใหม่)']] },
     { range: 'A2', values: [[monthLabel]] },
     { range: 'A3', values: [[
-      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − แพทย์ที่มีจริง ÷ FTE (ไม่ต่ำกว่า 0; อัตรากำลัง 13-11-69)      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
+      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − (แพทย์ที่มีจริง + จ้างรายวัน) ÷ FTE (ไม่ต่ำกว่า 0; อัตรากำลัง 13-11-69)      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
       + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ (ไม่เกิน ${PAY_CAP.toLocaleString('en-US')}: ส่วนที่เกินแบ่งให้คนอื่นในสาขาเดียวกันตามตัวคูณ)`,
     ]] },
     { range: 'A4:Q4', values: [BUDGET_HEADERS] },

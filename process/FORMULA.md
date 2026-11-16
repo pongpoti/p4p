@@ -82,7 +82,7 @@ dept_extra  = extra_pool × (count_d × dept_mult_d) / Σ (count × dept_mult)
 payment_i   = ⌊ min(15,000, 10,000 + dept_extra × mult_i / Σ mult_d) ⌋     anything above 15,000 goes to the rest of the department (Step 3.6)
 ```
 
-Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by the department multiplier, then inside each department by score. The department multiplier grows in proportion to how short of doctors the department is (`lack_d`, the share of its FTE not filled): every 10 points of lack adds 0.5, so a fully staffed department is 1.00, one 20% short 2.00 and one 60% short 4.00. A physician's average extra share grows the same way: a department at 4.00 gets 4 times the extra per physician of one at 1.00. There are no tiers or groups (Pong, 2026-11-13). Nobody is paid more than ฿15,000 (Pong's 15,000 check): what a physician's share would put above it goes to the other physicians of the same department, so each department's total and average stay as above. The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
+Every eligible STAFF physician gets ฿10,000; nobody is paid less. Only `extra_pool` is shared, first between departments by the department multiplier, then inside each department by score. The department multiplier grows in proportion to how short of doctors the department is (`lack_d`, the share of its FTE not filled by doctors on staff and doctors hired by the day): every 10 points of lack adds 0.5, so a fully staffed department is 1.00, one 20% short 2.00 and one 60% short 4.00. A physician's average extra share grows the same way: a department at 4.00 gets 4 times the extra per physician of one at 1.00. There are no tiers or groups (Pong, 2026-11-13). Nobody is paid more than ฿15,000 (Pong's 15,000 check): what a physician's share would put above it goes to the other physicians of the same department, so each department's total and average stay as above. The fractional remainder (a few dozen baht per month) is **not redistributed** — it stays unspent.
 
 If `staff_budget < 10,000 × N_staff` even after the intern pool is cut to 0 (`total_budget < 10,000 × N_staff`), ฿10,000 each is not affordable: every STAFF physician gets `⌊staff_budget / N_staff⌋`.
 
@@ -186,13 +186,13 @@ Every STAFF physician's pay starts at ฿10,000. Only `extra_pool` depends on de
 ```
 for each department d:
     count_d          = number of physicians in department d        งบรายสาขา column F
-    lack_d           = max(0, 1 − on_staff_d / FTE_d)              งบรายสาขา column D
+    lack_d           = max(0, 1 − (on_staff_d + daily_d) / FTE_d)  งบรายสาขา column D
     dept_mult_d      = 1 + 5 × lack_d                              งบรายสาขา column E
     weighted_units_d = count_d × dept_mult_d                       งบรายสาขา column H
 
 total_weighted_units = Σ weighted_units_d
 ```
-Each department's FTE, doctors on staff, lack and multiplier are in [Departments and Multipliers](#departments-and-multipliers). A department with its full FTE or more has lack 0, so no multiplier is below 1.00. The 5 is `LACK_K` in [`sk03-formula.ts`](./sk03-formula.ts); it sets how strongly lack counts.
+Each department's FTE, doctors on staff, daily hires, lack and multiplier are in [Departments and Multipliers](#departments-and-multipliers). A department with its full FTE or more has lack 0, so no multiplier is below 1.00. The 5 is `LACK_K` in [`sk03-formula.ts`](./sk03-formula.ts); it sets how strongly lack counts.
 
 **3.3 — Share the extra pool between departments**
 ```
@@ -226,7 +226,7 @@ rate_d       = extra_rate_d + over_d / under_d                      งบรา
                (extra_rate_d if under_d = 0)
 payment_i    = ⌊ min(15,000, 10,000 + rate_d × mult_i) ⌋            staff_summary N
 ```
-Nobody is paid more than ฿15,000. What a physician's share would put above it goes once to the physicians of the same department who are under it, in proportion to their multiplier, so the department's total and average do not change and Step 3.3 still holds. If that one pass put someone else above 15,000, they would be held at 15,000 and the rest would stay unspent; this has not happened in any month 2568_05–2569_08. The cap only applies in 2569_01, 2569_02 and 2569_05, each time in SOC (฿926, ฿67 and ฿180 passed on to the other SOC physicians).
+Nobody is paid more than ฿15,000. What a physician's share would put above it goes once to the physicians of the same department who are under it, in proportion to their multiplier, so the department's total and average do not change and Step 3.3 still holds. If that one pass put someone else above 15,000, they would be held at 15,000 and the rest would stay unspent. Since daily hires count (2026-11-16) the cap changes nothing in any month 2568_05–2569_08 (highest pay ฿14,652, 2568_10); it stays as a guard for a month with a much larger extra pool. Before that it applied in 2569_01, 2569_02 and 2569_05, each time in SOC.
 
 The fractional remainder is not redistributed — it stays unspent for that department this month.
 
@@ -234,21 +234,21 @@ If `extra_pool < 0` (only possible when `total_budget < 10,000 × N_staff`), eve
 
 In SK03 `staff_summary`: column U = `mult_i`, column V = `rate_d` (งบรายสาขา Q), and column N = `IF(L<0, 0, ROUNDDOWN(IF($Y$14<0, $Y$10/$Y$11, MIN(15000, 10000 + U × V)), 0))`.
 
-**Results (2569_07 and 2569_08: department multiplier 1 + 5 × lack from the staffing sheet 13-11-69, score ±50%)**
+**Results (2569_07 and 2569_08: department multiplier 1 + 5 × lack from the staffing sheet 13-11-69, daily hires counted, score ±50%)**
 
-| Department multiplier | Departments | 2569_07 (180 STAFF, extra ฿62,620, ฿197.65 per unit) | 2569_08 (181 STAFF, extra ฿83,445, ฿262.99 per unit) |
+| Department multiplier | Departments | 2569_07 (180 STAFF, extra ฿62,620, ฿223.40 per unit) | 2569_08 (181 STAFF, extra ฿83,445, ฿296.75 per unit) |
 |---|---|---|---|
-| 3.00–4.00 | SOC, ANS, OCM | ฿10,402–11,037, avg ฿10,645 | ฿10,563–11,499, avg ฿10,859 |
-| 2.06–2.67 | FOR, RHB, OBG, MED | ฿10,218–10,621, avg ฿10,438 | ฿10,276–10,909, avg ฿10,583 |
-| 1.33–1.64 | RAD, SUR, ORT, EYE, ENT | ฿10,134–10,506, avg ฿10,307 | ฿10,218–10,680, avg ฿10,410 |
-| 1.00 | PED, PSY, CPT, OPD, PAT, EMR | ฿10,122–10,280, avg ฿10,197 | ฿10,148–10,362, avg ฿10,262 |
+| 2.67–3.00 | ANS, OCM, FOR, RHB | ฿10,454–10,822, avg ฿10,643 | ฿10,603–11,045, avg ฿10,855 |
+| 1.33–1.83 | OBG, MED, ORT, EYE, ENT, SUR, RAD | ฿10,152–10,557, avg ฿10,351 | ฿10,238–10,770, avg ฿10,466 |
+| 1.00 | PED, PSY, CPT, OPD, PAT, SOC, EMR | ฿10,131–10,323, avg ฿10,223 | ฿10,161–10,423, avg ฿10,296 |
 
-- Nobody is paid less than ฿10,000, and with the budgets of 2568_05–2569_08 everyone is paid more (lowest ฿10,122, in 2569_07): every department multiplier is at least 1 and every score multiplier at least 0.5, so every share of a positive extra pool is above 0.
-- The average extra per physician is `extra_per_unit × dept_mult_d`, a straight line in the department's lack (2569_08: ฿263 at 1.00, ฿542 at 2.06, ฿1,052 at 4.00).
+- Nobody is paid less than ฿10,000, and with the budgets of 2568_05–2569_08 everyone is paid more (lowest ฿10,131, in 2569_07): every department multiplier is at least 1 and every score multiplier at least 0.5, so every share of a positive extra pool is above 0.
+- The average extra per physician is `extra_per_unit × dept_mult_d`, a straight line in the department's lack (2569_08: ฿296 at 1.00, ฿486 at 1.64, ฿890 at 3.00).
 - Score still counts inside each department (±50% of the extra), so pay ranges of departments with close multipliers overlap: a high scorer in a slightly short department can be paid more than a low scorer in a shorter one. Department averages follow the multiplier order.
-- Nobody is paid more than ฿15,000 (Step 3.6). In 2569_07 and 2569_08 the cap changes nothing (highest ฿11,037 and ฿11,499). Without it, the larger extra of 2569_01, 2569_02 and 2569_05 (฿1,458–1,705 per head) would have paid one or two SOC physicians up to ฿15,926.
-- Checked on all 8 months with เวชกรรมสังคม (2569_01–2569_08, Pong, 2026-11-13): everyone above ฿10,000 (lowest ฿10,122–10,535), nobody above ฿15,000, nobody below that month's intern average, ฿80–93 unspent, and in every month SOC's average extra is 4.00 times that of the fully staffed departments.
-- Replaces the capacity tiers (bonus weight 1.5 สาขาขาดแคลน / 1.0 กึ่งขาดแคลน / 0.5 เต็มศักยภาพ, Pong, 2026-11-11), at Pong's request on 2026-11-13: a department's share follows how short it is, without groups.
+- Nobody is paid more than ฿15,000 (Step 3.6). In 2569_07 and 2569_08 the highest pay is ฿10,822 and ฿11,045; in 2568_05–2569_08 it is at most ฿14,652, so the cap changes nothing.
+- Checked on all 16 months 2568_05–2569_08 (2026-11-16): everyone above ฿10,000 (lowest ฿10,131–10,590), nobody above ฿15,000, nobody below that month's intern average, ฿77–93 unspent.
+- Counting daily hires (Pong, 2026-11-16) changes SOC (4 + 15 of 10: 4.00 → 1.00), OBG (2.39 → 1.83), MED (2.06 → 1.64) and SUR (1.64 → 1.51). In 2569_08 the SOC average goes from ฿11,052 to ฿10,296, OBG −฿84, MED −฿57, and the other departments +฿17 to +฿101.
+- The 1 + 5 × lack rule replaced the capacity tiers (bonus weight 1.5 สาขาขาดแคลน / 1.0 กึ่งขาดแคลน / 0.5 เต็มศักยภาพ, Pong, 2026-11-11), at Pong's request on 2026-11-13: a department's share follows how short it is, without groups.
 - Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (the former Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
 
 ---
@@ -260,42 +260,43 @@ Used in Step 3.2: each STAFF department's multiplier sets its share of the extra
 The multiplier comes from the hospital's doctor staffing sheet:
 
 ```
-lack_d      = max(0, 1 − on_staff_d / FTE_d)     on staff = รวมอัตราตามจริง, FTE = จำนวนที่ควรมี
+lack_d      = max(0, 1 − (on_staff_d + daily_d) / FTE_d)
+                 on staff = รวมอัตราตามจริง, daily = ลูกจ้างชั่วคราว รายวัน, FTE = จำนวนที่ควรมี
 dept_mult_d = 1 + 5 × lack_d
 ```
 
-Doctors hired by the day (ลจ.ชั่วคราว รายวัน) are not counted. The SK03 งบรายสาขา sheet works out lack (column D, `=MAX(0,1-on staff/FTE)`) and the multiplier (column E) from the two numbers, so it uses exact values; the table below rounds them.
+Doctors hired by the day (ลูกจ้างชั่วคราว รายวัน) count the same as doctors on staff (Pong, 2026-11-16; before that they were left out). The SK03 งบรายสาขา sheet works out lack (column D, `=MAX(0,1-(on staff+daily)/FTE)`) and the multiplier (column E) from the three numbers, so it uses exact values; the table below rounds them.
 
-The numbers are from the staffing sheet อัตรากำลัง แพทย์ 13-11-69 (Pong, 2026-11-13). Every SK03 build from then on uses them, including a rebuild of an older month (2569_08 too). The last column is the bonus weight of each department's capacity tier before; only ratios count, so 3.00 against 1.00 now is the same step as 1.5 against 0.5 was.
+The numbers are from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan ขนาด a : ขนาดเตียงจำนวน 691 เตียง; Pong, 2026-11-13). Every SK03 build from then on uses them, including a rebuild of an older month (2569_08 too). The last column is the multiplier before daily hires were counted (2026-11-14 to 2026-11-16).
 
-| # | Department | Abbrev | FTE | On staff | Lack | Multiplier | Before 2026-11-13 |
-|:-:|---|:-:|:-:|:-:|:-:|:-:|---|
-| 1 | กุมารเวชกรรม | PED | 19 | 21 | 0% | 1.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 2 | จักษุวิทยา | EYE | 9 | 8 | 11.1% | 1.56 | 1.0 (สาขากึ่งขาดแคลน) |
-| 3 | จิตเวชและยาเสพติด | PSY | 4 | 4 | 0% | 1.00 | 1.0 (สาขากึ่งขาดแคลน) |
-| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 0% | 1.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 5 | นิติเวช | FOR | 3 | 2 | 33.3% | 2.67 | 1.5 (สาขาขาดแคลน) |
-| 6 | ผู้ป่วยนอก | OPD | 5 | 14 | 0% | 1.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 7 | พยาธิวิทยากายวิภาค | PAT | 2 | 3 | 0% | 1.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 8 | รังสีวิทยา | RAD | 15 | 14 | 6.7% | 1.33 | 1.0 (สาขากึ่งขาดแคลน) |
-| 9 | วิสัญญีวิทยา | ANS | 15 | 9 | 40.0% | 3.00 | 1.5 (สาขาขาดแคลน) |
-| 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 33.3% | 2.67 | 1.5 (สาขาขาดแคลน) |
-| 11 | เวชกรรมสังคม | SOC | 10 | 4 | 60.0% | 4.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 0% | 1.00 | 0.5 (สาขาเต็มศักยภาพ) |
-| 13 | ศัลยกรรม | SUR | 39 | 34 | 12.8% | 1.64 | 1.0 (สาขากึ่งขาดแคลน) |
-| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 11.8% | 1.59 | 1.0 (สาขากึ่งขาดแคลน) |
-| 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 27.8% | 2.39 | 1.5 (สาขาขาดแคลน) |
-| 16 | โสต ศอ นาสิก | ENT | 9 | 8 | 11.1% | 1.56 | 1.0 (สาขากึ่งขาดแคลน) |
-| 17 | อาชีวเวชกรรม | OCM | 5 | 3 | 40.0% | 3.00 | 1.5 (สาขาขาดแคลน) |
-| 18 | อายุรกรรม | MED | 47 | 37 | 21.3% | 2.06 | 1.5 (สาขาขาดแคลน) |
-| 19 | INTERN | INT | — | — | — | — (own pool, Step 2) | — |
+| # | Department | Abbrev | FTE | On staff | Daily | Lack | Multiplier | Before 2026-11-16 |
+|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 1 | กุมารเวชกรรม | PED | 19 | 21 | 1 | 0% | 1.00 | 1.00 |
+| 2 | จักษุวิทยา | EYE | 9 | 8 | 0 | 11.1% | 1.56 | 1.56 |
+| 3 | จิตเวชและยาเสพติด | PSY | 4 | 4 | 2 | 0% | 1.00 | 1.00 |
+| 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 0 | 0% | 1.00 | 1.00 |
+| 5 | นิติเวช | FOR | 3 | 2 | 0 | 33.3% | 2.67 | 2.67 |
+| 6 | ผู้ป่วยนอก | OPD | 5 | 14 | 27 | 0% | 1.00 | 1.00 |
+| 7 | พยาธิวิทยากายวิภาค | PAT | 2 | 3 | 0 | 0% | 1.00 | 1.00 |
+| 8 | รังสีวิทยา | RAD | 15 | 14 | 0 | 6.7% | 1.33 | 1.33 |
+| 9 | วิสัญญีวิทยา | ANS | 15 | 9 | 0 | 40.0% | 3.00 | 3.00 |
+| 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 0 | 33.3% | 2.67 | 2.67 |
+| 11 | เวชกรรมสังคม | SOC | 10 | 4 | 15 | 0% | 1.00 | 4.00 |
+| 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 0 | 0% | 1.00 | 1.00 |
+| 13 | ศัลยกรรม | SUR | 39 | 34 | 1 | 10.3% | 1.51 | 1.64 |
+| 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 0 | 11.8% | 1.59 | 1.59 |
+| 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 2 | 16.7% | 1.83 | 2.39 |
+| 16 | โสต ศอ นาสิก | ENT | 9 | 8 | 0 | 11.1% | 1.56 | 1.56 |
+| 17 | อาชีวเวชกรรม | OCM | 5 | 3 | 0 | 40.0% | 3.00 | 3.00 |
+| 18 | อายุรกรรม | MED | 47 | 37 | 4 | 12.8% | 1.64 | 2.06 |
+| 19 | INTERN | INT | — | — | — | — | — (own pool, Step 2) | — |
 
-12 departments are short of doctors (multiplier 1.33 to 4.00) and 6 are not (1.00).
+11 departments are short of doctors (multiplier 1.33 to 3.00) and 7 are not (1.00).
 
 Notes on the 13-11-69 sheet:
 - The sheet also lists กลุ่มงานการแพทย์แผนไทยฯ (FTE 1, 0 on staff) and three dental groups; none of them is a P4P department.
-- SOC also has 15 doctors hired by the day. Counted in, SOC would not be short (190%), and its multiplier would be 1.00.
-- PED, OPD and PAT have more doctors than their FTE; they count as lack 0, the same as a department with exactly its FTE.
+- Daily hires: OPD 27, SOC 15, MED 4, OBG 2, PSY 2, PED 1, SUR 1 (52 in all). With them SOC has 19 doctors for an FTE of 10, so it is not short (multiplier 1.00; 4.00 without them).
+- PED, PSY, OPD, PAT and SOC have more doctors than their FTE (daily hires counted); they count as lack 0, the same as a department with exactly its FTE.
 - OPD (14) lists more doctors than the SK03 has (2569_08: 3); OPD has lack 0 either way.
 
 ---
