@@ -17,7 +17,11 @@
 --  Re-running PART 1 never overwrites a number saved on the dashboard.
 --
 --  PART 2 adds staffing_save, which the tab calls (through the Vercel app,
---  service role only) to save one department.
+--  service role only) to save one department. A save also queues a new
+--  build of every ตรวจสอบ month still on the auditee's side (no round with
+--  the auditor or approved), so none of them can be sent with pay worked
+--  out from the old numbers; other months use the new numbers on their
+--  next build.
 --
 --  Run in the Supabase SQL editor. Each PART can be pasted on its own, PART 1
 --  first. Safe to re-run. No backslashes, so it pastes through chat.
@@ -70,9 +74,13 @@ select count(*) as departments, sum(fte) as fte, sum(staff) as on_staff, sum(dai
 
 -- ── PART 2: staffing_save, one department from the dashboard ───────────────
 -- Saves FTE, on staff and daily hires for one department code and returns
--- the row before (null: none yet) and after. The numbers are checked here
--- as well as in the app. No build is started: the next SK03 build of any
--- month uses the new numbers.
+-- the row before (null: none yet), the row after, and the months whose
+-- rebuild it queued. The numbers are checked here as well as in the app.
+-- When a number changed, the ตรวจสอบ months (from 2569_08) that have a
+-- build and are on the auditee's side get a build request (reason 'inputs': one more is queued
+-- after a build that is already running, since that one read the old
+-- numbers), and sending waits for it. Skipped while the ตรวจสอบ tables are
+-- not installed.
 create or replace function public.staffing_save(p_code text, p_fte int, p_staff int, p_daily int, p_actor text)
 returns jsonb
 language plpgsql
@@ -81,6 +89,8 @@ as $$
 declare
   v_before public.dept_staffing;
   v_after  public.dept_staffing;
+  v_month  text;
+  v_months text[] := '{}';
 begin
   if p_code is null or p_code not in ('PED','EYE','PSY','CPT','FOR','OPD','PAT','RAD','ANS',
                                       'RHB','SOC','EMR','SUR','ORT','OBG','ENT','OCM','MED') then
@@ -97,9 +107,27 @@ begin
      set fte = excluded.fte, staff = excluded.staff, daily = excluded.daily,
          updated_at = excluded.updated_at, updated_by = excluded.updated_by
   returning * into v_after;
+  if (v_before.code is null or (v_before.fte, v_before.staff, v_before.daily)
+                                is distinct from (v_after.fte, v_after.staff, v_after.daily))
+     and to_regclass('public.review_builds') is not null and to_regclass('public.review_rounds') is not null
+     and to_regprocedure('public.review_request_build(text, text, text)') is not null then
+    for v_month in
+      select distinct b.month from public.review_builds b where b.month >= '2569_08' order by 1
+    loop
+      -- The month's ตรวจสอบ lock: a send waits for this save, or this save
+      -- sees the round it sent.
+      perform pg_advisory_xact_lock(hashtext('review:' || v_month));
+      if not exists (select 1 from public.review_rounds r
+                      where r.month = v_month and r.status in ('submitted', 'approved')) then
+        perform public.review_request_build(v_month, 'inputs', coalesce(p_actor, ''));
+        v_months := v_months || v_month;
+      end if;
+    end loop;
+  end if;
   return jsonb_build_object(
     'before', case when v_before.code is null then null else to_jsonb(v_before) end,
-    'after', to_jsonb(v_after));
+    'after', to_jsonb(v_after),
+    'rebuild', to_jsonb(v_months));
 end;
 $$;
 

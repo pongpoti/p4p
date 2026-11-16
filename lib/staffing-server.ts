@@ -17,8 +17,10 @@
  * been run the list is the starting numbers of lib/dept-staffing.ts with
  * installed: false, and a save answers 503 saying what to run. Every save is
  * in ประวัติการใช้งาน as staffing.save, with the numbers and multiplier
- * before and after. No build is started: the next SK03 build of any month
- * uses the new numbers (process/process.ts loadDeptStaffing).
+ * before and after. When a number changed, staffing_save also queues a new
+ * build of every ตรวจสอบ month still on the auditee's side (rebuild: those
+ * months), so none is sent with pay from the old numbers; any other month
+ * uses the new numbers on its next build (process/process.ts loadDeptStaffing).
  */
 
 import type { Express, Request, Response } from "express"
@@ -65,6 +67,9 @@ const withMultiplier = (d: import("./dept-staffing").DeptStaffingRow) => ({
 })
 const countsOf = (r: any): Counts | null =>
   r ? { fte: Number(r.fte), staff: Number(r.staff), daily: Number(r.daily) } : null
+/** The months staffing_save queued a build of (YYYY_MM, oldest first). */
+const monthsOf = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((m): m is string => typeof m === "string" && /^\d{4}_\d{2}$/.test(m)) : []
 
 export function mountStaffing(d: StaffingDeps): void {
   const { app } = d
@@ -123,16 +128,18 @@ export function mountStaffing(d: StaffingDeps): void {
       const after = countsOf(out && out.after) || counts
       // A department never saved before had the starting numbers.
       const was = before || { fte: dept.fte, staff: dept.staff, daily: dept.daily }
+      const rebuild = monthsOf(out && out.rebuild)
       await d.audit(req, { sub: s.sub, name: s.name }, "staffing.save", {
-        code: dept.code, name: dept.name, before: was, after,
+        code: dept.code, name: dept.name, before: was, after, k: staffing.LACK_K,
         multiplier_before: round4(staffing.deptMultiplier(was)), multiplier_after: round4(staffing.deptMultiplier(after)),
+        rebuild,
       })
       const row = {
         ...dept, ...after,
         updated_at: (out && out.after && out.after.updated_at) || null,
         updated_by: (out && out.after && out.after.updated_by) || s.name,
       }
-      res.json({ ok: true, dept: withMultiplier(row) })
+      res.json({ ok: true, dept: withMultiplier(row), rebuild })
     } catch (e: any) {
       if (notInstalled(e)) {
         console.error("[dashboard] staffing save: not installed (" + String(pgError(e).code || "") + ")")

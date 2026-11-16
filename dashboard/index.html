@@ -220,8 +220,8 @@
         }
         /* A long LINE name is cut (the whole name is the tooltip); on a
            narrow window only the initial shows. */
-        #user-name { max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        @media (max-width: 1180px) { #user-name { display: none; } }
+        #user-name { max-width: 5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        @media (max-width: 1300px) { #user-name { display: none; } }
         #user-avatar {
             width: 34px; height: 34px;
             border-radius: 50%;
@@ -1537,7 +1537,7 @@
                 <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-daily">–</output></span>
             </div>
             <p id="staffing-meta" class="bd-meta hidden"></p>
-            <p class="bd-meta">บันทึกแล้วยังไม่สร้าง SK03 ใหม่ทันที: SK03 ที่สร้างครั้งถัดไปของทุกเดือนจะใช้ตัวเลขนี้</p>
+            <p class="bd-meta">บันทึกแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขนี้เมื่อสร้างครั้งถัดไป</p>
             <p id="staffing-error" class="error-text hidden" role="alert"></p>
             <div class="log-actions">
                 <button type="button" class="btn-ghost" data-close>ยกเลิก</button>

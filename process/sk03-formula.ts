@@ -70,8 +70,9 @@ export type DeptCapacity = import('../lib/dept-staffing').DeptStaffing;
  * starting numbers: the physician staffing sheet of 13 Nov 2026 (13-11-69:
  * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
  * ขนาด a, 691 เตียง; Pong, 2026-11-13). Daily hires (รายวัน) count as staff
- * since 2026-11-16 (Pong). A build uses the numbers saved on the dashboard
- * (process.ts loadDeptStaffing), these only for a department never edited.
+ * since 2026-11-16 (Pong). A build uses the numbers in the Supabase table
+ * dept_staffing, edited on the dashboard (process.ts loadDeptStaffing); these
+ * only for a department with no row there, or before the table exists.
  */
 export const DEPT_CAPACITY: DeptCapacity[] = staffing.DEPT_STAFFING_DEFAULTS;
 

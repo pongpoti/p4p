@@ -1064,9 +1064,18 @@
                 }
                 if (!changed)
                     add("ตัวเลขเท่าเดิม");
-                if (typeof t.multiplier_before === "number" && typeof t.multiplier_after === "number") {
+                const counts = (r) => [r.fte, r.staff, r.daily].every((n) => Number.isInteger(n)) && r.fte > 0
+                    ? { fte: r.fte, staff: r.staff, daily: r.daily } : null;
+                const cb = counts(was), ca = counts(now);
+                if (cb && ca && typeof t.k === "number") {
+                    add("ตัวคูณสาขา " + fmtMult(cb, t.k) + " → " + fmtMult(ca, t.k));
+                }
+                else if (typeof t.multiplier_before === "number" && typeof t.multiplier_after === "number") {
                     add("ตัวคูณสาขา " + t.multiplier_before.toFixed(2) + " → " + t.multiplier_after.toFixed(2));
                 }
+                const rebuild = sfMonths(t.rebuild);
+                if (rebuild)
+                    add("สร้าง SK03 ใหม่ " + rebuild);
                 break;
             }
         }
@@ -1712,21 +1721,38 @@
     const sfMeta = document.getElementById("staffing-meta");
     const sfError = document.getElementById("staffing-error");
     const sfSave = document.getElementById("staffing-save");
+    const sfCloses = Array.from(sfDlg.querySelectorAll("[data-close]"));
     for (const i of [sfFte, sfStaff, sfDaily])
         wholeField(i, false, 3);
-    sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg)
+    // The box stays open while a save is on its way (no Esc, backdrop or close).
+    sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy)
         sfDlg.close(); });
+    sfDlg.addEventListener("cancel", (ev) => { if (sfBusy)
+        ev.preventDefault(); });
     let staffing = null;
     let staffingSeq = 0;
     let sfEditing = null;
     let sfBusy = false;
     // The edit column is dropped once for anyone who cannot edit.
     let staffingEditCol = true;
-    // The same rule as lib/dept-staffing.ts, for the box's preview only; the
-    // server works the saved numbers out again.
-    const sfLackOf = (d) => Math.max(0, 1 - (d.staff + d.daily) / d.fte);
-    const fmtLack = (n) => n <= 0 ? "0%" : (100 * n).toFixed(1) + "%";
-    const fmtMult = (n) => n.toFixed(2);
+    // The same rule as lib/dept-staffing.ts, shown from the counts in whole
+    // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
+    // to 0.1%, multiplier to 0.01. The SK03 build uses the unrounded value.
+    const sfShort = (d) => Math.max(0, d.fte - d.staff - d.daily);
+    const sfFixed = (n, places) => {
+        const p = places === 1 ? 10 : 100;
+        return Math.floor(n / p) + "." + String(n % p).padStart(places, "0");
+    };
+    const fmtLack = (d) => {
+        const s = sfShort(d);
+        return s <= 0 ? "0%" : sfFixed(Math.floor((2000 * s + d.fte) / (2 * d.fte)), 1) + "%";
+    };
+    const fmtMult = (d, k) => Number.isInteger(k) && k >= 0
+        ? sfFixed(Math.floor((200 * (d.fte + k * sfShort(d)) + d.fte) / (2 * d.fte)), 2)
+        : (1 + k * sfShort(d) / d.fte).toFixed(2);
+    const sfK = () => staffing ? staffing.k : 5;
+    // "ส.ค. 2569, ต.ค. 2569"
+    const sfMonths = (ms) => Array.isArray(ms) ? ms.map(monthLabel).filter(Boolean).join(", ") : "";
     // "16 พ.ย. 69 22:42", short enough for the table's last-edit column.
     const fmtShortWhen = (iso) => {
         const d = new Date(iso);
@@ -1754,9 +1780,9 @@
         tr.appendChild(el("td", "num", fmtNum(d.staff)));
         tr.appendChild(el("td", "num" + (d.daily ? "" : " muted"), fmtNum(d.daily)));
         tr.appendChild(el("td", "num total", fmtNum(d.staff + d.daily)));
-        tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d.lack)));
+        tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)));
         const mult = el("td", "mult");
-        mult.appendChild(el("span", "mv", fmtMult(d.multiplier)));
+        mult.appendChild(el("span", "mv", fmtMult(d, sfK())));
         const bar = el("span", "mbar");
         bar.setAttribute("aria-hidden", "true");
         const fill = el("i");
@@ -1801,7 +1827,7 @@
         }
         staffingK.textContent = String(data.k);
         staffingSub.textContent = (data.canEdit
-            ? "แก้ไขแล้วมีผลกับ SK03 ที่สร้างครั้งถัดไปของทุกเดือน (ไม่สร้างใหม่ทันที)"
+            ? "แก้ไขแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขใหม่เมื่อสร้างครั้งถัดไป"
             : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข") + " · ค่าตั้งต้นจากแผ่น" + data.source;
         if (!data.installed && data.canEdit) {
             staffingAlert.textContent = "ยังไม่ได้ติดตั้งตารางอัตรากำลังใน Supabase จึงแสดงค่าตั้งต้น " + sfSource() +
@@ -1814,6 +1840,7 @@
         const ds = data.depts;
         const short = ds.filter((d) => d.lack > 0);
         const top = ds.reduce((m, d) => Math.max(m, d.multiplier), 1);
+        const topDept = ds.find((d) => d.multiplier === top);
         const sum = (f) => ds.reduce((n, d) => n + f(d), 0);
         const stat = (k, v, small) => {
             const div = el("div");
@@ -1824,7 +1851,7 @@
             div.appendChild(dd);
             return div;
         };
-        staffingStats.replaceChildren(stat("กลุ่มงานที่ขาด", fmtNum(short.length), "จาก " + fmtNum(ds.length)), stat("ตัวคูณสูงสุด", fmtMult(top), ds.filter((d) => d.multiplier === top).map((d) => d.code).join(" ")), stat("แพทย์รวม", fmtNum(sum((d) => d.staff + d.daily)), "FTE " + fmtNum(sum((d) => d.fte))));
+        staffingStats.replaceChildren(stat("กลุ่มงานที่ขาด", fmtNum(short.length), "จาก " + fmtNum(ds.length)), stat("ตัวคูณสูงสุด", topDept ? fmtMult(topDept, data.k) : "1.00", ds.filter((d) => d.multiplier === top).map((d) => d.code).join(" ")), stat("แพทย์รวม", fmtNum(sum((d) => d.staff + d.daily)), "FTE " + fmtNum(sum((d) => d.fte))));
         staffingRows.replaceChildren(...ds.map((d) => staffingRow(d, edit)));
         const foot = el("tr");
         foot.appendChild(el("td"));
@@ -1896,11 +1923,9 @@
                 sfSave.disabled = true;
             return;
         }
-        const lack = sfLackOf(v);
-        const k = staffing ? staffing.k : 5;
-        const next = fmtMult(1 + k * lack);
-        sfLack.textContent = fmtLack(lack);
-        const was = fmtMult(d.multiplier);
+        const next = fmtMult(v, sfK());
+        sfLack.textContent = fmtLack(v);
+        const was = fmtMult(d, sfK());
         sfMult.replaceChildren();
         if (was !== next)
             sfMult.append(el("span", "was", was + " → "));
@@ -1911,6 +1936,8 @@
     for (const i of [sfFte, sfStaff, sfDaily])
         i.addEventListener("input", paintStaffing);
     function openStaffing(d) {
+        if (sfBusy)
+            return;
         sfEditing = d;
         sfSub.textContent = d.name + " (" + d.code + ")";
         sfFte.value = String(d.fte);
@@ -1932,7 +1959,14 @@
         if (!d || !v || sfBusy || sfSame(v, d))
             return;
         const label = sfSave.textContent;
-        sfBusy = true;
+        const busy = (on) => {
+            sfBusy = on;
+            for (const i of [sfFte, sfStaff, sfDaily])
+                i.readOnly = on;
+            for (const b of sfCloses)
+                b.disabled = on;
+        };
+        busy(true);
         sfSave.disabled = true;
         sfSave.setAttribute("aria-busy", "true");
         sfSave.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"));
@@ -1956,14 +1990,24 @@
             console.error("staffing save failed:", e);
         }
         finally {
-            sfBusy = false;
+            busy(false);
             sfSave.removeAttribute("aria-busy");
             sfSave.textContent = label;
             paintStaffing();
         }
+        // The box can still have been closed (a browser may close it on a
+        // second Esc): the outcome then goes above the table.
+        const inBox = sfEditing === d && sfDlg.open;
         if (!ok || !out || !out.dept) {
-            sfError.textContent = (out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่";
-            sfError.classList.remove("hidden");
+            const msg = (out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่";
+            if (inBox) {
+                sfError.textContent = msg;
+                sfError.classList.remove("hidden");
+            }
+            else {
+                staffingAlert.textContent = d.name + ": " + msg;
+                staffingAlert.className = "sf-alert error";
+            }
             return;
         }
         const saved = out.dept;
@@ -1971,9 +2015,11 @@
             staffing.depts = staffing.depts.map((x) => x.code === saved.code ? saved : x);
             renderStaffing();
         }
-        sfDlg.close();
-        staffingOk.textContent = "✓ บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d.multiplier) + " → " + fmtMult(saved.multiplier) +
-            " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้";
+        if (inBox)
+            sfDlg.close();
+        const rebuild = sfMonths(out.rebuild);
+        staffingOk.textContent = "✓ บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
+            (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้");
         staffingOk.classList.remove("hidden");
         const tr = staffingRows.querySelector('tr[data-code="' + saved.code + '"]');
         if (tr) {
