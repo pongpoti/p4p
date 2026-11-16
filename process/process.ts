@@ -62,7 +62,8 @@ const {
   internMeanCell, staffPanel, internPanel, budgetSheet,
 } = require('./sk03-formula') as typeof import('./sk03-formula');
 type CellWrite = import('./sk03-formula').CellWrite;
-const { fitSheet, overallSpec, budgetSpec, deptSpec } = require('./sk03-fit') as typeof import('./sk03-fit');
+const { fitSheet, overallSpec, budgetSpec, deptSpec, DEPT_FIRST_ROW } = require('./sk03-fit') as typeof import('./sk03-fit');
+const { SK02_FORM } = require('./review-pdf') as typeof import('./review-pdf');
 type FitSpec = import('./sk03-fit').FitSpec;
 type FitGrid = import('./sk03-fit').Grid;
 const review = require('./review-build') as typeof import('./review-build');
@@ -1140,7 +1141,9 @@ async function buildDeptSheets(
   internSheetName: string,
   rowNumMap: Record<string, number>
 ): Promise<{ title: string; sheetId: number; lastRow: number }[]> {
-  const D = 6; // first data row in dep_template (rows 1-5 are header)
+  // dep_template's rows 1-5 are its header; one row is put above them for
+  // the form's name, so data starts at row 7.
+  const D = DEPT_FIRST_ROW;
   const built: { title: string; sheetId: number; lastRow: number }[] = [];
 
   for (const dept of Object.keys(DEPT_COLORS)) {
@@ -1172,14 +1175,38 @@ async function buildDeptSheets(
       }]},
     }));
 
-    // Header: A2 = month/year, A3 = dept name (mirrors GAS)
+    // Row 1: the form's name at the top right, as on the approval PDF's
+    // department pages and the hospital's SK02 form (Pong, 2026-11-15). A new
+    // row above the template's title, merged A:I and right-aligned, so the
+    // title stays centred over the table and no column widens for it.
+    await withRetry(() => sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: { requests: [
+        { insertDimension: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 }, inheritFromBefore: false } },
+        { mergeCells: { range: gridRange(sheetId, 0, 0, 0, 8), mergeType: 'MERGE_ALL' } },
+        { repeatCell: {
+            range: gridRange(sheetId, 0, 0, 0, 8),
+            cell: { userEnteredFormat: {
+              horizontalAlignment: 'RIGHT', verticalAlignment: 'BOTTOM', wrapStrategy: 'OVERFLOW_CELL',
+              textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 14, bold: false },
+            } },
+            // borders and backgroundColor are in the mask but not set: the
+            // row copies the title row's format, and this clears it.
+            fields: 'userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy,borders,backgroundColor,textFormat)',
+        }},
+        { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 24 }, fields: 'pixelSize' } },
+      ]},
+    }));
+
+    // Header: A1 = form name, A3 = month/year, A4 = dept name (mirrors GAS, one row down)
     await withRetry(() => sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: ssId,
       requestBody: {
         valueInputOption: 'RAW',
         data: [
-          { range: `'${dept}'!A2`, values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] },
-          { range: `'${dept}'!A3`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้าน${dept === 'เวชกรรมสังคม' ? 'ปฐมภูมิ' : 'ตติยภูมิ'}`]] },
+          { range: `'${dept}'!A1`, values: [[SK02_FORM]] },
+          { range: `'${dept}'!A3`, values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] },
+          { range: `'${dept}'!A4`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้าน${dept === 'เวชกรรมสังคม' ? 'ปฐมภูมิ' : 'ตติยภูมิ'}`]] },
         ],
       },
     }));
@@ -1261,8 +1288,10 @@ async function buildDeptSheets(
       ]},
     }));
 
-    // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one)
-    const blankRows: string[][] = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
+    // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one).
+    // A..I only: a value in J (even a space) puts J in the printed range, so
+    // the page shrinks and the table sits off-centre (Pong, 2026-11-15).
+    const blankRows: string[][] = Array.from({ length: 5 }, () => Array.from({ length: 9 }, () => ' '));
     await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${lastRow + 1}`,
@@ -1294,6 +1323,24 @@ async function buildDeptSheets(
         { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig2-1, 8), cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 16 } } }, fields: 'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize' } },
       ]},
     }));
+
+    // Print (Pong, 2026-11-15: print or save as PDF straight away, A4
+    // landscape). dep_template already carries A4, landscape, one page wide
+    // and centred, and copyTo keeps it. Freezing the form's name, titles and
+    // column headers (rows 1-6) lets Google's print repeat them on every page
+    // ("Repeat frozen rows"), as the approval PDF does. On its own request:
+    // a refused freeze must not stop the build (see #251).
+    try {
+      await withRetry(() => sheets.spreadsheets.batchUpdate({
+        spreadsheetId: ssId,
+        requestBody: { requests: [{ updateSheetProperties: {
+          properties: { sheetId, gridProperties: { frozenRowCount: D - 1 } },
+          fields: 'gridProperties.frozenRowCount',
+        }}]},
+      }));
+    } catch (err: any) {
+      log(`  [SK03] ⚠ header rows not frozen on one department sheet: ${err.message}`, 'warn');
+    }
   }
 
   // Delete "ชีต1" if still present (created with the spreadsheet, normally deleted in staff step)

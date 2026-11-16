@@ -346,20 +346,29 @@ export function budgetSpec(firstRow: number, totalRow: number): FitSpec {
 }
 
 /**
- * Department sheet: data rows from 6 to `lastRow`, columns A..I. The
- * signature column (H) is as wide as its header on one line, so there is
+ * First data row (1-based) of a department sheet: row 1 is the form's name
+ * ("แบบฟอร์ม P4P_SK02", top right, as on the approval PDF's department
+ * pages; Pong, 2026-11-15), rows 2-4 the titles, rows 5-6 the column
+ * headers, then one row per person.
+ */
+export const DEPT_FIRST_ROW = 7;
+
+/**
+ * Department sheet: data rows from DEPT_FIRST_ROW to `lastRow`, columns A..I.
+ * The signature column (H) is as wide as its header on one line, so there is
  * room to sign; the signature lines under the table (rows lastRow+3 and
  * lastRow+5) get as many dots as fit.
  */
 export function deptSpec(lastRow: number): FitSpec {
+  const first = DEPT_FIRST_ROW - 1; // 0-based
   return {
-    body: [{ rows: [5, lastRow - 1], cols: range(0, 8) }],
-    header: [3, 4],
-    flexRow: 4,
+    body: [{ rows: [first, lastRow - 1], cols: range(0, 8) }],
+    header: [first - 2, first - 1],
+    flexRow: first - 1,
     cols: range(0, 8),
     oneLineHeader: [7],
     floor: { 5: PAY_FLOOR, 6: PAY_FLOOR },
     dotRows: [lastRow + 2, lastRow + 4],
-    titleRows: [0, 1, 2],
+    titleRows: range(0, first - 3),
   };
 }

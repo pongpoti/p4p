@@ -262,11 +262,13 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 
   let pageNo = 1;
   const deptPages = layout.map(({ dept, sizes }) => {
-    const h = dept.header ?? [];
-    const first = (r: number): string => squash((h[r] ?? []).find((c) => squash(c) !== '') ?? '');
-    const t1 = first(0) || `หลักฐานการเบิกจ่ายเงินตามค่าตอบแทนผลการปฏิบัติงาน${HOSPITAL}`;
-    const t2 = first(1) || `ประจำเดือน ${monthTitle(d.month)}`;
-    const t3 = first(2) || `หน่วยงาน ${deptLabel(dept.name)}`;
+    const first = (row: string[] | undefined): string => squash((row ?? []).find((c) => squash(c) !== '') ?? '');
+    // The sheet's own titles: department sheets built since 2026-11-15 have
+    // the form's name in row 1 (it is printed at the top right here instead).
+    const h = (dept.header ?? []).filter((row) => first(row) !== SK02_FORM);
+    const t1 = first(h[0]) || `หลักฐานการเบิกจ่ายเงินตามค่าตอบแทนผลการปฏิบัติงาน${HOSPITAL}`;
+    const t2 = first(h[1]) || `ประจำเดือน ${monthTitle(d.month)}`;
+    const t3 = first(h[2]) || `หน่วยงาน ${deptLabel(dept.name)}`;
     let at = 0;
     return sizes.map((size, i) => {
       pageNo++;

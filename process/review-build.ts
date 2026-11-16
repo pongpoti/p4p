@@ -42,6 +42,7 @@ import type { drive_v3, sheets_v4 } from 'googleapis';
 const crypto  = require('crypto') as typeof import('crypto');
 const ExcelJS = require('exceljs') as typeof import('exceljs');
 const { log, withRetry, normaliseName } = require('./lib') as typeof import('./lib');
+const { DEPT_FIRST_ROW } = require('./sk03-fit') as typeof import('./sk03-fit');
 type Resolve = (rows: Record<string, unknown>[]) => { score: number | null; method: string };
 // The rule that put each score in SK03 K (a port of automation/claude-analyst.ts).
 const p4p = require('../lib/p4p-score') as { resolveScore: Resolve };
@@ -353,7 +354,11 @@ export function overallRows(values: Row[] | undefined, first: number): OverallRo
   return out;
 }
 
-/** Data rows of a department sheet read from A1 (data from row 6, A = running number). */
+/**
+ * Data rows of a department sheet read from A1 (A = running number): from
+ * row 7 since the form's name went above the title (2026-11-15), row 6 in
+ * sheets built before; the rows above the first number are skipped.
+ */
 export function deptRows(values: Row[] | undefined): DeptRow[] {
   const out: DeptRow[] = [];
   let i = 5;
@@ -416,7 +421,7 @@ export async function packageReviewBuild(o: PackageOptions): Promise<{ id: strin
     const sum = (k: 'admin' | 'pay' | 'total'): number => rows.reduce((s, r) => s + (r[k] ?? 0), 0);
     return {
       name,
-      header: (values ?? []).slice(0, 5).map((r) => (r ?? []).slice(0, 9).map(str)),
+      header: (values ?? []).slice(0, DEPT_FIRST_ROW - 1).map((r) => (r ?? []).slice(0, 9).map(str)),
       rows, admin: sum('admin'), pay: sum('pay'), total: sum('total'),
     };
   });
