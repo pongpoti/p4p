@@ -32,7 +32,9 @@
  *
  * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
  * Google Drive (the state carries their ids, the tab links them view only),
- * and a round is the newest build as the system checked it.
+ * and a round is the newest build as the system checked it. Once a month is
+ * approved, both sides can download the approval PDF (:month/pdf) and the
+ * per-person allocation list (:month/allocation, lib/allocation-xlsx.ts).
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
@@ -45,6 +47,7 @@
 import type { Express, Request, Response } from "express"
 import type { AxiosStatic } from "axios"
 
+const allocation = require("./allocation-xlsx") as typeof import("./allocation-xlsx")
 const core = require("./review-core") as {
   parseMonth(key: unknown): { be: number; month: number } | null
   approvalPdfName(key: unknown): string | null
@@ -544,6 +547,53 @@ export function mountReview(d: ReviewDeps): void {
       res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
         (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : ""))
     } catch (e: any) { fail(res, "pdf download", e) }
+  })
+
+  // รายละเอียดการจัดสรรเงินรายบุคคล (lib/allocation-xlsx.ts, Pong 2026-11-17):
+  // made on request from the approved round's own SK03 copy, with each
+  // person's department from that build, so it always matches what was
+  // approved. Nothing is stored.
+  app.get("/dashboard/api/review/:month/allocation", async (req: Request, res: Response) => {
+    const g = await gate(req, res, "auditee")
+    if (!g) return
+    try {
+      const r = await axios.get(rest("review_rounds?select=round_no,build_id&month=eq." + g.month + "&status=eq.approved"),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      const round = (r.data as any[])[0]
+      if (!round || !round.build_id) return res.status(404).json({ error: "เดือนนี้ยังไม่ได้อนุมัติ" })
+      const [b, people] = await Promise.all([
+        axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
+        axios.get(rest("review_build_people?select=is_intern,sk03_row,department&build_id=eq." + round.build_id),
+          { headers: d.serviceHeaders(), timeout: 8000 }),
+      ])
+      const path = (b.data as any[])[0]?.sk03_path
+      if (!path) return res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบที่อนุมัติ" })
+      let file: { data: ArrayBuffer }
+      try {
+        file = await axios.get(storage("object/" + BUCKET + "/" + String(path).split("/").map(encodeURIComponent).join("/")),
+          { headers: d.serviceHeaders(), responseType: "arraybuffer", timeout: 20000 })
+      } catch (e: any) {
+        // The body of a failed binary read is bytes: log it as text.
+        const body = e.response && e.response.data ? Buffer.from(e.response.data).toString("utf8").slice(0, 300) : ""
+        console.error("[dashboard] review allocation: SK03 download failed:", e.response ? e.response.status + " " + body : e.message)
+        return res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบที่อนุมัติไม่สำเร็จ ลองใหม่อีกครั้ง" })
+      }
+      const dept = new Map<string, string>()
+      for (const p of (people.data as any[]) || []) {
+        if (p.sk03_row != null && p.department) dept.set((p.is_intern ? "i" : "s") + p.sk03_row, String(p.department))
+      }
+      const ExcelJS = require("exceljs") as typeof import("exceljs")
+      const wb = new ExcelJS.Workbook()
+      await wb.xlsx.load(file.data as ArrayBuffer)
+      const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
+      if (!rows.length) return res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบที่อนุมัติ" })
+      const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
+      await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
+      const name = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      res.setHeader("Content-Disposition", "attachment; filename=\"allocation_" + g.month + ".xlsx\"; filename*=UTF-8''" + encodeURIComponent(name))
+      res.send(buf)
+    } catch (e: any) { fail(res, "allocation", e) }
   })
 
   app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {

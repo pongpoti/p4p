@@ -986,7 +986,7 @@
                 break;
             case "review.download":
                 add(monthLabel(t.month));
-                add(t.kind === "sk03" ? "SK03" : t.kind === "pdf" ? "เอกสารเบิกจ่าย (PDF)" : "ไฟล์รวมคะแนนรายคน");
+                add(t.kind === "sk03" ? "SK03" : t.kind === "pdf" ? "เอกสารเบิกจ่าย (PDF)" : t.kind === "allocation" ? "รายละเอียดการจัดสรรเงินรายบุคคล (Excel)" : "ไฟล์รวมคะแนนรายคน");
                 break;
             case "review.upload":
                 add(monthLabel(t.month));
