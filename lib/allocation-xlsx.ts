@@ -319,7 +319,10 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       null,
     ]
   })
-  const widths = columnWidths(cells)
+  // The sum row under the table (Pong, 2026-11-17): only I, =SUM of I, on
+  // green with the money format; every other cell of the row is left plain.
+  const sumRow = last + 1
+  const widths = columnWidths(rows.length ? [...cells, [null, null, null, null, null, null, null, null, total, null, null]] : cells)
 
   const wb = new ExcelJS.Workbook()
   wb.creator = "P4P"
@@ -374,6 +377,14 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
     })
   })
 
+  if (rows.length) {
+    const c = ws.getRow(sumRow).getCell(9)
+    c.value = { formula: `SUM(I${FIRST_ROW}:I${last})`, result: total }
+    c.font = { name: FONT, size: BODY_SIZE, bold: true }
+    c.numFmt = MONEY
+    c.fill = solid(TOTAL_FILL)
+    ws.getRow(sumRow).height = 21
+  }
   if (rows.length) ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: last, column: 11 } }
   return Buffer.from(await wb.xlsx.writeBuffer())
 }
