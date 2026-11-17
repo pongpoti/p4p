@@ -881,10 +881,10 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    // The owner and the ผู้จัดทำ also get each month's budget and N
-    // (review_inputs), for the budget button on the month cards. Others get
-    // none, and no button.
-    const canBudget = isDashOwner(s.sub) || isReviewAuditee(s.sub)
+    // The owner (admin) also gets each month's budget and N (review_inputs),
+    // for the งบ button on the month cards. Others get none, and no button
+    // (Pong, 2026-11-17: the ผู้จัดทำ no longer types them).
+    const canBudget = isDashOwner(s.sub)
     const budgets: Record<string, unknown> = {}
     if (canBudget) {
       try {
