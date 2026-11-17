@@ -306,6 +306,11 @@
     // One button per month, in time order; the status under it depends on
     // the side shown (redrawn on a role switch).
     function drawTabs() {
+        // The switch shows the side the tabs are drawn for. Without this, a
+        // side remembered from the last visit (auditor) with no month to
+        // open never reached render(), and the switch kept its default
+        // ผู้จัดทำ while every month showed locked (Pong, 2026-11-17).
+        syncRole();
         const a = document.activeElement;
         const had = a instanceof HTMLElement && monthBox.contains(a) ? a.id : "";
         monthBox.replaceChildren(...monthRows.map((m) => {
@@ -532,6 +537,10 @@
     // answer 404 for them). app.js sets this from the session before the
     // tab is first drawn.
     const auditeeOnly = () => document.body.dataset.reviewSide === "auditee";
+    function syncRole() {
+        for (const b of roleBtns)
+            b.setAttribute("aria-pressed", String(b.dataset.role === role));
+    }
     async function open() {
         if (auditeeOnly()) {
             role = "auditee";
@@ -627,8 +636,7 @@
     // comes back to the same control; if it is gone, to the heading of the
     // part it was in, never to the page.
     function render() {
-        for (const b of roleBtns)
-            b.setAttribute("aria-pressed", String(b.dataset.role === role));
+        syncRole();
         if (!st)
             return;
         const s = st;
