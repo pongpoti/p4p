@@ -816,14 +816,18 @@
         const inp = s.inputs;
         const row = el("div", "rv-ro");
         const set = !!(inp && inp.doctors);
-        const go = el("a", (set ? "btn-ghost" : "btn-primary") + " rv-go", set ? "แก้ที่หน้าภาพรวม →" : "กรอกที่หน้าภาพรวม →");
-        go.href = "/dashboard/#overview";
         if (inp) {
             row.append(kv("งบประมาณ (บาท)", budgetText(inp.budget)), kv("จำนวนแพทย์ (N)", inp.doctors ? int(inp.doctors) : "–"), kv("per P4P", baht(inp.per_p4p)));
         }
+        // Only the admin (owner) has the งบ button (Pong, 2026-11-17): the
+        // ผู้จัดทำ sees the numbers, or that the admin has yet to type them.
         if (!set)
-            row.append(el("span", "rv-none", inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ"));
-        row.append(go);
+            row.append(el("span", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (auditeeOnly() ? " (ผู้ดูแลระบบกรอก)" : "")));
+        if (!auditeeOnly()) {
+            const go = el("a", (set ? "btn-ghost" : "btn-primary") + " rv-go", set ? "แก้ที่หน้าภาพรวม →" : "กรอกที่หน้าภาพรวม →");
+            go.href = "/dashboard/#overview";
+            row.append(go);
+        }
         c.append(h, row);
         if (s.build || openRequest(s) || s.request)
             c.append(filesRow(s));
@@ -1363,7 +1367,7 @@
         if (s.roster.sent < s.roster.total)
             why.push("รอแพทย์ส่งครบ");
         if (!s.inputs || !s.inputs.doctors)
-            why.push("กรอกงบประมาณที่หน้าภาพรวม");
+            why.push(auditeeOnly() ? "รอผู้ดูแลระบบกรอกงบประมาณ" : "กรอกงบประมาณที่หน้าภาพรวม");
         if (openRequest(s))
             why.push("รอสร้างไฟล์ใหม่เสร็จ");
         else if (!s.build)

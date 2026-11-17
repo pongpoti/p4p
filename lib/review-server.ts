@@ -268,8 +268,9 @@ export function mountReview(d: ReviewDeps): void {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) return res.status(401).json({ error: "not authenticated" })
-    // Typing budget and N is the ผู้จัดทำ's job, so they get it too.
-    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) return res.status(404).json({ error: "not found" })
+    // The owner (admin) only, like the งบ button (Pong, 2026-11-17; the
+    // ผู้จัดทำ had it from 2026-11-12).
+    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
     const month = String(req.params.month || "")
     if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)

@@ -797,6 +797,7 @@
         .sf-formula { font-size: .9375rem; font-variant-numeric: tabular-nums; }
         .sf-formula .sf-dot { margin: 0 10px; color: var(--muted-foreground); }
         .sf-sub { font-size: .875rem; color: var(--muted-foreground); }
+        .sf-sub .sf-asof { font-style: italic; margin-left: .35em; }
         .sf-stats { display: flex; gap: 10px; margin: 0; }
         .sf-stats div { padding: 8px 14px; border-radius: 12px; background: #F6EFE6; min-width: 112px; }
         .sf-stats dt { font-size: .8125rem; font-weight: 600; color: var(--muted-foreground); white-space: nowrap; }
@@ -813,7 +814,6 @@
         .staffing-table col.c-hire { width: 80px; }
         .staffing-table col.c-lack { width: 84px; }
         .staffing-table col.c-mult { width: 136px; }
-        .staffing-table col.c-upd { width: 176px; }
         .staffing-table col.c-edit { width: 56px; }
         .staffing-table th, .staffing-table td { padding-left: 10px; padding-right: 10px; }
         .staffing-table td { height: 40px; }
@@ -831,7 +831,6 @@
         /* The bar is the department's lack: full width would be 100% short (multiplier 1 + K). */
         .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 56px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
         .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #E2A33A, #C2410C); }
-        .staffing-table .upd { font-size: .875rem; }
         .staffing-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
         .staffing-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
         .staffing-table .acts .icon-btn svg { width: 18px; height: 18px; }
@@ -1349,9 +1348,9 @@
             <p id="staffing-ok" class="sf-ok hidden" role="status"></p>
             <div class="audit-table-wrap glass">
                 <table class="audit-table staffing-table">
-                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-hire"><col class="c-hire"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-upd"><col class="c-edit"></colgroup>
+                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-hire"><col class="c-hire"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
                     <thead>
-                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้าง<br>รายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้าง<br>รายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col">แก้ไขล่าสุด</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
+                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้าง<br>รายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้าง<br>รายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
                     </thead>
                     <tbody id="staffing-rows"></tbody>
                     <tfoot id="staffing-foot"></tfoot>

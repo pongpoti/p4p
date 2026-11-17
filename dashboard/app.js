@@ -1818,14 +1818,32 @@
     const sfK = () => staffing ? staffing.k : 5;
     // "ส.ค. 2569, ต.ค. 2569"
     const sfMonths = (ms) => Array.isArray(ms) ? ms.map(monthLabel).filter(Boolean).join(", ") : "";
-    // "16 พ.ย. 69 22:42", short enough for the table's last-edit column.
-    const fmtShortWhen = (iso) => {
-        const d = new Date(iso);
-        return d.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "2-digit" }) + " " +
-            d.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
-    };
     // "อัตรากำลัง 13-11-69" → "13-11-69"
     const sfSource = () => staffing ? staffing.source.replace(/^อัตรากำลัง\s*/, "") : "";
+    const SF_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+    // "13 พ.ย. 69": the latest edit (Bangkok day) if after the sheet's date, else the sheet's date.
+    const sfAsOf = (data) => {
+        const m = /(\d{1,2})-(\d{1,2})-(\d{2})\s*$/.exec(data.source);
+        // yymmdd numbers in BE, so the sheet's date and an edit compare directly.
+        const sheet = m && +m[2] >= 1 && +m[2] <= 12 ? { key: +m[3] * 10000 + +m[2] * 100 + +m[1], text: +m[1] + " " + SF_MONTHS[+m[2] - 1] + " " + m[3] } : null;
+        let edit = null;
+        for (const d of data.depts) {
+            if (!d.updated_at)
+                continue;
+            const t = new Date(d.updated_at);
+            if (isNaN(t.getTime()))
+                continue;
+            const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "numeric", month: "numeric", year: "numeric" }).formatToParts(t);
+            const get = (type) => Number((parts.find((p) => p.type === type) || { value: "0" }).value);
+            const yy = (get("year") + 543) % 100, mm = get("month"), dd = get("day");
+            const key = yy * 10000 + mm * 100 + dd;
+            if (!edit || key > edit.key)
+                edit = { key, text: dd + " " + SF_MONTHS[mm - 1] + " " + String(yy).padStart(2, "0") };
+        }
+        if (edit && (!sheet || edit.key > sheet.key))
+            return edit.text;
+        return sheet ? sheet.text : "";
+    };
     const sfEmpty = (text, cls) => {
         const tr = emptyRow(text, cls);
         tr.firstElementChild.setAttribute("colspan", String(staffingTable.tHead.rows[0].cells.length));
@@ -1856,9 +1874,6 @@
         bar.appendChild(fill);
         mult.appendChild(bar);
         tr.appendChild(mult);
-        const upd = el("td", "upd" + (d.updated_at ? "" : " muted"), d.updated_at ? fmtShortWhen(d.updated_at) + (d.updated_by ? " · " + d.updated_by : "") : "ค่าตั้งต้น " + sfSource());
-        upd.title = d.updated_at ? "แก้ไขล่าสุด " + fmtWhen(d.updated_at) + (d.updated_by ? " โดย " + d.updated_by : "") : "ค่าตั้งต้นจากแผ่น" + (staffing ? staffing.source : "");
-        tr.appendChild(upd);
         if (edit !== "none") {
             const acts = el("td", "acts");
             const b = el("button", "icon-btn edit");
@@ -1892,9 +1907,16 @@
             staffingEditCol = false;
         }
         staffingK.textContent = String(data.k);
-        staffingSub.textContent = (data.canEdit
+        // The แก้ไขล่าสุด column is gone (Pong, 2026-11-17); the line under
+        // the title ends with when the numbers were last brought up to date,
+        // in italics: the staffing sheet's date (13-11-69 → 13 พ.ย. 69), or
+        // the latest edit in the tab if there is a later one.
+        staffingSub.replaceChildren(data.canEdit
             ? "แก้ไขแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขใหม่เมื่อสร้างครั้งถัดไป"
-            : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข") + " · ค่าตั้งต้นจากแผ่น" + data.source;
+            : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข");
+        const asOf = sfAsOf(data);
+        if (asOf)
+            staffingSub.appendChild(el("em", "sf-asof", "ปรับปรุงข้อมูล วันที่ " + asOf));
         if (!data.installed && data.canEdit) {
             staffingAlert.textContent = "ยังไม่ได้ติดตั้งตารางอัตรากำลังใน Supabase จึงแสดงค่าตั้งต้น " + sfSource() +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor";
@@ -1938,7 +1960,6 @@
         const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน");
         shortCell.setAttribute("colspan", "2");
         foot.appendChild(shortCell);
-        foot.appendChild(el("td"));
         if (staffingEditCol)
             foot.appendChild(el("td"));
         staffingFoot.replaceChildren(foot);
