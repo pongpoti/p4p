@@ -47,6 +47,7 @@ import type { AxiosStatic } from "axios"
 
 const core = require("./review-core") as {
   parseMonth(key: unknown): { be: number; month: number } | null
+  approvalPdfName(key: unknown): string | null
   parseBudget(v: unknown, max: number): number | null
   parseCount(v: unknown, max: number): number | null
   parseScore(v: unknown): number | null
@@ -537,9 +538,11 @@ export function mountReview(d: ReviewDeps): void {
         { headers: json(), timeout: 8000 })
       await d.audit(req, g.s, "review.download", { month: g.month, kind: "pdf", round: row.round_no })
       // Opens in the browser's PDF viewer (the tab links it in a new tab);
-      // ?download=1 saves it under a readable name instead.
+      // ?download=1 saves it under the form's name instead
+      // ("แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf", Pong 2026-11-17).
+      const name = core.approvalPdfName(g.month) || "P4P_" + g.month + "_approved.pdf"
       res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
-        (req.query.download === "1" ? "&download=" + encodeURIComponent("P4P_" + g.month + "_approved.pdf") : ""))
+        (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : ""))
     } catch (e: any) { fail(res, "pdf download", e) }
   })
 

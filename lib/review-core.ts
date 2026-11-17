@@ -320,6 +320,19 @@ function parseMonth(key: unknown): { be: number; month: number } | null {
   return { be: parseInt(m[1], 10), month }
 }
 
+const THAI_MONTH_NAMES = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+
+/**
+ * The approval PDF's saved name (Pong, 2026-11-17): "2569_08" →
+ * "แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf" (full Thai month, BE year).
+ */
+function approvalPdfName(key: unknown): string | null {
+  const p = parseMonth(key)
+  if (!p) return null
+  return "แบบฟอร์ม P4P_SK02 เดือน" + THAI_MONTH_NAMES[p.month - 1] + " " + p.be + ".pdf"
+}
+
 /** Budget as typed: whole baht from 1, no decimals, commas allowed (Pong, 2026-11-10). */
 function parseBudget(v: unknown, max: number): number | null {
   const s = String(v ?? "").replace(/,/g, "").trim()
@@ -374,6 +387,7 @@ function scoreFlag(score: number | null | undefined): "high" | "low" | null {
   moneyCheck,
   w9Rate,
   parseMonth,
+  approvalPdfName,
   parseBudget,
   parseCount,
   parseScore,
