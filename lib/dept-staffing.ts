@@ -2,13 +2,18 @@
  * lib/dept-staffing.ts
  *
  * Each STAFF department's physician staffing (FTE, doctors on staff, doctors
- * hired by the day) and the department multiplier worked out from it, shared
- * by the SK03 build (process/sk03-formula.ts, in GitHub Actions) and the
- * Vercel app (lib/staffing-server.ts, the dashboard's อัตรากำลัง tab). No
- * network, no dependencies.
+ * hired by the month and by the day) and the department multiplier worked
+ * out from it, shared by the SK03 build (process/sk03-formula.ts, in GitHub
+ * Actions) and the Vercel app (lib/staffing-server.ts, the dashboard's
+ * อัตรากำลัง tab). No network, no dependencies.
  *
- *   lack       = max(0, 1 − (on staff + daily hires) ÷ FTE)
+ *   lack       = max(0, 1 − (on staff + monthly hires + daily hires) ÷ FTE)
  *   multiplier = 1 + LACK_K × lack
+ *
+ * Monthly hires (ลูกจ้างชั่วคราว รายเดือน) have their own column since
+ * 2026-11-17 (Pong: "add column จ้างรายเดือน"). The sheet's รวมอัตราตามจริง
+ * already counts them, so on staff is รวมอัตราตามจริง less the monthly hires
+ * (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed.
  *
  * The numbers start as the physician staffing sheet of 13 Nov 2026
  * (13-11-69, ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม
@@ -24,11 +29,12 @@
 
 export interface DeptStaffing {
   no: number
-  name: string  // department name as in Supabase / DEPT_COLORS
+  name: string    // department name as in Supabase / DEPT_COLORS
   code: string
-  fte: number   // doctors the department should have (จำนวนที่ควรมี, FTE)
-  staff: number // doctors on staff (รวมอัตราตามจริง)
-  daily: number // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
+  fte: number     // doctors the department should have (จำนวนที่ควรมี, FTE)
+  staff: number   // doctors on staff (รวมอัตราตามจริง less the monthly hires)
+  monthly: number // doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน), its own column since 2026-11-17
+  daily: number   // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
 }
 
 /** A department as saved: the numbers in use, and who last changed them (null: never edited). */
@@ -44,45 +50,49 @@ export const LACK_K = 5
 export const STAFFING_SOURCE = "อัตรากำลัง 13-11-69"
 
 /** Limits of each number, as the dashboard and dept_staffing take them. FTE is at least 1 (it divides). */
-export const STAFFING_LIMITS: Record<"fte" | "staff" | "daily", { min: number; max: number }> = {
+export const STAFFING_LIMITS: Record<"fte" | "staff" | "monthly" | "daily", { min: number; max: number }> = {
   fte: { min: 1, max: 999 },
   staff: { min: 0, max: 999 },
+  monthly: { min: 0, max: 999 },
   daily: { min: 0, max: 999 },
 }
 
 /**
  * The 18 STAFF departments in the order of FORMULA.md's "Departments and
  * Multipliers" table, with the numbers of the physician staffing sheet of
- * 13 Nov 2026 (Pong, 2026-11-13; daily hires counted since 2026-11-16).
+ * 13 Nov 2026 (Pong, 2026-11-13; daily hires counted since 2026-11-16;
+ * monthly hires in their own column since 2026-11-17).
  */
 export const DEPT_STAFFING_DEFAULTS: DeptStaffing[] = [
-  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 21, daily: 1 },
-  { no: 2,  name: "จักษุวิทยา",                          code: "EYE", fte: 9,  staff: 8,  daily: 0 },
-  { no: 3,  name: "จิตเวชและยาเสพติด",                   code: "PSY", fte: 4,  staff: 4,  daily: 2 },
-  { no: 4,  name: "เทคนิคการแพทย์และพยาธิวิทยาคลินิก",   code: "CPT", fte: 1,  staff: 1,  daily: 0 },
-  { no: 5,  name: "นิติเวช",                             code: "FOR", fte: 3,  staff: 2,  daily: 0 },
-  { no: 6,  name: "ผู้ป่วยนอก",                           code: "OPD", fte: 5,  staff: 14, daily: 27 },
-  { no: 7,  name: "พยาธิวิทยากายวิภาค",                  code: "PAT", fte: 2,  staff: 3,  daily: 0 },
-  { no: 8,  name: "รังสีวิทยา",                           code: "RAD", fte: 15, staff: 14, daily: 0 },
-  { no: 9,  name: "วิสัญญีวิทยา",                         code: "ANS", fte: 15, staff: 9,  daily: 0 },
-  { no: 10, name: "เวชกรรมฟื้นฟู",                        code: "RHB", fte: 6,  staff: 4,  daily: 0 },
-  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 4,  daily: 15 },
-  { no: 12, name: "เวชศาสตร์ฉุกเฉิน",                     code: "EMR", fte: 10, staff: 10, daily: 0 },
-  { no: 13, name: "ศัลยกรรม",                            code: "SUR", fte: 39, staff: 34, daily: 1 },
-  { no: 14, name: "ศัลยกรรมออร์โธปิดิกส์",                code: "ORT", fte: 17, staff: 15, daily: 0 },
-  { no: 15, name: "สูติ-นรีเวชกรรม",                      code: "OBG", fte: 18, staff: 13, daily: 2 },
-  { no: 16, name: "โสต ศอ นาสิก",                         code: "ENT", fte: 9,  staff: 8,  daily: 0 },
-  { no: 17, name: "อาชีวเวชกรรม",                         code: "OCM", fte: 5,  staff: 3,  daily: 0 },
-  { no: 18, name: "อายุรกรรม",                            code: "MED", fte: 47, staff: 37, daily: 4 },
+  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 21, monthly: 0, daily: 1 },
+  { no: 2,  name: "จักษุวิทยา",                          code: "EYE", fte: 9,  staff: 7,  monthly: 1, daily: 0 },
+  { no: 3,  name: "จิตเวชและยาเสพติด",                   code: "PSY", fte: 4,  staff: 4,  monthly: 0, daily: 2 },
+  { no: 4,  name: "เทคนิคการแพทย์และพยาธิวิทยาคลินิก",   code: "CPT", fte: 1,  staff: 1,  monthly: 0, daily: 0 },
+  { no: 5,  name: "นิติเวช",                             code: "FOR", fte: 3,  staff: 2,  monthly: 0, daily: 0 },
+  { no: 6,  name: "ผู้ป่วยนอก",                           code: "OPD", fte: 5,  staff: 14, monthly: 0, daily: 27 },
+  { no: 7,  name: "พยาธิวิทยากายวิภาค",                  code: "PAT", fte: 2,  staff: 3,  monthly: 0, daily: 0 },
+  { no: 8,  name: "รังสีวิทยา",                           code: "RAD", fte: 15, staff: 14, monthly: 0, daily: 0 },
+  { no: 9,  name: "วิสัญญีวิทยา",                         code: "ANS", fte: 15, staff: 9,  monthly: 0, daily: 0 },
+  { no: 10, name: "เวชกรรมฟื้นฟู",                        code: "RHB", fte: 6,  staff: 4,  monthly: 0, daily: 0 },
+  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 4,  monthly: 0, daily: 15 },
+  { no: 12, name: "เวชศาสตร์ฉุกเฉิน",                     code: "EMR", fte: 10, staff: 10, monthly: 0, daily: 0 },
+  { no: 13, name: "ศัลยกรรม",                            code: "SUR", fte: 39, staff: 34, monthly: 0, daily: 1 },
+  { no: 14, name: "ศัลยกรรมออร์โธปิดิกส์",                code: "ORT", fte: 17, staff: 15, monthly: 0, daily: 0 },
+  { no: 15, name: "สูติ-นรีเวชกรรม",                      code: "OBG", fte: 18, staff: 13, monthly: 0, daily: 2 },
+  { no: 16, name: "โสต ศอ นาสิก",                         code: "ENT", fte: 9,  staff: 8,  monthly: 0, daily: 0 },
+  { no: 17, name: "อาชีวเวชกรรม",                         code: "OCM", fte: 5,  staff: 3,  monthly: 0, daily: 0 },
+  { no: 18, name: "อายุรกรรม",                            code: "MED", fte: 47, staff: 36, monthly: 1, daily: 4 },
 ]
 
-/** Share of the department's FTE not filled by staff and daily hires (0 when fully or over-staffed). */
-export function deptLack(d: { fte: number; staff: number; daily: number }): number {
-  return Math.max(0, 1 - (d.staff + d.daily) / d.fte)
+type Counts = { fte: number; staff: number; monthly: number; daily: number }
+
+/** Share of the department's FTE not filled by staff, monthly and daily hires (0 when fully or over-staffed). */
+export function deptLack(d: Counts): number {
+  return Math.max(0, 1 - (d.staff + d.monthly + d.daily) / d.fte)
 }
 
 /** The department's multiplier on the extra above 10,000: 1 + LACK_K × lack. */
-export function deptMultiplier(d: { fte: number; staff: number; daily: number }): number {
+export function deptMultiplier(d: Counts): number {
   return 1 + LACK_K * deptLack(d)
 }
 
@@ -102,13 +112,20 @@ export function parseStaffCount(v: unknown, field: keyof typeof STAFFING_LIMITS)
 
 /**
  * The 18 departments with the saved numbers (rows of dept_staffing:
- * {code, fte, staff, daily, updated_at, updated_by}) laid over the starting
- * ones, in the fixed order. A department with no row, or with a row whose
- * numbers are out of range, keeps its starting numbers and is listed in
- * `missing` / `bad`; a row for a code that is not a department is listed in
- * `unknown` and left out.
+ * {code, fte, staff, monthly, daily, updated_at, updated_by}) laid over the
+ * starting ones, in the fixed order. A department with no row, or with a
+ * row whose numbers are out of range, keeps its starting numbers and is
+ * listed in `missing` / `bad`; a row for a code that is not a department is
+ * listed in `unknown` and left out.
+ *
+ * A row with no monthly field at all comes from a table made before
+ * 2026-11-17, whose staff still counts the monthly hires: it is taken with
+ * monthly 0 (the same total, so the same multiplier) and its code is listed
+ * in `noMonthly` until the SQL file is run again.
  */
-export function mergeStaffing(rows: unknown): { list: DeptStaffingRow[]; missing: string[]; bad: string[]; unknown: string[] } {
+export function mergeStaffing(rows: unknown): {
+  list: DeptStaffingRow[]; missing: string[]; bad: string[]; unknown: string[]; noMonthly: string[]
+} {
   const byCode = new Map<string, Record<string, unknown>>()
   const unknown: string[] = []
   const known = new Set(DEPT_STAFFING_DEFAULTS.map((d) => d.code))
@@ -118,19 +135,22 @@ export function mergeStaffing(rows: unknown): { list: DeptStaffingRow[]; missing
     if (known.has(code)) byCode.set(code, r as Record<string, unknown>)
     else unknown.push(code)
   }
-  const missing: string[] = [], bad: string[] = []
+  const missing: string[] = [], bad: string[] = [], noMonthly: string[] = []
   const list = DEPT_STAFFING_DEFAULTS.map((d): DeptStaffingRow => {
     const r = byCode.get(d.code)
     if (!r) { missing.push(d.code); return { ...d, updated_at: null, updated_by: null } }
     const fte = parseStaffCount(r.fte, "fte"), staff = parseStaffCount(r.staff, "staff"), daily = parseStaffCount(r.daily, "daily")
-    if (fte === null || staff === null || daily === null) { bad.push(d.code); return { ...d, updated_at: null, updated_by: null } }
+    const legacy = !("monthly" in r)
+    const monthly = legacy ? 0 : parseStaffCount(r.monthly, "monthly")
+    if (fte === null || staff === null || monthly === null || daily === null) { bad.push(d.code); return { ...d, updated_at: null, updated_by: null } }
+    if (legacy) noMonthly.push(d.code)
     return {
-      ...d, fte, staff, daily,
+      ...d, fte, staff, monthly, daily,
       updated_at: typeof r.updated_at === "string" ? r.updated_at : null,
       updated_by: typeof r.updated_by === "string" ? r.updated_by : null,
     }
   })
-  return { list, missing, bad, unknown }
+  return { list, missing, bad, unknown, noMonthly }
 }
 
 /** The department with this code, or null. */
