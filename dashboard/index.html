@@ -808,11 +808,12 @@
         .sf-ok { border-left: 4px solid var(--success); background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
         .staffing-table col.c-sno { width: 48px; }
         .staffing-table col.c-code { width: 60px; }
-        .staffing-table col.c-n { width: 64px; }
-        .staffing-table col.c-hire { width: 104px; }
-        .staffing-table col.c-lack { width: 96px; }
-        .staffing-table col.c-mult { width: 160px; }
-        .staffing-table col.c-upd { width: 190px; }
+        /* Narrow enough that department names keep about 190px, as before the monthly column. */
+        .staffing-table col.c-n { width: 60px; }
+        .staffing-table col.c-hire { width: 80px; }
+        .staffing-table col.c-lack { width: 84px; }
+        .staffing-table col.c-mult { width: 136px; }
+        .staffing-table col.c-upd { width: 176px; }
         .staffing-table col.c-edit { width: 56px; }
         .staffing-table th, .staffing-table td { padding-left: 10px; padding-right: 10px; }
         .staffing-table td { height: 40px; }
@@ -828,7 +829,7 @@
         .staffing-table .mv { display: inline-block; min-width: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .staffing-table tr:not(.short) .mv { font-weight: 500; color: var(--muted-foreground); }
         /* The bar is the department's lack: full width would be 100% short (multiplier 1 + K). */
-        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 80px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
+        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 56px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
         .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #E2A33A, #C2410C); }
         .staffing-table .upd { font-size: .875rem; }
         .staffing-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
@@ -1338,7 +1339,7 @@
                 <table class="audit-table staffing-table">
                     <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-hire"><col class="c-hire"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-upd"><col class="c-edit"></colgroup>
                     <thead>
-                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้างรายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้างรายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col">แก้ไขล่าสุด</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
+                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้าง<br>รายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้าง<br>รายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col">แก้ไขล่าสุด</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
                     </thead>
                     <tbody id="staffing-rows"></tbody>
                     <tfoot id="staffing-foot"></tfoot>

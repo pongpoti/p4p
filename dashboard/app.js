@@ -1880,8 +1880,10 @@
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly))));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.daily))));
         foot.appendChild(el("td", "num total", fmtNum(sum(sfHave))));
-        foot.appendChild(el("td"));
-        foot.appendChild(el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน"));
+        // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
+        const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน");
+        shortCell.setAttribute("colspan", "2");
+        foot.appendChild(shortCell);
         foot.appendChild(el("td"));
         if (staffingEditCol)
             foot.appendChild(el("td"));
