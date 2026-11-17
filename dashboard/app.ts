@@ -1001,7 +1001,7 @@
                 if (t.build === true) add("เริ่มสร้าง SK03")
                 break
             case "review.download":
-                add(monthLabel(t.month)); add(t.kind === "sk03" ? "SK03" : t.kind === "pdf" ? "เอกสารเบิกจ่าย (PDF)" : "ไฟล์รวมคะแนนรายคน")
+                add(monthLabel(t.month)); add(t.kind === "sk03" ? "SK03" : t.kind === "pdf" ? "เอกสารเบิกจ่าย (PDF)" : t.kind === "allocation" ? "รายละเอียดการจัดสรรเงินรายบุคคล (Excel)" : "ไฟล์รวมคะแนนรายคน")
                 break
             case "review.upload":
                 add(monthLabel(t.month)); add(t.kind === "sk03" ? "SK03" : "ไฟล์รวมคะแนนรายคน"); add(t.file)
@@ -1046,15 +1046,20 @@
             case "staffing.save": {
                 // "อายุรกรรม (MED) · จ้างรายวัน 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
                 add(t.name ? t.name + (t.code ? " (" + t.code + ")" : "") : t.code)
-                const was = (t.before || {}) as Record<string, unknown>, now = (t.after || {}) as Record<string, unknown>
+                // Saves from before 2026-11-17 have no monthly hires (their staff counts them): 0.
+                const withMonthly = (r: unknown): Record<string, unknown> => {
+                    const o = (r || {}) as Record<string, unknown>
+                    return o.monthly === undefined ? { ...o, monthly: 0 } : o
+                }
+                const was = withMonthly(t.before), now = withMonthly(t.after)
                 let changed = 0
-                for (const [k, label] of [["fte", "FTE"], ["staff", "มีจริง"], ["daily", "จ้างรายวัน"]]) {
+                for (const [k, label] of [["fte", "FTE"], ["staff", "มีจริง"], ["monthly", "จ้างรายเดือน"], ["daily", "จ้างรายวัน"]]) {
                     if (was[k] !== now[k]) { add(label + " " + auditValue("", was[k]) + " → " + auditValue("", now[k])); changed++ }
                 }
                 if (!changed) add("ตัวเลขเท่าเดิม")
                 const counts = (r: Record<string, unknown>): StaffingCounts | null =>
-                    [r.fte, r.staff, r.daily].every((n) => Number.isInteger(n)) && (r.fte as number) > 0
-                        ? { fte: r.fte as number, staff: r.staff as number, daily: r.daily as number } : null
+                    [r.fte, r.staff, r.monthly, r.daily].every((n) => Number.isInteger(n)) && (r.fte as number) > 0
+                        ? { fte: r.fte as number, staff: r.staff as number, monthly: r.monthly as number, daily: r.daily as number } : null
                 const cb = counts(was), ca = counts(now)
                 if (cb && ca && typeof t.k === "number") {
                     add("ตัวคูณสาขา " + fmtMult(cb, t.k) + " → " + fmtMult(ca, t.k))
@@ -1659,8 +1664,8 @@
 
     // ── อัตรากำลัง: each department's staffing and multiplier ────────────
     // Every dashboard user sees the list (lib/staffing-server.ts); the owner
-    // gets an edit button on each row for on staff and daily hires; FTE is
-    // locked (Pong, 2026-11-16). A save that changes
+    // gets an edit button on each row for on staff, monthly and daily hires;
+    // FTE is locked (Pong, 2026-11-16). A save that changes
     // a number queues a new SK03 build of each ตรวจสอบ month still with the
     // ผู้จัดทำ; any other month reads the new numbers on its next build.
     interface StaffingDept {
@@ -1669,6 +1674,7 @@
         code: string
         fte: number
         staff: number
+        monthly: number
         daily: number
         lack: number
         multiplier: number
@@ -1677,12 +1683,14 @@
     }
     interface StaffingData {
         installed: boolean
+        // The table is from before the monthly column: shown, not saved, until the SQL is run again.
+        needsUpdate?: boolean
         canEdit: boolean
         k: number
         source: string
         depts: StaffingDept[]
     }
-    type StaffingCounts = { fte: number; staff: number; daily: number }
+    type StaffingCounts = { fte: number; staff: number; monthly: number; daily: number }
     const PENCIL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
     const staffingRows  = document.getElementById("staffing-rows") as HTMLElement
     const staffingFoot  = document.getElementById("staffing-foot") as HTMLElement
@@ -1697,6 +1705,7 @@
     const sfForm  = document.getElementById("staffing-form") as HTMLFormElement
     const sfFte   = document.getElementById("staffing-fte") as HTMLInputElement
     const sfStaff = document.getElementById("staffing-staff") as HTMLInputElement
+    const sfMonthly = document.getElementById("staffing-monthly") as HTMLInputElement
     const sfDaily = document.getElementById("staffing-daily") as HTMLInputElement
     const sfLack  = document.getElementById("staffing-lack") as HTMLElement
     const sfMult  = document.getElementById("staffing-mult") as HTMLElement
@@ -1704,10 +1713,11 @@
     const sfError = document.getElementById("staffing-error") as HTMLElement
     const sfSave  = document.getElementById("staffing-save") as HTMLButtonElement
     const sfCloses = Array.from(sfDlg.querySelectorAll<HTMLButtonElement>("[data-close]"))
-    // FTE is shown but locked (Pong, 2026-11-16): only on staff and daily
-    // hires are edited; the save sends the department's FTE unchanged.
+    // FTE is shown but locked (Pong, 2026-11-16): only on staff, monthly and
+    // daily hires are edited; the save sends the department's FTE unchanged.
     sfFte.disabled = true
-    for (const i of [sfStaff, sfDaily]) numberField(i, false, 3, 0)
+    const sfInputs = [sfStaff, sfMonthly, sfDaily]
+    for (const i of sfInputs) numberField(i, false, 3, 0)
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy) sfDlg.close() })
     sfDlg.addEventListener("cancel", (ev) => { if (sfBusy) ev.preventDefault() })
@@ -1722,7 +1732,8 @@
     // The same rule as lib/dept-staffing.ts, shown from the counts in whole
     // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
     // to 0.1%, multiplier to 0.01. The SK03 build uses the unrounded value.
-    const sfShort = (d: StaffingCounts): number => Math.max(0, d.fte - d.staff - d.daily)
+    const sfHave = (d: StaffingCounts): number => d.staff + d.monthly + d.daily
+    const sfShort = (d: StaffingCounts): number => Math.max(0, d.fte - sfHave(d))
     const sfFixed = (n: number, places: number): string => {
         const p = places === 1 ? 10 : 100
         return Math.floor(n / p) + "." + String(n % p).padStart(places, "0")
@@ -1777,8 +1788,9 @@
         tr.appendChild(el("td", "code", d.code))
         tr.appendChild(el("td", "num", fmtNum(d.fte)))
         tr.appendChild(el("td", "num", fmtNum(d.staff)))
+        tr.appendChild(el("td", "num" + (d.monthly ? "" : " muted"), fmtNum(d.monthly)))
         tr.appendChild(el("td", "num" + (d.daily ? "" : " muted"), fmtNum(d.daily)))
-        tr.appendChild(el("td", "num total", fmtNum(d.staff + d.daily)))
+        tr.appendChild(el("td", "num total", fmtNum(sfHave(d))))
         tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)))
         const mult = el("td", "mult")
         mult.appendChild(el("span", "mv", fmtMult(d, sfK())))
@@ -1812,7 +1824,7 @@
     function renderStaffing(): void {
         const data = staffing
         if (!data) return
-        const edit = !data.canEdit ? "none" : data.installed ? "edit" : "locked"
+        const edit = !data.canEdit ? "none" : data.installed && !data.needsUpdate ? "edit" : "locked"
         if (staffingEditCol && !data.canEdit) {
             // Read-only: no edit column at all.
             staffingTable.querySelector("col.c-edit")?.remove()
@@ -1833,6 +1845,10 @@
             staffingAlert.textContent = "ยังไม่ได้ติดตั้งตารางอัตรากำลังใน Supabase จึงแสดงค่าตั้งต้น " + sfSource() +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor"
             staffingAlert.className = "sf-alert"
+        } else if (data.needsUpdate && data.canEdit) {
+            staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องจ้างรายเดือน (มีจริงยังรวมจ้างรายเดือนอยู่ ตัวคูณสาขาไม่เปลี่ยน)" +
+                " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
+            staffingAlert.className = "sf-alert"
         } else {
             staffingAlert.className = "sf-alert hidden"
         }
@@ -1850,9 +1866,9 @@
             return div
         }
         staffingStats.replaceChildren(
-            stat("กลุ่มงานที่ขาด", fmtNum(short.length), "จาก " + fmtNum(ds.length)),
+            stat("กลุ่มงานที่ขาดแคลน", fmtNum(short.length), "จาก " + fmtNum(ds.length)),
             stat("ตัวคูณสูงสุด", topDept ? fmtMult(topDept, data.k) : "1.00", ds.filter((d) => d.multiplier === top).map((d) => d.code).join(" ")),
-            stat("แพทย์รวม", fmtNum(sum((d) => d.staff + d.daily)), "FTE " + fmtNum(sum((d) => d.fte))),
+            stat("แพทย์รวม", fmtNum(sum(sfHave)), "FTE " + fmtNum(sum((d) => d.fte))),
         )
         staffingRows.replaceChildren(...ds.map((d) => staffingRow(d, edit)))
         const foot = el("tr")
@@ -1862,10 +1878,13 @@
         foot.appendChild(label)
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.fte))))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.staff))))
+        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly))))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.daily))))
-        foot.appendChild(el("td", "num total", fmtNum(sum((d) => d.staff + d.daily))))
-        foot.appendChild(el("td"))
-        foot.appendChild(el("td", "muted", "ขาด " + fmtNum(short.length) + " กลุ่มงาน"))
+        foot.appendChild(el("td", "num total", fmtNum(sum(sfHave))))
+        // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
+        const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน")
+        shortCell.setAttribute("colspan", "2")
+        foot.appendChild(shortCell)
         if (staffingEditCol) foot.appendChild(el("td"))
         staffingFoot.replaceChildren(foot)
     }
@@ -1902,10 +1921,12 @@
         return /^\d{1,3}$/.test(d) && Number(d) >= min ? Number(d) : null
     }
     const sfValues = (): StaffingCounts | null => {
-        const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0), daily = sfCount(sfDaily.value, 0)
-        return fte === null || staff === null || daily === null ? null : { fte, staff, daily }
+        const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0)
+        const monthly = sfCount(sfMonthly.value, 0), daily = sfCount(sfDaily.value, 0)
+        return fte === null || staff === null || monthly === null || daily === null ? null : { fte, staff, monthly, daily }
     }
-    const sfSame = (a: StaffingCounts, b: StaffingCounts): boolean => a.fte === b.fte && a.staff === b.staff && a.daily === b.daily
+    const sfSame = (a: StaffingCounts, b: StaffingCounts): boolean =>
+        a.fte === b.fte && a.staff === b.staff && a.monthly === b.monthly && a.daily === b.daily
 
     // The lack and multiplier as typed, beside the saved multiplier when it changes.
     const paintStaffing = (): void => {
@@ -1924,7 +1945,7 @@
         sfMult.append(document.createTextNode(next))
         if (!sfBusy) sfSave.disabled = sfSame(v, d)
     }
-    for (const i of [sfStaff, sfDaily]) i.addEventListener("input", paintStaffing)
+    for (const i of sfInputs) i.addEventListener("input", paintStaffing)
 
     function openStaffing(d: StaffingDept): void {
         if (sfBusy) return
@@ -1932,6 +1953,7 @@
         sfSub.textContent = d.name + " (" + d.code + ")"
         sfFte.value = String(d.fte)
         sfStaff.value = String(d.staff)
+        sfMonthly.value = String(d.monthly)
         sfDaily.value = String(d.daily)
         sfError.classList.add("hidden")
         sfMeta.textContent = d.updated_at
@@ -1951,7 +1973,7 @@
         const label = sfSave.textContent
         const busy = (on: boolean): void => {
             sfBusy = on
-            for (const i of [sfStaff, sfDaily]) i.readOnly = on
+            for (const i of sfInputs) i.readOnly = on
             for (const b of sfCloses) b.disabled = on
         }
         busy(true)

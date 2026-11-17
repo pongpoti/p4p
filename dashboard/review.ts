@@ -2070,6 +2070,15 @@
             p.setAttribute("aria-busy", "true")
             c.append(p)
         }
+        // The per-person allocation list (Pong, 2026-11-17): made on request
+        // from the approved round, so it does not wait for the PDF.
+        const xl = el("div", "rv-actions")
+        const xa = el("a", "rv-link", "ดาวน์โหลดรายละเอียดการจัดสรรเงินรายบุคคล (Excel)")
+        xa.href = "/dashboard/api/review/" + s.month + "/allocation"
+        xa.id = "rv-allocation-dl"
+        xa.append(el("span", "sr-only", " " + shortMonth(s.month)))
+        xl.append(xa)
+        c.append(xl)
         c.append(kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
         const n = noteEl("pdf")
         if (n) c.append(n)

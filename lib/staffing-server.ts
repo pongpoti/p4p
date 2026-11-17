@@ -10,13 +10,17 @@
  *   GET /dashboard/api/staffing         every department, in the SK03 order
  *                                       (?view=1 logs the visit); any
  *                                       dashboard user. canEdit: the owner.
- *   PUT /dashboard/api/staffing/:code   {fte, staff, daily}: one department,
- *                                       owner only (404 for anyone else)
+ *   PUT /dashboard/api/staffing/:code   {fte, staff, monthly, daily}: one
+ *                                       department, owner only (404 for
+ *                                       anyone else)
  *
  * The numbers live in the Supabase table dept_staffing, saved through
  * staffing_save (scripts/dept-staffing-2026-11.sql). Until that file has
  * been run the list is the starting numbers of lib/dept-staffing.ts with
- * installed: false, and a save answers 503 saying what to run. Every save is
+ * installed: false, and a save answers 503 saying what to run. A table made
+ * before the monthly-hires column (2026-11-17) is read as it is, with
+ * monthly 0 and needsUpdate: true, and a save answers 503 the same way
+ * until the file has been run again. Every save is
  * in ประวัติการใช้งาน as staffing.save, with the numbers and multiplier
  * before and after. When a number changed, staffing_save also queues a new
  * build of every ตรวจสอบ month still on the auditee's side (rebuild: those
@@ -52,13 +56,15 @@ const notInstalled = (e: any): boolean => {
     .test(String(d.message || ""))
 }
 const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการบันทึกอัตรากำลัง ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor"
-const FIELD_ERROR: Record<"fte" | "staff" | "daily", string> = {
+const FIELD_ERROR: Record<"fte" | "staff" | "monthly" | "daily", string> = {
   fte: "FTE: ใส่จำนวนเต็ม 1 ถึง 999",
   staff: "มีจริง: ใส่จำนวนเต็ม 0 ถึง 999",
+  monthly: "จ้างรายเดือน: ใส่จำนวนเต็ม 0 ถึง 999",
   daily: "จ้างรายวัน: ใส่จำนวนเต็ม 0 ถึง 999",
 }
+const FIELDS = ["fte", "staff", "monthly", "daily"] as const
 
-type Counts = { fte: number; staff: number; daily: number }
+type Counts = { fte: number; staff: number; monthly: number; daily: number }
 const round4 = (n: number): number => Math.round(n * 10000) / 10000
 /** One department as the tab shows it: the numbers, lack and multiplier (4 decimals). */
 const withMultiplier = (d: import("./dept-staffing").DeptStaffingRow) => ({
@@ -66,8 +72,9 @@ const withMultiplier = (d: import("./dept-staffing").DeptStaffingRow) => ({
   lack: round4(staffing.deptLack(d)),
   multiplier: round4(staffing.deptMultiplier(d)),
 })
+// A row from before the monthly column has none: 0 (its staff still counts them).
 const countsOf = (r: any): Counts | null =>
-  r ? { fte: Number(r.fte), staff: Number(r.staff), daily: Number(r.daily) } : null
+  r ? { fte: Number(r.fte), staff: Number(r.staff), monthly: Number(r.monthly ?? 0), daily: Number(r.daily) } : null
 /** The months staffing_save queued a build of (YYYY_MM, oldest first). */
 const monthsOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((m): m is string => typeof m === "string" && /^\d{4}_\d{2}$/.test(m)) : []
@@ -83,7 +90,8 @@ export function mountStaffing(d: StaffingDeps): void {
     let installed = true
     let rows: unknown = []
     try {
-      const r = await d.axios.get(d.supabaseUrl + "/rest/v1/dept_staffing?select=code,fte,staff,daily,updated_at,updated_by",
+      // select=*: a table made before the monthly column still reads.
+      const r = await d.axios.get(d.supabaseUrl + "/rest/v1/dept_staffing?select=*",
         { headers: d.serviceHeaders(), timeout: 8000 })
       rows = r.data
     } catch (e: any) {
@@ -98,6 +106,7 @@ export function mountStaffing(d: StaffingDeps): void {
     const merged = staffing.mergeStaffing(rows)
     res.json({
       installed,
+      needsUpdate: installed && merged.noMonthly.length > 0,
       canEdit: d.isDashOwner(s.sub),
       k: staffing.LACK_K,
       source: staffing.STAFFING_SOURCE,
@@ -115,7 +124,7 @@ export function mountStaffing(d: StaffingDeps): void {
     if (!dept) return res.status(404).json({ error: "ไม่พบกลุ่มงานนี้" })
     const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>
     const next: Partial<Counts> = {}
-    for (const f of ["fte", "staff", "daily"] as const) {
+    for (const f of FIELDS) {
       const v = staffing.parseStaffCount(body[f], f)
       if (v === null) return res.status(400).json({ error: FIELD_ERROR[f], field: f })
       next[f] = v
@@ -123,12 +132,13 @@ export function mountStaffing(d: StaffingDeps): void {
     const counts = next as Counts
     try {
       const out = await d.callServiceRpc("staffing_save", {
-        p_code: dept.code, p_fte: counts.fte, p_staff: counts.staff, p_daily: counts.daily, p_actor: s.name,
+        p_code: dept.code, p_fte: counts.fte, p_staff: counts.staff, p_monthly: counts.monthly, p_daily: counts.daily,
+        p_actor: s.name,
       })
       const before = countsOf(out && out.before)
       const after = countsOf(out && out.after) || counts
       // A department never saved before had the starting numbers.
-      const was = before || { fte: dept.fte, staff: dept.staff, daily: dept.daily }
+      const was = before || { fte: dept.fte, staff: dept.staff, monthly: dept.monthly, daily: dept.daily }
       const rebuild = monthsOf(out && out.rebuild)
       await d.audit(req, { sub: s.sub, name: s.name }, "staffing.save", {
         code: dept.code, name: dept.name, before: was, after, k: staffing.LACK_K,

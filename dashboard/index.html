@@ -809,10 +809,11 @@
         .sf-ok { border-left: 4px solid var(--success); background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
         .staffing-table col.c-sno { width: 48px; }
         .staffing-table col.c-code { width: 60px; }
-        .staffing-table col.c-n { width: 64px; }
-        .staffing-table col.c-daily { width: 92px; }
+        /* Narrow enough that department names keep about 190px, as before the monthly column. */
+        .staffing-table col.c-n { width: 60px; }
+        .staffing-table col.c-hire { width: 80px; }
         .staffing-table col.c-lack { width: 84px; }
-        .staffing-table col.c-mult { width: 160px; }
+        .staffing-table col.c-mult { width: 136px; }
         .staffing-table col.c-edit { width: 56px; }
         .staffing-table th, .staffing-table td { padding-left: 10px; padding-right: 10px; }
         .staffing-table td { height: 40px; }
@@ -828,7 +829,7 @@
         .staffing-table .mv { display: inline-block; min-width: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .staffing-table tr:not(.short) .mv { font-weight: 500; color: var(--muted-foreground); }
         /* The bar is the department's lack: full width would be 100% short (multiplier 1 + K). */
-        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 80px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
+        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 56px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
         .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #E2A33A, #C2410C); }
         .staffing-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
         .staffing-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
@@ -838,15 +839,16 @@
         .staffing-table tr.flash td { background: rgba(21, 127, 61, .09); }
         .staffing-table tfoot td { position: sticky; bottom: 0; background: #FCF9F4; border-top: 1px solid var(--border); border-bottom: 0; font-weight: 600; }
         .staffing-table td.audit-empty { height: 88px; }
-        .sf-dialog { width: min(600px, 94vw); }
-        .sf-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .sf-dialog { width: min(680px, 94vw); }
+        .sf-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         .sf-form .bd-field label small { font-weight: 400; }
         .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
         .sf-preview { align-items: center; }
         .sf-preview .k output { margin-left: 6px; font-size: 1.15rem; font-weight: 700; color: var(--foreground); font-variant-numeric: tabular-nums; }
         .sf-preview .k .v { font-size: 1.6rem; }
         .sf-preview .was { font-size: 1rem; font-weight: 500; color: var(--muted-foreground); }
-        @media (max-width: 520px) { .sf-form { grid-template-columns: 1fr; } }
+        @media (max-width: 640px) { .sf-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 400px) { .sf-form { grid-template-columns: 1fr; } }
 
         /* ── ตรวจสอบ tab (dashboard/review.ts) ─────────────────────────── */
         #review-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 32px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
@@ -1337,7 +1339,7 @@
             <div class="sf-head glass">
                 <div class="sf-intro">
                     <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
-                    <p class="sf-formula">ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาด<span class="sf-dot" aria-hidden="true">·</span>ขาด = 1 − (มีจริง + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</p>
+                    <p class="sf-formula">ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span>ขาดแคลน = 1 − (มีจริง + จ้างรายเดือน + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</p>
                     <p id="staffing-sub" class="sf-sub"></p>
                 </div>
                 <dl id="staffing-stats" class="sf-stats"></dl>
@@ -1346,9 +1348,9 @@
             <p id="staffing-ok" class="sf-ok hidden" role="status"></p>
             <div class="audit-table-wrap glass">
                 <table class="audit-table staffing-table">
-                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-daily"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
+                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-hire"><col class="c-hire"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
                     <thead>
-                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="รวมอัตราตามจริง">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้างรายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายวัน">รวม</th><th scope="col" class="num">ขาด</th><th scope="col">ตัวคูณสาขา</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
+                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้าง<br>รายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้าง<br>รายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
                     </thead>
                     <tbody id="staffing-rows"></tbody>
                     <tfoot id="staffing-foot"></tfoot>
@@ -1518,7 +1520,7 @@
         </form>
     </dialog>
 
-    <!-- อัตรากำลัง: one department's FTE, on staff and daily hires (owner only) -->
+    <!-- อัตรากำลัง: one department's FTE, on staff, monthly and daily hires (owner only) -->
     <dialog id="staffing-dialog" class="log-dialog sf-dialog" aria-labelledby="staffing-dialog-title" aria-describedby="staffing-dialog-sub">
         <div class="log-header">
             <div>
@@ -1536,17 +1538,21 @@
                 <input id="staffing-fte" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint" disabled>
             </div>
             <div class="bd-field">
-                <label for="staffing-staff">มีจริง <small>อัตราตามจริง</small></label>
+                <label for="staffing-staff">มีจริง <small>ไม่รวมรายเดือน</small></label>
                 <input id="staffing-staff" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+            </div>
+            <div class="bd-field">
+                <label for="staffing-monthly">จ้างรายเดือน</label>
+                <input id="staffing-monthly" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
                 <label for="staffing-daily">จ้างรายวัน</label>
                 <input id="staffing-daily" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
-            <p id="staffing-hint" class="bd-meta">มีจริงและจ้างรายวัน: จำนวนเต็ม 0–999</p>
+            <p id="staffing-hint" class="bd-meta">มีจริง จ้างรายเดือน และจ้างรายวัน: จำนวนเต็ม 0–999 (มีจริงคืออัตราตามจริงที่ไม่รวมลูกจ้างรายเดือน)</p>
             <div class="bd-rate sf-preview" aria-live="polite">
-                <span class="k">ขาด <output id="staffing-lack" for="staffing-fte staffing-staff staffing-daily">–</output></span>
-                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-daily">–</output></span>
+                <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
+                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
             </div>
             <p id="staffing-meta" class="bd-meta hidden"></p>
             <p class="bd-meta">บันทึกแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขนี้เมื่อสร้างครั้งถัดไป</p>

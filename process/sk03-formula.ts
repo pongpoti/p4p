@@ -11,8 +11,8 @@
  *   2. STAFF get the rest: staff budget = total budget − interns' actual pay.
  *      Every staff member gets the 10,000 base. The extra (staff budget −
  *      10,000 × staff) goes to departments by (staff × department multiplier,
- *      1 + LACK_K × share of the department's FTE not filled, daily hires
- *      counted as staff),
+ *      1 + LACK_K × share of the department's FTE not filled, monthly and
+ *      daily hires counted as staff),
  *      then inside a department by score: multiplier = clip(1 + 0.5 × (excess
  *      ÷ dept mean excess − 1), 0.5, 1.5).
  *      Pay = ROUNDDOWN(MIN(15,000, 10,000 + multiplier × dept extra ÷ dept Σ multipliers), 0);
@@ -78,16 +78,17 @@ export const DEPT_CAPACITY: DeptCapacity[] = staffing.DEPT_STAFFING_DEFAULTS;
 
 /**
  * Department multiplier = 1 + LACK_K × lack,
- * lack = max(0, 1 − (on staff + daily hires) ÷ FTE)
+ * lack = max(0, 1 − (on staff + monthly hires + daily hires) ÷ FTE)
  * (Pong, 2026-11-13: the effect grows in proportion to how short the
- * department is; no groups. Pong, 2026-11-16: daily hires count too).
- * Every 10 points short adds 0.5: ANS (40% short) 3.00, MED (37 + 4 of 47,
- * 12.8%) 1.64, a fully staffed department 1.00. Over-staffed departments
+ * department is; no groups. Pong, 2026-11-16: daily hires count too;
+ * 2026-11-17: monthly hires in their own column, already counted before).
+ * Every 10 points short adds 0.5: ANS (40% short) 3.00, MED (36 + 1 + 4 of
+ * 47, 12.8%) 1.64, a fully staffed department 1.00. Over-staffed departments
  * count as 0% short, so no multiplier is below 1 (SOC: 4 + 15 of 10).
  */
 export const LACK_K = staffing.LACK_K;
 
-/** Share of the department's FTE not filled by staff and daily hires (0 when fully or over-staffed). */
+/** Share of the department's FTE not filled by staff, monthly and daily hires (0 when fully or over-staffed). */
 export const deptLack = (d: DeptCapacity): number => staffing.deptLack(d);
 
 /** The department's multiplier on the extra above BASE: 1 + LACK_K × lack. */
@@ -245,7 +246,7 @@ export function internPanel(staffSheet: string, first: number, last: number, rat
 // ─── งบรายสาขา sheet ──────────────────────────────────────────────
 
 export const BUDGET_HEADERS = [
-  'ที่', 'สาขา', 'รหัส', 'ขาด\n(1 − (มีจริง + รายวัน) ÷ FTE)', `ตัวคูณสาขา\n(1 + ${LACK_K} × ขาด)`, 'จำนวน\nแพทย์',
+  'ที่', 'สาขา', 'รหัส', 'ขาดแคลน\n(1 − (มีจริง + รายเดือน + รายวัน) ÷ FTE)', `ตัวคูณสาขา\n(1 + ${LACK_K} × ขาดแคลน)`, 'จำนวน\nแพทย์',
   `ฐาน\n(${BASE.toLocaleString('en-US')} × จำนวน)`, 'หน่วย\n(จำนวน × ตัวคูณ)',
   'ส่วนเพิ่ม\n(หน่วย × ต่อหน่วย)', 'งบสาขา', 'sum point\nของสาขา', 'ส่วนเพิ่ม\nต่อตัวคูณ',
   'จ่ายจริง\n(ROUNDDOWN)', 'เศษคงเหลือ',
@@ -269,7 +270,7 @@ export function budgetSheet(
     const r = BUDGET_FIRST + k;
     return [
       d.no, d.name, d.code,
-      `=MAX(0,1-(${d.staff}+${d.daily})/${d.fte})`,                        // D share short ((on staff + daily hires) ÷ FTE)
+      `=MAX(0,1-(${d.staff}+${d.monthly}+${d.daily})/${d.fte})`,           // D share short ((on staff + monthly + daily hires) ÷ FTE)
       `=1+${LACK_K}*D${r}`,                                                // E department multiplier
       `=COUNTIFS(${codes},C${r},${S}$L$${first}:$L$${last},">=0")`,       // F staff ≥ 2,200
       `=${BASE}*F${r}`,                                                    // G base 10,000 each
@@ -293,7 +294,7 @@ export function budgetSheet(
     { range: 'A1', values: [['งบ P4P staff รายสาขา (สูตรใหม่)']] },
     { range: 'A2', values: [[monthLabel]] },
     { range: 'A3', values: [[
-      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาด,  ขาด = 1 − (แพทย์ที่มีจริง + จ้างรายวัน) ÷ FTE (ไม่ต่ำกว่า 0; ${staffingNote})      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
+      `ตัวคูณสาขา = 1 + ${LACK_K} × ขาดแคลน,  ขาดแคลน = 1 − (แพทย์ที่มีจริง + จ้างรายเดือน + จ้างรายวัน) ÷ FTE (ไม่ต่ำกว่า 0; ${staffingNote})      งบสาขา = ${BASE.toLocaleString('en-US')} × จำนวนแพทย์ + ส่วนเพิ่มต่อหน่วย × จำนวนแพทย์ × ตัวคูณสาขา      `
       + `ส่วนเพิ่มต่อตัวคูณ = ส่วนเพิ่มของสาขา ÷ sum point ของสาขา      ได้รับ = ${BASE.toLocaleString('en-US')} + ตัวคูณ × ส่วนเพิ่มต่อตัวคูณ (ไม่เกิน ${PAY_CAP.toLocaleString('en-US')}: ส่วนที่เกินแบ่งให้คนอื่นในสาขาเดียวกันตามตัวคูณ)`,
     ]] },
     { range: 'A4:Q4', values: [BUDGET_HEADERS] },
