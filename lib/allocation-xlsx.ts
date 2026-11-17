@@ -20,12 +20,18 @@
  *   G ค่าตอบแทนด้านบริหาร        SK03 M (blank when 0)
  *   H ค่าตอบแทนตามสัดส่วนวิชาชีพ  SK03 N
  *   I รวมยอดเงินที่จ่าย           =G+H
- *   J รวมยอดหน่วยงาน            left empty, no format (Pong); the total is the sum row under I
+ *   J รวมยอดหน่วยงาน            left empty (Pong); the total is the sum row under I
  *   K หมายเหตุ                  left empty
  *
- * TH SarabunPSK throughout, as on SK03. Each column is as wide as its
- * widest cell, header included (Pong, 2026-11-17: "Each column should fits
- * its content"), measured with the font's own character widths
+ * Font and cell format as on SK03's staff sheet (Pong, 2026-11-17: "same
+ * font and format exactly same as SK03"): TH SarabunPSK in black, data at
+ * 16 pt on rows 30 high, money as ###,##0.00 on the right, text on the
+ * left, every cell middle-aligned in thin lines; bold centred headers at
+ * SK03's sizes; the title bold 18; A4 landscape, one page wide, centred.
+ * Two things are Pong's own and stay: the month's header colour and the
+ * green sum row under I. Each column is as wide as its widest cell, header
+ * included (Pong, 2026-11-17: "Each column should fits its content"),
+ * measured with the font's own character widths
  * (lib/th-sarabun-widths.ts). The department is the roster's
  * (review_build_people, by the person's SK03 row): SK03's department sheet
  * titles are cut to 31 characters by the .xlsx export.
@@ -42,9 +48,9 @@ const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "ม�
 const TH_MONTHS_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 
 /**
- * One header colour per month, so the twelve files tell apart at a glance.
- * มิ.ย. keeps the green of the hand-made June file; the others go round the
- * colour wheel at a similar depth. Header text is dark (#333333) on every one.
+ * One header colour per month, so the twelve files tell apart at a glance
+ * (Pong). มิ.ย. keeps the green of the hand-made June file; the others go
+ * round the colour wheel at a similar depth. Header text is black, as on SK03.
  */
 export const MONTH_COLORS: readonly string[] = [
   "5B9BD5", // ม.ค.  sky blue
@@ -61,27 +67,26 @@ export const MONTH_COLORS: readonly string[] = [
   "AED581", // ธ.ค.  lime
 ]
 
+// SK03's own: font, black text, money format, the sum row's green (Pong's).
 const FONT = "TH SarabunPSK"
-const HEAD_TEXT = "FF333333"
-const SUM_FILL = "FFFFCCFF"     // I: =G+H, as on the June file
-const TOTAL_FILL = "FF92D050"   // the sum row's I, the June file's green
-// Every data cell shows two spaces before its value (Pong, 2026-11-17):
-// text as "  "@, money in the June file's accounting format with "  ".
-const LEAD = "  "
-const TEXT_FMT = '"  "@'
-const MONEY = '_-"  "* #,##0.00_-;\\-"  "* #,##0.00_-;_-"  "* "-"??_-;_-@_-'
+const BLACK = "FF000000"
+const MONEY = "###,##0.00"
+const TOTAL_FILL = "FF92D050"   // the sum row's I, the June file's green (Pong)
 const FIRST_ROW = 3
 const SK03_FIRST_ROW = 8
 
 const HEADERS = ["No", "เลขที่บัตรประชาชน", "ชื่อ - สกุล", "หน่วยงาน P4P", "ตำแหน่ง", "ประเภทการจ้าง",
   "ค่าตอบแทน\nด้านบริหาร", "ค่าตอบแทนตาม\nสัดส่วนวิชาชีพ", "รวมยอดเงิน\nที่จ่าย", "รวมยอดหน่วยงาน", "หมายเหตุ"]
-// The June file's header sizes. Its G..I headers are in smaller type on two
-// lines; the break is set here, at a word, so the money columns stay as
-// narrow as their numbers in every app (none breaks Thai the same way).
-const HEAD_SIZES = [16, 16, 16, 16, 16, 16, 10, 10, 12, 16, 16]
-const HEAD_HEIGHT = 32   // two lines of 12 pt
+// SK03's header sizes: 18 for ที่, ชื่อ-สกุล and ตำแหน่ง, 12 for ประเภท, 14
+// for the money columns, 13 for หมายเหตุ. G..I go on two lines, broken at
+// a word here, so the money columns stay as narrow as their numbers in
+// every app (none breaks Thai the same way).
+const HEAD_SIZES = [18, 18, 18, 18, 18, 12, 14, 14, 14, 14, 13]
+const HEAD_HEIGHT = 40   // two lines of 14 pt
 const BODY_SIZE = 16
+const BODY_HEIGHT = 30   // SK03's data rows
 const TITLE_SIZE = 18
+const TITLE_HEIGHT = 21  // SK03's title rows, a line each
 
 export interface AllocationRow {
   prefix: string
@@ -135,25 +140,6 @@ export function headerColor(month: string): string {
   const k = parseKey(month)
   if (!k) throw new Error("bad month " + month)
   return MONTH_COLORS[k.m - 1]
-}
-
-/** `hex` mixed 60% toward white (a plain RGB mix, not Excel's HSL tint). */
-export function tintColor(hex: string, tint = 0.6): string {
-  return [0, 2, 4].map((i) => {
-    const c = parseInt(hex.slice(i, i + 2), 16)
-    return Math.round(c + (255 - c) * tint).toString(16).padStart(2, "0")
-  }).join("").toUpperCase()
-}
-
-/**
- * The pale fill of the No (A) and หน่วยงาน (D) cells. มิ.ย. keeps the June
- * file's own C5E0B4; the other months take a pale shade of their header
- * colour so the two go together.
- */
-export function lightColor(month: string): string {
-  const k = parseKey(month)
-  if (!k) throw new Error("bad month " + month)
-  return k.m === 6 ? "C5E0B4" : tintColor(MONTH_COLORS[k.m - 1])
 }
 
 const squash = (v: unknown): string => String(v ?? "").replace(/\s+/g, " ").trim()
@@ -227,25 +213,15 @@ export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: numb
   return out
 }
 
-type Side = "thin" | "medium" | undefined
-const line = (style: Side): Partial<Borders["top"]> | undefined => (style ? { style } : undefined)
-function box(left: Side, right: Side, top: Side, bottom: Side): Partial<Borders> {
-  const b: Partial<Borders> = {}
-  if (left) b.left = line(left) as Borders["left"]
-  if (right) b.right = line(right) as Borders["right"]
-  if (top) b.top = line(top) as Borders["top"]
-  if (bottom) b.bottom = line(bottom) as Borders["bottom"]
-  return b
-}
+// Thin lines on every side of every table cell, as on SK03.
+const thin = { style: "thin" } as Borders["top"]
+const GRID: Partial<Borders> = { top: thin, left: thin, bottom: thin, right: thin }
 const solid = (argb: string): Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb } })
 
-// Left/right edges per column, as on the June file: heavy lines around No,
-// ชื่อ - สกุล and หน่วยงาน, a heavy right edge on หมายเหตุ, thin between the rest.
-const EDGES: [Side, Side][] = [
-  ["medium", "medium"], [undefined, undefined], ["medium", "medium"], ["medium", "medium"], [undefined, "thin"],
-  ["thin", "thin"], ["thin", undefined], ["thin", undefined], ["thin", undefined], ["thin", undefined], ["thin", "medium"],
-]
-const ALIGN: ("center" | "left")[] = ["center", "center", "left", "center", "left", "left", "center", "center", "center", "center", "left"]
+// SK03's alignment: ที่ centred, text on the left, money and หมายเหตุ on
+// the right. J (รวมยอดหน่วยงาน) is empty and has no number format (Pong).
+const isMoney = (j: number): boolean => j >= 6 && j <= 8
+const ALIGN: ("center" | "left" | "right")[] = ["center", "left", "left", "left", "left", "left", "right", "right", "right", "left", "right"]
 
 /** How wide TH SarabunPSK draws `s` at `pt` points, in px at 96 dpi. */
 export function textPx(s: string, pt: number, bold = false): number {
@@ -270,9 +246,9 @@ export function fitWidth(px: number): number {
   return Math.ceil(((px * FIT_SLACK + FIT_PAD_PX) / PX_PER_UNIT) * 8) / 8
 }
 
-/** A number as the accounting format draws it ("-"-wide space and two spaces before, "-"-wide space after). */
+/** A number as ###,##0.00 draws it. */
 export function moneyText(n: number): string {
-  return "-" + LEAD + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "-"
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** A cell value as shown on screen, for measuring. */
@@ -280,7 +256,7 @@ function shown(v: unknown, money: boolean): string {
   const x = cellValue(v)
   if (x === null || x === undefined || x === "") return ""
   if (money && typeof x === "number") return moneyText(x)
-  return LEAD + String(x)
+  return String(x)
 }
 
 // The filter button covers the right end of each header cell; a centred
@@ -290,13 +266,13 @@ const FILTER_BUTTON_PX = 16
 
 /**
  * The widths (Excel units) that fit each column to its widest cell: the
- * header on one line at its own size beside the filter button, every data
- * cell at 16 pt (No and หน่วยงาน in bold).
+ * header's longer line at its own size, in bold, beside the filter button;
+ * every data cell at 16 pt.
  */
 export function columnWidths(cells: unknown[][]): number[] {
   return HEADERS.map((h, j) => {
     let px = Math.max(...h.split("\n").map((t) => textPx(t, HEAD_SIZES[j], true))) + 2 * FILTER_BUTTON_PX
-    for (const row of cells) px = Math.max(px, textPx(shown(row[j], j >= 6 && j <= 8), BODY_SIZE, j === 0 || j === 3))
+    for (const row of cells) px = Math.max(px, textPx(shown(row[j], isMoney(j)), BODY_SIZE))
     return fitWidth(px)
   })
 }
@@ -304,7 +280,6 @@ export function columnWidths(cells: unknown[][]): number[] {
 /** The .xlsx, as a Buffer. */
 export async function buildAllocationXlsx(month: string, rows: AllocationRow[], ExcelJS: typeof import("exceljs")): Promise<Buffer> {
   const color = "FF" + headerColor(month)
-  const tint = "FF" + lightColor(month)
   const id = allocationId(month)
   const last = FIRST_ROW + rows.length - 1
   const total = rows.reduce((s, x) => s + (x.admin || 0) + (x.pay ?? 0), 0)
@@ -320,18 +295,20 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
     ]
   })
   // The sum row under the table (Pong, 2026-11-17): only I, =SUM of I, on
-  // green with the money format; every other cell of the row is left plain.
+  // green, bold like SK03's totals; every other cell of the row is plain.
   const sumRow = last + 1
   const widths = columnWidths(rows.length ? [...cells, [null, null, null, null, null, null, null, null, total, null, null]] : cells)
 
   const wb = new ExcelJS.Workbook()
   wb.creator = "P4P"
   wb.title = (allocationFileName(month) ?? "").replace(/\.xlsx$/, "")
+  // SK03's page: A4 landscape, one page wide, centred, its margins. The
+  // title and headers stay on screen and on every printed page.
   const ws = wb.addWorksheet(allocationSheetName(month), {
-    views: [{ state: "frozen", ySplit: 2, topLeftCell: "A3", showGridLines: false, zoomScale: 90 }],
+    views: [{ state: "frozen", ySplit: 2, topLeftCell: "A3" }],
     pageSetup: {
-      paperSize: 9, orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
-      margins: { left: 0.118, right: 0.197, top: 0.276, bottom: 0.197, header: 0.315, footer: 0.315 },
+      paperSize: 9, orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
+      margins: { left: 0.039, right: 0.039, top: 0.551, bottom: 0.551, header: 0, footer: 0 },
       printTitlesRow: "1:2",
     },
   })
@@ -342,47 +319,46 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
   ws.mergeCells("A1:K1")
   const title = ws.getCell("A1")
   title.value = allocationTitle(month)
-  title.font = { name: FONT, size: TITLE_SIZE, bold: true }
+  title.font = { name: FONT, size: TITLE_SIZE, bold: true, color: { argb: BLACK } }
   const spanPx = widths.reduce((s, w) => s + w * PX_PER_UNIT, 0)
   const titleLines = Math.max(1, Math.ceil((textPx(allocationTitle(month), TITLE_SIZE, true) * FIT_SLACK + FIT_PAD_PX) / spanPx))
   title.alignment = { horizontal: "center", vertical: "middle", wrapText: titleLines > 1 }
-  ws.getRow(1).height = 24 * titleLines
+  ws.getRow(1).height = TITLE_HEIGHT * titleLines
 
   const head = ws.getRow(2)
   head.height = HEAD_HEIGHT
   HEADERS.forEach((h, i) => {
     const c = head.getCell(i + 1)
     c.value = h
-    c.font = { name: FONT, size: HEAD_SIZES[i], bold: true, color: { argb: HEAD_TEXT } }
+    c.font = { name: FONT, size: HEAD_SIZES[i], bold: true, color: { argb: BLACK } }
     c.fill = solid(color)
     c.alignment = { horizontal: "center", vertical: "middle", wrapText: true }
-    c.border = box(EDGES[i][0], EDGES[i][1], "medium", "medium")
+    c.border = GRID
   })
 
   cells.forEach((values, i) => {
     const r = FIRST_ROW + i
     const row = ws.getRow(r)
-    row.height = 21
+    row.height = BODY_HEIGHT
     values.forEach((v, j) => {
       const c = row.getCell(j + 1)
       if (v !== null && v !== undefined) c.value = v as never
-      const bold = j === 0 || j === 3
-      c.font = { name: FONT, size: BODY_SIZE, bold }
-      c.alignment = { horizontal: ALIGN[j], vertical: "top", wrapText: true }
-      c.border = box(EDGES[j][0], EDGES[j][1], j === 0 ? undefined : "thin", "thin")
-      c.numFmt = j >= 6 && j <= 8 ? MONEY : TEXT_FMT
-      if (bold) c.fill = solid(tint)
-      if (j === 8) c.fill = solid(SUM_FILL)
+      c.font = { name: FONT, size: BODY_SIZE, color: { argb: BLACK } }
+      // Text wraps, as on SK03; money stays on its line.
+      c.alignment = isMoney(j) ? { horizontal: "right", vertical: "middle" } : { horizontal: ALIGN[j], vertical: "middle", wrapText: true }
+      c.border = GRID
+      if (isMoney(j)) c.numFmt = MONEY
     })
   })
 
   if (rows.length) {
     const c = ws.getRow(sumRow).getCell(9)
     c.value = { formula: `SUM(I${FIRST_ROW}:I${last})`, result: total }
-    c.font = { name: FONT, size: BODY_SIZE, bold: true }
+    c.font = { name: FONT, size: BODY_SIZE, bold: true, color: { argb: BLACK } }
+    c.alignment = { horizontal: "right", vertical: "middle" }
     c.numFmt = MONEY
     c.fill = solid(TOTAL_FILL)
-    ws.getRow(sumRow).height = 21
+    ws.getRow(sumRow).height = BODY_HEIGHT
   }
   if (rows.length) ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: last, column: 11 } }
   return Buffer.from(await wb.xlsx.writeBuffer())

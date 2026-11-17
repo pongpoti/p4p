@@ -231,7 +231,9 @@
         const b = el("button", "btn-ghost", "ลองอีกครั้ง");
         b.type = "button";
         b.id = id;
-        b.addEventListener("click", retry);
+        // It spins until the try ends; what comes next replaces the box.
+        b.addEventListener("click", () => { if (b.getAttribute("aria-busy") === "true")
+            return; markBusy(b); retry(); });
         box.append(el("p", undefined, text), b);
         return box;
     }
@@ -298,7 +300,12 @@
         const again = el("button", "btn-ghost", "ดูอีกครั้ง");
         again.type = "button";
         again.id = "rv-months-again";
-        again.addEventListener("click", () => { void open(); });
+        again.addEventListener("click", () => {
+            if (again.getAttribute("aria-busy") === "true")
+                return;
+            markBusy(again);
+            void open(true);
+        });
         if (role === "auditor")
             return card("ยังไม่มีเดือนที่พร้อมตรวจ", [el("p", undefined, "เมื่อผู้จัดทำส่งแล้วจะเปิดได้"), again]);
         return card("ยังไม่มีเดือนที่แพทย์ส่งครบ", [el("p", undefined, "เปิดเดือนได้เมื่อแพทย์ส่งครบทุกคน"), again]);
@@ -328,13 +335,23 @@
             const off = locked(m);
             if (off)
                 b.setAttribute("aria-disabled", "true");
+            if (m.month === loadingFor || m.month === lookingAt)
+                b.setAttribute("aria-busy", "true");
             b.addEventListener("click", () => {
+                if (b.getAttribute("aria-busy") === "true")
+                    return;
                 if (!off) {
                     pickMonth(m.month);
                     return;
                 }
-                // The list may be old: look again before saying no.
+                // The list may be old: look again before saying no. The tab
+                // spins meanwhile.
+                lookingAt = m.month;
+                b.setAttribute("aria-busy", "true");
                 void refreshMonthRows().catch(() => undefined).then(() => {
+                    if (lookingAt === m.month)
+                        lookingAt = "";
+                    syncBusy();
                     const now = monthRows.find((x) => x.month === m.month);
                     if (now && !locked(now))
                         pickMonth(m.month);
@@ -357,7 +374,50 @@
         resetMonth();
         drawTabs();
         show(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
-        void loadState(true).catch(loadFailed);
+        void loadPicked();
+    }
+    // A month being opened: its tab (and the side switch, when the switch
+    // opened it) spins until the month is on screen or the load fails
+    // (Pong, 2026-11-17: every button shows it is loading).
+    let loadingFor = "";
+    let lookingAt = "";
+    let roleLoad = false;
+    let pickSeq = 0;
+    // Lists on their way (names, issues), so the side switch that asked for
+    // them can spin.
+    let listsLoading = 0;
+    let roleLists = false;
+    async function loadPicked() {
+        // Only the newest load ends the spin: an older one of the same month
+        // can come back first.
+        const tok = ++pickSeq;
+        loadingFor = month;
+        syncBusy();
+        try {
+            await loadState(true);
+        }
+        catch (e) {
+            loadFailed(e);
+        }
+        finally {
+            if (tok === pickSeq) {
+                loadingFor = "";
+                roleLoad = false;
+                syncBusy();
+            }
+        }
+    }
+    function syncBusy() {
+        for (const m of monthRows) {
+            const b = document.getElementById("rv-m-" + m.month);
+            if (!b)
+                continue;
+            if (m.month === loadingFor || m.month === lookingAt)
+                b.setAttribute("aria-busy", "true");
+            else
+                b.removeAttribute("aria-busy");
+        }
+        syncRole();
     }
     // Everything on screen belongs to one month: a switch drops the old
     // month's state, lists, drafts and notes, and any reply still on its way
@@ -474,10 +534,7 @@
             keepLooking();
             return;
         }
-        show(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => {
-            loadingLine("กำลังโหลด…");
-            void loadState(true).catch(loadFailed);
-        }));
+        show(failBox("โหลดข้อมูลเดือน " + monthName(month) + " ไม่สำเร็จ: " + msg, "rv-retry-load", () => { void loadPicked(); }));
         const b = document.getElementById("rv-retry-load");
         if (b && document.activeElement === document.body)
             b.focus();
@@ -538,20 +595,31 @@
     // tab is first drawn.
     const auditeeOnly = () => document.body.dataset.reviewSide === "auditee";
     function syncRole() {
-        for (const b of roleBtns)
-            b.setAttribute("aria-pressed", String(b.dataset.role === role));
+        for (const b of roleBtns) {
+            const on = b.dataset.role === role;
+            b.setAttribute("aria-pressed", String(on));
+            if (on && ((roleLoad && loadingFor) || (roleLists && listsLoading > 0)))
+                b.setAttribute("aria-busy", "true");
+            else
+                b.removeAttribute("aria-busy");
+        }
     }
-    async function open() {
+    // fromButton: a ลองอีกครั้ง / ดูอีกครั้ง button is spinning, so the
+    // screen stays until the answer comes.
+    async function open(fromButton = false) {
         if (auditeeOnly()) {
             role = "auditee";
             const sw = document.getElementById("review-role");
             if (sw)
                 sw.classList.add("hidden");
         }
-        loadingLine("กำลังโหลด…");
+        if (!fromButton)
+            loadingLine("กำลังโหลด…");
         try {
             if (!(await loadMonths(true))) {
-                if (body.querySelector(".rv-loading"))
+                // Still no month: the loading line, or the spinning button
+                // that asked, gives way to the card (with a fresh button).
+                if (body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]'))
                     show(noMonthCard());
                 return;
             }
@@ -561,15 +629,15 @@
                 return;
             const msg = errText(e, "โหลดข้อมูลไม่สำเร็จ");
             shout(msg);
-            show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(); }));
+            show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(true); }));
             return;
         }
-        await loadState(true).catch(loadFailed);
+        await loadPicked();
     }
     window.addEventListener("dashboard:review", () => { void open(); });
     for (const b of roleBtns) {
         b.addEventListener("click", () => {
-            if (auditeeOnly())
+            if (auditeeOnly() || b.getAttribute("aria-busy") === "true")
                 return;
             role = b.dataset.role === "auditor" ? "auditor" : "auditee";
             try {
@@ -584,8 +652,10 @@
             const shown = monthRows.find((m) => m.month === month);
             if (monthRows.length && (!shown || locked(shown))) {
                 const m = defaultMonth();
-                if (m)
+                if (m) {
+                    roleLoad = true;
                     pickMonth(m);
+                }
                 else {
                     month = "";
                     resetMonth();
@@ -594,8 +664,14 @@
                 }
             }
             else {
+                // Same month, other side: it spins while the lists that side
+                // needs (names, issues) load.
+                roleLists = true;
                 drawTabs();
                 render();
+                if (!listsLoading)
+                    roleLists = false;
+                syncRole();
             }
             drawMail();
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"));
@@ -1929,8 +2005,23 @@
     // were, their row showing the result, instead of a green note above the
     // names (Pong, 2026-11-12). Cleared when the filter changes.
     const kept = new Set();
+    function listDone() {
+        listsLoading = Math.max(0, listsLoading - 1);
+        if (!listsLoading)
+            roleLists = false;
+        syncRole();
+    }
     const roundKey = (s, r) => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix);
     async function loadPeople(s, r) {
+        listsLoading++;
+        try {
+            await loadPeopleNow(s, r);
+        }
+        finally {
+            listDone();
+        }
+    }
+    async function loadPeopleNow(s, r) {
         const key = s.month + ":" + r.round_no;
         const seq = ++peopleSeq;
         peopleKey = key;
@@ -1955,6 +2046,15 @@
         render();
     }
     async function loadIssues(s) {
+        listsLoading++;
+        try {
+            await loadIssuesNow(s);
+        }
+        finally {
+            listDone();
+        }
+    }
+    async function loadIssuesNow(s) {
         const seq = ++issuesSeq;
         issuesKey = s.month;
         issuesErr = "";
@@ -2248,6 +2348,9 @@
             d.href = "/dashboard/api/review/" + s.month + "/pdf?download=1";
             d.id = "rv-pdf-dl";
             d.append(el("span", "sr-only", " เอกสารเบิกจ่าย " + shortMonth(s.month)));
+            if (flying(s, "pdf-dl"))
+                markBusy(d);
+            d.addEventListener("click", (ev) => { ev.preventDefault(); void downloadPdf(s, d); });
             const size = [r.pdf_pages ? int(r.pdf_pages) + " หน้า" : "", r.pdf_bytes ? sizeText(r.pdf_bytes) : ""].filter(Boolean).join(" · ");
             row.append(a, d);
             if (size)
@@ -2274,18 +2377,29 @@
             c.append(p);
         }
         // The per-person allocation list (Pong, 2026-11-17): made on request
-        // from the approved round, so it does not wait for the PDF.
-        const xl = el("div", "rv-actions");
-        const xa = el("a", "rv-link", "ดาวน์โหลดรายละเอียดการจัดสรรเงินรายบุคคล (Excel)");
-        xa.href = "/dashboard/api/review/" + s.month + "/allocation";
-        xa.id = "rv-allocation-dl";
-        xa.append(el("span", "sr-only", " " + shortMonth(s.month)));
-        xl.append(xa);
-        c.append(xl);
+        // from the approved round, so it does not wait for the PDF. The
+        // auditor side only (the server lets only the owner have it).
+        if (side === "auditor") {
+            const xl = el("div", "rv-actions");
+            const xa = el("a", "rv-link", "ดาวน์โหลดรายละเอียดการจัดสรรเงินรายบุคคล (Excel)");
+            xa.href = "/dashboard/api/review/" + s.month + "/allocation";
+            xa.id = "rv-allocation-dl";
+            xa.append(el("span", "sr-only", " " + shortMonth(s.month)));
+            if (flying(s, "xlsx"))
+                markBusy(xa);
+            xa.addEventListener("click", (ev) => { ev.preventDefault(); void downloadFile(s, "xlsx", xa, "allocation_" + s.month + ".xlsx"); });
+            xl.append(xa);
+            c.append(xl);
+            const xn = noteEl("xlsx");
+            if (xn)
+                c.append(xn);
+        }
         c.append(kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0));
-        const n = noteEl("pdf");
-        if (n)
-            c.append(n);
+        for (const spot of ["pdf", "pdf-dl"]) {
+            const n = noteEl(spot);
+            if (n)
+                c.append(n);
+        }
         const mail = side === "auditee" ? emailBox(s, r) : null;
         if (mail)
             c.append(mail);
@@ -2301,6 +2415,98 @@
                 el("p", "rv-hint", "เอกสารที่สร้างแล้วจะใช้ไม่ได้ รอบที่ " + r.round_no + " กลับมาเป็นคิวผู้ตรวจสอบ ผลอนุมัติเดิมยังอยู่")], "rv-h-reopen"));
         }
         return out;
+    }
+    // Downloads spin until the file is on its way (Pong, 2026-11-17: every
+    // button shows it is loading). The Excel is made on request and can take
+    // a few seconds, so it is fetched here and handed to the browser under
+    // the name the server gave; the PDF link is signed first, then the
+    // browser saves it from storage.
+    async function fetchOk(url) {
+        let r;
+        try {
+            r = await fetch(url, { credentials: "same-origin" });
+        }
+        catch (e) {
+            throw new ApiError(NET_ERROR, 0);
+        }
+        if (r.status === 401) {
+            location.href = "/dashboard/login?error=idle";
+            throw new ApiError("signed out", 401);
+        }
+        if (!r.ok) {
+            let data = null;
+            try {
+                data = await r.json();
+            }
+            catch (e) {
+                data = null;
+            }
+            throw new ApiError((data && typeof data.error === "string" && data.error) || "ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง (" + r.status + ")", r.status);
+        }
+        return r;
+    }
+    // filename*=UTF-8''<name> (RFC 6266), else filename="<name>".
+    function savedName(cd) {
+        if (!cd)
+            return "";
+        const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+        if (star) {
+            try {
+                return decodeURIComponent(star[1].trim());
+            }
+            catch (e) { /* fall through */ }
+        }
+        const plain = /filename="([^"]+)"/i.exec(cd);
+        return plain ? plain[1] : "";
+    }
+    function saveFrom(href, name) {
+        const t = document.createElement("a");
+        t.href = href;
+        if (name)
+            t.download = name;
+        t.style.display = "none";
+        document.body.append(t);
+        t.click();
+        t.remove();
+    }
+    async function downloadFile(s, spot, a, fallback) {
+        if (!begin(s, spot, a))
+            return;
+        try {
+            const r = await fetchOk(a.href);
+            const url = URL.createObjectURL(await r.blob());
+            saveFrom(url, savedName(r.headers.get("Content-Disposition")) || fallback);
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }
+        catch (e) {
+            if (!signedOut(e))
+                tell(s, spot, "err", errText(e, "ดาวน์โหลดไม่สำเร็จ"));
+        }
+        finally {
+            end(s, spot);
+        }
+        if (s.month === month)
+            render();
+    }
+    async function downloadPdf(s, a) {
+        if (!begin(s, "pdf-dl", a))
+            return;
+        try {
+            const r = await fetchOk(a.href + "&link=1");
+            const data = await r.json();
+            if (!data || typeof data.url !== "string")
+                throw new Error("ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง");
+            saveFrom(data.url);
+        }
+        catch (e) {
+            if (!signedOut(e))
+                tell(s, "pdf-dl", "err", errText(e, "ดาวน์โหลดไม่สำเร็จ"));
+        }
+        finally {
+            end(s, "pdf-dl");
+        }
+        if (s.month === month)
+            render();
     }
     async function retryPdf(s, b) {
         if (!begin(s, "pdf", b))
