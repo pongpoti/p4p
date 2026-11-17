@@ -715,7 +715,9 @@
             }
             // Keep the digits and, with decimals, the first "."; count what is
             // kept before the caret so it lands after the same character.
-            let w = "", f = "", dot = false, before = 0;
+            // A second "." does nothing, wherever it is typed or pasted: it
+            // must not move the point (2,158,70|9.6 + "." is not 215,870.96).
+            let w = "", f = "", dot = false, extra = false, before = 0;
             for (let k = 0; k < raw.length; k++) {
                 const ch = raw[k];
                 let kept = true;
@@ -725,14 +727,20 @@
                     else
                         w += ch;
                 }
-                else if (ch === "." && decimals > 0 && !dot)
-                    dot = true;
+                else if (ch === "." && decimals > 0) {
+                    if (dot) {
+                        extra = true;
+                        kept = false;
+                    }
+                    else
+                        dot = true;
+                }
                 else
                     kept = false;
                 if (kept && k < pos)
                     before++;
             }
-            if (w.length > maxDigits || f.length > decimals) {
+            if (extra || w.length > maxDigits || f.length > decimals) {
                 const back = raw.length - pos;
                 i.value = good;
                 const at = Math.max(0, good.length - back);
