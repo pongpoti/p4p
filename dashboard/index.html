@@ -642,6 +642,13 @@
         .rv-mail .rv-note { font-size: .85rem; }
         :is(#review-view, #review-confirm) .btn-ghost[aria-busy="true"]::before { border-color: rgba(63, 47, 36, .22); border-top-color: #3F2F24; }
         :is(#review-view, #review-confirm) .btn-primary.rv-off[aria-busy="true"]::before { border-color: rgba(74, 61, 51, .25); border-top-color: #4A3D33; }
+        /* Month tabs, the side switch and the download links spin the same way
+           while what they open is loading (Pong, 2026-11-17). */
+        #review-view :is(.rv-mtab, .rv-role button, a.rv-link)[aria-busy="true"] { position: relative; color: transparent; cursor: progress; }
+        #review-view :is(.rv-mtab, .rv-role button, a.rv-link)[aria-busy="true"] > * { visibility: hidden; }
+        #review-view :is(.rv-mtab, .rv-role button, a.rv-link)[aria-busy="true"]::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; border: 2px solid rgba(63, 47, 36, .22); border-top-color: #3F2F24; animation: spin .8s linear infinite; }
+        #review-view a.rv-link[aria-busy="true"] { display: inline-block; text-decoration-color: transparent; }
+        #review-view .rv-role button[aria-pressed="true"][aria-busy="true"]::after { border-color: rgba(255, 255, 255, .35); border-top-color: #fff; }
         @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
         .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
         .btn-ghost:hover { background: var(--accent); }

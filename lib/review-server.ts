@@ -33,8 +33,9 @@
  * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
  * Google Drive (the state carries their ids, the tab links them view only),
  * and a round is the newest build as the system checked it. Once a month is
- * approved, both sides can download the approval PDF (:month/pdf) and the
- * per-person allocation list (:month/allocation, lib/allocation-xlsx.ts).
+ * approved, both sides can download the approval PDF (:month/pdf), and the
+ * auditor (the owner) the per-person allocation list (:month/allocation,
+ * lib/allocation-xlsx.ts).
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
@@ -544,18 +545,23 @@ export function mountReview(d: ReviewDeps): void {
       // Opens in the browser's PDF viewer (the tab links it in a new tab);
       // ?download=1 saves it under the form's name instead
       // ("แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf", Pong 2026-11-17).
+      // ?link=1 answers {url} instead of redirecting, so the tab's
+      // ดาวน์โหลด link can spin until the link is signed.
       const name = core.approvalPdfName(g.month) || "P4P_" + g.month + "_approved.pdf"
-      res.redirect(302, d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
-        (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : ""))
+      const url = d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
+        (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : "")
+      if (req.query.link === "1") { res.json({ url }); return }
+      res.redirect(302, url)
     } catch (e: any) { fail(res, "pdf download", e) }
   })
 
   // รายละเอียดการจัดสรรเงินรายบุคคล (lib/allocation-xlsx.ts, Pong 2026-11-17):
   // made on request from the approved round's own SK03 copy, with each
   // person's department from that build, so it always matches what was
-  // approved. Nothing is stored.
+  // approved. Nothing is stored. The auditor (the owner) only: the auditee
+  // gets a 404 like any other page they cannot see (Pong, 2026-11-17).
   app.get("/dashboard/api/review/:month/allocation", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res)
     if (!g) return
     try {
       const r = await axios.get(rest("review_rounds?select=round_no,build_id&month=eq." + g.month + "&status=eq.approved"),
