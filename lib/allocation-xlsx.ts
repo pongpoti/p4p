@@ -20,7 +20,7 @@
  *   G ค่าตอบแทนด้านบริหาร        SK03 M (blank when 0)
  *   H ค่าตอบแทนตามสัดส่วนวิชาชีพ  SK03 N
  *   I รวมยอดเงินที่จ่าย           =G+H
- *   J รวมยอดหน่วยงาน            last row only: =SUM(I3:I<last>)
+ *   J รวมยอดหน่วยงาน            left empty, no format (Pong); the total is the sum row under I
  *   K หมายเหตุ                  left empty
  *
  * TH SarabunPSK throughout, as on SK03. Each column is as wide as its
@@ -64,7 +64,7 @@ export const MONTH_COLORS: readonly string[] = [
 const FONT = "TH SarabunPSK"
 const HEAD_TEXT = "FF333333"
 const SUM_FILL = "FFFFCCFF"     // I: =G+H, as on the June file
-const TOTAL_FILL = "FF92D050"   // J: the grand total, as on the June file
+const TOTAL_FILL = "FF92D050"   // the sum row's I, the June file's green
 // Every data cell shows two spaces before its value (Pong, 2026-11-17):
 // text as "  "@, money in the June file's accounting format with "  ".
 const LEAD = "  "
@@ -296,7 +296,7 @@ const FILTER_BUTTON_PX = 16
 export function columnWidths(cells: unknown[][]): number[] {
   return HEADERS.map((h, j) => {
     let px = Math.max(...h.split("\n").map((t) => textPx(t, HEAD_SIZES[j], true))) + 2 * FILTER_BUTTON_PX
-    for (const row of cells) px = Math.max(px, textPx(shown(row[j], j >= 6 && j <= 9), BODY_SIZE, j === 0 || j === 3))
+    for (const row of cells) px = Math.max(px, textPx(shown(row[j], j >= 6 && j <= 8), BODY_SIZE, j === 0 || j === 3))
     return fitWidth(px)
   })
 }
@@ -315,7 +315,7 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       id, null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
       admin, p.pay,
       { formula: `G${r}+H${r}`, result: (admin ?? 0) + (p.pay ?? 0) },
-      r === last ? { formula: `SUM(I${FIRST_ROW}:I${last})`, result: total } : null,
+      null,
       null,
     ]
   })
@@ -370,10 +370,9 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       c.font = { name: FONT, size: BODY_SIZE, bold }
       c.alignment = { horizontal: ALIGN[j], vertical: "top", wrapText: true }
       c.border = box(EDGES[j][0], EDGES[j][1], j === 0 ? undefined : "thin", "thin")
-      c.numFmt = j >= 6 && j <= 9 ? MONEY : TEXT_FMT
+      c.numFmt = j >= 6 && j <= 8 ? MONEY : TEXT_FMT
       if (bold) c.fill = solid(tint)
       if (j === 8) c.fill = solid(SUM_FILL)
-      if (j === 9 && r === last) c.fill = solid(TOTAL_FILL)
     })
   })
 
