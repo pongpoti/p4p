@@ -161,7 +161,7 @@
     // Pong gets a Telegram once the SK03 is built with them.
     const WARN_SVG = '<svg class="bud-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
     const fmtRate = (n) => n.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    // Whole baht as saved; an older month saved with satang keeps them.
+    // As saved: whole baht without decimals, satang with both digits.
     const fmtBudget = (n) => Number.isInteger(n) ? fmtNum(n) : fmtRate(n);
     function budgetBtn(m) {
         const b = m.budget || null;
@@ -615,34 +615,53 @@
         }
     }
     // ── งบประมาณจัดสรร: the box behind a month card's งบ button ────────────
-    // Budget and N are whole numbers (lib/review-core.ts parseBudget,
-    // parseCount); per P4P = budget ÷ N to the satang, as the SQL stores it.
+    // The budget is baht with up to 2 decimals (satang; Pong, 2026-11-17)
+    // and N a whole number (lib/review-core.ts parseBudget, parseCount);
+    // per P4P = budget ÷ N to the satang, as the SQL stores it.
     const BUDGET_DIGITS = 11; // under 1e11, as the server takes it
+    const BUDGET_DECIMALS = 2;
     const DOCTORS_DIGITS = 5; // under 1e5
     const grouped = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     const wholeOf = (v) => {
         const d = v.replace(/,/g, "").trim();
         return /^\d+$/.test(d) && Number(d) > 0 ? Number(d) : null;
     };
+    // "2,158,709.06" → 2158709.06; a "." with nothing after it counts as whole baht.
+    const amountOf = (v) => {
+        const d = v.replace(/,/g, "").trim();
+        if (!/^\d+(\.\d{0,2})?$/.test(d))
+            return null;
+        const n = Math.round(parseFloat(d) * 100) / 100;
+        return n > 0 ? n : null;
+    };
     const rateOf = (budget, n) => {
-        const b = wholeOf(budget), c = wholeOf(n);
+        const b = amountOf(budget), c = wholeOf(n);
         if (b === null || c === null || b >= 1e11 || c >= 1e5)
             return null;
         const v = Math.round(Math.round(b * 100) / c) / 100;
         return v > 0 ? v : null;
     };
-    // A whole-number field takes digits only and says nothing: a typed
-    // letter, space or "." does nothing, and so do the digits typed right
-    // after a "." (until the caret moves), the same as pasted text keeps the
-    // digits before its first ".": 2,158,709.06 gives 2,158,709 either way,
-    // never 215,870,906 (Pong, 2026-11-10).
+    // The budget as the box shows it: commas, and satang only when it has them.
+    const amountText = (n) => {
+        const [w, f] = (Math.round(n * 100) / 100).toFixed(2).split(".");
+        return grouped(w) + (f === "00" ? "" : "." + f);
+    };
+    // A number field takes digits only and says nothing: a typed letter or
+    // space does nothing. With `decimals` 0 (N) a "." does nothing too, and
+    // so do the digits typed right after it (until the caret moves), the
+    // same as pasted text keeps the digits before its first ".": 2,158,709.06
+    // gives 2,158,709 either way, never 215,870,906 (Pong, 2026-11-10).
+    // With `decimals` 2 (the budget, Pong 2026-11-17) one "." goes in and up
+    // to 2 digits after it; a third digit does nothing, and pasted text
+    // keeps its first 2 decimals.
     // A digit past the field's limit does nothing either. With `group` the
-    // digits show a comma every 1,000 as they are typed, the caret staying
-    // after the same digit; Backspace or Delete on a comma takes the digit
-    // beside it. A leading 0 stays while typing (deleting the 2 of 2,058,709
-    // must not leave 58,709 when the 2 is typed back) and goes when the
-    // field is left.
-    function wholeField(i, group, maxDigits) {
+    // whole-baht digits show a comma every 1,000 as they are typed, the caret
+    // staying after the same digit; Backspace or Delete on a comma takes the
+    // digit beside it. A leading 0 stays while typing (deleting the 2 of
+    // 2,058,709 must not leave 58,709 when the 2 is typed back) and goes
+    // when the field is left; so does a "." with nothing after it, and one
+    // decimal gets its second 0 (1,000.5 → 1,000.50).
+    function numberField(i, group, maxDigits, decimals) {
         let prev = null;
         let good = "";
         let fraction = false;
@@ -658,7 +677,10 @@
             e.preventDefault();
             fraction = false;
             const text = e.clipboardData ? e.clipboardData.getData("text") : "";
-            const clean = text.split(".")[0].replace(/\D/g, "");
+            const parts = text.split(".");
+            const w = parts[0].replace(/\D/g, "");
+            const f = decimals > 0 && parts.length > 1 ? parts[1].replace(/\D/g, "").slice(0, decimals) : "";
+            const clean = w + (f ? "." + f : "");
             if (!clean)
                 return;
             const from = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : i.value.length;
@@ -675,7 +697,7 @@
                 return;
             let raw = i.value;
             let pos = (_a = i.selectionStart) !== null && _a !== void 0 ? _a : raw.length;
-            if (ev.inputType === "insertText" && ev.data && ev.data.length === 1) {
+            if (decimals === 0 && ev.inputType === "insertText" && ev.data && ev.data.length === 1) {
                 if (ev.data === ".")
                     fraction = true;
                 else if (fraction && /\d/.test(ev.data) && pos > 0 && raw[pos - 1] === ev.data) {
@@ -691,16 +713,41 @@
                 else if (ev.inputType === "deleteContentForward" && pos < raw.length)
                     raw = raw.slice(0, pos) + raw.slice(pos + 1);
             }
-            const digits = raw.replace(/\D/g, "");
-            if (digits.length > maxDigits) {
+            // Keep the digits and, with decimals, the first "."; count what is
+            // kept before the caret so it lands after the same character.
+            // A second "." does nothing, wherever it is typed or pasted: it
+            // must not move the point (2,158,70|9.6 + "." is not 215,870.96).
+            let w = "", f = "", dot = false, extra = false, before = 0;
+            for (let k = 0; k < raw.length; k++) {
+                const ch = raw[k];
+                let kept = true;
+                if (/\d/.test(ch)) {
+                    if (dot)
+                        f += ch;
+                    else
+                        w += ch;
+                }
+                else if (ch === "." && decimals > 0) {
+                    if (dot) {
+                        extra = true;
+                        kept = false;
+                    }
+                    else
+                        dot = true;
+                }
+                else
+                    kept = false;
+                if (kept && k < pos)
+                    before++;
+            }
+            if (extra || w.length > maxDigits || f.length > decimals) {
                 const back = raw.length - pos;
                 i.value = good;
                 const at = Math.max(0, good.length - back);
                 i.setSelectionRange(at, at);
                 return;
             }
-            const before = raw.slice(0, pos).replace(/\D/g, "").length;
-            const out = group ? grouped(digits) : digits;
+            const out = (group ? grouped(w) : w) + (dot ? "." + f : "");
             if (out !== i.value) {
                 i.value = out;
                 let at = 0;
@@ -712,11 +759,19 @@
             good = i.value;
         });
         i.addEventListener("blur", () => {
-            const digits = i.value.replace(/,/g, "");
-            const trimmed = digits.replace(/^0+(?=\d)/, "");
-            if (trimmed === digits)
+            const v = i.value.replace(/,/g, "");
+            const dot = v.indexOf(".");
+            let w = dot < 0 ? v : v.slice(0, dot);
+            let f = dot < 0 ? "" : v.slice(dot + 1);
+            w = w.replace(/^0+(?=\d)/, "");
+            if (f && !w)
+                w = "0";
+            if (f.length === 1)
+                f += "0";
+            const out = (group ? grouped(w) : w) + (f ? "." + f : "");
+            if (out === i.value)
                 return;
-            i.value = group ? grouped(trimmed) : trimmed;
+            i.value = out;
             i.dispatchEvent(new Event("input", { bubbles: true }));
         });
     }
@@ -731,13 +786,13 @@
     const budgetError = document.getElementById("budget-error");
     const budgetCancel = document.getElementById("budget-cancel");
     const budgetSave = document.getElementById("budget-save");
-    wholeField(budgetAmount, true, BUDGET_DIGITS);
-    wholeField(budgetN, false, DOCTORS_DIGITS);
+    numberField(budgetAmount, true, BUDGET_DIGITS, BUDGET_DECIMALS);
+    numberField(budgetN, false, DOCTORS_DIGITS, 0);
     budgetDlg.addEventListener("click", (ev) => { if (ev.target === budgetDlg)
         budgetDlg.close(); });
     let budgetMonth = null;
     let budgetBusy = false;
-    // per P4P as typed; บันทึก is off until both are whole numbers above 0.
+    // per P4P as typed; บันทึก is off until both are numbers above 0.
     const paintBudget = () => {
         const v = rateOf(budgetAmount.value, budgetN.value);
         budgetRate.textContent = v === null ? "–" : fmtRate(v);
@@ -763,9 +818,8 @@
         const b = m.budget || null;
         budgetDlg.style.setProperty("--month", m.color);
         budgetTitle.textContent = "งบประมาณจัดสรร " + m.name;
-        // A budget saved with satang (months before whole baht) shows its
-        // whole baht; saving it again stores that.
-        budgetAmount.value = b ? grouped(String(Math.trunc(b.budget))) : "";
+        // The saved budget with its satang, if it has any.
+        budgetAmount.value = b ? amountText(Number(b.budget)) : "";
         budgetN.value = b && b.doctors ? String(b.doctors) : "";
         budgetOk.classList.add("hidden");
         budgetError.classList.add("hidden");
@@ -780,7 +834,7 @@
         const m = budgetMonth;
         if (!m || budgetBusy || budgetAmount.readOnly)
             return;
-        const budget = wholeOf(budgetAmount.value), doctors = wholeOf(budgetN.value);
+        const budget = amountOf(budgetAmount.value), doctors = wholeOf(budgetN.value);
         if (budget === null || doctors === null || rateOf(budgetAmount.value, budgetN.value) === null)
             return;
         const label = budgetSave.textContent;
@@ -979,7 +1033,7 @@
             case "budget.save":
             case "review.inputs":
                 add(monthLabel(t.month));
-                add("งบประมาณ " + auditValue("", t.budget) + (t.doctors ? " · N " + auditValue("", t.doctors) : "") + " · per P4P " + auditValue("", t.per_p4p));
+                add("งบประมาณ " + (typeof t.budget === "number" ? fmtBudget(t.budget) : auditValue("", t.budget)) + (t.doctors ? " · N " + auditValue("", t.doctors) : "") + " · per P4P " + auditValue("", t.per_p4p));
                 // budget.save: from the overview's งบ button; build = 2.2 started.
                 if (t.build === true)
                     add("เริ่มสร้าง SK03");
@@ -1733,7 +1787,7 @@
     sfFte.disabled = true;
     const sfInputs = [sfStaff, sfMonthly, sfDaily];
     for (const i of sfInputs)
-        wholeField(i, false, 3);
+        numberField(i, false, 3, 0);
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy)
         sfDlg.close(); });
@@ -1923,7 +1977,7 @@
         }
     }
     // ── Edit one department (owner) ──
-    // Each field: whole digits only (wholeField), FTE 1–999, the others 0–999.
+    // Each field: whole digits only (numberField), FTE 1–999, the others 0–999.
     const sfCount = (v, min) => {
         const d = v.trim();
         return /^\d{1,3}$/.test(d) && Number(d) >= min ? Number(d) : null;
