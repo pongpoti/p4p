@@ -1001,6 +1001,18 @@
         .rv-people-count { margin: 0; }
         /* อนุมัติทุกคนที่รอตรวจ in the left column. */
         .rv-approve-all { display: flex; flex-direction: column; gap: 4px; }
+        /* The review's key buttons glow while they can be pressed (Pong,
+           2026-11-17): ผู้ตรวจสอบ's อนุมัติ … คนที่รอตรวจ and ส่งผลตรวจ (or
+           ส่งกลับ / อนุมัติทั้งหมด), and ผู้จัดทำ's ส่งให้ผู้ตรวจสอบ. A steady
+           warm glow, with a slow pulse unless motion is reduced. */
+        :is(#rv-approve-all, #rv-finish, #rv-send):not([aria-disabled="true"]):not([aria-busy="true"]):not(:disabled) {
+            box-shadow: 0 0 0 1px rgba(240, 180, 80, .55), 0 0 14px 2px rgba(240, 175, 70, .45);
+            animation: rv-glow 2.4s ease-in-out infinite;
+        }
+        @keyframes rv-glow {
+            0%, 100% { box-shadow: 0 0 0 1px rgba(240, 180, 80, .45), 0 0 8px 1px rgba(240, 175, 70, .30); }
+            50% { box-shadow: 0 0 0 1px rgba(245, 190, 90, .85), 0 0 20px 5px rgba(240, 175, 70, .60); }
+        }
         .rv-side .rv-approve-all .btn-primary { width: 100%; }
         .rv-approve-all-why { margin: 0; font-size: .82rem; line-height: 1.45; }
         .rv-inline-link { background: none; border: 0; padding: 0; font: inherit; color: var(--ring); text-decoration: underline; cursor: pointer; }
@@ -1465,7 +1477,7 @@
         <form id="budget-form" class="bd-form" novalidate>
             <div class="bd-field">
                 <label for="budget-amount">งบประมาณ (บาท)</label>
-                <input id="budget-amount" type="text" inputmode="numeric" autocomplete="off">
+                <input id="budget-amount" type="text" inputmode="decimal" autocomplete="off">
             </div>
             <div class="bd-field">
                 <label for="budget-doctors">จำนวนแพทย์ (N)</label>
