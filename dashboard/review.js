@@ -382,9 +382,16 @@
     let loadingFor = "";
     let lookingAt = "";
     let roleLoad = false;
+    let pickSeq = 0;
+    // Lists on their way (names, issues), so the side switch that asked for
+    // them can spin.
+    let listsLoading = 0;
+    let roleLists = false;
     async function loadPicked() {
-        const m = month;
-        loadingFor = m;
+        // Only the newest load ends the spin: an older one of the same month
+        // can come back first.
+        const tok = ++pickSeq;
+        loadingFor = month;
         syncBusy();
         try {
             await loadState(true);
@@ -393,7 +400,7 @@
             loadFailed(e);
         }
         finally {
-            if (loadingFor === m) {
+            if (tok === pickSeq) {
                 loadingFor = "";
                 roleLoad = false;
                 syncBusy();
@@ -591,7 +598,7 @@
         for (const b of roleBtns) {
             const on = b.dataset.role === role;
             b.setAttribute("aria-pressed", String(on));
-            if (on && roleLoad && loadingFor)
+            if (on && ((roleLoad && loadingFor) || (roleLists && listsLoading > 0)))
                 b.setAttribute("aria-busy", "true");
             else
                 b.removeAttribute("aria-busy");
@@ -610,7 +617,9 @@
             loadingLine("กำลังโหลด…");
         try {
             if (!(await loadMonths(true))) {
-                if (body.querySelector(".rv-loading"))
+                // Still no month: the loading line, or the spinning button
+                // that asked, gives way to the card (with a fresh button).
+                if (body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]'))
                     show(noMonthCard());
                 return;
             }
@@ -655,8 +664,14 @@
                 }
             }
             else {
+                // Same month, other side: it spins while the lists that side
+                // needs (names, issues) load.
+                roleLists = true;
                 drawTabs();
                 render();
+                if (!listsLoading)
+                    roleLists = false;
+                syncRole();
             }
             drawMail();
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"));
@@ -1990,8 +2005,23 @@
     // were, their row showing the result, instead of a green note above the
     // names (Pong, 2026-11-12). Cleared when the filter changes.
     const kept = new Set();
+    function listDone() {
+        listsLoading = Math.max(0, listsLoading - 1);
+        if (!listsLoading)
+            roleLists = false;
+        syncRole();
+    }
     const roundKey = (s, r) => s.month + ":" + r.round_no + ":" + r.status + ":" + (r.counts.approve + r.counts.fix);
     async function loadPeople(s, r) {
+        listsLoading++;
+        try {
+            await loadPeopleNow(s, r);
+        }
+        finally {
+            listDone();
+        }
+    }
+    async function loadPeopleNow(s, r) {
         const key = s.month + ":" + r.round_no;
         const seq = ++peopleSeq;
         peopleKey = key;
@@ -2016,6 +2046,15 @@
         render();
     }
     async function loadIssues(s) {
+        listsLoading++;
+        try {
+            await loadIssuesNow(s);
+        }
+        finally {
+            listDone();
+        }
+    }
+    async function loadIssuesNow(s) {
         const seq = ++issuesSeq;
         issuesKey = s.month;
         issuesErr = "";

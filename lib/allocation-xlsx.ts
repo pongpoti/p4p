@@ -218,10 +218,10 @@ const thin = { style: "thin" } as Borders["top"]
 const GRID: Partial<Borders> = { top: thin, left: thin, bottom: thin, right: thin }
 const solid = (argb: string): Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb } })
 
-// SK03's alignment: ที่ centred, text on the left, money on the right. J
-// (รวมยอดหน่วยงาน) is empty and has no number format (Pong).
+// SK03's alignment: ที่ centred, text on the left, money and หมายเหตุ on
+// the right. J (รวมยอดหน่วยงาน) is empty and has no number format (Pong).
 const isMoney = (j: number): boolean => j >= 6 && j <= 8
-const ALIGN: ("center" | "left" | "right")[] = ["center", "left", "left", "left", "left", "left", "right", "right", "right", "left", "left"]
+const ALIGN: ("center" | "left" | "right")[] = ["center", "left", "left", "left", "left", "left", "right", "right", "right", "left", "right"]
 
 /** How wide TH SarabunPSK draws `s` at `pt` points, in px at 96 dpi. */
 export function textPx(s: string, pt: number, bold = false): number {
