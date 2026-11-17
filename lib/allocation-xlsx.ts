@@ -65,7 +65,11 @@ const FONT = "TH SarabunPSK"
 const HEAD_TEXT = "FF333333"
 const SUM_FILL = "FFFFCCFF"     // I: =G+H, as on the June file
 const TOTAL_FILL = "FF92D050"   // J: the grand total, as on the June file
-const MONEY = '_-" "* #,##0.00_-;\\-" "* #,##0.00_-;_-" "* "-"??_-;_-@_-'
+// Every data cell shows two spaces before its value (Pong, 2026-11-17):
+// text as "  "@, money in the June file's accounting format with "  ".
+const LEAD = "  "
+const TEXT_FMT = '"  "@'
+const MONEY = '_-"  "* #,##0.00_-;\\-"  "* #,##0.00_-;_-"  "* "-"??_-;_-@_-'
 const FIRST_ROW = 3
 const SK03_FIRST_ROW = 8
 
@@ -266,9 +270,9 @@ export function fitWidth(px: number): number {
   return Math.ceil(((px * FIT_SLACK + FIT_PAD_PX) / PX_PER_UNIT) * 8) / 8
 }
 
-/** A number as the accounting format draws it ("- " before, "-"-wide space after). */
+/** A number as the accounting format draws it ("-"-wide space and two spaces before, "-"-wide space after). */
 export function moneyText(n: number): string {
-  return "- " + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "-"
+  return "-" + LEAD + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "-"
 }
 
 /** A cell value as shown on screen, for measuring. */
@@ -276,7 +280,7 @@ function shown(v: unknown, money: boolean): string {
   const x = cellValue(v)
   if (x === null || x === undefined || x === "") return ""
   if (money && typeof x === "number") return moneyText(x)
-  return String(x)
+  return LEAD + String(x)
 }
 
 // The filter button covers the right end of each header cell; a centred
@@ -363,7 +367,7 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       c.font = { name: FONT, size: BODY_SIZE, bold }
       c.alignment = { horizontal: ALIGN[j], vertical: "top", wrapText: true }
       c.border = box(EDGES[j][0], EDGES[j][1], j === 0 ? undefined : "thin", "thin")
-      if (j >= 6 && j <= 9) c.numFmt = MONEY
+      c.numFmt = j >= 6 && j <= 9 ? MONEY : TEXT_FMT
       if (bold) c.fill = solid(tint)
       if (j === 8) c.fill = solid(SUM_FILL)
       if (j === 9 && r === last) c.fill = solid(TOTAL_FILL)
