@@ -333,11 +333,15 @@ function approvalPdfName(key: unknown): string | null {
   return "แบบฟอร์ม P4P_SK02 เดือน" + THAI_MONTH_NAMES[p.month - 1] + " " + p.be + ".pdf"
 }
 
-/** Budget as typed: whole baht from 1, no decimals, commas allowed (Pong, 2026-11-10). */
+/**
+ * Budget as typed: baht above 0 with up to 2 decimals (satang), commas
+ * allowed (Pong, 2026-11-17; whole baht only from 2026-11-10). The SQL
+ * (budget_save) takes the same: numeric(14,2), above 0, under 1e11.
+ */
 function parseBudget(v: unknown, max: number): number | null {
   const s = String(v ?? "").replace(/,/g, "").trim()
-  if (!/^\d+$/.test(s)) return null
-  const n = parseInt(s, 10)
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null
+  const n = Math.round(parseFloat(s) * 100) / 100
   return n > 0 && n < max ? n : null
 }
 

@@ -1909,7 +1909,7 @@
             // The reason line under the button is gone (Pong, 2026-11-12):
             // รอตรวจ above says how many are left; hover and click still say it.
             const left = "ส่งได้เมื่อตรวจครบทุกคน (เหลือ " + int(c.waiting) + " คน)"
-            btn.textContent = "ส่งผลตรวจ…"
+            btn.textContent = "ส่งผลตรวจ"
             btn.setAttribute("aria-disabled", "true")
             btn.title = left
             btn.addEventListener("click", () => say(left))
@@ -1917,20 +1917,20 @@
             return bar
         }
         if (openIssues === null) {
-            btn.textContent = "ส่งผลตรวจ…"
+            btn.textContent = "ส่งผลตรวจ"
             btn.setAttribute("aria-disabled", "true")
             btn.setAttribute("aria-describedby", why.id)
             why.textContent = issuesErr ? "ส่งได้เมื่อโหลดข้อมูลได้ กดลองอีกครั้งด้านขวา" : "กำลังโหลด…"
             btn.addEventListener("click", () => say(why.textContent || ""))
         } else if (c.fix > 0 || openIssues > 0) {
-            btn.textContent = "ส่งกลับให้ผู้จัดทำแก้…"
+            btn.textContent = "ส่งกลับให้ผู้จัดทำแก้"
             why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน" + others
             btn.addEventListener("click", () => {
                 askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน" + others),
                     el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"))
             })
         } else {
-            btn.textContent = "อนุมัติทั้งหมด…"
+            btn.textContent = "อนุมัติทั้งหมด"
             why.textContent = "อนุมัติครบ " + int(c.approve) + " คน"
             btn.addEventListener("click", () => {
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
@@ -1950,7 +1950,7 @@
         const box = el("div", "rv-approve-all")
         const waiting = people ? people.filter((p) => p.decision === null) : null
         const n = waiting ? waiting.length : r.counts.waiting
-        const b = el("button", "btn-primary", "อนุมัติ " + int(n) + " คนที่รอตรวจ…")
+        const b = el("button", "btn-primary", "อนุมัติ " + int(n) + " คนที่รอตรวจ")
         b.type = "button"
         b.id = "rv-approve-all"
         const why = el("p", "rv-hint rv-approve-all-why")

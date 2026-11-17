@@ -274,7 +274,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)
     const doctors = core.parseCount(req.body && req.body.doctors, 1e5)
-    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่จำนวนเต็มบาทมากกว่า 0", field: "budget" })
+    if (budget === null) return res.status(400).json({ error: "งบประมาณ: ใส่ตัวเลขมากกว่า 0 ทศนิยมไม่เกิน 2 ตำแหน่ง", field: "budget" })
     if (doctors === null) return res.status(400).json({ error: "จำนวนแพทย์: ใส่จำนวนเต็มมากกว่า 0", field: "doctors" })
     const actor = { sub: s.sub, name: s.name }
     try {
