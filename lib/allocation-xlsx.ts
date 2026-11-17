@@ -23,7 +23,10 @@
  *   J รวมยอดหน่วยงาน            last row only: =SUM(I3:I<last>)
  *   K หมายเหตุ                  left empty
  *
- * TH SarabunPSK throughout, as on SK03. The department is the roster's
+ * TH SarabunPSK throughout, as on SK03. Each column is as wide as its
+ * widest cell, header included (Pong, 2026-11-17: "Each column should fits
+ * its content"), measured with the font's own character widths
+ * (lib/th-sarabun-widths.ts). The department is the roster's
  * (review_build_people, by the person's SK03 row): SK03's department sheet
  * titles are cut to 31 characters by the .xlsx export.
  *
@@ -32,6 +35,7 @@
  */
 
 import type { Workbook, Worksheet, Borders, Fill } from "exceljs"
+const fontTable = require("./th-sarabun-widths") as typeof import("./th-sarabun-widths")
 
 const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
   "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
@@ -66,10 +70,14 @@ const FIRST_ROW = 3
 const SK03_FIRST_ROW = 8
 
 const HEADERS = ["No", "เลขที่บัตรประชาชน", "ชื่อ - สกุล", "หน่วยงาน P4P", "ตำแหน่ง", "ประเภทการจ้าง",
-  "ค่าตอบแทนด้านบริหาร", "ค่าตอบแทนตามสัดส่วนวิชาชีพ", "รวมยอดเงินที่จ่าย", "รวมยอดหน่วยงาน", "หมายเหตุ"]
-// The June file's widths and header sizes (G..I are narrow, so smaller type).
-const WIDTHS = [14.625, 17.75, 31.125, 65.375, 29.375, 24.375, 12.875, 12.875, 12.875, 16.25, 40.75]
+  "ค่าตอบแทน\nด้านบริหาร", "ค่าตอบแทนตาม\nสัดส่วนวิชาชีพ", "รวมยอดเงิน\nที่จ่าย", "รวมยอดหน่วยงาน", "หมายเหตุ"]
+// The June file's header sizes. Its G..I headers are in smaller type on two
+// lines; the break is set here, at a word, so the money columns stay as
+// narrow as their numbers in every app (none breaks Thai the same way).
 const HEAD_SIZES = [16, 16, 16, 16, 16, 16, 10, 10, 12, 16, 16]
+const HEAD_HEIGHT = 32   // two lines of 12 pt
+const BODY_SIZE = 16
+const TITLE_SIZE = 18
 
 export interface AllocationRow {
   prefix: string
@@ -235,11 +243,80 @@ const EDGES: [Side, Side][] = [
 ]
 const ALIGN: ("center" | "left")[] = ["center", "center", "left", "center", "left", "left", "center", "center", "center", "center", "left"]
 
+/** How wide TH SarabunPSK draws `s` at `pt` points, in px at 96 dpi. */
+export function textPx(s: string, pt: number, bold = false): number {
+  const table = bold ? fontTable.PX_PER_PT.bold : fontTable.PX_PER_PT.regular
+  let w = 0
+  for (const ch of String(s ?? "")) {
+    const cp = ch.codePointAt(0) as number
+    if (cp === 0x200b || cp === 0x200c || cp === 0x200d || cp === 0xfeff) continue   // zero-width
+    w += table.get(cp === 0xa0 ? 0x20 : cp) ?? fontTable.FALLBACK_PX_PER_PT
+  }
+  return w * pt
+}
+
+// Excel's column unit is the default font's digit, 7 px (Calibri 11, which
+// ExcelJS writes as the workbook default). A column gets its widest text
+// plus 5% (screens round each letter's width) and 14 px for the cell's own
+// margins, to the next 1/8 of a unit.
+const PX_PER_UNIT = 7
+const FIT_SLACK = 1.05
+const FIT_PAD_PX = 14
+export function fitWidth(px: number): number {
+  return Math.ceil(((px * FIT_SLACK + FIT_PAD_PX) / PX_PER_UNIT) * 8) / 8
+}
+
+/** A number as the accounting format draws it ("- " before, "-"-wide space after). */
+export function moneyText(n: number): string {
+  return "- " + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "-"
+}
+
+/** A cell value as shown on screen, for measuring. */
+function shown(v: unknown, money: boolean): string {
+  const x = cellValue(v)
+  if (x === null || x === undefined || x === "") return ""
+  if (money && typeof x === "number") return moneyText(x)
+  return String(x)
+}
+
+// The filter button covers the right end of each header cell; a centred
+// header keeps clear of it with that much room on both sides. A header on
+// two lines needs its longer line.
+const FILTER_BUTTON_PX = 16
+
+/**
+ * The widths (Excel units) that fit each column to its widest cell: the
+ * header on one line at its own size beside the filter button, every data
+ * cell at 16 pt (No and หน่วยงาน in bold).
+ */
+export function columnWidths(cells: unknown[][]): number[] {
+  return HEADERS.map((h, j) => {
+    let px = Math.max(...h.split("\n").map((t) => textPx(t, HEAD_SIZES[j], true))) + 2 * FILTER_BUTTON_PX
+    for (const row of cells) px = Math.max(px, textPx(shown(row[j], j >= 6 && j <= 9), BODY_SIZE, j === 0 || j === 3))
+    return fitWidth(px)
+  })
+}
+
 /** The .xlsx, as a Buffer. */
 export async function buildAllocationXlsx(month: string, rows: AllocationRow[], ExcelJS: typeof import("exceljs")): Promise<Buffer> {
   const color = "FF" + headerColor(month)
   const tint = "FF" + lightColor(month)
   const id = allocationId(month)
+  const last = FIRST_ROW + rows.length - 1
+  const total = rows.reduce((s, x) => s + (x.admin || 0) + (x.pay ?? 0), 0)
+  const cells: unknown[][] = rows.map((p, i) => {
+    const r = FIRST_ROW + i
+    const admin = p.admin && p.admin !== 0 ? p.admin : null
+    return [
+      id, null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
+      admin, p.pay,
+      { formula: `G${r}+H${r}`, result: (admin ?? 0) + (p.pay ?? 0) },
+      r === last ? { formula: `SUM(I${FIRST_ROW}:I${last})`, result: total } : null,
+      null,
+    ]
+  })
+  const widths = columnWidths(cells)
+
   const wb = new ExcelJS.Workbook()
   wb.creator = "P4P"
   wb.title = (allocationFileName(month) ?? "").replace(/\.xlsx$/, "")
@@ -251,17 +328,21 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       printTitlesRow: "1:2",
     },
   })
-  ws.columns = WIDTHS.map((width) => ({ width }))
+  ws.columns = widths.map((width) => ({ width }))
 
+  // The title spans A:K; when the fitted columns are narrower than it, it
+  // wraps onto as many lines as it needs.
   ws.mergeCells("A1:K1")
   const title = ws.getCell("A1")
   title.value = allocationTitle(month)
-  title.font = { name: FONT, size: 18, bold: true }
-  title.alignment = { horizontal: "center", vertical: "middle" }
-  ws.getRow(1).height = 24
+  title.font = { name: FONT, size: TITLE_SIZE, bold: true }
+  const spanPx = widths.reduce((s, w) => s + w * PX_PER_UNIT, 0)
+  const titleLines = Math.max(1, Math.ceil((textPx(allocationTitle(month), TITLE_SIZE, true) * FIT_SLACK + FIT_PAD_PX) / spanPx))
+  title.alignment = { horizontal: "center", vertical: "middle", wrapText: titleLines > 1 }
+  ws.getRow(1).height = 24 * titleLines
 
   const head = ws.getRow(2)
-  head.height = 30
+  head.height = HEAD_HEIGHT
   HEADERS.forEach((h, i) => {
     const c = head.getCell(i + 1)
     c.value = h
@@ -271,24 +352,15 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
     c.border = box(EDGES[i][0], EDGES[i][1], "medium", "medium")
   })
 
-  const last = FIRST_ROW + rows.length - 1
-  rows.forEach((p, i) => {
+  cells.forEach((values, i) => {
     const r = FIRST_ROW + i
     const row = ws.getRow(r)
     row.height = 21
-    const admin = p.admin && p.admin !== 0 ? p.admin : null
-    const values: unknown[] = [
-      id, null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
-      admin, p.pay,
-      { formula: `G${r}+H${r}`, result: (admin ?? 0) + (p.pay ?? 0) },
-      r === last ? { formula: `SUM(I${FIRST_ROW}:I${last})`, result: rows.reduce((s, x) => s + (x.admin || 0) + (x.pay ?? 0), 0) } : null,
-      null,
-    ]
     values.forEach((v, j) => {
       const c = row.getCell(j + 1)
       if (v !== null && v !== undefined) c.value = v as never
       const bold = j === 0 || j === 3
-      c.font = { name: FONT, size: 16, bold }
+      c.font = { name: FONT, size: BODY_SIZE, bold }
       c.alignment = { horizontal: ALIGN[j], vertical: "top", wrapText: true }
       c.border = box(EDGES[j][0], EDGES[j][1], j === 0 ? undefined : "thin", "thin")
       if (j >= 6 && j <= 9) c.numFmt = MONEY
