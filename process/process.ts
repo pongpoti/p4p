@@ -220,7 +220,7 @@ function getMgmt(person: { firstname: string; lastname: string }): MgmtEntry | n
   return MGMT_LOOKUP[key] ?? null;
 }
 
-// Each department's staffing (FTE, on staff, daily hires) for the
+// Each department's staffing (FTE, on staff, monthly and daily hires) for the
 // department multiplier, as saved on the dashboard's อัตรากำลัง tab (Supabase
 // dept_staffing, scripts/dept-staffing-2026-11.sql; Pong, 2026-11-16). Read
 // once per run by loadDeptStaffing() in main(); until then, and when the
@@ -242,14 +242,15 @@ function thaiDate(iso: string): string {
  * uses numbers other than the saved ones.
  */
 async function loadDeptStaffing(supabase: SupabaseClient): Promise<void> {
-  const { data, error } = await supabase.from('dept_staffing').select('code, fte, staff, daily, updated_at, updated_by');
+  // select *: a table made before the monthly column (2026-11-17) still reads; its staff counts them.
+  const { data, error } = await supabase.from('dept_staffing').select('*');
   if (error && !['42P01', 'PGRST205'].includes(String(error.code))) throw new Error(`dept_staffing read error: ${error.message}`);
   if (error) {
     log(`  [Staffing] ⚠ dept_staffing not installed (${error.code}) — using the starting numbers (${staffingLib.STAFFING_SOURCE}); run scripts/dept-staffing-2026-11.sql`, 'warn');
     return;
   }
   const merged = staffingLib.mergeStaffing(data);
-  DEPT_STAFFING = merged.list.map(({ no, name, code, fte, staff, daily }) => ({ no, name, code, fte, staff, daily }));
+  DEPT_STAFFING = merged.list.map(({ no, name, code, fte, staff, monthly, daily }) => ({ no, name, code, fte, staff, monthly, daily }));
   const edited = merged.list.map((d) => d.updated_at).filter((t): t is string => !!t).sort();
   STAFFING_NOTE = edited.length
     ? `${staffingLib.STAFFING_SOURCE} แก้ไขในแดชบอร์ดล่าสุด ${thaiDate(edited[edited.length - 1])}`
@@ -257,7 +258,8 @@ async function loadDeptStaffing(supabase: SupabaseClient): Promise<void> {
   if (merged.missing.length) log(`  [Staffing] ⚠ no saved row for ${merged.missing.join(', ')} — starting numbers used`, 'warn');
   if (merged.bad.length) log(`  [Staffing] ⚠ out-of-range numbers for ${merged.bad.join(', ')} — starting numbers used`, 'warn');
   if (merged.unknown.length) log(`  [Staffing] ⚠ rows for unknown codes ignored: ${merged.unknown.join(', ')}`, 'warn');
-  log(`  [Staffing] ${DEPT_STAFFING.map((d) => `${d.code} ${d.staff}+${d.daily}/${d.fte} ×${deptMultiplier(d).toFixed(2)}`).join(' · ')}`);
+  if (merged.noMonthly.length) log(`  [Staffing] ⚠ dept_staffing has no monthly column yet (staff still counts monthly hires; same totals) — run scripts/dept-staffing-2026-11.sql again`, 'warn');
+  log(`  [Staffing] ${DEPT_STAFFING.map((d) => `${d.code} ${d.staff}+${d.monthly}+${d.daily}/${d.fte} ×${deptMultiplier(d).toFixed(2)}`).join(' · ')}`);
 }
 
 const DEPT_ORDER: Record<string, number> = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
