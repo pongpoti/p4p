@@ -20,6 +20,7 @@
     "dashboard/app.ts",
     "dashboard/login.ts",
     "dashboard/review.ts",
+    "dashboard/users.ts",
     "upload/app.ts",
     "lib/line-receipt-flex.ts",
     "lib/isomorphic-globals.d.ts"
