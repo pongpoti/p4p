@@ -1871,6 +1871,229 @@
             :is(#review-view, #review-confirm) a[aria-busy="true"] { color: Canvas; }
             :is(#review-view, #review-confirm) :is(button, a):not(.rv-switch)[aria-busy="true"]::after { forced-color-adjust: none; border-color: GrayText !important; border-top-color: ButtonText !important; }
         }
+        /* ── Users and rights (QR invite, Pong 2026-11-18) ────────────────
+           The owner's name chip opens a menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งาน
+           และสิทธิ์); its two dialogs keep this look on every tab, so their
+           rules are their own (um-*), not the two looks' shared ones. */
+        #header-actions { position: relative; }
+        .userchip {
+            display: inline-flex; align-items: center; gap: var(--sp-2); height: 44px; padding: 0 var(--sp-2) 0 var(--sp-1);
+            border: 0; border-radius: var(--r-pill); background: transparent; color: #EADFD2; font: inherit; font-size: var(--fs-sm); cursor: pointer;
+        }
+        .userchip:hover, .userchip[aria-expanded="true"] { background: var(--c-brand-hover); color: #fff; }
+        .userchip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 6px var(--c-focus); }
+        .userchip .um-av { position: relative; display: inline-flex; }
+        .userchip #user-avatar { width: 34px; height: 34px; }
+        .userchip .um-dot { position: absolute; top: -2px; right: -2px; width: 11px; height: 11px; border-radius: 50%; background: #F59E0B; border: 2px solid var(--c-brand); }
+        .userchip .um-chev { width: 18px; height: 18px; flex: none; }
+        .user-menu {
+            position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: 260px; min-width: max-content; padding: var(--sp-2) 0;
+            background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: var(--elev-3);
+            color: var(--c-text); white-space: normal;
+        }
+        .user-menu .um-who { padding: var(--sp-2) var(--sp-4) var(--sp-3); border-bottom: 1px solid var(--c-border); margin-bottom: var(--sp-1); }
+        .user-menu .um-who b { display: block; font-size: var(--fs-md); font-weight: 700; }
+        .user-menu .um-who span { color: var(--c-text-2); font-size: var(--fs-sm); }
+        .user-menu .um-item {
+            display: flex; align-items: center; gap: var(--sp-3); width: 100%; padding: var(--sp-2) var(--sp-4); border: 0; background: transparent;
+            font: inherit; color: var(--c-text); text-align: left; cursor: pointer; line-height: var(--lh-ui);
+        }
+        .user-menu .um-item:hover, .user-menu .um-item:focus-visible { background: var(--c-surface-3); box-shadow: inset 3px 0 0 var(--c-tan); outline: none; }
+        .user-menu .um-item > .ic { width: 22px; height: 22px; color: var(--c-brand); }
+        .user-menu .um-item b { display: block; font-size: var(--fs-md); font-weight: 700; }
+        .user-menu .um-item small { display: block; color: var(--c-text-2); font-size: var(--fs-xs); max-width: 260px; }
+        .user-menu .um-item .um-pill { margin-left: auto; }
+        .um-pill {
+            display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-pill);
+            font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; border: 1px solid transparent;
+        }
+        .um-pill.warn { background: var(--st-warn-bg); color: var(--st-warn-fg); border-color: var(--st-warn-line); }
+        .um-pill.info { background: var(--st-info-bg); color: var(--st-info-fg); border-color: var(--st-info-line); }
+        .um-pill.ok { background: var(--st-success-bg); color: var(--st-success-fg); border-color: var(--st-success-line); }
+        .um-pill.danger { background: var(--st-danger-bg); color: var(--st-danger-fg); border-color: var(--st-danger-line); }
+        .um-pill.muted { background: var(--st-neutral-bg); color: var(--st-neutral-fg); border-color: var(--st-neutral-line); }
+        .um-pill .um-pulse { width: 9px; height: 9px; border-radius: 50%; background: currentColor; animation: um-pulse 1.6s ease-in-out infinite; }
+        @keyframes um-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(29, 78, 216, .35); } 50% { box-shadow: 0 0 0 6px rgba(29, 78, 216, 0); } }
+
+        dialog.um-dialog {
+            margin: auto; padding: 0; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+            border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface); box-shadow: var(--elev-3);
+            color: var(--c-text); font: inherit; font-size: var(--fs-md); line-height: var(--lh-ui); overflow: hidden;
+        }
+        dialog.um-dialog[open] { display: flex; flex-direction: column; }
+        dialog.um-dialog.wide { width: min(900px, calc(100vw - 32px)); }
+        dialog.um-dialog#users-dialog { width: min(860px, calc(100vw - 32px)); }
+        dialog.um-dialog::backdrop { background: rgba(36, 28, 22, .45); }
+        .um-h { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--c-border); flex: none; }
+        .um-h h2 { font-size: var(--fs-xl); font-weight: 700; line-height: 1.2; }
+        .um-h p { color: var(--c-text-2); font-size: var(--fs-sm); }
+        .um-h p:empty { display: none; }
+        .um-h .um-grow { flex: 1; }
+        .um-x {
+            width: 40px; height: 40px; flex: none; border: 0; border-radius: var(--r-md); background: transparent; color: var(--c-text-2);
+            display: grid; place-items: center; cursor: pointer;
+        }
+        .um-x:hover { background: var(--c-brand-soft); color: var(--c-text); }
+        .um-x .ic { width: 22px; height: 22px; }
+        .um-b { padding: var(--sp-5); overflow: auto; flex: 1 1 auto; min-height: 0; }
+        .um-f { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--c-border); background: var(--c-surface-2); flex: none; }
+        .um-f .um-grow { flex: 1; min-width: 0; }
+        .um-f .error-text, .um-b .error-text { color: var(--st-danger-fg); font-size: var(--fs-sm); font-weight: 700; line-height: var(--lh-text); }
+        .ub {
+            display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); min-height: var(--ctl-md); padding: 0 var(--sp-5);
+            border-radius: var(--r-md); border: 1px solid var(--c-border-strong); background: var(--c-surface); color: var(--c-brand);
+            font: inherit; font-size: var(--fs-md); font-weight: 700; line-height: var(--lh-ui); cursor: pointer; white-space: nowrap;
+        }
+        .ub:hover { background: var(--c-brand-soft); }
+        .ub:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        .ub.primary { background: var(--c-brand); border-color: var(--c-brand); color: #fff; }
+        .ub.primary:hover { background: var(--c-brand-hover); }
+        .ub:disabled, .ub.primary:disabled { background: var(--c-disabled-bg); border-color: var(--c-disabled-bg); color: var(--c-text-3); cursor: not-allowed; }
+        .ub.danger { color: var(--st-danger-fg); border-color: var(--st-danger-solid); }
+        .ub.danger:hover { background: var(--st-danger-bg); }
+        .ub.danger.solid { background: var(--st-danger-solid); color: #fff; }
+        .ub.sm { min-height: var(--ctl-sm); padding: 0 var(--sp-3); font-size: var(--fs-sm); }
+        .ub.link { border: 0; background: transparent; color: var(--c-link); padding: 0; min-height: 32px; text-decoration: underline; font-weight: 400; }
+        .ub .ic { width: 20px; height: 20px; }
+        .ub[aria-busy="true"]::before {
+            content: ""; width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+            animation: um-turn .8s linear infinite;
+        }
+        @keyframes um-turn { to { transform: rotate(360deg); } }
+
+        /* The QR */
+        .um-qrgrid { display: grid; grid-template-columns: 272px 1fr; gap: var(--sp-6); }
+        .um-qrtile {
+            position: relative; width: 272px; height: 272px; padding: 16px; border: 1px solid var(--c-border); border-radius: var(--r-lg);
+            background: #fff; box-shadow: var(--elev-1); display: grid; place-items: center;
+        }
+        .um-qrtile img { width: 240px; height: 240px; display: block; image-rendering: pixelated; }
+        .um-qrtile.dim img { opacity: .25; }
+        .um-qrtile .um-over {
+            position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--sp-3); padding: var(--sp-4);
+            text-align: center; font-weight: 700; color: var(--c-text);
+        }
+        .um-qrtile .um-spin { width: 36px; height: 36px; border-radius: 50%; border: 4px solid var(--c-border); border-top-color: var(--c-brand); animation: um-turn 1s linear infinite; }
+        .um-qrmeta { margin-top: var(--sp-3); text-align: center; font-size: var(--fs-sm); color: var(--c-text-2); }
+        .um-qrmeta b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+        .um-steps h3 { font-size: var(--fs-md); font-weight: 700; margin-bottom: var(--sp-2); }
+        .um-steps ol { list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: var(--sp-3); }
+        .um-steps li { counter-increment: s; display: grid; grid-template-columns: 32px 1fr; gap: var(--sp-3); align-items: start; line-height: var(--lh-text); }
+        .um-steps li::before {
+            content: counter(s); width: 32px; height: 32px; border-radius: 50%; background: var(--c-brand); color: #fff; font-weight: 700;
+            display: grid; place-items: center;
+        }
+        .um-status { margin-top: var(--sp-5); }
+        .um-note {
+            margin-top: var(--sp-4); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--c-surface-2);
+            border: 1px solid var(--c-border); color: var(--c-text-2); font-size: var(--fs-sm); line-height: var(--lh-text);
+        }
+        .um-note.warn { background: var(--st-warn-bg); border-color: var(--st-warn-line); color: var(--st-warn-fg); }
+
+        /* The approval panel */
+        .um-apgrid { display: grid; grid-template-columns: 300px 1fr; gap: var(--sp-6); }
+        .um-person {
+            display: flex; gap: var(--sp-3); align-items: center; padding: var(--sp-3); border: 1px solid var(--c-border);
+            border-radius: var(--r-lg); background: var(--c-surface-2); overflow-wrap: anywhere;
+        }
+        .um-pic {
+            width: 56px; height: 56px; border-radius: 50%; flex: none; object-fit: cover;
+            background: linear-gradient(135deg, #C9B79F, #8C7358); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: var(--fs-xl);
+        }
+        .um-person b { display: block; font-size: var(--fs-md); }
+        .um-person small { display: block; color: var(--c-text-2); font-size: var(--fs-xs); line-height: 1.35; }
+        .um-lbl { display: block; margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-sm); font-weight: 700; color: var(--c-text); }
+        .um-lbl.first { margin-top: 0; }
+        .um-digits { display: flex; gap: var(--sp-2); }
+        .um-digits input {
+            width: 56px; height: 64px; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); background: #fff; text-align: center;
+            font: inherit; font-size: var(--fs-2xl); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--c-text);
+        }
+        .um-digits input:focus { outline: none; border: 2px solid var(--c-focus); box-shadow: 0 0 0 3px rgba(29, 78, 216, .15); }
+        .um-digits.bad input { border-color: var(--st-danger-solid); }
+        .um-help { margin-top: var(--sp-3); color: var(--c-text-2); font-size: var(--fs-xs); line-height: var(--lh-text); }
+        .um-inp {
+            width: 100%; height: var(--ctl-md); padding: 0 var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+            font: inherit; font-size: var(--fs-md); color: var(--c-text); background: #fff;
+        }
+        .um-inp:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 0; border-color: var(--c-focus); }
+        .um-chips { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+        .um-chip {
+            height: 32px; padding: 0 var(--sp-3); border-radius: var(--r-pill); border: 1px solid var(--c-border-strong); background: #fff;
+            color: var(--c-brand); font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
+        }
+        .um-chip:hover { background: var(--c-brand-soft); }
+        .um-chip[aria-pressed="true"] { background: var(--c-brand-soft); border-color: var(--c-brand); }
+        .um-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        .um-matrix { margin-top: var(--sp-3); border: 1px solid var(--c-border); border-radius: var(--r-lg); overflow: hidden; background: #fff; }
+        .um-matrix .um-r {
+            display: grid; grid-template-columns: 150px auto 1fr; align-items: center; gap: var(--sp-3); min-height: 44px; padding: var(--sp-1) var(--sp-3);
+            border-top: 1px solid var(--c-border);
+        }
+        .um-matrix .um-r:first-child { border-top: 0; }
+        .um-matrix .um-r b { font-weight: 700; }
+        .um-matrix .um-r small { color: var(--c-text-3); font-size: var(--fs-xs); }
+        .um-seg { display: inline-flex; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); overflow: hidden; }
+        .um-seg button {
+            height: 32px; padding: 0 var(--sp-3); border: 0; border-left: 1px solid var(--c-border); background: #fff; color: var(--c-text-2);
+            font: inherit; font-size: var(--fs-sm); cursor: pointer;
+        }
+        .um-seg button:first-child { border-left: 0; }
+        .um-seg button:hover { background: var(--c-brand-soft); }
+        .um-seg button[aria-checked="true"] { background: var(--c-brand); color: #fff; font-weight: 700; }
+        .um-seg button:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -2px; }
+        .um-locked {
+            display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 var(--sp-3); border-radius: var(--r-md);
+            background: var(--c-surface-3); color: var(--c-text-2); font-size: var(--fs-sm); justify-self: start;
+        }
+        .um-locked .ic { width: 16px; height: 16px; }
+        .um-summary { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--c-text-2); line-height: var(--lh-text); }
+        .um-summary b { color: var(--c-text); }
+        .um-foot-note { margin-top: var(--sp-2); font-size: var(--fs-xs); color: var(--c-text-3); line-height: var(--lh-text); }
+        .um-confirm { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
+        .um-confirm b { flex: 1; min-width: 0; }
+        .um-confirm .um-grow { flex: 1; min-width: 0; }
+
+        /* Results */
+        .um-result { text-align: center; padding: var(--sp-4) var(--sp-2); }
+        .um-result .um-mark { width: 72px; height: 72px; margin: 0 auto var(--sp-3); border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--st-success-solid); }
+        .um-result .um-mark.no { background: var(--st-danger-solid); }
+        .um-result .um-mark.warn { background: var(--st-warn-solid); }
+        .um-result .um-mark .ic { width: 40px; height: 40px; }
+        .um-result h3 { font-size: var(--fs-xl); font-weight: 700; margin-bottom: var(--sp-2); }
+        .um-result p { color: var(--c-text-2); line-height: var(--lh-text); max-width: 560px; margin: 0 auto var(--sp-2); }
+
+        /* ผู้ใช้งานและสิทธิ์ */
+        .um-sec { margin-bottom: var(--sp-5); }
+        .um-sec h3 { font-size: var(--fs-md); font-weight: 700; margin-bottom: var(--sp-2); }
+        .um-pending { border: 1px solid var(--st-warn-line); background: var(--st-warn-bg); border-radius: var(--r-lg); }
+        .um-pending h3 { color: var(--st-warn-fg); padding: var(--sp-3) var(--sp-4) 0; }
+        .um-pending ul { list-style: none; }
+        .um-pending li { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); }
+        .um-pending li + li { border-top: 1px solid var(--st-warn-line); }
+        .um-pending li .um-grow { flex: 1; min-width: 0; }
+        .um-pending li small { color: var(--c-text-2); font-size: var(--fs-sm); }
+        .um-table { width: 100%; border-collapse: collapse; border: 1px solid var(--c-border); border-radius: var(--r-lg); overflow: hidden; }
+        .um-table th { text-align: left; font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); background: var(--c-surface-3); padding: var(--sp-2) var(--sp-3); }
+        .um-table td { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--c-border); vertical-align: middle; }
+        .um-table td small { display: block; color: var(--c-text-3); font-size: var(--fs-xs); }
+        .um-table .um-acts { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: nowrap; }
+        .um-table .um-acts-cell { width: 1%; white-space: nowrap; }
+        .um-table tr.off td:not(.um-acts-cell) { color: var(--c-text-3); }
+        .um-table tr.off td:first-child b { text-decoration: line-through; }
+        .um-table tr.um-edit td { background: var(--c-surface-2); }
+        .um-table .um-perm { display: inline-block; margin: 2px 4px 2px 0; padding: 0 8px; border-radius: var(--r-pill); background: var(--c-brand-soft); color: var(--c-brand); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; }
+        .um-edit-grid { display: grid; grid-template-columns: 260px 1fr; gap: var(--sp-5); align-items: start; padding: var(--sp-2) 0; }
+        .um-edit-btns { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-3); align-items: center; }
+        .um-toast {
+            position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100; padding: var(--sp-3) var(--sp-5); border-radius: var(--r-pill);
+            background: var(--c-brand); color: #fff; font-weight: 700; box-shadow: var(--elev-3);
+        }
+        /* ตามส่ง without บันทึก: the history only, no form or delete. */
+        body.followup-readonly #log-form, body.followup-readonly .log-delete { display: none !important; }
+        @media (forced-colors: active) {
+            .um-seg button[aria-checked="true"], .um-chip[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+        }
     </style>
 </head>
 
@@ -1890,7 +2113,7 @@
                 <span>SAKHONMSO</span>
             </a>
             <nav id="nav" aria-label="เมนูหลัก">
-                <a class="nav-btn" href="/dashboard/#followup" data-view="followup">
+                <a class="nav-btn" href="/dashboard/#followup" data-view="followup" id="followup-nav">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
@@ -1941,6 +2164,19 @@
                     <span id="user-avatar" aria-hidden="true"></span>
                     <span id="user-name"></span>
                 </span>
+                <!-- The owner's menu: users.js turns #user into its button -->
+                <div id="user-menu" class="user-menu hidden" role="menu" aria-label="เมนูผู้ดูแลระบบ">
+                    <div class="um-who" role="presentation"><b id="um-name"></b><span>ผู้ดูแลระบบ</span></div>
+                    <button type="button" class="um-item" role="menuitem" id="um-invite" tabindex="-1">
+                        <span class="um-ico" data-icon="qr"></span>
+                        <span><b>เพิ่มผู้ใช้ด้วย QR</b><small id="um-invite-sub">ให้ผู้ใช้ใหม่สแกนด้วยแอป LINE</small></span>
+                    </button>
+                    <button type="button" class="um-item" role="menuitem" id="um-users" tabindex="-1">
+                        <span class="um-ico" data-icon="users"></span>
+                        <span><b>ผู้ใช้งานและสิทธิ์</b><small id="um-users-sub" class="hidden"></small></span>
+                        <span id="um-pending" class="um-pill warn hidden"></span>
+                    </button>
+                </div>
                 <span class="sep" aria-hidden="true"></span>
                 <button type="button" id="logout-btn" class="btn-secondary">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -2077,6 +2313,7 @@
                         <option value="login">เข้าสู่ระบบ</option>
                         <option value="refused">ถูกปฏิเสธการเข้าสู่ระบบ</option>
                         <option value="session">ออกจากระบบ</option>
+                        <option value="users">ผู้ใช้งาน</option>
                     </select>
                 </label>
                 <label>ตั้งแต่วันที่
@@ -2274,9 +2511,39 @@
         </div>
     </dialog>
 
+    <!-- เพิ่มผู้ใช้ด้วย QR (owner only): the QR, then the approval panel, then the result; drawn by users.js -->
+    <dialog id="invite-dialog" class="um-dialog" aria-labelledby="invite-title" aria-describedby="invite-sub">
+        <div class="um-h">
+            <div class="um-grow">
+                <h2 id="invite-title">เพิ่มผู้ใช้ด้วย QR</h2>
+                <p id="invite-sub"></p>
+            </div>
+            <button type="button" class="um-x" data-um-close aria-label="ปิด"><span data-icon="x"></span></button>
+        </div>
+        <div id="invite-body" class="um-b"></div>
+        <div id="invite-foot" class="um-f"></div>
+    </dialog>
+
+    <!-- ผู้ใช้งานและสิทธิ์ (owner only): requests waiting, the users, edit and suspend; drawn by users.js -->
+    <dialog id="users-dialog" class="um-dialog" aria-labelledby="users-title">
+        <div class="um-h">
+            <div class="um-grow">
+                <h2 id="users-title">ผู้ใช้งานและสิทธิ์</h2>
+            </div>
+            <button type="button" class="ub sm" id="users-add"><span data-icon="qr"></span>เพิ่มผู้ใช้ด้วย QR</button>
+            <button type="button" class="um-x" data-um-close aria-label="ปิด"><span data-icon="x"></span></button>
+        </div>
+        <div id="users-body" class="um-b"></div>
+        <div class="um-f">
+            <p class="um-grow um-foot-note">ผู้ใช้ที่ตั้งไว้ใน Vercel (DASHBOARD_LINE_USER_IDS) จะย้ายเข้ารายการนี้เองเมื่อเข้าสู่ระบบครั้งถัดไป</p>
+            <button type="button" class="ub" data-um-close>ปิด</button>
+        </div>
+    </dialog>
+
     <!-- line icons for app.js and review.js (TH SarabunPSK has no arrows or ticks) -->
     <script src="icons.js"></script>
     <script src="app.js"></script>
+    <script src="users.js"></script>
     <script src="review.js"></script>
 </body>
 

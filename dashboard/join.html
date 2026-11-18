@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    __JOIN_REFRESH__
+    <title>SAKHONMSO P4P — ขอเข้าใช้งานแดชบอร์ด</title>
+    <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/dashboard/favicon-32.png" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png">
+    <style>
+        /* The phone page of the QR invite (Pong, 2026-11-18): served by
+           main.ts at /dashboard/join, /join/wait and /join/done, which put
+           one card in <main>. The two placeholders appear once each and
+           nowhere else (main.ts replaces the first match). No script and no mobile block: it is
+           the one dashboard page made for a phone. Same tokens, brown bar and
+           TH SarabunPSK as dashboard/index.html. */
+        @font-face {
+            font-family: "TH SarabunPSK";
+            src: local("TH SarabunPSK"), local("THSarabunPSK"), url("/dashboard/fonts/THSarabunPSK-Regular.ttf") format("truetype");
+            font-weight: 100 500; font-style: normal; font-display: swap;
+        }
+        @font-face {
+            font-family: "TH SarabunPSK";
+            src: local("TH SarabunPSK Bold"), local("THSarabunPSK-Bold"), url("/dashboard/fonts/THSarabunPSK-Bold.ttf") format("truetype");
+            font-weight: 600 900; font-style: normal; font-display: swap;
+        }
+        :root {
+            --fs-xs: calc(18rem / 22); --fs-sm: calc(20rem / 22); --fs-md: 1rem; --fs-lg: calc(24rem / 22);
+            --fs-xl: calc(28rem / 22); --fs-2xl: calc(32rem / 22);
+            --lh-ui: 1.3; --lh-text: 1.45;
+            --r-md: 6px; --r-lg: 8px; --r-pill: 999px;
+            --elev-2: 0 4px 12px rgba(36, 28, 22, .10);
+            --c-surface: #FFFFFF; --c-border: #E4DACE; --c-text: #241C16; --c-text-2: #5F5045; --c-text-3: #6E5D50;
+            --c-brand: #3F2F24; --c-tan: #A68966; --c-focus: #1D4ED8;
+            --st-success-solid: #157F3D;
+            --st-danger-fg: #A3221A; --st-danger-bg: #FDECEA; --st-danger-solid: #B42318;
+            --st-warn-fg: #7A4700; --st-warn-bg: #FDF0D5; --st-warn-solid: #9A5B00;
+            --st-info-fg: #1D4ED8; --st-info-bg: #E8EFFD; --st-info-solid: #2457C5; --st-info-line: #AFC4F3;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 137.5%; font-synthesis: none; }
+        body {
+            min-height: 100vh;
+            font-family: "TH SarabunPSK", "TH Sarabun New", Tahoma, sans-serif;
+            font-size: 1rem; line-height: var(--lh-ui); color: var(--c-text);
+            background:
+                radial-gradient(420px 320px at 10% 0%, rgba(222, 190, 145, .42), transparent 70%),
+                radial-gradient(380px 300px at 95% 90%, rgba(150, 208, 216, .25), transparent 70%),
+                linear-gradient(160deg, #FBF6EF, #F8F1E7 50%, #FBF7F1);
+            -webkit-font-smoothing: antialiased;
+        }
+        :focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+        @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+        .bar {
+            height: 56px; display: flex; align-items: center; justify-content: center; gap: 8px;
+            background: var(--c-brand); color: #fff; font-weight: 700; font-size: var(--fs-md);
+        }
+        .logo-mark {
+            display: inline-flex; align-items: center; height: 30px; padding: 0 6px; border-radius: var(--r-md);
+            background: #F7F3EE; color: var(--c-brand); box-shadow: inset 0 -3px 0 var(--c-tan); font-size: var(--fs-sm); font-weight: 700;
+        }
+        .logo-mark b { color: #7A5A3C; }
+        main { max-width: 440px; margin: 0 auto; padding: 20px 16px 40px; }
+        .card {
+            padding: 22px 20px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px;
+            box-shadow: var(--elev-2); text-align: center; overflow-wrap: anywhere;
+        }
+        h1 { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.2; margin-bottom: 10px; }
+        p { font-size: var(--fs-md); line-height: var(--lh-text); color: var(--c-text-2); }
+        .nowrap { white-space: nowrap; }
+        /* LINE's own brand green, as on login.html: an accepted brand exception
+           to the 4.5:1 contrast rule (white on it is about 2.3:1). */
+        .line {
+            margin: 22px 0 14px; width: 100%; min-height: 52px; border-radius: 10px; background: #06C755; color: #fff;
+            font-size: var(--fs-lg); font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px;
+            text-decoration: none;
+        }
+        .line:active { background: #05A847; }
+        .line i { font-style: normal; background: #fff; color: #06C755; border-radius: 6px; padding: 0 6px; font-size: var(--fs-sm); line-height: 1.4; }
+        .fine { font-size: var(--fs-xs); color: var(--c-text-3); line-height: var(--lh-text); }
+        .code {
+            margin: 18px 0 8px; font-size: 56px; font-weight: 700; letter-spacing: 14px; padding-left: 14px;
+            font-variant-numeric: tabular-nums; color: var(--c-brand); line-height: 1;
+        }
+        .spin {
+            display: inline-flex; align-items: center; gap: 10px; margin-top: 18px; padding: 10px 14px; border-radius: var(--r-pill);
+            background: var(--st-info-bg); color: var(--st-info-fg); font-size: var(--fs-sm); font-weight: 700; text-align: left;
+        }
+        .spin::before {
+            content: ""; flex: none; width: 18px; height: 18px; border-radius: 50%;
+            border: 3px solid var(--st-info-line); border-top-color: var(--st-info-solid); animation: turn 1s linear infinite;
+        }
+        @keyframes turn { to { transform: rotate(360deg); } }
+        .mark { width: 72px; height: 72px; margin: 6px auto 12px; border-radius: 50%; color: #fff; display: grid; place-items: center; }
+        .mark svg { width: 40px; height: 40px; }
+        .mark.ok { background: var(--st-success-solid); }
+        .mark.no { background: var(--st-danger-solid); }
+        .mark.warn { background: var(--st-warn-solid); }
+        .info {
+            margin-top: 16px; padding: 12px 14px; border-radius: var(--r-md); background: var(--st-info-bg); border: 1px solid var(--st-info-line);
+            color: var(--st-info-fg); font-size: var(--fs-sm); line-height: var(--lh-text); text-align: left;
+        }
+    </style>
+</head>
+
+<body>
+    <header class="bar"><span class="logo-mark" aria-hidden="true">P<b>4</b>P</span><span>SAKHONMSO</span></header>
+    <main>
+        __JOIN_BODY__
+    </main>
+</body>
+
+</html>

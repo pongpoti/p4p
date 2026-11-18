@@ -73,7 +73,13 @@
         lastKeepAlive = Date.now()
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" })
-            if (r.status === 401) location.href = "/dashboard/login?error=idle"
+            if (r.status === 401) { location.href = "/dashboard/login?error=idle"; return }
+            if (!r.ok) return
+            const s: Session = await r.json()
+            // The owner changed this user's rights: draw the page again with
+            // the new tabs (the server already answers by the new ones).
+            if (sessionOk && permsKey(s.perms) !== permsKey(perms)) { location.reload(); return }
+            window.dispatchEvent(new CustomEvent("dashboard:session", { detail: s }))
         } catch (e) {
             // Offline for a moment; the next activity retries.
         }
@@ -96,6 +102,12 @@
     setInterval(checkIdle, 15 * 1000)
 
     // ── Helpers ──────────────────────────────────────────────────────────
+    interface Session {
+        name?: string; isOwner?: boolean; reviewAuditee?: boolean
+        // The tabs this user has (QR invite, 2026-11-18); the owner has all.
+        perms?: string[]; pendingUsers?: number; usersInstalled?: boolean
+    }
+    const permsKey = (p: unknown): string => Array.isArray(p) ? p.slice().sort().join() : ""
     const el = (tag: string, cls?: string, text?: string): HTMLElement => {
         const e = document.createElement(tag)
         if (cls) e.className = cls
@@ -236,6 +248,12 @@
     let sessionKnown = false
     // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
     let reviewAuditee = false
+    // The rights from the session (main.ts dashPerms): which tabs show, and
+    // whether ตามส่ง can add or delete notes. Only what is drawn: the server
+    // answers 404 to anything outside them.
+    let perms: string[] = []
+    let sessionOk = false
+    const can = (p: string): boolean => isOwner || perms.includes(p)
     const auditView = document.getElementById("audit-view") as HTMLElement
     const rosterView = document.getElementById("roster-view") as HTMLElement
     const reviewView = document.getElementById("review-view") as HTMLElement
@@ -247,10 +265,12 @@
     // Until the session call answers, #review and #history stay what they
     // ask for (the tab's frame, empty), not ภาพรวม for a moment; the call
     // then decides, as before.
+    // A tab the user does not have falls back to ภาพรวม.
     const currentView = (): string =>
-        location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
+        location.hash === "#followup" && (can("followup.view") || !sessionKnown) ? "followup"
+            : location.hash === "#roster" && (can("roster.view") || !sessionKnown) ? "roster"
             : location.hash === "#review" && (isOwner || reviewAuditee || !sessionKnown) ? "review"
-            : location.hash === "#staffing" ? "staffing"
+            : location.hash === "#staffing" && (can("staffing.view") || !sessionKnown) ? "staffing"
             : (location.hash === "#history" || location.hash === "#audit") && (isOwner || !sessionKnown) ? "audit" : "overview"
     // The nav's current tile, alone: it paints before the tab is drawn.
     const markNav = (view: string): void => {
@@ -905,9 +925,11 @@
     const auditTo     = document.getElementById("audit-to") as HTMLInputElement
     const auditReset  = document.getElementById("audit-reset") as HTMLButtonElement
     const auditNav    = document.getElementById("audit-nav") as HTMLElement
-    // รายชื่อ is owner-only too (main.ts returns 404 to anyone else).
+    // Each tab shows only with its right (main.ts returns 404 without it).
     const rosterNav   = document.getElementById("roster-nav") as HTMLElement
     const reviewNav   = document.getElementById("review-nav") as HTMLElement
+    const followupNav = document.getElementById("followup-nav") as HTMLElement
+    const staffingNav = document.getElementById("staffing-nav") as HTMLElement
 
     const ACTION_LABEL: Record<string, string> = {
         "login.success": "เข้าสู่ระบบ",
@@ -951,9 +973,33 @@
         "review.reopen": "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง",
         "view.staffing": "เปิดแท็บอัตรากำลัง",
         "staffing.save": "แก้ไขอัตรากำลัง",
+        "user.invite": "สร้าง QR เพิ่มผู้ใช้",
+        "user.cancel": "ยกเลิก QR",
+        "user.claim": "สแกน QR ขอเข้าใช้งาน",
+        "user.claim_refused": "สแกน QR ไม่สำเร็จ",
+        "user.bad_code": "รหัสยืนยันไม่ตรง",
+        "user.approve": "อนุมัติผู้ใช้ใหม่",
+        "user.reject": "ปฏิเสธผู้ใช้ใหม่",
+        "user.edit": "แก้ไขสิทธิ์ผู้ใช้",
+        "user.suspend": "ระงับผู้ใช้",
+        "user.import": "ย้ายผู้ใช้เข้าระบบ",
     }
     const GROUP_LABEL: Record<string, string> = {
-        change: "การแก้ไข", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ",
+        change: "การแก้ไข", view: "การเปิดดู", login: "เข้าสู่ระบบ", refused: "ถูกปฏิเสธ", session: "ออกจากระบบ", users: "ผู้ใช้งาน",
+    }
+    // "ตามส่ง (บันทึก) · รายชื่อ (ดู)" (the same words as users.js and main.ts)
+    const permsSummary = (p: unknown): string => {
+        const list = Array.isArray(p) ? p as string[] : []
+        const out: string[] = []
+        if (list.includes("followup.edit")) out.push("ตามส่ง (บันทึก)")
+        else if (list.includes("followup.view")) out.push("ตามส่ง (ดู)")
+        if (list.includes("roster.view")) out.push("รายชื่อ (ดู)")
+        if (list.includes("staffing.view")) out.push("อัตรากำลัง (ดู)")
+        if (list.includes("review.auditee")) out.push("ตรวจสอบ (ผู้จัดทำ)")
+        return out.length ? out.join(" · ") : "ภาพรวมเท่านั้น"
+    }
+    const CLAIM_REASON: Record<string, string> = {
+        used: "QR ถูกใช้แล้ว", expired: "QR หมดอายุ", already: "มีสิทธิ์อยู่แล้ว", invalid: "QR ไม่ถูกต้อง",
     }
     // Roster columns in Thai, for the form and the audit log.
     const FIELD_LABEL: Record<string, string> = {
@@ -1081,6 +1127,39 @@
             case "review.issue_close":
                 add(monthLabel(t.month)); add("เรื่องที่ " + t.id)
                 break
+            case "user.invite":
+            case "user.claim":
+                add(t.invite ? "QR " + t.invite : "")
+                break
+            case "user.cancel":
+                add(t.invite ? "QR " + t.invite : ""); add(t.reason === "closed" ? "ปิดหน้าต่างก่อนมีผู้สแกน" : "")
+                break
+            case "user.claim_refused":
+                add(CLAIM_REASON[t.reason] || t.reason); add(t.invite ? "QR " + t.invite : "")
+                break
+            case "user.bad_code":
+                add("ครั้งที่ " + (Number(t.tries) || 1)); if (Number(t.tries) >= 3) add("ยกเลิกคำขอแล้ว")
+                break
+            case "user.approve":
+                // "Somchai P.: ตามส่ง (บันทึก) · รายชื่อ (ดู)"
+                add((t.name || "") + ": " + permsSummary(t.perms))
+                break
+            case "user.reject":
+            case "user.suspend":
+                add(t.name)
+                break
+            case "user.edit": {
+                add(t.name)
+                type UserSide = { displayName?: string; perms?: unknown; active?: boolean }
+                const b = (t.before || {}) as UserSide, n = (t.after || {}) as UserSide
+                if (b.displayName !== n.displayName) add("ชื่อ " + (b.displayName || "—") + " → " + (n.displayName || "—"))
+                if (permsKey(b.perms) !== permsKey(n.perms)) add("สิทธิ์ " + permsSummary(b.perms) + " → " + permsSummary(n.perms))
+                if (b.active === false && n.active === true) add("เปิดใช้อีกครั้ง")
+                break
+            }
+            case "user.import":
+                add(permsSummary(t.perms))
+                break
             case "staffing.save": {
                 // "อายุรกรรม (MED) · จ้างรายวัน 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
                 add(t.name ? t.name + (t.code ? " (" + t.code + ")" : "") : t.code)
@@ -1120,8 +1199,8 @@
     }
 
     const auditRow = (a: AuditEntry): HTMLElement => {
-        const tr = el("tr", /\.(delete|reject)$/.test(a.action) || a.action === "login.refused" ? "warn"
-            : /^(followup\.add|roster\.(add|edit)|access\.approve|review\.(inputs|submit)|staffing\.save)$/.test(a.action) ? "change" : "")
+        const tr = el("tr", /\.(delete|reject)$/.test(a.action) || /^(login\.refused|user\.(bad_code|suspend|claim_refused))$/.test(a.action) ? "warn"
+            : /^(followup\.add|roster\.(add|edit)|access\.approve|review\.(inputs|submit)|staffing\.save|user\.(approve|edit|import))$/.test(a.action) ? "change" : "")
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)))
         const who = el("td", "who", a.actor_name || "—")
         who.title = a.actor_name
@@ -2127,22 +2206,34 @@
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" })
             if (r.status === 401) { location.href = "/dashboard/login"; return }
             if (r.ok) {
-                const session: { name?: string; isOwner?: boolean; reviewAuditee?: boolean } = await r.json()
+                const session: Session = await r.json()
                 const name = session.name || ""
                 userName.textContent = name
                 ;(userName.parentElement as HTMLElement).title = name
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : ""
                 isOwner = session.isOwner === true
                 reviewAuditee = !isOwner && session.reviewAuditee === true
+                perms = Array.isArray(session.perms) ? session.perms : []
                 // review.js reads this before drawing: ผู้จัดทำ only, no switch.
                 if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
-                auditNav.classList.toggle("hidden", !isOwner)
-                rosterNav.classList.remove("hidden")
-                reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee)
+                sessionOk = true
+                // users.js: the owner's menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งานและสิทธิ์).
+                window.dispatchEvent(new CustomEvent("dashboard:session", { detail: session }))
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
         }
+        // The tabs this user has. Without an answer, the tabs every user had
+        // before the QR invite (the server still decides every call).
+        const showTab = (nav: HTMLElement, on: boolean): void => { nav.classList.toggle("hidden", !on) }
+        showTab(followupNav, sessionOk ? can("followup.view") : true)
+        showTab(rosterNav, sessionOk ? can("roster.view") : true)
+        showTab(staffingNav, sessionOk ? can("staffing.view") : true)
+        showTab(reviewNav, isOwner || reviewAuditee)
+        showTab(auditNav, isOwner)
+        // ตามส่ง without บันทึก: the history only (index.html hides the form
+        // and the delete buttons).
+        document.body.classList.toggle("followup-readonly", sessionOk && !can("followup.edit"))
         sessionKnown = true
         // รายชื่อ: เพิ่มรายชื่อ and คำขอเข้าใช้งาน start hidden (index.html) and
         // appear for the owner only; anyone else, or a failed session call,

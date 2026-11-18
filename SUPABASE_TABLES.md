@@ -290,6 +290,50 @@ each report actually went out.
   `service_role` key touches it (no client page reads it).
 - Migration: `scripts/email-sent-log-setup.sql`.
 
+## `dashboard_users`
+
+**Purpose:** Who may use `/dashboard/` besides the owner, and which tabs
+each one sees (the QR invite, 2026-11-18). The owner is not in it: the owner
+stays in the `ADMIN_LINE_USER_ID` env var and has every right.
+
+- **Columns:** `line_user_id` (primary key, the LINE Login `sub`, checked
+  `^U[0-9a-f]{32}$`), `line_name` (the LINE profile name at the scan),
+  `display_name` (the name the dashboard shows, 1 to 60 characters),
+  `perms` (text[] of `followup.view`, `followup.edit`, `roster.view`,
+  `staffing.view`, `review.auditee`; nothing else is accepted), `active`
+  (false = suspended), `source` (`qr`, or `env` for a user moved in from
+  `DASHBOARD_LINE_USER_IDS`), `added_by`, `added_at`, `updated_by`,
+  `updated_at`, `suspended_by`, `suspended_at`.
+- A row beats the env var: a suspended row refuses that user even if the
+  env var still lists them. `main.ts` reads the table every 30 seconds per
+  instance (`loadDashUsers`) and checks the rights on every request.
+- Written only by `dashboard_invite_decide` (approve), `dashboard_user_save`
+  (edit, suspend, re-enable) and `dashboard_user_import` (an env user's
+  first sign-in). At most 20 active users.
+- **Access:** RLS on with no policies; `service_role` only (select, insert,
+  update; delete and truncate revoked).
+- Migration: `scripts/dashboard-users-2026-11.sql` PART 1.
+
+## `dashboard_invites`
+
+**Purpose:** One row per QR the owner made with เพิ่มผู้ใช้ด้วย QR.
+
+- **Columns:** `id` (uuid), `token_hash` (sha256 of the QR's one-time
+  token; the token itself is never stored), `created_by`, `created_at`,
+  `expires_at` (10 minutes after it is made; 24 hours after the scan),
+  `status` (`open`, `scanned`, `approved`, `rejected`, `cancelled`,
+  `expired`, `locked`), `claimed_sub`, `claimed_name`, `claimed_picture`
+  (only `https://profile.line-scdn.net/...`), `claimed_at`, `confirm_code`
+  (the 4 digits shown on the newcomer's phone, which the owner must type),
+  `code_tries` (3 wrong codes lock the request), `decided_by`,
+  `decided_at`, `perms` (as approved).
+- One open QR per owner (partial unique index); a new one cancels the last.
+  At most 10 an hour. Expiry is checked inside every function, so no cron.
+- **Access:** RLS on with no policies; `service_role` only (select, insert,
+  update; delete and truncate revoked).
+- Migration: `scripts/dashboard-users-2026-11.sql` PART 2; functions in
+  PART 3.
+
 ---
 
 ## Architecture note
