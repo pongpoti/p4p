@@ -265,9 +265,12 @@
         #mobile-block h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; }
         #mobile-block p { color: var(--muted-foreground); }
 
-        /* ── Sticky header ────────────────────────────────────────────── */
-        /* ── Header (every tab): a flat 64px bar across the window; the
-           current page is marked by a brown bar under it (aria-current). ── */
+        /* ── Header (every tab, over ภาพรวม/ตามส่ง's colour fields too): a
+           white 64px bar across the window. The menu is an icon ribbon
+           (Pong's pick แบบ 3, 2026-11-18): each item an even full-height
+           tile, a 22px icon above its label, hairlines only between items;
+           the current page (aria-current) is a solid brown tile with a white
+           bold label and a tan foot; on ภาพรวม the brand is underlined. ── */
         #header {
             position: sticky;
             top: 0;
@@ -311,33 +314,54 @@
         /* The logo is the way back to ภาพรวม (there is no separate tab for it). */
         #brand:hover .logo-mark { filter: brightness(1.25); }
         #brand:hover > span:last-child { color: var(--primary); }
+        #brand[aria-current="page"] > span:last-child { text-decoration: underline 3px var(--c-brand); text-underline-offset: 8px; }
+        #brand:focus-visible, #logout-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
         #nav { display: flex; gap: 0; align-self: stretch; }
         .nav-btn {
             display: inline-flex;
+            flex-direction: column;
             align-items: center;
-            gap: var(--sp-2);
+            justify-content: center;
+            gap: 0;
             height: 64px;
+            min-width: 112px;
             padding: 0 var(--sp-4);
             white-space: nowrap;
             font-size: var(--fs-md);
             font-weight: 400;
+            line-height: var(--lh-ui);
             color: var(--c-text-2);
             text-decoration: none;
             border: 0;
             background: transparent;
-            box-shadow: inset 0 -3px 0 transparent;
+            box-shadow: none;
             transition: background .15s, color .15s;
         }
-        .nav-btn .ico { width: var(--icon-md); height: var(--icon-md); }
-        .nav-btn:hover { background: var(--c-surface-3); color: var(--c-text); }
+        .nav-btn + .nav-btn { border-left: 1px solid var(--c-border); }
+        .nav-btn .ico { width: 22px; height: 22px; flex: none; color: var(--c-text-3); transition: color .15s; }
+        .nav-btn:hover { background: var(--c-surface-3); color: var(--c-text); box-shadow: inset 0 -4px 0 var(--c-tan); }
+        .nav-btn:hover .ico { color: var(--c-brand); }
         .nav-btn[aria-current="page"], .nav-btn[aria-current="page"]:hover {
-            background: var(--c-brand-soft);
-            color: var(--c-brand);
+            background: var(--c-brand);
+            color: #fff;
             font-weight: 700;
-            box-shadow: inset 0 -3px 0 var(--c-brand);
+            border-left-color: var(--c-brand);
+            box-shadow: inset 0 -4px 0 var(--c-tan);
         }
-        .nav-btn:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -4px; }
+        .nav-btn[aria-current="page"] + .nav-btn { border-left-color: var(--c-brand); }
+        .nav-btn[aria-current="page"] .ico { color: inherit; }
+        .nav-btn:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -3px; box-shadow: inset 0 0 0 5px #fff; }
+        .nav-btn[aria-current="page"]:focus-visible { box-shadow: inset 0 -4px 0 var(--c-tan), inset 0 0 0 5px #fff; }
+
+        /* Windows high contrast: fills are dropped, so the current page keeps
+           a foot bar and an outline, hover an underline, focus a thick ring. */
+        @media (forced-colors: active) {
+            .nav-btn .ico { color: inherit; }
+            .nav-btn[aria-current="page"] { outline: 2px solid Highlight; outline-offset: -2px; border-bottom: 4px solid CanvasText; }
+            .nav-btn:hover { text-decoration: underline; }
+            :is(#brand, .nav-btn, #logout-btn):focus-visible { outline: 3px solid CanvasText; outline-offset: -3px; }
+        }
 
         #header-actions { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); white-space: nowrap; }
         #user {
@@ -1134,7 +1158,6 @@
         /* Windows high contrast: the drawn icons keep their shape */
         @media (forced-colors: active) {
             :is(.sf-ok, .sf-alert)::before, :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.btn-primary, .btn-ghost):disabled::before { forced-color-adjust: none; background-color: CanvasText; }
-            .nav-btn[aria-current="page"] { outline: 2px solid Highlight; outline-offset: -2px; }
         }
 
         /* ── ตรวจสอบ tab (dashboard/review.ts) ─────────────────────────── */
