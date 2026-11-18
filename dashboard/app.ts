@@ -315,11 +315,17 @@
         ;(infoPop.querySelector(".ip-item") as HTMLElement).focus()
     }
     document.addEventListener("click", (ev) => { if (!infoPop.contains(ev.target as Node)) closePop() })
+    // Tabbing out of the card closes it (back to its button is fine).
+    infoPop.addEventListener("focusout", (ev) => {
+        const to = ev.relatedTarget
+        if (to instanceof Node && !infoPop.contains(to) && to !== popBtn) closePop()
+    })
     document.addEventListener("keydown", (ev) => {
-        if (infoPop.classList.contains("hidden")) return
-        if (ev.key === "Escape") { ev.preventDefault(); closePop(true); return }
-        // Up and down move between the two buttons.
-        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        if (infoPop.classList.contains("hidden") || document.querySelector("dialog[open]")) return
+        const inside = infoPop.contains(document.activeElement)
+        if (ev.key === "Escape" && (inside || document.activeElement === popBtn)) { ev.preventDefault(); closePop(true); return }
+        // Up and down move between the two buttons, only while on one of them.
+        if (inside && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
             const items = Array.from(infoPop.querySelectorAll<HTMLElement>(".ip-item"))
             const i = items.indexOf(document.activeElement as HTMLElement)
             ev.preventDefault()
@@ -1055,6 +1061,17 @@
     let allocBusy = false
     let allocChanged = false
     let allocLoad = 0
+    // A save or an upload done: the card's ⚠ must follow. True when its
+    // answer is too old to paint (the box closed, or opened again since):
+    // a closed box refreshes ภาพรวม now, a box open again on the same
+    // month reads the month again.
+    const allocSaved = (m: MonthStatus, load: number): boolean => {
+        allocChanged = true
+        if (!allocDlg.open) { void loadOverview(); return true }
+        if (load === allocLoad && allocMonth === m) return false
+        if (allocMonth === m) void loadAlloc(m)
+        return true
+    }
 
     const allocSay = (kind: "ok" | "error" | null, text = ""): void => {
         allocOk.classList.toggle("hidden", kind !== "ok")
@@ -1099,6 +1116,7 @@
         set.addEventListener("submit", async (ev) => {
             ev.preventDefault()
             if (save.disabled || allocBusy) return
+            const load = allocLoad
             allocBusy = true
             save.disabled = true
             save.setAttribute("aria-busy", "true")
@@ -1113,10 +1131,11 @@
                 const out = await r.json().catch(() => null) as (AllocStatus & { ok?: boolean }) | null
                 if (r.status === 401) { location.href = "/dashboard/login"; return }
                 if (!r.ok || !out || !out.ok) throw new Error((out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่")
-                allocChanged = true
+                if (allocSaved(m, load)) return
                 paintAlloc(m, out)
                 allocSay("ok", "บันทึกเลขของ " + name + " แล้ว (" + idPrefix(m.key) + inp.value + ")")
             } catch (e: any) {
+                if (load !== allocLoad) return
                 err.textContent = e && e.message ? e.message : "บันทึกไม่สำเร็จ กรุณาลองใหม่"
                 err.classList.remove("hidden")
                 save.textContent = "บันทึก"
@@ -1194,6 +1213,11 @@
         allocDropT.textContent = "เลือกไฟล์เอกสารจัดสรร (.xlsx)"
         allocSay(null)
         allocDlg.showModal()
+        await loadAlloc(m)
+    }
+
+    // The month's status into the open box. A newer open or read wins.
+    async function loadAlloc(m: MonthStatus): Promise<void> {
         const load = ++allocLoad
         try {
             const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key), { credentials: "same-origin" })
@@ -1215,6 +1239,7 @@
         if (!m || allocBusy) return
         if (!/\.xlsx$/i.test(file.name)) { allocSay("error", "ไฟล์ต้องเป็น Excel (.xlsx) ถ้าเป็น .xls ให้เปิดใน Excel แล้วบันทึกเป็น .xlsx ก่อน"); return }
         if (file.size > ALLOC_MAX) { allocSay("error", "ไฟล์ใหญ่เกิน 4 MB"); return }
+        const load = allocLoad
         allocBusy = true
         allocSay(null)
         allocDrop.setAttribute("aria-busy", "true")
@@ -1230,14 +1255,14 @@
             if (r.status === 401) { location.href = "/dashboard/login"; return }
             const out = await r.json().catch(() => null) as (AllocStatus & { ok?: boolean }) | null
             if (!r.ok || !out || !out.ok) throw new Error((out && out.error) || (r.status === 413 ? "ไฟล์ใหญ่เกิน 4 MB" : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่"))
-            allocChanged = true
-            if (allocMonth !== m) return
+            if (allocSaved(m, load)) return
             paintAlloc(m, out)
             const left = (out.without || []).length, close = out.upload ? out.upload.close.length : 0
             allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
                 + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
                 + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"))
         } catch (e: any) {
+            if (load !== allocLoad || !allocDlg.open) return
             allocSay("error", e && e.message ? e.message : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่")
             allocDropT.textContent = title
         } finally {

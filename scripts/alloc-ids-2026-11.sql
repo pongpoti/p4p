@@ -56,7 +56,8 @@ grant select, insert, update, delete on table public.alloc_uploads to service_ro
 -- An upload. p_rows: [{roster_index, no4, how}], how exact or close. p_upload:
 -- {file_name, sheet_name, sheet_rows, roster_rows, close, missing,
 -- ambiguous}. The month's digits from the last file are replaced; one typed
--- on the page stays unless the new file has that person. The names still
+-- on the page stays unless the new file has that person by exact name (a
+-- close spelling never overwrites what someone typed). The names still
 -- without digits are kept for the page, less those typed earlier.
 create or replace function public.alloc_ids_save(p_month text, p_rows jsonb, p_upload jsonb, p_actor text)
 returns jsonb
@@ -75,7 +76,8 @@ begin
   select p_month, x.roster_index, x.no4, x.how, now(), coalesce(p_actor, '')
     from jsonb_to_recordset(p_rows) as x(roster_index uuid, no4 text, how text)
   on conflict (month, roster_index) do update
-     set no4 = excluded.no4, how = excluded.how, updated_at = excluded.updated_at, updated_by = excluded.updated_by;
+     set no4 = excluded.no4, how = excluded.how, updated_at = excluded.updated_at, updated_by = excluded.updated_by
+   where excluded.how = 'exact';
   insert into public.alloc_uploads as u (month, file_name, sheet_name, sheet_rows, roster_rows, close, missing, ambiguous, uploaded_at, uploaded_by)
   values (
     p_month,

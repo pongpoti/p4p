@@ -312,7 +312,8 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     The allocation sheet (รายละเอียดการจัดสรรเงินรายบุคคล) writes the
     digits after `ID-<yy>-<MM>-` in its No column, and the ผู้จัดทำ cannot
     send a month to the auditor until every doctor has them. Functions
-    `alloc_ids_save` (an upload) and `alloc_id_set` (4 digits typed on the
+    `alloc_ids_save` (an upload; a typed number is replaced only by an
+    exact name in the new file) and `alloc_id_set` (4 digits typed on the
     page). Both tables and both functions are service_role only. Needs
     nothing else. Until it runs, the เอกสารจัดสรร box and the ตรวจสอบ send
     bar say it is not installed, sending a month is refused (503), and the

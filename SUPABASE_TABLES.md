@@ -348,7 +348,8 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   a doctor's row spelled 1 or 2 letters apart; `manual`: typed on the
   page), `updated_at`, `updated_by`. Primary key (`month`, `roster_index`).
 - An upload replaces the month's `exact` and `close` rows; a `manual` row
-  stays unless the new file has that person. No name, ID card number or
+  stays unless the new file has that person by exact name (a close
+  spelling never overwrites a typed number). No name, ID card number or
   file is stored.
 - **Access:** RLS on with no policies; `service_role` only.
 - Migration: `scripts/alloc-ids-2026-11.sql` (step 29).

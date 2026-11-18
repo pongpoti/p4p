@@ -810,15 +810,16 @@ export function mountReview(d: ReviewDeps): void {
       if (!round || !round.build_id) return res.status(404).json({ error: "เดือนนี้ยังไม่ได้อนุมัติ" })
       // The 4 digits from เอกสารจัดสรร (scripts/alloc-ids-2026-11.sql), by
       // roster person; none (the table missing, or no upload) leaves No as
-      // "ID-<yy>-<MM>-".
+      // "ID-<yy>-<MM>-". A failed read stops the download instead, so a
+      // file without the digits is never handed out by mistake.
       const [b, people, ids] = await Promise.all([
         axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
         axios.get(rest("review_build_people?select=roster_index,is_intern,sk03_row,department&build_id=eq." + round.build_id),
           { headers: d.serviceHeaders(), timeout: 8000 }),
         axios.get(rest("alloc_ids?select=roster_index,no4&month=eq." + g.month), { headers: d.serviceHeaders(), timeout: 8000 })
           .then((r) => (r.data as any[]) || [], (e: any) => {
-            if (!notInstalled(e)) console.error("[dashboard] review allocation: digits failed:", e.response ? JSON.stringify(e.response.data) : e.message)
-            return [] as any[]
+            if (notInstalled(e)) return [] as any[]
+            throw e
           }),
       ])
       const path = (b.data as any[])[0]?.sk03_path

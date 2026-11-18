@@ -5,9 +5,9 @@
  * advance, its list of everyone paid that month. Its first column, No, is
  * "ID-<yy>-<MM>-<4 digits>" (sheet "เดือนกรกฎาคม 2569": row 2 the headers
  * No | ชื่อสกุล | หน่วยงาน P4P | ตำแหน่ง | ..., one person a row from row 3).
- * The owner uploads it from the month card's ข้อมูล button; the app keeps
- * only the 4 digits of each doctor in the month's roster, and the
- * allocation sheet (lib/allocation-xlsx.ts) writes them after
+ * The owner or the ผู้จัดทำ uploads it from the month card's ข้อมูล button;
+ * the app keeps only the 4 digits of each doctor in the month's roster, and
+ * the allocation sheet (lib/allocation-xlsx.ts) writes them after
  * "ID-<yy>-<MM>-" in its No column.
  *
  * The file has the whole hospital (about 2,500 people) and other sheets,
@@ -23,7 +23,8 @@
  * title followed by the first name, spaces ignored. Two or more rows for
  * one person: the doctors' ones (หน่วยงาน P4P องค์กรแพทย์, or a ตำแหน่ง
  * with แพทย์ that is not แพทย์แผนไทย) are kept; if they still disagree on
- * the digits the person is ambiguous and gets none.
+ * the digits the person is ambiguous and gets none. Then a close spelling
+ * among the doctors' rows nobody took (matchRoster's second pass).
  *
  * No network here: lib/review-server.ts reads the roster, saves the result
  * and answers the page; lib/__tests__/alloc-ids.test.mjs checks it.
@@ -83,18 +84,24 @@ export function normThai(v: unknown): string {
 }
 const squeeze = (s: string): string => normThai(s).replace(/ /g, "")
 
-const TITLES = new Set(["", "นาย", "นาง", "นางสาว", "น.ส.", "นพ.", "พญ.", "นายแพทย์", "แพทย์หญิง", "ดร.", "mr.", "mrs.", "ms.", "miss"])
+const TITLES = new Set(["", "นาย", "นาง", "นางสาว", "น.ส.", "นพ.", "พญ.", "นายแพทย์", "แพทย์หญิง", "ดร.", "mr.", "mrs.", "ms.", "miss",
+  // Ranks with no grade after them.
+  "จ่าสิบตำรวจ", "พลตำรวจ", "พลทหาร", "ดาบตำรวจ", "นายดาบตำรวจ"])
 
 /**
  * Whether what comes before the first name on the sheet is a title: one of
  * the common ones, an abbreviated rank (ร.ต., พ.ต.ท.หญิง), or a rank
- * written out (ว่าที่ร้อยตรี, ร้อยตำรวจเอกหญิง, จ่าสิบเอก, ...).
+ * written out (ว่าที่ร้อยตรี, ร้อยตำรวจเอกหญิง, จ่าสิบเอก, ...): a rank
+ * word, a service, then one grade. Strict on purpose: นาย is a title but
+ * นายเอก is not, so นายเอกภพ (someone else, a relative) never reads as a
+ * title before the first name ภพ; nor does ร้อยตรีเอก.
  */
 export function isTitle(p: string): boolean {
   const t = p.replace(/ /g, "").toLowerCase()
   if (TITLES.has(t)) return true
   if (/^(ว่าที่)?([ก-ฮ]{1,3}\.){1,4}(หญิง)?(นาย|นาง|นางสาว)?$/.test(t)) return true
-  if (/^(ว่าที่)?(ร้อย|พัน|นาวา|เรือ|จ่า|สิบ|พล|พันจ่า|นาย)(ตรี|โท|เอก|ตำรวจ|อากาศ|เรือ|จัตวา|ตรีหญิง|โทหญิง|เอกหญิง)*(หญิง)?$/.test(t) && t.length > 3) return true
+  if (/^(ว่าที่)?(ร้อย|พัน|นาวา|เรือ|จ่า|สิบ|พล|พันจ่า)(สิบ)?(ตำรวจ|อากาศ|เรือ)?(ตรี|โท|เอก|จัตวา)(หญิง)?$/.test(t)) return true
+  if (t.length > 6 && t.startsWith("ว่าที่") && TITLES.has(t.slice(6))) return true
   return false
 }
 
@@ -244,26 +251,46 @@ export function matchRoster(rows: SheetRow[], roster: RosterPerson[]): MatchResu
     if (nos.length === 1) {
       out.matched.push({ index: p.index, no4: nos[0], how: "exact" })
       for (const h of hits) used.add(h)
-    } else if (nos.length > 1) out.ambiguous.push({ index: p.index, name, department, nos: nos.sort() })
-    else left.push({ p, first, last, name, department })
+    } else if (nos.length > 1) {
+      out.ambiguous.push({ index: p.index, name, department, nos: nos.sort() })
+      // Rows with this person's own name are theirs to settle, never
+      // someone else's close spelling.
+      for (const h of hits) used.add(h)
+    } else left.push({ p, first, last, name, department })
   }
   // Second pass, doctors' rows nobody took: a spelling 1-2 letters apart
   // (ฎ for ฏ, a dropped า; one letter when a name is under 4 letters) is
-  // taken when one row is clearly nearest; otherwise the one row with the
-  // same first name, or the same last name, is offered on the page.
-  for (const x of left) {
-    const free = doctorRows.filter((d) => !used.has(d.row))
-    const scored = free.map((d) => ({ d, n: editDistance(x.first, d.first) + editDistance(x.last, d.last) })).sort((a, b) => a.n - b.n)
-    const best = scored[0]
-    const limit = Math.min(x.first.length, x.last.length) < 4 ? 1 : 2
-    if (best && best.n <= limit && (scored.length < 2 || scored[1].n > best.n)) {
-      used.add(best.d.row)
-      out.matched.push({ index: x.p.index, no4: best.d.row.no4, how: "close" })
-      out.close.push({ index: x.p.index, name: x.name, sheetName: best.d.row.name, no4: best.d.row.no4 })
-      continue
+  // taken when that row is the person's one nearest and nobody else still
+  // looking is as near to it. Decided in rounds on the state at the start
+  // of each, so the roster's order never changes who gets a row. Then, for
+  // whoever is left, the one row still free with the same first name, or
+  // the same last name, is offered on the page.
+  type Left = (typeof left)[number]
+  type Row = (typeof doctorRows)[number]
+  const free = new Set(doctorRows.filter((d) => !used.has(d.row)))
+  const dist = (x: Left, d: Row): number => editDistance(x.first, d.first) + editDistance(x.last, d.last)
+  let looking = left.slice()
+  for (;;) {
+    const take: { x: Left; d: Row }[] = []
+    for (const x of looking) {
+      const scored = [...free].map((d) => ({ d, n: dist(x, d) })).sort((a, b) => a.n - b.n)
+      const best = scored[0]
+      const limit = Math.min(x.first.length, x.last.length) < 4 ? 1 : 2
+      if (!best || best.n > limit || (scored.length > 1 && scored[1].n === best.n)) continue
+      if (looking.some((y) => y !== x && dist(y, best.d) <= best.n)) continue
+      take.push({ x, d: best.d })
     }
-    const sameFirst = free.filter((d) => d.first === x.first)
-    const sameLast = free.filter((d) => d.last === x.last)
+    if (!take.length) break
+    for (const { x, d } of take) {
+      free.delete(d)
+      out.matched.push({ index: x.p.index, no4: d.row.no4, how: "close" })
+      out.close.push({ index: x.p.index, name: x.name, sheetName: d.row.name, no4: d.row.no4 })
+    }
+    looking = looking.filter((x) => !take.some((t) => t.x === x))
+  }
+  for (const x of looking) {
+    const sameFirst = [...free].filter((d) => d.first === x.first)
+    const sameLast = [...free].filter((d) => d.last === x.last)
     const one = sameFirst.length === 1 ? sameFirst[0] : sameLast.length === 1 ? sameLast[0] : null
     out.missing.push({ index: x.p.index, name: x.name, department: x.department, suggest: one ? { no4: one.row.no4, sheetName: one.row.name } : null })
   }

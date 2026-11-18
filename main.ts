@@ -1554,14 +1554,17 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
     const now = bkk.getUTCFullYear() * 12 + bkk.getUTCMonth()
     const recent = [1, 2, 3, 4, 5, 6].map((back) => [(now - back) % 12, Math.floor((now - back) / 12) + 543])
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
+    // Each month's roster indexes, for the เอกสารจัดสรร count below (not sent).
+    const rosterIdx = new Map<string, string[]>()
     const months = await Promise.all(recent.map(async ([m, year]) => {
       const key = year + "_" + String(m + 1).padStart(2, "0")
       const base = { key, name: month_array[m] + " " + year, color: color_array[m][1] }
       if (!tables.includes(key)) return { ...base, exists: false, total: 0, sent: 0, lastSubmittedAt: null }
       const r = await axios.get(
-        SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=submitted_at",
+        SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=index,submitted_at",
         { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 },
       )
+      rosterIdx.set(key, (r.data as { index: string }[]).map((row) => String(row.index)))
       const stamps = (r.data as { submitted_at: string | null }[]).map((row) => row.submitted_at).filter(Boolean) as string[]
       return {
         ...base,
@@ -1580,8 +1583,9 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
     const budgets: Record<string, unknown> = {}
     // And, for the same button (ข้อมูล since 2026-11-18), whether each
     // month's เอกสารจัดสรร is in (alloc_uploads, scripts/alloc-ids-2026-11.sql):
-    // when, by whom, and how many names it could not place. allocInstalled
-    // false: the SQL is not run yet.
+    // when, by whom, and how many doctors on the roster today still have no
+    // 4 digits (alloc_ids), counted as the box and the ตรวจสอบ send check
+    // count them. allocInstalled false: the SQL is not run yet.
     const allocs: Record<string, unknown> = {}
     let allocInstalled = true
     if (canBudget) {
@@ -1599,16 +1603,23 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
           console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
         }),
         axios.get(
-          SUPABASE_URL + "/rest/v1/alloc_uploads?select=month,uploaded_at,uploaded_by,missing,ambiguous&month=in.(" + keys + ")",
+          SUPABASE_URL + "/rest/v1/alloc_uploads?select=month,uploaded_at,uploaded_by&month=in.(" + keys + ")",
           { headers: SERVICE_HEADERS(), timeout: 8000 },
-        ).then((r) => {
-          for (const row of r.data as { month: string; uploaded_at: string; uploaded_by: string; missing: unknown[]; ambiguous: unknown[] }[]) {
+        ).then(async (r) => {
+          // One read per uploaded month (a month is about 230 rows, under
+          // PostgREST's 1,000-row cap; six together would not be).
+          await Promise.all((r.data as { month: string; uploaded_at: string; uploaded_by: string }[]).map(async (row) => {
+            const ids = await axios.get(
+              SUPABASE_URL + "/rest/v1/alloc_ids?select=roster_index&month=eq." + encodeURIComponent(row.month),
+              { headers: SERVICE_HEADERS(), timeout: 8000 },
+            )
+            const have = new Set((ids.data as { roster_index: string }[]).map((x) => String(x.roster_index)))
             allocs[row.month] = {
               uploaded_at: row.uploaded_at, uploaded_by: row.uploaded_by,
-              without: (Array.isArray(row.missing) ? row.missing.length : 0) + (Array.isArray(row.ambiguous) ? row.ambiguous.length : 0),
+              without: (rosterIdx.get(row.month) || []).filter((i) => !have.has(i)).length,
             }
-          }
-        }, (e: any) => {
+          }))
+        }).catch((e: any) => {
           const code = String((e.response && e.response.data && e.response.data.code) || "")
           if (["PGRST205", "42P01"].includes(code)) { allocInstalled = false; return }
           console.error("[dashboard] overview alloc failed:", e.response ? JSON.stringify(e.response.data) : e.message)

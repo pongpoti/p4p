@@ -288,16 +288,23 @@
     }
     document.addEventListener("click", (ev) => { if (!infoPop.contains(ev.target))
         closePop(); });
+    // Tabbing out of the card closes it (back to its button is fine).
+    infoPop.addEventListener("focusout", (ev) => {
+        const to = ev.relatedTarget;
+        if (to instanceof Node && !infoPop.contains(to) && to !== popBtn)
+            closePop();
+    });
     document.addEventListener("keydown", (ev) => {
-        if (infoPop.classList.contains("hidden"))
+        if (infoPop.classList.contains("hidden") || document.querySelector("dialog[open]"))
             return;
-        if (ev.key === "Escape") {
+        const inside = infoPop.contains(document.activeElement);
+        if (ev.key === "Escape" && (inside || document.activeElement === popBtn)) {
             ev.preventDefault();
             closePop(true);
             return;
         }
-        // Up and down move between the two buttons.
-        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        // Up and down move between the two buttons, only while on one of them.
+        if (inside && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
             const items = Array.from(infoPop.querySelectorAll(".ip-item"));
             const i = items.indexOf(document.activeElement);
             ev.preventDefault();
@@ -1068,6 +1075,22 @@
     let allocBusy = false;
     let allocChanged = false;
     let allocLoad = 0;
+    // A save or an upload done: the card's ⚠ must follow. True when its
+    // answer is too old to paint (the box closed, or opened again since):
+    // a closed box refreshes ภาพรวม now, a box open again on the same
+    // month reads the month again.
+    const allocSaved = (m, load) => {
+        allocChanged = true;
+        if (!allocDlg.open) {
+            void loadOverview();
+            return true;
+        }
+        if (load === allocLoad && allocMonth === m)
+            return false;
+        if (allocMonth === m)
+            void loadAlloc(m);
+        return true;
+    };
     const allocSay = (kind, text = "") => {
         allocOk.classList.toggle("hidden", kind !== "ok");
         allocError.classList.toggle("hidden", kind !== "error");
@@ -1116,6 +1139,7 @@
             ev.preventDefault();
             if (save.disabled || allocBusy)
                 return;
+            const load = allocLoad;
             allocBusy = true;
             save.disabled = true;
             save.setAttribute("aria-busy", "true");
@@ -1134,11 +1158,14 @@
                 }
                 if (!r.ok || !out || !out.ok)
                     throw new Error((out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่");
-                allocChanged = true;
+                if (allocSaved(m, load))
+                    return;
                 paintAlloc(m, out);
                 allocSay("ok", "บันทึกเลขของ " + name + " แล้ว (" + idPrefix(m.key) + inp.value + ")");
             }
             catch (e) {
+                if (load !== allocLoad)
+                    return;
                 err.textContent = e && e.message ? e.message : "บันทึกไม่สำเร็จ กรุณาลองใหม่";
                 err.classList.remove("hidden");
                 save.textContent = "บันทึก";
@@ -1218,6 +1245,10 @@
         allocDropT.textContent = "เลือกไฟล์เอกสารจัดสรร (.xlsx)";
         allocSay(null);
         allocDlg.showModal();
+        await loadAlloc(m);
+    }
+    // The month's status into the open box. A newer open or read wins.
+    async function loadAlloc(m) {
         const load = ++allocLoad;
         try {
             const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key), { credentials: "same-origin" });
@@ -1252,6 +1283,7 @@
             allocSay("error", "ไฟล์ใหญ่เกิน 4 MB");
             return;
         }
+        const load = allocLoad;
         allocBusy = true;
         allocSay(null);
         allocDrop.setAttribute("aria-busy", "true");
@@ -1271,8 +1303,7 @@
             const out = await r.json().catch(() => null);
             if (!r.ok || !out || !out.ok)
                 throw new Error((out && out.error) || (r.status === 413 ? "ไฟล์ใหญ่เกิน 4 MB" : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่"));
-            allocChanged = true;
-            if (allocMonth !== m)
+            if (allocSaved(m, load))
                 return;
             paintAlloc(m, out);
             const left = (out.without || []).length, close = out.upload ? out.upload.close.length : 0;
@@ -1281,6 +1312,8 @@
                 + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"));
         }
         catch (e) {
+            if (load !== allocLoad || !allocDlg.open)
+                return;
             allocSay("error", e && e.message ? e.message : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่");
             allocDropT.textContent = title;
         }
