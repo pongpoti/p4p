@@ -2052,6 +2052,7 @@
         .um-foot-note { margin-top: var(--sp-2); font-size: var(--fs-xs); color: var(--c-text-3); line-height: var(--lh-text); }
         .um-confirm { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
         .um-confirm b { flex: 1; min-width: 0; }
+        .um-confirm .um-grow { flex: 1; min-width: 0; }
 
         /* Results */
         .um-result { text-align: center; padding: var(--sp-4) var(--sp-2); }
@@ -2076,7 +2077,8 @@
         .um-table th { text-align: left; font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); background: var(--c-surface-3); padding: var(--sp-2) var(--sp-3); }
         .um-table td { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--c-border); vertical-align: middle; }
         .um-table td small { display: block; color: var(--c-text-3); font-size: var(--fs-xs); }
-        .um-table .um-acts { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; }
+        .um-table .um-acts { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: nowrap; }
+        .um-table .um-acts-cell { width: 1%; white-space: nowrap; }
         .um-table tr.off td:not(.um-acts-cell) { color: var(--c-text-3); }
         .um-table tr.off td:first-child b { text-decoration: line-through; }
         .um-table tr.um-edit td { background: var(--c-surface-2); }
@@ -2111,7 +2113,7 @@
                 <span>SAKHONMSO</span>
             </a>
             <nav id="nav" aria-label="เมนูหลัก">
-                <a class="nav-btn hidden" href="/dashboard/#followup" data-view="followup" id="followup-nav">
+                <a class="nav-btn" href="/dashboard/#followup" data-view="followup" id="followup-nav">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
@@ -2129,7 +2131,7 @@
                     </svg>
                     รายชื่อ
                 </a>
-                <a class="nav-btn hidden" href="/dashboard/#staffing" data-view="staffing" id="staffing-nav">
+                <a class="nav-btn" href="/dashboard/#staffing" data-view="staffing" id="staffing-nav">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M3 3v18h18" />

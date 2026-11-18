@@ -311,7 +311,7 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   (edit, suspend, re-enable) and `dashboard_user_import` (an env user's
   first sign-in). At most 20 active users.
 - **Access:** RLS on with no policies; `service_role` only (select, insert,
-  update; no delete).
+  update; delete and truncate revoked).
 - Migration: `scripts/dashboard-users-2026-11.sql` PART 1.
 
 ## `dashboard_invites`
@@ -330,7 +330,7 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
 - One open QR per owner (partial unique index); a new one cancels the last.
   At most 10 an hour. Expiry is checked inside every function, so no cron.
 - **Access:** RLS on with no policies; `service_role` only (select, insert,
-  update; no delete).
+  update; delete and truncate revoked).
 - Migration: `scripts/dashboard-users-2026-11.sql` PART 2; functions in
   PART 3.
 

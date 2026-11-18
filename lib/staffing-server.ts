@@ -40,8 +40,10 @@ export interface StaffingDeps {
   supabaseUrl: string
   serviceHeaders(): Record<string, string>
   callServiceRpc(fn: string, args?: Record<string, unknown>): Promise<any>
-  dashSession(req: Request): { sub: string; name: string; exp: number } | null
+  dashSession(req: Request): { sub: string; name: string; exp: number; perms?: string[] } | null
   isDashOwner(sub: string): boolean
+  /** The อัตรากำลัง view right (main.ts's path gate checks it too). */
+  canView?(s: { sub: string; name: string; exp: number; perms?: string[] }): boolean
   audit(req: Request, actor: { sub: string; name: string }, action: string, target?: Record<string, unknown>): Promise<void>
 }
 
@@ -86,6 +88,7 @@ export function mountStaffing(d: StaffingDeps): void {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) return res.status(401).json({ error: "not authenticated" })
+    if (d.canView && !d.canView(s)) return res.status(404).json({ error: "not found" })
     const logged = req.query.view === "1" ? d.audit(req, s, "view.staffing") : Promise.resolve()
     let installed = true
     let rows: unknown = []

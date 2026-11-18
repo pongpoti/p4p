@@ -863,27 +863,38 @@ app.use("/dashboard", async (req: Request, res: Response, next: NextFunction) =>
 
 // Rights by path, before every route (mountReview and mountStaffing too).
 // It only ever adds a refusal: no session goes on to the route's own 401,
-// and the owner-only checks in the handlers stay as they are. Matched on
-// originalUrl because app.use("/dashboard") strips that prefix from
-// req.path. ภาพรวม (/api/overview, /api/pending) is everyone's.
+// and the owner-only checks in the handlers stay as they are. Express
+// routes ignore case and a trailing slash, so the gate matches the same
+// way: on Express's own parsed path (baseUrl + path, which also handles an
+// absolute-form request target), lower-cased, with repeated and trailing
+// slashes taken off. The ตามส่ง, รายชื่อ and อัตรากำลัง handlers check the
+// right again themselves. ภาพรวม (/api/overview, /api/pending) is everyone's.
 const DASH_PATH_RIGHTS: [RegExp, (method: string) => string | null][] = [
-  [/^[/]dashboard[/]api[/]followups([/].*)?$/, (m) => (m === "GET" || m === "HEAD" ? "followup.view" : "followup.edit")],
-  [/^[/]dashboard[/]api[/]roster([/].*)?$/, (m) => (m === "GET" || m === "HEAD" ? "roster.view" : null)],
-  [/^[/]dashboard[/]api[/]staffing$/, (m) => (m === "GET" || m === "HEAD" ? "staffing.view" : null)],
+  [/^[/]dashboard[/]api[/]followups([/].*)?$/i, (m) => (m === "GET" || m === "HEAD" ? "followup.view" : "followup.edit")],
+  [/^[/]dashboard[/]api[/]roster([/].*)?$/i, (m) => (m === "GET" || m === "HEAD" ? "roster.view" : null)],
+  [/^[/]dashboard[/]api[/]staffing$/i, (m) => (m === "GET" || m === "HEAD" ? "staffing.view" : null)],
 ]
-function dashPathRight(method: string, url: string): string | null {
-  const p = url.split("?")[0]
+const dashGatePath = (path: string): string => path.toLowerCase().replace(/[/]{2,}/g, "/").replace(/(.)[/]+$/, "$1")
+function dashPathRight(method: string, path: string): string | null {
+  const p = dashGatePath(path.split("?")[0])
   for (const [re, right] of DASH_PATH_RIGHTS) if (re.test(p)) return right(method)
   return null
 }
 app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
-  const need = dashPathRight(req.method, req.originalUrl)
+  const need = dashPathRight(req.method, req.baseUrl + req.path)
   if (!need) return next()
   const s = dashSession(req)
   if (!s || can(s, need)) return next()
   res.setHeader("Cache-Control", "no-store")
   res.status(404).json({ error: "not found" })
 })
+// The same check inside a handler: true when the request may go on, and
+// otherwise the 404 has been sent.
+function dashRight(s: { sub: string; perms: string[] }, need: string, res: Response): boolean {
+  if (can(s, need)) return true
+  res.status(404).json({ error: "not found" })
+  return false
+}
 
 // The dashboard is only ever served to a signed-in, allowlisted user;
 // everyone else lands on /dashboard/login first.
@@ -1634,6 +1645,7 @@ app.get("/dashboard/api/followups", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!dashRight(s, "followup.view", res)) return
   const { month, index, channel } = req.query
   if (typeof month !== "string" || !/^\d{4}_\d{2}$/.test(month) || typeof index !== "string" || !UUID_RE.test(index) ||
       typeof channel !== "string" || !FOLLOWUP_CHANNELS.includes(channel)) {
@@ -1663,6 +1675,7 @@ app.post("/dashboard/api/followups", express.json({ limit: "4kb" }), async (req:
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!dashRight(s, "followup.edit", res)) return
   const { month, index, channel } = req.body || {}
   const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : ""
   if (typeof index !== "string" || !UUID_RE.test(index) || typeof channel !== "string" || !FOLLOWUP_CHANNELS.includes(channel)) {
@@ -1690,6 +1703,7 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!dashRight(s, "followup.edit", res)) return
   const id = String(req.params.id)
   if (!/^[1-9][0-9]{0,17}$/.test(id)) return res.status(400).json({ error: "bad request" })
   try {
@@ -1799,6 +1813,7 @@ app.get("/dashboard/api/roster", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!dashRight(s, "roster.view", res)) return
   try {
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
     res.json({ tables: tables.slice().sort().reverse() })
@@ -1813,6 +1828,7 @@ app.get("/dashboard/api/roster/:table", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
+  if (!dashRight(s, "roster.view", res)) return
   try {
     const table = await dashRosterTable(req, res)
     if (!table) return
@@ -1934,6 +1950,7 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   callServiceRpc,
   dashSession,
   isDashOwner,
+  canView: (s: { sub: string; perms: string[] }) => can(s, "staffing.view"),
   audit,
 })
 

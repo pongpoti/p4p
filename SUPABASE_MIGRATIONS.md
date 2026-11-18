@@ -280,7 +280,8 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     `_claim`, `_status`, `_decide`, `_cancel`, `dashboard_user_save`,
     `dashboard_user_import`, and the helpers `dashboard_invites_sweep` and
     `dashboard_perms_clean`). Both tables and every function are
-    service_role only, and nothing can be deleted. Needs only step 22 (the
+    service_role only, and nothing can be deleted (delete and truncate are
+    revoked from service_role too). Needs only step 22 (the
     app writes the matching History rows there). The file writes no LINE ID
     or name: rows come only from the app. Until it runs, the user menu's two
     items say it is not installed, and sign-in works exactly as before from
@@ -288,7 +289,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     into `dashboard_users` with the rights they have today the next time
     they sign in, and can then be edited or suspended on the page. End with
     the check query at the bottom (tables_2 = 2, functions_10 = 10,
-    anon_0 = 0). Each PART can be pasted on its own, in order; safe to
+    anon_0 = 0, delete_0 = 0). Each PART can be pasted on its own, in order; safe to
     re-run; no backslashes, so it pastes through chat. Emergency stop for a
     user: `update public.dashboard_users set active = false where ...`.
 

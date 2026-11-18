@@ -23,7 +23,6 @@
         return;
     const NOT_INSTALLED = "ยังไม่ได้ติดตั้ง — วาง scripts/dashboard-users-2026-11.sql ใน Supabase SQL editor";
     // The dialog's title already says ยังไม่ได้ติดตั้ง, so its body only says what to do.
-    const NOT_INSTALLED_HOW = "วาง scripts/dashboard-users-2026-11.sql ใน Supabase SQL editor แล้วลองอีกครั้ง";
     const PRESETS = [
         { key: "author", label: "ผู้จัดทำ", title: "เหมือนกานดา", perms: ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"] },
         { key: "view", label: "ดูอย่างเดียว", perms: ["followup.view", "roster.view", "staffing.view"] },
@@ -279,6 +278,12 @@
         if (!chip)
             return;
         menu.classList.remove("hidden");
+        // Under the chip, right edges lined up (the menu sits in #header-actions,
+        // which also holds ออกจากระบบ), but never past the window's left edge.
+        const box = (menu.offsetParent || document.body).getBoundingClientRect();
+        const c = chip.getBoundingClientRect();
+        const right = Math.min(box.right - c.right, box.right - 8 - menu.offsetWidth);
+        menu.style.right = Math.max(0, Math.round(right)) + "px";
         chip.setAttribute("aria-expanded", "true");
         if (focusItem)
             menuItems[last ? menuItems.length - 1 : 0].focus();
@@ -352,7 +357,8 @@
     const invSub = document.getElementById("invite-sub");
     const invBody = document.getElementById("invite-body");
     const invFoot = document.getElementById("invite-foot");
-    for (const d of [invDlg, document.getElementById("users-dialog")]) {
+    const usersDlgEl = document.getElementById("users-dialog");
+    for (const d of [invDlg, usersDlgEl]) {
         for (const b of Array.from(d.querySelectorAll("[data-um-close]")))
             b.addEventListener("click", () => d.close());
     }
@@ -372,23 +378,32 @@
     const grow = () => el("span", "um-grow");
     const closeBtn = () => btn("ub", "ปิด", () => invDlg.close());
     const newQrBtn = (cls = "ub") => btn(cls, "สร้าง QR ใหม่", () => { void makeQr(); });
+    // A result card (done, rejected, locked, gone…): read out, and its
+    // heading takes the focus, since the button that led here is gone.
+    function resultCard(kind, title) {
+        const box = el("div", "um-result");
+        box.setAttribute("role", "status");
+        const mark = el("div", "um-mark" + (kind === "ok" ? "" : " " + kind));
+        mark.appendChild(iconEl(kind === "ok" ? "check" : kind === "no" ? "x" : "alert-tri"));
+        const h = el("h3", undefined, title);
+        h.tabIndex = -1;
+        box.append(mark, h);
+        return { box, show: () => { invBody.replaceChildren(box); h.focus(); } };
+    }
     function showMessage(title, text, kind = "warn", withNewQr = true) {
         stopTimers();
         setHead("เพิ่มผู้ใช้ด้วย QR", "");
-        const box = el("div", "um-result");
-        const mark = el("div", "um-mark" + (kind === "ok" ? "" : " " + kind));
-        mark.appendChild(iconEl(kind === "ok" ? "check" : kind === "no" ? "x" : "alert-tri"));
-        box.append(mark, el("h3", undefined, title));
+        const card = resultCard(kind, title);
         if (text)
-            box.appendChild(el("p", undefined, text));
-        invBody.replaceChildren(box);
+            card.box.appendChild(el("p", undefined, text));
         footer(grow(), ...(withNewQr && installed ? [newQrBtn()] : []), closeBtn());
+        card.show();
     }
     async function openInvite() {
         if (!invDlg.open)
             invDlg.showModal();
         if (!installed) {
-            showMessage("ยังไม่ได้ติดตั้ง", NOT_INSTALLED_HOW, "warn", false);
+            showMessage(NOT_INSTALLED, "", "warn", false);
             return;
         }
         await makeQr();
@@ -432,7 +447,7 @@
             if (err.status === 409 && err.body && err.body.installed === false) {
                 installed = false;
                 updateBadge();
-                return showMessage("ยังไม่ได้ติดตั้ง", NOT_INSTALLED_HOW, "warn", false);
+                return showMessage(NOT_INSTALLED, "", "warn", false);
             }
             showMessage(err.status === 429 ? "สร้าง QR บ่อยเกินไป ลองใหม่ในอีกสักครู่" : "สร้าง QR ไม่สำเร็จ กรุณาลองใหม่", "", "warn", err.status !== 429);
         }
@@ -553,7 +568,19 @@
         // approved / rejected / locked elsewhere (another tab)
         showMessage("คำขอนี้หมดอายุหรือถูกจัดการแล้ว", "");
     }
+    // Each dialog opens from a menu item (or a dialog) that is hidden by then,
+    // so the browser has nowhere to send focus back to: the chip takes it.
+    const focusChip = () => {
+        if (invDlg.open || usersDlgEl.open || !chip)
+            return;
+        // At the close event focus may still sit on a button of the closed
+        // dialog (blurred a moment later), or already be on <body>.
+        const a = document.activeElement;
+        if (!a || a === document.body || invDlg.contains(a) || usersDlgEl.contains(a) || menu.contains(a))
+            chip.focus();
+    };
     invDlg.addEventListener("close", () => {
+        focusChip();
         stopTimers();
         seq++;
         document.title = baseTitle;
@@ -608,7 +635,7 @@
             const b = document.createElement("input");
             b.type = "text";
             b.inputMode = "numeric";
-            b.maxLength = 1;
+            // No maxlength: it would cut a pasted code to its first digit.
             b.autocomplete = "off";
             b.setAttribute("aria-label", "หลักที่ " + (i + 1));
             digits.appendChild(b);
@@ -650,6 +677,16 @@
                     ev.preventDefault();
                     void approve();
                 }
+            });
+            b.addEventListener("paste", (ev) => {
+                const v = ((ev.clipboardData && ev.clipboardData.getData("text")) || "").replace(/[^0-9]/g, "");
+                if (!v)
+                    return;
+                ev.preventDefault();
+                v.slice(0, 4 - i).split("").forEach((d, j) => { boxes[i + j].value = d; });
+                boxes[Math.min(3, i + v.length - 1)].focus();
+                digits.classList.remove("bad");
+                syncApprove();
             });
             b.addEventListener("focus", () => b.select());
         });
@@ -731,10 +768,12 @@
                 else if (what === "too_many") {
                     showErr("มีผู้ใช้ครบ 20 คนแล้ว ระงับผู้ใช้ที่ไม่ใช้แล้วก่อน");
                     syncApprove();
+                    approveBtn.focus();
                 }
                 else {
                     showErr("บันทึกไม่สำเร็จ กรุณาลองใหม่");
                     syncApprove();
+                    approveBtn.focus();
                 }
             }
         }
@@ -748,12 +787,9 @@
                 pending = Math.max(0, pending - 1);
                 updateBadge();
                 setHead("เพิ่มผู้ใช้ด้วย QR", "");
-                const box = el("div", "um-result");
-                const mark = el("div", "um-mark no");
-                mark.appendChild(iconEl("x"));
-                box.append(mark, el("h3", undefined, "ปฏิเสธคำขอแล้ว"));
-                invBody.replaceChildren(box);
+                const card = resultCard("no", "ปฏิเสธคำขอแล้ว");
                 footer(grow(), newQrBtn(), closeBtn());
+                card.show();
             }
             catch (e) {
                 const x = e;
@@ -762,6 +798,7 @@
                 else {
                     normalFoot();
                     showErr("บันทึกไม่สำเร็จ กรุณาลองใหม่");
+                    rejectBtn.focus();
                 }
             }
         }
@@ -771,16 +808,13 @@
     }
     function showDone(shown, perms) {
         setHead("เพิ่มผู้ใช้ด้วย QR", "");
-        const box = el("div", "um-result");
-        const mark = el("div", "um-mark");
-        mark.appendChild(iconEl("check"));
-        box.append(mark, el("h3", undefined, "เพิ่ม " + shown + " แล้ว"));
+        const card = resultCard("ok", "เพิ่ม " + shown + " แล้ว");
         const sum = el("p");
         sum.append(el("b", undefined, "สิทธิ์:"), " " + permsSummary(perms));
-        box.appendChild(sum);
-        box.appendChild(el("p", undefined, "ให้เข้าสู่ระบบด้วย LINE บนคอมพิวเตอร์ที่ p4p-sakhonmso.vercel.app/dashboard ด้วยบัญชีเดียวกันนี้"));
-        invBody.replaceChildren(box);
+        card.box.appendChild(sum);
+        card.box.appendChild(el("p", undefined, "ให้เข้าสู่ระบบด้วย LINE บนคอมพิวเตอร์ที่ p4p-sakhonmso.vercel.app/dashboard ด้วยบัญชีเดียวกันนี้"));
         footer(grow(), btn("ub", "เพิ่มอีกคน", () => { void makeQr(); }), btn("ub primary", "ปิด", () => invDlg.close()));
+        card.show();
     }
     // A request from the list (ตรวจและอนุมัติ): the approval panel at once.
     async function openRequest(id) {
@@ -804,7 +838,8 @@
         }
     }
     // ── ผู้ใช้งานและสิทธิ์ ─────────────────────────────────────────────────
-    const usersDlg = document.getElementById("users-dialog");
+    const usersDlg = usersDlgEl;
+    usersDlg.addEventListener("close", () => focusChip());
     const usersBody = document.getElementById("users-body");
     document.getElementById("users-add").addEventListener("click", () => { usersDlg.close(); void openInvite(); });
     let users = [];
@@ -880,6 +915,7 @@
     }
     function userRow(u) {
         const tr = el("tr", u.active ? "" : "off");
+        tr.dataset.uid = u.id;
         const n = el("td");
         n.appendChild(el("b", undefined, u.displayName));
         if (u.lineName && u.lineName !== u.displayName)
@@ -895,7 +931,9 @@
         const acts = el("td", "um-acts-cell");
         const box = el("div", "um-acts");
         if (u.active) {
-            box.append(btn("ub sm", "แก้ไขสิทธิ์", () => editRow(tr, u)), btn("ub sm danger", "ระงับการใช้งาน", () => confirmSuspend(tr, u)));
+            const editBtn = btn("ub sm", "แก้ไขสิทธิ์", () => editRow(tr, u, editBtn));
+            const stopBtn = btn("ub sm danger", "ระงับการใช้งาน", () => confirmSuspend(tr, u, stopBtn));
+            box.append(editBtn, stopBtn);
         }
         else {
             box.appendChild(btn("ub sm", "เปิดใช้อีกครั้ง", () => {
@@ -911,7 +949,7 @@
         if (next && next.classList.contains("um-edit"))
             next.remove();
     };
-    function editRow(tr, u) {
+    function editRow(tr, u, from) {
         dropExtra(tr);
         const row = el("tr", "um-edit");
         const td = el("td");
@@ -943,13 +981,13 @@
             }
             void save(u, rights.matrix.get(), shown, true, "บันทึกสิทธิ์แล้ว มีผลภายใน 30 วินาที", saveBtn, err);
         });
-        btns.append(err, btn("ub", "ยกเลิก", () => { row.remove(); }), saveBtn);
+        btns.append(err, btn("ub", "ยกเลิก", () => { row.remove(); from.focus(); }), saveBtn);
         td.append(grid, btns);
         row.appendChild(td);
         tr.after(row);
         name.focus();
     }
-    function confirmSuspend(tr, u) {
+    function confirmSuspend(tr, u, from) {
         dropExtra(tr);
         const row = el("tr", "um-edit");
         const td = el("td");
@@ -962,7 +1000,7 @@
         const yes = btn("ub danger solid", "ระงับการใช้งาน", () => {
             void save(u, u.perms, u.displayName, false, "ระงับ " + u.displayName + " แล้ว", yes, err);
         });
-        box.append(t, err, btn("ub", "ยกเลิก", () => row.remove()), yes);
+        box.append(t, err, btn("ub", "ยกเลิก", () => { row.remove(); from.focus(); }), yes);
         td.appendChild(box);
         row.appendChild(td);
         tr.after(row);
@@ -977,11 +1015,17 @@
             await api("/dashboard/api/users/" + encodeURIComponent(u.id), "PATCH", { perms, displayName, active });
             toast(done);
             await loadUsers();
+            // The table was drawn again: back to that user's first button.
+            const again = Array.from(usersBody.querySelectorAll("tr[data-uid]")).find((r) => r.dataset.uid === u.id);
+            const first = again && again.querySelector(".um-acts button");
+            if (first)
+                first.focus();
         }
         catch (e) {
             if (busy) {
                 busy.disabled = false;
                 busy.removeAttribute("aria-busy");
+                busy.focus();
             }
             const x = e;
             const msg = x.body && x.body.error === "too_many" ? "มีผู้ใช้ครบ 20 คนแล้ว" : "บันทึกไม่สำเร็จ กรุณาลองใหม่";

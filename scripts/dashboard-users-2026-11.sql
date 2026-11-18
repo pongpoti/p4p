@@ -56,6 +56,9 @@ create table if not exists public.dashboard_users (
 alter table public.dashboard_users enable row level security;
 revoke all on table public.dashboard_users from public, anon, authenticated;
 grant select, insert, update on table public.dashboard_users to service_role;
+-- Supabase gives service_role every right on a new table by default; take
+-- delete and truncate back so the rows really stay.
+revoke delete, truncate on table public.dashboard_users from service_role;
 
 
 -- ── PART 2: dashboard_invites ──────────────────────────────────────────────
@@ -88,6 +91,9 @@ create index if not exists dashboard_invites_status_created
 alter table public.dashboard_invites enable row level security;
 revoke all on table public.dashboard_invites from public, anon, authenticated;
 grant select, insert, update on table public.dashboard_invites to service_role;
+-- Supabase gives service_role every right on a new table by default; take
+-- delete and truncate back so the rows really stay.
+revoke delete, truncate on table public.dashboard_invites from service_role;
 
 
 -- ── PART 3: the functions ──────────────────────────────────────────────────
@@ -374,7 +380,7 @@ $$;
 revoke all on function public.dashboard_user_import(text, text, text) from public, anon, authenticated;
 grant execute on function public.dashboard_user_import(text, text, text) to service_role;
 
--- Check: tables_2 = 2, functions_10 = 10, anon_0 = 0.
+-- Check: tables_2 = 2, functions_10 = 10, anon_0 = 0, delete_0 = 0.
 select
   (select count(*) from information_schema.tables
     where table_schema = 'public' and table_name in ('dashboard_users', 'dashboard_invites')) as tables_2,
@@ -383,4 +389,10 @@ select
       'dashboard_invite_create', 'dashboard_invite_peek', 'dashboard_invite_claim', 'dashboard_invite_status',
       'dashboard_invite_decide', 'dashboard_invite_cancel', 'dashboard_user_save', 'dashboard_user_import')) as functions_10,
   (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname like 'dashboard_invite%' and has_function_privilege('anon', p.oid, 'execute')) as anon_0;
+    where n.nspname = 'public' and p.proname in ('dashboard_invites_sweep', 'dashboard_perms_clean',
+      'dashboard_invite_create', 'dashboard_invite_peek', 'dashboard_invite_claim', 'dashboard_invite_status',
+      'dashboard_invite_decide', 'dashboard_invite_cancel', 'dashboard_user_save', 'dashboard_user_import')
+      and has_function_privilege('anon', p.oid, 'execute')) as anon_0,
+  (select count(*) from unnest(array['public.dashboard_users', 'public.dashboard_invites']) t
+    where has_table_privilege('service_role', t, 'delete')
+       or has_table_privilege('service_role', t, 'truncate')) as delete_0;
