@@ -178,7 +178,9 @@
             border: 0;
         }
         @media (prefers-reduced-motion: reduce) {
-            * { transition: none !important; animation: none !important; }
+            /* the pseudo-elements too: the busy spinner is drawn on ::after
+               and stays as a still ring */
+            *, *::before, *::after { transition: none !important; animation: none !important; }
         }
 
         #skip-link {
@@ -948,7 +950,23 @@
             padding: var(--sp-1);
             font-size: var(--fs-md); line-height: var(--lh-ui); color: var(--c-text);
         }
-        #review-body { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+        /* The main column is never taller than the window: the cards stack
+           at their own height, and a card that holds a long list (.rv-fill:
+           the auditee's table, the fixes of a returned round) gives up
+           height down to its min-height, its list then scrolling inside.
+           A grid of the window's height: its rows stop growing there. */
+        #review-body { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--sp-4); min-width: 0; }
+        #review-body:has(> .rv-fill) { height: calc(var(--rv-view-h, 600px) - 8px); }
+        #review-view .rv-card.rv-fill { min-height: 240px; }
+        #review-view .rv-fill > * { flex-shrink: 0; }
+        #review-view .rv-fill > :is(.rv-table-box, .rv-fix-list) { flex: 1 1 auto; min-height: 0; }
+        /* รายชื่อทั้งหมด, open under a returned round's fixes: its list card
+           takes what is left under its title */
+        #review-view .rv-more.rv-fill { grid-template-rows: auto minmax(0, 1fr); min-height: 300px; }
+        #review-body:has(> .rv-more.rv-fill) > .rv-fill:not(.rv-more) { min-height: 180px; }
+        #review-view .rv-more.rv-fill > .rv-stack { align-self: stretch; min-height: 0; }
+        #review-view .rv-more.rv-fill > .rv-stack > :not(.rv-fill) { flex-shrink: 0; }
+        #review-view .rv-more.rv-fill > .rv-stack > .rv-fill { flex: 1 1 auto; min-height: 120px; }
         :is(#review-view, #review-confirm) :is(h2, h3, h4) { line-height: var(--lh-ui); }
         #review-view .glass {
             background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg);
@@ -1011,8 +1029,9 @@
         /* ต้องแก้ไข while its remark box is open */
         #review-view .btn-ghost.rv-pressed { background: var(--c-selected); border: 2px solid var(--c-brand); padding: 0 calc(var(--sp-4) - 1px); }
         /* The hand-over buttons, while they can be pressed: a still tan ring
-           (it replaced the pulsing glow of 2026-11-17; WCAG 2.2.2). */
-        #review-view :is(#rv-approve-all, #rv-finish, #rv-send):not([aria-disabled="true"]):not([aria-busy="true"]):not(:disabled) { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-tan); }
+           (it replaced the pulsing glow of 2026-11-17; WCAG 2.2.2). With
+           the keyboard on it, the blue focus ring takes its place (2.4.7). */
+        #review-view :is(#rv-approve-all, #rv-finish, #rv-send):not([aria-disabled="true"]):not([aria-busy="true"]):not(:disabled):not(:focus-visible) { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-tan); }
         /* A step on its way: a spinner in place of the words (Pong,
            2026-11-12 and 11-17), on buttons, month tabs, the side switch and
            the download links. The control keeps its size. */
@@ -1134,12 +1153,21 @@
 
         /* Left column: one panel; title, side switch and months, then the
            side's figures, then its main button docked at the foot. */
+        /* Only the part above the dock scrolls (.rv-side-scroll), so the
+           dock never covers anything; a shadow over the dock says there is
+           more above it (review.js sets .rv-side-more). */
         #review-view .rv-side {
             position: sticky; top: 0; display: flex; flex-direction: column;
-            height: calc(var(--rv-view-h, 600px) - 8px); overflow-y: auto; overscroll-behavior: contain;
+            height: calc(var(--rv-view-h, 600px) - 8px); overflow: hidden;
             background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--elev-1);
-            scroll-padding-bottom: 104px;
         }
+        #review-view .rv-side-scroll {
+            display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+            overflow-y: auto; overscroll-behavior: contain; scroll-padding: var(--sp-2) 0;
+        }
+        #review-view .rv-dock-slot { position: relative; z-index: 1; flex: none; border-top: 1px solid var(--c-border); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+        #review-view .rv-dock-slot:empty { display: none; }
+        #review-view .rv-side.rv-side-more .rv-dock-slot { box-shadow: 0 -4px 12px rgba(36, 28, 22, .10); }
         #review-view .rv-head { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-3); }
         #review-view .rv-title { font-size: var(--fs-lg); font-weight: 700; }
         #review-view .rv-side-body { display: flex; flex-direction: column; flex: 1 0 auto; }
@@ -1148,8 +1176,8 @@
         #review-view .rv-side .rv-card { padding: var(--sp-3) var(--sp-4); gap: var(--sp-2); background: transparent; border-width: 1px 0 0; border-radius: 0; box-shadow: none; }
         /* ผู้จัดทำ: งบ / N / per P4P as ruled rows, the Drive files, ส่ง */
         #review-view .rv-ro { display: flex; flex-direction: column; margin: 0; }
-        #review-view .rv-ro .rv-kv { flex-direction: row; justify-content: space-between; align-items: baseline; gap: var(--sp-2); padding: 1px 0; border-bottom: 1px solid var(--c-border); }
-        #review-view .rv-ro .rv-kv dd { font-size: var(--fs-md); text-align: right; }
+        #review-view .rv-ro .rv-kv { flex-direction: row; justify-content: space-between; align-items: baseline; gap: var(--sp-2); padding: 0; border-bottom: 1px solid var(--c-border); line-height: 1.25; }
+        #review-view .rv-ro .rv-kv dd { font-size: var(--fs-md); line-height: 1.25; text-align: right; }
         #review-view .rv-none { color: var(--st-warn-fg); font-weight: 700; }
         #review-view .rv-go-row { display: flex; justify-content: flex-end; margin-top: -2px; line-height: 1.2; }
         #review-view .rv-go-row .rv-link { font-size: var(--fs-xs); }
@@ -1159,7 +1187,7 @@
         #review-view .rv-files .rv-actions { gap: var(--sp-1) var(--sp-4); }
         #review-view .rv-files .rv-actions .rv-hint { flex-basis: 100%; font-size: var(--fs-xs); }
         #review-view .rv-files .rv-progress { flex-basis: 100%; }
-        #review-view #rv-rebuild { min-height: var(--ctl-sm); padding: 0 var(--sp-3); font-size: var(--fs-sm); }
+        #review-view #rv-rebuild { min-height: 36px; padding: 0 var(--sp-3); font-size: var(--fs-sm); }
         #review-view #rv-rebuild:not([aria-busy="true"]):not([aria-disabled="true"])::before {
             content: ""; width: var(--icon-sm); height: var(--icon-sm); background: currentColor;
             -webkit-mask: var(--i-refresh) center / contain no-repeat; mask: var(--i-refresh) center / contain no-repeat;
@@ -1167,10 +1195,10 @@
         /* The docked foot of the left column: ส่ง, or อนุมัติทั้งหมด and ส่งผลตรวจ,
            each with the reason it cannot be pressed yet under it. */
         #review-view .rv-dock {
-            position: sticky; bottom: 0; z-index: 3; margin-top: auto;
             display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-1);
-            padding: var(--sp-3) var(--sp-4); background: var(--c-surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg);
+            padding: var(--sp-2) var(--sp-4); background: var(--c-surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg);
         }
+        #review-view .rv-dock .rv-hint { line-height: var(--lh-ui); }
         #review-view .rv-dock .rv-hint:empty { display: none; }
         #review-view .rv-dock .rv-note { font-size: var(--fs-sm); }
         /* ผู้ตรวจสอบ: the round and its figures */
@@ -1196,19 +1224,19 @@
         #review-view .rv-role button[aria-selected="true"] { background: var(--c-brand); border-color: var(--c-brand); color: #fff; font-weight: 700; }
         #review-view .rv-role button:focus-visible { z-index: 1; }
 
-        /* Months: two columns of 60px tabs, three rows, then the grid scrolls */
+        /* Months: two columns of 56px tabs, three rows, then the grid scrolls */
         #review-view .rv-months {
             position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2);
-            max-height: calc(3 * 60px + 2 * 8px); overflow-y: auto; overscroll-behavior: contain;
+            max-height: calc(3 * 56px + 2 * 8px); overflow-y: auto; overscroll-behavior: contain;
         }
         #review-view .rv-mtab {
             position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0;
-            min-height: 60px; padding: var(--sp-1) var(--sp-3); text-align: left;
+            min-height: 56px; padding: 0 var(--sp-3); text-align: left;
             border: 1px solid var(--c-border-strong); border-radius: var(--r-md); background: var(--c-surface);
             font: inherit; color: var(--c-text); cursor: pointer;
         }
         #review-view .rv-mtab:hover { background: var(--c-surface-3); }
-        #review-view .rv-mtab[aria-checked="true"] { padding: calc(var(--sp-1) - 1px) calc(var(--sp-3) - 1px); border: 2px solid var(--c-brand); background: var(--c-selected); }
+        #review-view .rv-mtab[aria-checked="true"] { padding: 0 calc(var(--sp-3) - 1px); border: 2px solid var(--c-brand); background: var(--c-selected); }
         /* Locked: dashed, a lock, words at full contrast (no fading) */
         #review-view .rv-mtab[aria-disabled="true"] { border-style: dashed; background: var(--c-surface-2); cursor: not-allowed; }
         #review-view .rv-mtab[aria-disabled="true"]:hover { background: var(--c-surface-2); }
@@ -1293,12 +1321,13 @@
         /* The auditee's list: fixed columns (an inline edit moves nothing),
            a sticky head, 44px rows, numbers right-aligned to 2 decimals. */
         #review-view .rv-table-box {
-            position: relative; overflow: auto; max-height: max(240px, calc(var(--rv-view-h, 600px) - 94px));
+            position: relative; overflow: auto;
             border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface);
             scroll-padding: 48px 0 8px;
         }
         #review-view .rv-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-md); line-height: var(--lh-ui); }
-        #review-view .rv-table :is(th, td) { height: 44px; padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--c-border); text-align: left; vertical-align: middle; }
+        #review-view .rv-table :is(th, td) { height: 44px; padding: 3px var(--sp-3); border-bottom: 1px solid var(--c-border); text-align: left; vertical-align: middle; }
+        #review-view .rv-table td > .rv-icon-btn { vertical-align: middle; }
         #review-view .rv-table thead th {
             position: sticky; top: 0; z-index: 1; height: 40px; background: var(--c-surface-3); color: var(--c-text-2);
             font-size: var(--fs-sm); font-weight: 700; white-space: nowrap; border-bottom: 0; box-shadow: inset 0 -2px 0 var(--c-border-strong);
@@ -1315,12 +1344,17 @@
         #review-view .rv-table tr.on:not([data-i]) > td { padding-bottom: var(--sp-3); }
         #review-view .rv-table td > .rv-chip { margin: 2px var(--sp-1) 2px 0; }
         #review-view .rv-old { display: block; font-size: var(--fs-xs); line-height: var(--lh-ui); color: var(--c-text-2); }
+        /* Why a figure is missing carries meaning: 20px (not the 18px of a
+           provenance line), without a lone last word */
+        #review-view .rv-old.rv-miss-why { font-size: var(--fs-sm); text-wrap: pretty; }
         #review-view .rv-flagged { color: var(--st-outlier-fg); font-weight: 700; }
         #review-view .rv-warn-text { color: var(--st-outlier-fg); font-size: var(--fs-sm); font-weight: 700; white-space: normal; }
         #review-view .rv-edit-cell { text-align: right; white-space: nowrap; }
-        #review-view .rv-score-in { width: 100%; min-height: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+        #review-view .rv-score-in { width: 100%; text-align: right; font-variant-numeric: tabular-nums; }
         #review-view .rv-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); padding: var(--sp-1) 0; }
-        #review-view .rv-edit-actions .rv-note-in { flex: 0 1 420px; min-height: 36px; }
+        #review-view .rv-edit-actions .rv-note-in { flex: 0 1 420px; }
+        /* The inline edit's fields line up with its 36px buttons */
+        #review-view input:is(.rv-score-in, .rv-note-in) { min-height: 36px; padding-top: 0; padding-bottom: 0; }
         /* แก้คะแนน: an outlined button with a pencil, so it reads as a button */
         #review-view .rv-icon-btn { min-height: 36px; padding: 0 var(--sp-3); background: var(--c-surface); border-color: var(--c-border-strong); color: var(--c-brand); font-size: var(--fs-sm); }
         #review-view .rv-icon-btn:hover { background: var(--c-brand-soft); }
@@ -1404,7 +1438,7 @@
         #review-view .rv-people-list > li { border-bottom: 1px solid var(--c-border); }
         #review-view .rv-people-list > .rv-hint { padding: var(--sp-3); border: 0; }
         #review-view .rv-person-btn {
-            width: 100%; display: flex; align-items: center; gap: var(--sp-2); min-height: 52px; padding: 2px var(--sp-3);
+            width: 100%; display: flex; align-items: center; gap: var(--sp-2); min-height: 51px; padding: 0 var(--sp-3);
             border: 0; border-radius: 0; background: var(--c-surface); font: inherit; font-size: var(--fs-md); color: var(--c-text); text-align: left; cursor: pointer;
         }
         #review-view .rv-person-btn:hover { background: var(--c-surface-3); }
@@ -1420,7 +1454,9 @@
         #review-view .rv-pline .rv-chip { flex: none; }
         #review-view .rv-pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; padding-top: 1px; }
         #review-view .rv-psub { font-size: var(--fs-xs); line-height: 1.25; color: var(--c-text-2); }
-        #review-view .rv-pdec { font-weight: 700; }
+        /* the decision word carries meaning: 20px; line-height 1 keeps the
+           row at 52px */
+        #review-view .rv-pdec { font-size: var(--fs-sm); font-weight: 700; line-height: 1; }
         #review-view .rv-pdec-ok { color: var(--st-success-fg); }
         #review-view .rv-pdec-fix { color: var(--st-attn-fg); }
         /* The decision mark: a ring (รอตรวจ), a tick (อนุมัติ), a return (ต้องแก้ไข) */
@@ -1466,7 +1502,7 @@
         #review-view .rv-remark-line { display: flex; align-items: flex-start; gap: var(--sp-2); }
         #review-view .rv-remark-line textarea { flex: 1 1 auto; min-width: 0; min-height: 44px; }
         #review-view .rv-remark-line .rv-actions { flex: none; flex-wrap: nowrap; gap: var(--sp-2); }
-        #review-view .rv-remark-line .rv-actions :is(.btn-primary, .btn-ghost) { min-height: 44px; }
+        #review-view .rv-remark-line .rv-actions :is(.btn-primary, .btn-ghost) { min-height: var(--ctl-md); }
         #review-view .rv-decide-row {
             position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3);
             margin: auto calc(-1 * var(--sp-5)) 0; padding: var(--sp-3) var(--sp-5);
@@ -1499,6 +1535,8 @@
 
         /* ผู้จัดทำ: a month sent back, one row per person: who, the remark,
            the score (edit it here) and the answer */
+        /* inline room for the focus rings of the controls at its edges */
+        #review-view .rv-fix-list { position: relative; overflow-y: auto; overscroll-behavior: contain; scroll-padding: var(--sp-2) 0; margin: 0 calc(-1 * var(--sp-2)); padding: 0 var(--sp-2); }
         #review-view .rv-fix { display: grid; grid-template-columns: 240px minmax(0, 1fr) 240px; gap: var(--sp-2) var(--sp-5); align-items: start; padding: var(--sp-3) 0; border-top: 1px solid var(--c-border); }
         #review-view .rv-fix h3 { font-size: var(--fs-md); font-weight: 700; }
         #review-view .rv-fix :is(.rv-edit-actions, .rv-note) { grid-column: 1 / -1; }
@@ -1560,13 +1598,26 @@
             #review-view .rv-people-list { max-height: 40vh; }
         }
         @media (max-width: 720px) { #review-view .rv-fix { grid-template-columns: 1fr; } #review-view .rv-fix-score { justify-content: flex-start; } }
+        /* Short windows (Pong's page area is 620px high): the person's parts
+           sit closer, so a remark box opened with the person still clears
+           the docked decide row. */
+        @media (max-height: 680px) {
+            #review-view .rv-person { padding-top: var(--sp-3); gap: var(--sp-2); }
+            #review-view .rv-person-top { padding-bottom: var(--sp-2); }
+            #review-view .rv-compare tbody :is(th, td) { padding-top: 6px; padding-bottom: 6px; }
+            #review-view .rv-decide-row { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+        }
         /* Windows high contrast: the drawn icons and marks keep their shape
            in system colours; what is on or current gets a Highlight outline. */
         @media (forced-colors: active) {
+            /* !important: the component rules that colour each icon are more
+               specific than these */
             #review-view *::before, #review-view :not([aria-busy="true"])::after, #review-confirm *::before, #review-view :is(.rv-dmark, .rv-st-dot) {
-                forced-color-adjust: none; background-color: CanvasText;
+                forced-color-adjust: none; background-color: CanvasText !important;
             }
-            #review-view .rv-dmark-wait { background: Canvas; border-color: CanvasText; }
+            #review-view .rv-dmark-wait { background-color: Canvas !important; border-color: CanvasText; }
+            /* the tick and the return inside the filled disc */
+            #review-view :is(.rv-dmark-ok, .rv-dmark-fix)::before { background-color: Canvas !important; }
             #review-view :is([aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]) { outline: 2px solid Highlight; outline-offset: -2px; }
         }
     </style>
@@ -1739,17 +1790,21 @@
                  title, the role switch, the months, then the side's summary
                  and its main button (review.js fills #review-side). -->
             <aside class="rv-side" aria-label="ตรวจสอบ: เดือนและสรุป">
-                <div class="rv-head">
-                    <h2 id="review-title" class="rv-title">ตรวจสอบ <span lang="en">SK03</span> ก่อนเบิกจ่าย</h2>
-                    <!-- a tab list: arrow keys move between the two sides (review.js) -->
-                    <div id="review-role" class="rv-role" role="tablist" aria-label="มุมมอง">
-                        <button type="button" role="tab" data-role="auditee" aria-selected="true" tabindex="0">ผู้จัดทำ</button>
-                        <button type="button" role="tab" data-role="auditor" aria-selected="false" tabindex="-1">ผู้ตรวจสอบ</button>
+                <!-- everything but the dock scrolls here; the dock (#review-dock) stays under it -->
+                <div class="rv-side-scroll">
+                    <div class="rv-head">
+                        <h2 id="review-title" class="rv-title">ตรวจสอบ <span lang="en">SK03</span> ก่อนเบิกจ่าย</h2>
+                        <!-- a tab list: arrow keys move between the two sides (review.js) -->
+                        <div id="review-role" class="rv-role" role="tablist" aria-label="มุมมอง">
+                            <button type="button" role="tab" data-role="auditee" aria-selected="true" tabindex="0">ผู้จัดทำ</button>
+                            <button type="button" role="tab" data-role="auditor" aria-selected="false" tabindex="-1">ผู้ตรวจสอบ</button>
+                        </div>
+                        <!-- one tab stop; arrow keys move, Enter or Space opens (review.js) -->
+                        <div id="review-months" class="rv-months" role="radiogroup" aria-label="เดือน"></div>
                     </div>
-                    <!-- one tab stop; arrow keys move, Enter or Space opens (review.js) -->
-                    <div id="review-months" class="rv-months" role="radiogroup" aria-label="เดือน"></div>
+                    <div id="review-side" class="rv-side-body"></div>
                 </div>
-                <div id="review-side" class="rv-side-body"></div>
+                <div id="review-dock" class="rv-dock-slot"></div>
             </aside>
             <div id="review-body"></div>
             <p id="review-live" class="sr-only" role="status" aria-live="polite"></p>

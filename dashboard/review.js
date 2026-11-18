@@ -36,8 +36,14 @@
     // button. render() fills it; everything else that draws the body alone
     // (loading, a failure, no month) empties it, so no stale button stays.
     const side = document.getElementById("review-side");
+    // The side's main button sits in its own slot under the part that
+    // scrolls, so it never covers the figures (render() moves every
+    // .rv-dock of sideOut there).
+    const dock = document.getElementById("review-dock");
+    const sideScroll = side.parentElement;
+    const inSide = (n) => !!n && (side.contains(n) || dock.contains(n));
     let sideOut = [];
-    const show = (...nodes) => { side.replaceChildren(); body.replaceChildren(...nodes); };
+    const show = (...nodes) => { side.replaceChildren(); dock.replaceChildren(); body.replaceChildren(...nodes); syncSide(); };
     const monthBox = document.getElementById("review-months");
     const roleBtns = Array.from(document.querySelectorAll("#review-role button"));
     const live = document.getElementById("review-live");
@@ -604,7 +610,7 @@
     }
     // The loading line takes the focus a pressed retry button had.
     function loadingLine(text) {
-        const hadFocus = body.contains(document.activeElement) || side.contains(document.activeElement);
+        const hadFocus = body.contains(document.activeElement) || inSide(document.activeElement);
         const p = el("p", "rv-loading", text);
         p.tabIndex = -1;
         show(p);
@@ -793,10 +799,10 @@
                 notes.delete(k);
         }
         const a = document.activeElement;
-        const inBody = !!a && a !== body && a !== side && (body.contains(a) || side.contains(a));
+        const inBody = !!a && a !== body && a !== side && a !== dock && (body.contains(a) || inSide(a));
         const focusId = inBody && a ? a.id : "";
         const holder = inBody && a ? a.closest("[aria-labelledby]") : null;
-        const holderId = holder && (body.contains(holder) || side.contains(holder)) ? holder.getAttribute("aria-labelledby") || "" : "";
+        const holderId = holder && (body.contains(holder) || inSide(holder)) ? holder.getAttribute("aria-labelledby") || "" : "";
         let selA = null, selB = null;
         if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) {
             try {
@@ -816,8 +822,11 @@
         if (tn)
             top.push(tn);
         sideOut = [];
+        chipDrawn = false;
         const main = role === "auditee" ? auditee(s) : auditor(s);
-        side.replaceChildren(...sideOut);
+        const docked = (n) => n instanceof HTMLElement && n.classList.contains("rv-dock");
+        side.replaceChildren(...sideOut.filter((n) => !docked(n)));
+        dock.replaceChildren(...sideOut.filter(docked));
         body.replaceChildren(...top, ...main);
         const list2 = body.querySelector(".rv-people-list");
         if (list2)
@@ -899,8 +908,13 @@
             row.append(t);
             const inner = el("div", "rv-stack");
             inner.id = "rv-more-body";
-            if (moreOpen)
-                inner.append(...buildAlerts(s), listCard(s));
+            if (moreOpen) {
+                const lc = listCard(s);
+                inner.append(...buildAlerts(s), lc);
+                // Open, a long list shares the window's height with the fixes above.
+                if (lc.classList.contains("rv-fill"))
+                    more.classList.add("rv-fill");
+            }
             else
                 inner.hidden = true;
             more.append(h, row, inner);
@@ -1301,6 +1315,10 @@
         tbl.append(cap, thead, tbody);
         box.append(tbl);
         c.append(box);
+        // Long enough to need it: the table gives up height to fit the
+        // window (a short one keeps its own height; .rv-fill has a floor).
+        if (shown.length > 3)
+            c.classList.add("rv-fill");
         if (openRequest(s) || all.some(pending))
             c.append(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"));
         const n = noteEl("score");
@@ -1335,7 +1353,7 @@
                 out.push(chip("bad", "เงินไม่ตรง"));
             if (p.scoreCheck === "missing" || p.moneyCheck === "missing") {
                 out.push(chip("miss", "ไม่พบข้อมูล"));
-                out.push(el("span", "rv-old", p.scoreCheck === "missing" ? (MISS_TEXT[p.statedHow] || "ไม่พบยอดรวมในไฟล์แพทย์")
+                out.push(el("span", "rv-old rv-miss-why", p.scoreCheck === "missing" ? (MISS_TEXT[p.statedHow] || "ไม่พบยอดรวมในไฟล์แพทย์")
                     : p.sk03Row === null ? "ไม่มีใน SK03" : "ไม่พบในชีตกลุ่มงาน"));
             }
         }
@@ -1953,11 +1971,15 @@
         if (st)
             render();
     });
-    // A card title with the chip after it, when there is one.
+    // A card title with the chip after it, when there is one: only on the
+    // first card drawn (a returned round with รายชื่อทั้งหมด open has two
+    // card titles, and the chip and its panel have fixed ids).
+    let chipDrawn = false;
     function headRow(h) {
-        const c = mailChip();
+        const c = chipDrawn ? null : mailChip();
         if (!c)
             return h;
+        chipDrawn = true;
         const r = el("div", "rv-head-row");
         r.append(h, c);
         return r;
@@ -2053,6 +2075,12 @@
             c.append(el("p", "rv-loading", "กำลังโหลด…"));
         else if (!fixes.length)
             c.append(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้ ดูปัญหาอื่น ๆ"));
+        // The fixes scroll in their own box when the window is short.
+        const list = el("div", "rv-fix-list");
+        if (fixes.length)
+            c.append(list);
+        if (fixes.length > 1)
+            c.classList.add("rv-fill");
         const canEdit = auditeeTurn(s);
         for (const p of fixes) {
             const item = el("article", "rv-fix");
@@ -2106,7 +2134,7 @@
             const n = noteEl(spot);
             if (n)
                 item.append(n);
-            c.append(item);
+            list.append(item);
         }
         const n = moreOpen ? null : noteEl("score");
         if (n)
@@ -3033,7 +3061,15 @@
         const foot = body.querySelector(".rv-decide-foot");
         view.style.scrollPaddingBottom = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
         markStuck(true);
+        syncSide();
     }
+    // A shadow over the dock while the side has more under the fold.
+    function syncSide() {
+        var _a;
+        const more = sideScroll.scrollHeight - sideScroll.scrollTop - sideScroll.clientHeight > 1 && dock.childElementCount > 0;
+        (_a = sideScroll.parentElement) === null || _a === void 0 ? void 0 : _a.classList.toggle("rv-side-more", more);
+    }
+    sideScroll.addEventListener("scroll", syncSide, { passive: true });
     // Once the checks have scrolled up out of sight, the bottom bar also
     // names the person.
     function markStuck(force = false) {
@@ -3188,9 +3224,16 @@
         nav.append(go(-1, "คนก่อนหน้า"), go(1, "คนถัดไป"));
         // ปุ่มลัด: a switch for the keys, and the keys while they are on.
         const keysBox = el("div", "rv-keys-box");
-        const kt = el("button", "rv-keys-toggle", keysOn ? "ปุ่มลัด เปิด" : "ปุ่มลัด ปิด");
+        // A switch named ปุ่มลัด; the word after it shows its state, which
+        // aria-checked says to a screen reader.
+        const kt = el("button", "rv-keys-toggle", "ปุ่มลัด ");
+        const state = el("span", undefined, keysOn ? "เปิด" : "ปิด");
+        state.setAttribute("aria-hidden", "true");
+        kt.append(state);
         kt.type = "button";
         kt.id = "rv-keys-toggle";
+        kt.setAttribute("role", "switch");
+        kt.setAttribute("aria-checked", String(keysOn));
         kt.addEventListener("click", () => {
             keysOn = !keysOn;
             try {
