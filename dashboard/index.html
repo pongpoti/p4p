@@ -9,6 +9,11 @@
     <link rel="icon" href="/dashboard/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png">
     <link rel="preload" href="/dashboard/fonts/THSarabunPSK-Regular.ttf" as="font" type="font/ttf" crossorigin>
+    <!-- ภาพรวม and ตามส่ง keep 17 Nov's fonts (Inter + Noto Sans Thai) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
     <style>
         /* Design tokens and the app shell (2026-11-18 redesign): TH SarabunPSK
            on every tab, a flat 64px header, and one token set (type, space,
@@ -232,16 +237,20 @@
 
         .hidden { display: none !important; }
 
-        /* The header's bar and the content share a 36px gutter (main's 32px
-           plus each view's 4px), so their edges line up. ภาพรวม and ตามส่ง
-           keep their centred column (--content-w). */
+        /* Every tab is a centred 1152px column, as on 17 Nov (Pong,
+           2026-11-18: "use same width of yesterday"); ตรวจสอบ alone may grow
+           to 1680px (body.review-open, set by app.ts), as it did then. The
+           header's bar spans the window and its content sits in the same
+           column; its 36px gutter is main's 32px plus each view's 4px, so
+           the edges line up. */
         .container {
             width: 100%;
+            max-width: var(--content-w);
             margin: 0 auto;
             padding-left: 32px;
             padding-right: 32px;
         }
-        :where(body.cards-view) .container { max-width: var(--content-w); }
+        body.review-open main.container { max-width: 1680px; }
 
         /* A panel. ภาพรวม, ตามส่ง: frosted glass over #bg; every other tab:
            white, a hairline border, a soft shadow. */
@@ -290,7 +299,7 @@
             display: flex;
             align-items: center;
             gap: var(--sp-7);
-            max-width: none;
+            max-width: var(--content-w);
             height: 65px;
             padding-top: 8px;
             padding-left: 36px;
@@ -424,18 +433,30 @@
         .btn-secondary:active { background: var(--c-selected); }
 
         /* ════ ภาพรวม and ตามส่ง, and their dialogs (who has not sent, the
-           call/LINE log, งบประมาณจัดสรร): the look of 257d328, unchanged.
-           Rules for shared parts carry the ภาพรวม/ตามส่ง scope (see the top). ════ */
+           call/LINE log, งบประมาณจัดสรร): exactly the look of 17 Nov
+           (824e543), in its own font, Inter + Noto Sans Thai at a 16px base
+           (Pong, 2026-11-18: "format and color should be exact same as
+           yesterday"). Sizes are px (824e543's rem x 16), since the root
+           here is 22px. The cards keep 824e543's height (the window under
+           its 77px header). Rules for shared parts carry the ภาพรวม/ตามส่ง
+           scope (see the top). ════ */
+        :where(body.cards-view) :is(main, #pending-sheet, #log-dialog, #budget-dialog) {
+            --font-sans: "Inter", "Noto Sans Thai", system-ui, sans-serif;
+            font-family: var(--font-sans);
+            font-size: 16px;
+            line-height: 1.6;
+            font-synthesis: auto;
+        }
 
-        /* ── Content: the six cards fill the space under the 65px header
-           (64px plus its border), so
+        /* ── Content: the six cards fill the space 824e543 gave them (the
+           window under its 77px header), so
            all of them fit on one screen without scrolling. Sizes below scale
            with the window height (vh); very short windows scroll instead. */
         :where(body.cards-view) main {
             display: flex;
             flex-direction: column;
-            height: calc(100vh - 65px);
-            height: calc(100dvh - 65px);
+            height: calc(100vh - 77px);
+            height: calc(100dvh - 77px);
             min-height: 560px;
             padding-top: clamp(16px, 3vh, 32px);
             padding-bottom: clamp(16px, 3vh, 32px);
@@ -490,7 +511,7 @@
             background: var(--month);
             color: #2d2d2d;
             font-weight: 700;
-            font-size: 1rem;
+            font-size: 16px;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 1px 2px rgba(41, 29, 20, .12);
         }
         /* ตามส่ง tab: the whole card in its month colour, a lighter chip, the
@@ -507,7 +528,7 @@
         #months.followup .month-chip {
             height: 48px;
             padding: 0 26px;
-            font-size: 1.375rem;
+            font-size: 22px;
             background: color-mix(in srgb, var(--month) 18%, #fff);
             box-shadow: 0 1px 3px rgba(41, 29, 20, .15);
         }
@@ -529,8 +550,8 @@
             height: 26px;
             padding: 0 10px;
             border-radius: 999px;
-            font-size: .8125rem;
-            font-weight: 700;
+            font-size: 13px;
+            font-weight: 600;
             white-space: nowrap;
             border: 1px solid transparent;
         }
@@ -550,8 +571,8 @@
             padding-bottom: clamp(10px, 2vh, 18px);
         }
         .stat { display: flex; align-items: baseline; gap: 10px; }
-        .stat .pct { font-size: clamp(1.0909rem, 3.3vh, 1.5rem); font-weight: 700; color: var(--muted-foreground); letter-spacing: 0; line-height: 1; font-variant-numeric: tabular-nums; }
-        .stat .of { color: var(--muted-foreground); font-size: clamp(1.0625rem, 2.6vh, 1.375rem); font-weight: 400; }
+        .stat .pct { font-size: clamp(16px, 2.2vh, 20px); font-weight: 600; color: var(--muted-foreground); letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+        .stat .of { color: var(--muted-foreground); font-size: clamp(17px, 2.6vh, 22px); font-weight: 500; }
         .stat .of b { color: var(--foreground); font-weight: 700; font-variant-numeric: tabular-nums; }
 
         /* shadcn Progress */
@@ -583,9 +604,9 @@
             background: rgba(255, 255, 255, .55);
             border: 1px solid var(--border);
         }
-        .split dt { font-size: 1rem; font-weight: 700; line-height: 1.2; color: var(--muted-foreground); }
+        .split dt { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
         /* TH SarabunPSK's digits are about 0.65x Inter's: these vh sizes grow by about 1.5x. */
-        .split dd { font-size: clamp(2.25rem, 7vh, 4rem); font-weight: 700; line-height: 1; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+        .split dd { font-size: clamp(28px, 5.4vh, 52px); font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
         .split .pending dd { color: var(--warning); }
         .split .pending.zero dd { color: var(--muted-foreground); }
 
@@ -597,8 +618,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: .875rem;
-            line-height: 1.2;
+            font-size: 14px;
             color: var(--muted-foreground);
         }
         .card-footer .ico { width: 16px; height: 16px; flex: none; }
@@ -611,7 +631,7 @@
             flex: none; margin: -1px 0 -1px auto; height: 24px; padding: 0 10px 0 8px;
             display: inline-flex; align-items: center; gap: 5px; border-radius: 999px;
             border: 1px solid var(--border); background: #fff; color: var(--foreground);
-            font: inherit; font-size: .8125rem; font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer;
+            font: inherit; font-size: 13px; font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer;
         }
         .budbtn:hover { background: var(--accent); }
         .budbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
@@ -641,7 +661,7 @@
             justify-content: center;
             gap: 14px;
             color: var(--muted-foreground);
-            font-size: 1.25rem;
+            font-size: 20px;
         }
         .empty svg { width: 56px; height: 56px; color: var(--success); }
 
@@ -677,7 +697,7 @@
             border-bottom: 1px solid var(--border);
             background: linear-gradient(180deg, color-mix(in srgb, var(--month) 35%, #fff), #FDFAF5);
         }
-        .sheet-header .month-chip { height: 40px; font-size: 1.25rem; padding: 0 20px; background: color-mix(in srgb, var(--month) 45%, #fff); }
+        .sheet-header .month-chip { height: 40px; font-size: 20px; padding: 0 20px; background: color-mix(in srgb, var(--month) 45%, #fff); }
         :where(body.cards-view) .search {
             grid-column: 1 / -1;
             display: flex; align-items: center; gap: 10px;
@@ -687,19 +707,19 @@
         :where(body.cards-view) .search:focus-within { outline: 2px solid var(--primary); outline-offset: 1px; }
         :where(body.cards-view) .search svg { width: 20px; height: 20px; color: var(--muted-foreground); flex-shrink: 0; }
         :where(body.cards-view) .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; color: var(--foreground); }
-        .sheet-count { margin-top: 10px; font-size: 1.125rem; font-weight: 700; color: var(--warning); }
+        .sheet-count { margin-top: 10px; font-size: 18px; font-weight: 600; color: var(--warning); }
         .pending-list { list-style: none; margin: 0; padding: 8px 12px 24px; overflow-y: auto; flex: 1; }
         .pending-row {
             display: grid; grid-template-columns: 32px minmax(0, 1fr) 230px auto; align-items: center; gap: 14px;
-            padding: 12px; border-bottom: 1px solid var(--border);
+            padding: 12px; border-radius: 12px;
         }
         .pending-row:hover { background: rgba(166, 137, 102, .08); }
         .pending-row[hidden] { display: none; }
-        .pending-row .num { color: var(--muted-foreground); font-size: .875rem; text-align: right; font-variant-numeric: tabular-nums; }
+        .pending-row .num { color: var(--muted-foreground); font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; }
         .pending-row .who { display: flex; flex-direction: column; min-width: 0; }
-        .pending-row .name { font-weight: 700; font-size: 1.0625rem; }
-        .pending-row .meta { color: var(--muted-foreground); font-size: .875rem; }
-        .pending-row .last { color: var(--success); font-size: .875rem; }
+        .pending-row .name { font-weight: 600; font-size: 17px; }
+        .pending-row .meta { color: var(--muted-foreground); font-size: 14px; }
+        .pending-row .last { color: var(--success); font-size: 14px; }
         .pending-row .last.none { color: var(--muted-foreground); }
         .pending-row .actions { display: flex; gap: 8px; }
         .skeleton-row { height: 64px; background: linear-gradient(90deg, rgba(63,47,36,.05), rgba(63,47,36,.1), rgba(63,47,36,.05)) !important; background-size: 200% 100% !important; animation: shimmer 1.4s infinite; margin-bottom: 6px; }
@@ -721,7 +741,7 @@
             position: absolute; top: -7px; right: -7px;
             min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
             display: inline-grid; place-items: center;
-            font-size: .75rem; font-weight: 700; color: #fff; background: var(--primary);
+            font-size: 12px; font-weight: 700; color: #fff; background: var(--primary);
             border: 2px solid #FDFAF5;
         }
         .contact-btn .count.zero { display: none; }
@@ -738,8 +758,8 @@
             display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
             padding: 20px 22px 14px; border-bottom: 1px solid var(--border);
         }
-        :where(body.cards-view) .log-header h2 { font-size: 1.25rem; font-weight: 700; }
-        :where(body.cards-view) .log-header p { color: var(--muted-foreground); font-size: .9375rem; margin-top: 2px; }
+        :where(body.cards-view) .log-header h2 { font-size: 20px; font-weight: 700; }
+        :where(body.cards-view) .log-header p { color: var(--muted-foreground); font-size: 15px; margin-top: 2px; }
         :where(body.cards-view) .log-dialog[data-channel="phone"] .log-header { background: linear-gradient(180deg, #EFF5FF, #FDFAF5); }
         :where(body.cards-view) .log-dialog[data-channel="line"] .log-header { background: linear-gradient(180deg, #E6F9EE, #FDFAF5); }
         .log-list { list-style: none; margin: 0; padding: 14px 22px; overflow-y: auto; flex: 1; min-height: 80px; }
@@ -752,18 +772,18 @@
         .log-entry .time-no {
             align-self: start; justify-self: start;
             padding: 3px 10px; border-radius: 999px;
-            font-size: .8125rem; font-weight: 700; color: var(--primary); background: var(--accent);
+            font-size: 13px; font-weight: 700; color: var(--primary); background: var(--accent);
         }
         .log-dialog[data-channel="phone"] .time-no { color: #1D4ED8; background: #E3EDFF; }
         .log-dialog[data-channel="line"] .time-no { color: #047A34; background: #DDF6E7; }
-        .log-entry .when { font-size: .875rem; color: var(--muted-foreground); }
+        .log-entry .when { font-size: 14px; color: var(--muted-foreground); }
         .log-entry .note { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .log-empty { padding: 18px 0; text-align: center; color: var(--muted-foreground); }
         .log-form { display: flex; flex-direction: column; gap: 8px; padding: 14px 22px 20px; border-top: 1px solid var(--border); }
-        .log-form label { font-weight: 700; font-size: .9375rem; }
+        .log-form label { font-weight: 600; font-size: 15px; }
         .log-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
         .preset {
-            font: inherit; font-size: .9375rem; min-height: 40px; padding: 6px 14px; border-radius: 999px;
+            font: inherit; font-size: 15px; min-height: 40px; padding: 6px 14px; border-radius: 999px;
             border: 1px solid rgba(63, 47, 36, .22); background: #fff; color: var(--foreground); cursor: pointer;
         }
         .preset:hover { background: #F6EFE6; }
@@ -776,9 +796,7 @@
         }
         .log-form textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
         :where(body.cards-view) .log-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
-        :where(body.cards-view) .btn-primary, :where(body.cards-view) .btn-ghost {
-            height: 44px; padding: 0 18px; border-radius: 10px; font: inherit; font-weight: 700; cursor: pointer;
-        }
+        :where(body.cards-view) .btn-primary, :where(body.cards-view) .btn-ghost { height: 44px; padding: 0 18px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer; }
         :where(body.cards-view) .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
         :where(body.cards-view) .btn-primary:disabled { opacity: .55; cursor: default; }
         :where(body.cards-view) .btn-primary[aria-busy="true"] { opacity: .8; cursor: progress; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
@@ -805,45 +823,21 @@
         .budget-dialog .log-header { background: #F6EFE6; background: linear-gradient(180deg, color-mix(in srgb, var(--month, #F6EFE6) 45%, #FDFAF5), #FDFAF5); }
         :where(body.cards-view) .bd-form { box-sizing: border-box; width: 100%; padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
         :where(body.cards-view) .bd-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-        :where(body.cards-view) .bd-field label { font-size: .875rem; font-weight: 700; color: var(--muted-foreground); }
+        :where(body.cards-view) .bd-field label { font-size: 14px; font-weight: 600; color: var(--muted-foreground); }
         :where(body.cards-view) .bd-field input {
             box-sizing: border-box; width: 100%; min-width: 0; height: 46px; padding: 0 12px;
             border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px; background: #fff;
-            font: inherit; font-size: 1.15rem; font-weight: 700; color: var(--foreground); font-variant-numeric: tabular-nums;
+            font: inherit; font-size: 18.4px; font-weight: 600; color: var(--foreground); font-variant-numeric: tabular-nums;
         }
         :where(body.cards-view) .bd-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
         :where(body.cards-view) .bd-field input[readonly] { background: #F6EFE6; border-color: transparent; }
         :where(body.cards-view) .bd-field input:disabled { background: #F6EFE6; border-color: transparent; color: var(--muted-foreground); cursor: not-allowed; opacity: 1; -webkit-text-fill-color: var(--muted-foreground); }
         :where(body.cards-view) .bd-rate { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: #F6EFE6; }
-        :where(body.cards-view) .bd-rate .k { font-weight: 700; color: var(--muted-foreground); }
-        :where(body.cards-view) .bd-rate .k small { font-size: .875rem; font-weight: 400; }
-        :where(body.cards-view) .bd-rate .v { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .bd-ok { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border-left: 4px solid var(--success); border-radius: 6px; background: #E7F4EC; color: #0B5E2B; font-weight: 700; }
-        :where(body.cards-view) .bd-meta { grid-column: 1 / -1; font-size: .875rem; color: var(--muted-foreground); }
-
-        /* Under a ~695px window the cards' content was taller than their
-           row (at 257d328 a 620px page area, Pong's screen, cut the footers
-           off and scrolled the page by 5px). From 720px up nothing is cut,
-           so there 257d328's sizing stays exactly as it was (TH SarabunPSK's
-           taller lines left the งบ pill touching the card's foot at 700-719,
-           so the band starts there, not at 700). Under 720px the
-           vh-based spacing above uses a slightly smaller unit, --cvh, so the
-           content fits with no overflow at all; main may shrink to 520px as
-           on the other tabs, and the big figures to 2rem. The same cards,
-           with a little less air. */
-        @media (max-height: 719px) {
-            :where(body.cards-view) main { min-height: 520px; }
-            #months { --cvh: min(1vh, calc(2.198vh - 9.06px)); }
-            .card-header { padding-top: clamp(6px, calc(2.2 * var(--cvh)), 20px); }
-            .card-content { padding-top: clamp(6px, calc(2.4 * var(--cvh)), 22px); padding-bottom: clamp(6px, calc(2 * var(--cvh)), 18px); }
-            .progress { margin-top: clamp(6px, calc(2.2 * var(--cvh)), 24px); }
-            .split { margin-top: clamp(6px, calc(2.4 * var(--cvh)), 28px); }
-            .split div { padding-top: clamp(4px, calc(1.6 * var(--cvh)), 16px); padding-bottom: clamp(4px, calc(1.6 * var(--cvh)), 16px); }
-            .split dd { font-size: clamp(2rem, 7vh, 4rem); }
-            .card-footer { padding-top: clamp(6px, calc(1.5 * var(--cvh)), 14px); padding-bottom: clamp(6px, calc(1.8 * var(--cvh)), 18px); }
-            #months.followup .card-header { padding-top: clamp(6px, calc(3 * var(--cvh)), 28px); }
-            #months.followup .card-content { padding-bottom: clamp(6px, calc(2.6 * var(--cvh)), 24px); }
-        }
+        :where(body.cards-view) .bd-rate .k { font-weight: 600; color: var(--muted-foreground); }
+        :where(body.cards-view) .bd-rate .k small { font-size: 14px; font-weight: 400; }
+        :where(body.cards-view) .bd-rate .v { font-size: 25.6px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .bd-ok { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border-left: 4px solid var(--success); border-radius: 6px; background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
+        :where(body.cards-view) .bd-meta { grid-column: 1 / -1; font-size: 14px; color: var(--muted-foreground); }
 
         /* ════ รายชื่อ, อัตรากำลัง, ประวัติการใช้งาน (tables and forms), their
            dialogs, and the parts ตรวจสอบ shares: design ข (2026-11-18).
@@ -999,10 +993,10 @@
         /* position: the box holds the rows' screen-reader text (.sr-only), so it scrolls with them */
         .audit-table-wrap { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-padding: 48px 0 8px; }
         .audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-md); line-height: var(--lh-ui); }
-        .audit-table col.c-when { width: 220px; }
+        .audit-table col.c-when { width: 180px; }
         .audit-table col.c-who { width: 140px; }
-        .audit-table col.c-what { width: 260px; }
-        .audit-table col.c-ip { width: 140px; }
+        .audit-table col.c-what { width: 220px; }
+        .audit-table col.c-ip { width: 130px; }
         .audit-table th {
             position: sticky; top: 0; z-index: 1;
             height: 40px; padding: var(--sp-1) var(--sp-3); text-align: left; vertical-align: middle;
@@ -1045,12 +1039,12 @@
             min-width: 24px; height: 24px; padding: 0 7px; border-radius: var(--r-pill);
             display: inline-grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; line-height: 1; color: #fff; background: var(--st-attn-solid);
         }
-        .audit-table col.c-no { width: 64px; }
-        .audit-table col.c-dept { width: 18%; }
-        .audit-table col.c-type { width: 20%; }
-        .audit-table col.c-score { width: 120px; }
-        .audit-table col.c-sent { width: 220px; }
-        .audit-table col.c-act { width: 112px; }
+        .audit-table col.c-no { width: 56px; }
+        .audit-table col.c-dept { width: 16%; }
+        .audit-table col.c-type { width: 18%; }
+        .audit-table col.c-score { width: 100px; }
+        .audit-table col.c-sent { width: 176px; }
+        .audit-table col.c-act { width: 96px; }
         .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-2); }
         .roster-table th.num, .roster-table th.score { text-align: right; }
         .roster-table .score { color: var(--c-text); }
@@ -1131,11 +1125,11 @@
         .sf-alert, .sf-ok { margin: 0; }
         .sf-ok { font-weight: 700; }
         .staffing-table col.c-sno { width: 52px; }
-        .staffing-table col.c-code { width: 76px; }
-        .staffing-table col.c-n { width: 84px; }
-        .staffing-table col.c-hire { width: 100px; }
+        .staffing-table col.c-code { width: 64px; }
+        .staffing-table col.c-n { width: 68px; }
+        .staffing-table col.c-hire { width: 84px; }
         .staffing-table col.c-lack { width: 104px; }
-        .staffing-table col.c-mult { width: 190px; }
+        .staffing-table col.c-mult { width: 160px; }
         .staffing-table col.c-edit { width: 64px; }
         .staffing-table th { height: 52px; }
         .staffing-table td { height: 40px; }
