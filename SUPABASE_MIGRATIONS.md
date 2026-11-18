@@ -296,8 +296,8 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     The ผู้ตรวจสอบ right (Pong, 2026-11-18: "for audit access role : allow
     select ผู้ตรวจสอบ"). `dashboard_users.perms` and `dashboard_perms_clean`
     now take `review.auditor` (the ตรวจสอบ tab's auditor side: check each
-    person, approve or return, approve all, reopen, the allocation sheet
-    (post)), and refuse a user who holds both `review.auditee` and
+    person, approve or return, approve all, reopen, the allocation
+    sheet), and refuse a user who holds both `review.auditee` and
     `review.auditor`. Writes no row; the function stays service_role only.
     Needs step 27. Until it runs, giving someone ผู้ตรวจสอบ on the page says
     this file is not installed, and nothing is saved. End with the check
