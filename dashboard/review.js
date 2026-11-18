@@ -1040,9 +1040,15 @@
             box.append(ul);
             const row = el("div", "rv-actions");
             if (blockers.some((p) => p.code === "not_in_sk03" || p.code === "no_doctor_sheet" || p.code === "not_in_dept_sheet")) {
-                const a = el("a", "rv-link", "แก้ในแท็บรายชื่อ");
-                a.href = "/dashboard/#roster";
-                row.append(a);
+                // รายชื่อ is read-only for the ผู้จัดทำ (Pong, 2026-11-18): the
+                // admin fixes the roster, so they get a note, not a link.
+                if (auditeeOnly())
+                    row.append(el("span", "rv-hint", "แจ้งผู้ดูแลระบบให้แก้รายชื่อ"));
+                else {
+                    const a = el("a", "rv-link", "แก้ในแท็บรายชื่อ");
+                    a.href = "/dashboard/#roster";
+                    row.append(a);
+                }
             }
             if (s.stale > 0 && auditeeTurn(s)) {
                 const rb = el("button", "btn-ghost", "สร้างใหม่");

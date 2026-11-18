@@ -239,7 +239,7 @@
             else
                 a.removeAttribute("aria-current");
         }
-        titleEl.textContent = TITLES[view];
+        titleEl.textContent = view === "roster" && !isOwner ? "รายชื่อ — รายชื่อแพทย์รายเดือน (ดูอย่างเดียว)" : TITLES[view];
         if (audit) {
             monthsEl.classList.add("hidden");
             emptyEl.classList.add("hidden");
@@ -2161,19 +2161,25 @@
                     document.body.dataset.reviewSide = "auditee";
                 auditNav.classList.toggle("hidden", !isOwner);
                 rosterNav.classList.remove("hidden");
-                // รายชื่อ read-only: no add, no access requests, no edit column.
-                if (!isOwner) {
-                    rosterAdd.remove();
-                    reqBtn.remove();
-                    const rt = rosterRows.closest("table");
-                    (_a = rt.querySelector("col.c-act")) === null || _a === void 0 ? void 0 : _a.remove();
-                    (_b = rt.tHead.rows[0].lastElementChild) === null || _b === void 0 ? void 0 : _b.remove();
-                }
                 reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee);
             }
         }
         catch (e) {
             // Name stays blank; the page itself is already authorised.
+        }
+        // รายชื่อ: เพิ่มรายชื่อ and คำขอเข้าใช้งาน start hidden (index.html) and
+        // appear for the owner only; anyone else, or a failed session call,
+        // gets the read-only table without its edit/delete column.
+        if (isOwner) {
+            rosterAdd.classList.remove("hidden");
+            reqBtn.classList.remove("hidden");
+        }
+        else {
+            rosterAdd.remove();
+            reqBtn.remove();
+            const rt = rosterRows.closest("table");
+            (_a = rt.querySelector("col.c-act")) === null || _a === void 0 ? void 0 : _a.remove();
+            (_b = rt.tHead.rows[0].lastElementChild) === null || _b === void 0 ? void 0 : _b.remove();
         }
         render();
         const view = currentView();

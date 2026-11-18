@@ -438,12 +438,19 @@ export function mountReview(d: ReviewDeps): void {
     if (!g) return
     const round = /^[1-9][0-9]{0,3}$/.test(String(req.query.round || "")) ? Number(req.query.round) : null
     try {
-      res.json(await d.callServiceRpc("review_people", { p_month: g.month, p_round: round }))
+      const out = await d.callServiceRpc("review_people", { p_month: g.month, p_round: round })
+      // The ผู้จัดทำ (กานดา) reads a round's decisions and remarks only once the
+      // auditor has handed it back or approved it, never while the auditor is
+      // still deciding (Pong, 2026-11-18: "ตรวจสอบ : access only in auditee part").
+      const st = out && out.round ? String(out.round.status || "") : ""
+      if (!g.owner && out && out.round && st !== "returned" && st !== "approved") return res.status(404).json({ error: "ไม่พบในรอบนี้" })
+      res.json(out)
     } catch (e: any) { fail(res, "people", e) }
   })
 
+  // One doctor's sheet for the auditor's per-person panel: the auditor's only.
   app.get("/dashboard/api/review/:month/person/:round/:index", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res)
     if (!g) return
     const round = String(req.params.round), index = String(req.params.index)
     if (!/^[1-9][0-9]{0,3}$/.test(round) || !UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
