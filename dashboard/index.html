@@ -205,19 +205,20 @@
             z-index: 100;
             padding: 10px 16px;
             border-radius: 10px;
-            background: var(--primary);
-            color: var(--primary-foreground);
+            background: #F7F3EE;
+            color: var(--c-brand);
             font-weight: 700;
             text-decoration: none;
         }
         #skip-link:focus { top: 12px; }
+        #skip-link:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 6px var(--c-focus); }
 
-        /* ภาพรวม, ตามส่ง: soft colour fields behind the glass, so the blur
-           has something to pick up. Same background as login.html. The other
-           tabs leave #bg unstyled and sit on the body's flat canvas. */
-        /* In px (257d328's 40rem at a 16px rem): the 22px rem would make
-           each field 1.375 times bigger. */
-        :where(body.cards-view) #bg {
+        /* Every tab (Pong, 2026-11-18: "use same main BG as original"):
+           257d328's soft colour fields, the same background as login.html.
+           ภาพรวม/ตามส่ง's glass blurs them; the other tabs' white panels sit
+           on them. In px (257d328's 40rem at a 16px rem): the 22px rem would
+           make each field 1.375 times bigger. */
+        #bg {
             position: fixed;
             inset: 0;
             z-index: -1;
@@ -273,25 +274,25 @@
         #mobile-block p { color: var(--muted-foreground); }
 
         /* ── Header (every tab, over ภาพรวม/ตามส่ง's colour fields too): a
-           white 64px bar across the window. The menu is an icon ribbon
-           (Pong's pick แบบ 3, 2026-11-18): each item an even full-height
-           tile, a 22px icon above its label, hairlines only between items;
-           the current page (aria-current) is a solid brown tile with a white
-           bold label and a tan foot; on ภาพรวม the brand is underlined. ── */
+           deep brown 65px bar across the window (Pong's pick แบบ 1 แถบสีน้ำตาล,
+           2026-11-18). Menu labels are cream; the current page (aria-current)
+           is a cream tab that rises from the bottom edge into the page, with a
+           tan cap and rounded feet; on ภาพรวม the wordmark gets a tan
+           underline. 65px = the old 64px bar + its 1px line, so the page
+           heights below (calc(100vh - 65px)) are unchanged. ── */
         #header {
             position: sticky;
             top: 0;
             z-index: 15;
-            background: var(--c-surface);
-            border-bottom: 1px solid var(--c-border);
-            box-shadow: var(--elev-1);
+            background: var(--c-brand);
         }
         #header .container {
             display: flex;
             align-items: center;
-            gap: var(--sp-6);
+            gap: var(--sp-7);
             max-width: none;
-            height: 64px;
+            height: 65px;
+            padding-top: 8px;
             padding-left: 36px;
             padding-right: 36px;
         }
@@ -301,7 +302,7 @@
             gap: var(--sp-2);
             font-size: var(--fs-lg);
             font-weight: 700;
-            color: var(--c-text);
+            color: #fff;
             text-decoration: none;
             border-radius: var(--r-md);
         }
@@ -317,57 +318,59 @@
             background: var(--c-brand);
         }
         .logo-mark b { color: #DDBF94; font-weight: 700; }
-        #brand .logo-mark { height: 36px; padding: 0 var(--sp-2); border-radius: var(--r-md); font-size: var(--fs-md); transition: filter .15s; }
+        /* On the brown bar the mark is a cream tile with a tan foot. */
+        #brand .logo-mark { height: 36px; padding: 0 var(--sp-2); border-radius: var(--r-md); font-size: var(--fs-md); background: #F7F3EE; color: var(--c-brand); box-shadow: inset 0 -3px 0 var(--c-tan); transition: background .15s; }
+        #brand .logo-mark b { color: #7A5A3C; }                /* 5.67:1 on cream */
         /* The logo is the way back to ภาพรวม (there is no separate tab for it). */
-        #brand:hover .logo-mark { filter: brightness(1.25); }
-        #brand:hover > span:last-child { color: var(--primary); }
-        #brand[aria-current="page"] > span:last-child { text-decoration: underline 3px var(--c-brand); text-underline-offset: 8px; }
-        #brand:focus-visible, #logout-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        #brand:hover .logo-mark { background: #fff; }
+        #brand:hover > span:last-child { color: #E9D7BC; }
+        #brand[aria-current="page"] > span:last-child { text-decoration: underline 3px var(--c-tan); text-underline-offset: 8px; }
+        #brand:focus-visible, #logout-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 6px var(--c-focus); }
 
-        #nav { display: flex; gap: 0; align-self: stretch; }
+        /* Menu: tabs sit on the bottom edge of the bar. */
+        #nav { display: flex; gap: var(--sp-1); align-self: stretch; align-items: flex-end; margin-top: -8px; }
         .nav-btn {
+            position: relative;
             display: inline-flex;
-            flex-direction: column;
             align-items: center;
-            justify-content: center;
-            gap: 0;
-            height: 64px;
-            min-width: 112px;
+            gap: var(--sp-2);
+            height: 53px;
             padding: 0 var(--sp-4);
+            border-radius: 10px 10px 0 0;
             white-space: nowrap;
             font-size: var(--fs-md);
             font-weight: 400;
-            line-height: var(--lh-ui);
-            color: var(--c-text-2);
+            color: #EADFD2;                                     /* 10.9:1 on the brown */
             text-decoration: none;
             border: 0;
             background: transparent;
             box-shadow: none;
             transition: background .15s, color .15s;
         }
-        .nav-btn + .nav-btn { border-left: 1px solid var(--c-border); }
-        .nav-btn .ico { width: 22px; height: 22px; flex: none; color: var(--c-text-3); transition: color .15s; }
-        .nav-btn:hover { background: var(--c-surface-3); color: var(--c-text); box-shadow: inset 0 -4px 0 var(--c-tan); }
-        .nav-btn:hover .ico { color: var(--c-brand); }
+        .nav-btn .ico { width: var(--icon-md); height: var(--icon-md); flex: none; opacity: .9; }
+        .nav-btn:hover { background: var(--c-brand-hover); color: #fff; box-shadow: inset 0 -3px 0 var(--c-tan); }
+        .nav-btn:hover .ico { opacity: 1; }
         .nav-btn[aria-current="page"], .nav-btn[aria-current="page"]:hover {
-            background: var(--c-brand);
-            color: #fff;
+            background: #F7F3EE;
+            color: var(--c-brand);                              /* 11.57:1 */
             font-weight: 700;
-            border-left-color: var(--c-brand);
-            box-shadow: inset 0 -4px 0 var(--c-tan);
+            box-shadow: inset 0 3px 0 var(--c-tan);
         }
-        .nav-btn[aria-current="page"] + .nav-btn { border-left-color: var(--c-brand); }
-        .nav-btn[aria-current="page"] .ico { color: inherit; }
-        .nav-btn:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -3px; box-shadow: inset 0 0 0 5px #fff; }
-        .nav-btn[aria-current="page"]:focus-visible { box-shadow: inset 0 -4px 0 var(--c-tan), inset 0 0 0 5px #fff; }
+        .nav-btn[aria-current="page"] .ico { opacity: 1; }
+        /* Rounded "feet" so the current tab flows into the page. */
+        .nav-btn[aria-current="page"]::before,
+        .nav-btn[aria-current="page"]::after { content: ""; position: absolute; bottom: 0; width: 10px; height: 10px; pointer-events: none; }
+        .nav-btn[aria-current="page"]::before { left: -10px; background: radial-gradient(circle at 0 0, transparent 9.5px, #F7F3EE 10px); }
+        .nav-btn[aria-current="page"]::after { right: -10px; background: radial-gradient(circle at 100% 0, transparent 9.5px, #F7F3EE 10px); }
+        .nav-btn:focus-visible { outline: 2px solid #fff; outline-offset: -2px; box-shadow: inset 0 0 0 4px var(--c-focus); }
+        .nav-btn[aria-current="page"]:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -2px; box-shadow: inset 0 3px 0 var(--c-tan), inset 0 0 0 4px #fff; }
 
-        /* Windows high contrast: fills are dropped, so the current page keeps
-           a foot bar and an outline, hover an underline, focus a thick ring. */
+        /* Windows high contrast: fills and shadows drop out, so draw real lines. */
         @media (forced-colors: active) {
-            .nav-btn .ico { color: inherit; }
-            .nav-btn[aria-current="page"] { outline: 2px solid Highlight; outline-offset: -2px; border-bottom: 4px solid CanvasText; }
+            .nav-btn[aria-current="page"] { border: 2px solid CanvasText; border-bottom: 0; }
+            .nav-btn[aria-current="page"]::before, .nav-btn[aria-current="page"]::after { display: none; }
             .nav-btn:hover { text-decoration: underline; }
-            :is(#brand, .nav-btn, #logout-btn):focus-visible { outline: 3px solid CanvasText; outline-offset: -3px; }
+            :is(#brand, .nav-btn, #logout-btn, #skip-link):focus-visible { outline: 3px solid CanvasText; outline-offset: -3px; }
         }
 
         #header-actions { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); white-space: nowrap; }
@@ -376,7 +379,7 @@
             align-items: center;
             gap: var(--sp-2);
             font-size: var(--fs-sm);
-            color: var(--c-text-2);
+            color: #EADFD2;
         }
         /* A long LINE name is cut (the whole name is the tooltip); on a
            narrow window only the initial shows. */
@@ -386,14 +389,19 @@
             width: 32px; height: 32px;
             border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
-            background: var(--c-brand-soft);
-            border: 1px solid var(--c-border);
-            color: var(--c-text);
+            background: #F3ECE3;
+            border: 1px solid var(--c-tan);
+            color: var(--c-brand);
             font-weight: 700;
             font-size: var(--fs-sm);
         }
         #user-avatar:empty { display: none; }
         .sep { width: 1px; height: 24px; background: var(--c-border); }
+        #header .sep { background: rgba(255, 255, 255, .22); }
+        /* ออกจากระบบ on the brown bar: white words and outline. */
+        #logout-btn { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .6); }
+        #logout-btn:hover { background: var(--c-brand-hover); border-color: #fff; }
+        #logout-btn:active { background: var(--c-brand-active); }
         /* Secondary button (ออกจากระบบ): white, a 4.6:1 outline, brown words. */
         .btn-secondary {
             display: inline-flex;
