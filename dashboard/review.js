@@ -22,6 +22,14 @@
 ;
 (function () {
     "use strict";
+    // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
+    // a copy of lib/staff-names.ts). New saves already carry the Thai name;
+    // this covers rows saved before.
+    const STAFF_NAMES = { pongsit: "ปองสิทธิ์", dada: "กานดา" };
+    const staffName = (name) => {
+        const s = String(name == null ? "" : name).trim();
+        return STAFF_NAMES[s.toLowerCase()] || s;
+    };
     const view = document.getElementById("review-view");
     const body = document.getElementById("review-body");
     // The left column under the months: each side's summary and main
@@ -1691,8 +1699,9 @@
     }
     // The round's email to the auditor (Pong, 2026-11-12): sending a round
     // queues it and the always-on relay sends it within about a minute.
-    // ส่งอีเมล sends it (again) for a month sent before this existed, a
-    // failed email, or after a test; the SQL refuses once a real one went out.
+    // Pong, 2026-11-18: no ส่งอีเมล button after a send, since the email
+    // goes out by itself; the only button left is ส่งอีเมลอีกครั้ง after the
+    // relay gave up on a failed email. The SQL refuses once a real one went out.
     const roundEmails = (s, r) => (s.emails || []).filter((e) => e.round_id === r.id);
     function emailWaiting(s) {
         const r = liveRound(s);
@@ -1732,11 +1741,9 @@
         }
         else if (last && last.status === "sent" && last.test) {
             w.append(el("p", "rv-hint", "ส่งอีเมลทดสอบแล้ว " + when(last.sent_at) + (mail && !mail.test ? " · ยังไม่ได้ส่งจริง" : " · ถึงที่อยู่ทดสอบเท่านั้น")));
-            button = "ส่งอีเมล";
         }
         else {
             w.append(el("p", "rv-hint", "ยังไม่ได้ส่งอีเมลถึงผู้ตรวจสอบ"));
-            button = "ส่งอีเมล";
         }
         if (button) {
             const row = el("div", "rv-actions");
@@ -2333,7 +2340,7 @@
         const h = el("h2", "rv-card-h", "อนุมัติ " + shortMonth(s.month) + " แล้ว");
         h.id = "rv-h-pdf";
         c.setAttribute("aria-labelledby", h.id);
-        c.append(h, el("p", "rv-hint", when(r.approved_at) + " · รอบที่ " + r.round_no + (r.approved_by ? " · " + r.approved_by : "")));
+        c.append(h, el("p", "rv-hint", when(r.approved_at) + " · รอบที่ " + r.round_no + (r.approved_by ? " · " + staffName(r.approved_by) : "")));
         if (status === "ready") {
             const row = el("div", "rv-actions");
             const a = el("a", "rv-link", "เปิดเอกสารเบิกจ่าย PDF ");

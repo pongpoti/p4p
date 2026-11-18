@@ -28,6 +28,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 const fs   = require('fs') as typeof import('fs');
 const path = require('path') as typeof import('path');
+// Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18).
+const { staffName } = require('../lib/staff-names') as typeof import('../lib/staff-names');
 
 const BUCKET = 'review-files';
 const FONT_DIR = path.join(__dirname, '..', 'src', 'fonts');
@@ -229,9 +231,9 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
   const left_over = Math.round((d.budget - pay) * 100) / 100 || 0;   // || 0: never "-0"
   const balance = left_over < 0 ? `เกินงบ ${money(-left_over)} บาท` : `คงเหลือ ${money(left_over)} บาท`;
   const timeline = [
-    `ผู้จัดทำ ${esc(d.submittedBy || '—')} ส่งรอบที่ ${d.roundNo}: ${esc(thaiDateTime(d.submittedAt, true))}`,
-    d.reopenedAt ? `ผู้ตรวจสอบ ${esc(d.reopenedBy || '—')} ยกเลิกเอกสารเดิมและเปิดตรวจอีกครั้ง: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
-    `ผู้ตรวจสอบ ${esc(d.approvedBy || '—')} อนุมัติครบ: ${esc(thaiDateTime(d.approvedAt, true))}`,
+    `ผู้จัดทำ ${esc(staffName(d.submittedBy) || '—')} ส่งรอบที่ ${d.roundNo}: ${esc(thaiDateTime(d.submittedAt, true))}`,
+    d.reopenedAt ? `ผู้ตรวจสอบ ${esc(staffName(d.reopenedBy) || '—')} ยกเลิกเอกสารเดิมและเปิดตรวจอีกครั้ง: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
+    `ผู้ตรวจสอบ ${esc(staffName(d.approvedBy) || '—')} อนุมัติครบ: ${esc(thaiDateTime(d.approvedAt, true))}`,
   ].filter(Boolean).join(' · ');
 
   const cover = `<section class="page"><div class="body cover">

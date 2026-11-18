@@ -666,7 +666,7 @@ function dashSession(req: Request): { sub: string; name: string; exp: number } |
   if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000) return null
   // Re-checked on every request, so removing an id from the env var locks
   // that person out on the next deploy rather than when the cookie expires.
-  return DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: String(o.name || ""), exp: o.exp } : null
+  return DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: staffName(o.name), exp: o.exp } : null
 }
 // (Re)issues the session cookie with a fresh idle deadline, keeping the
 // absolute 12h expiry from sign-in.
@@ -705,6 +705,8 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 // (ADMIN_LINE_USER_ID, the single /admin/ user) can read it; the other
 // dashboard admins never see the tab and get 404 from its API.
 const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
+// LINE display names shown as the Thai names Pong set (lib/staff-names.ts).
+const { staffName } = require("./lib/staff-names") as typeof import("./lib/staff-names")
 // The ตรวจสอบ tab's ผู้จัดทำ (auditee) side, and the overview's งบ button:
 // every dashboard user who is not the owner (Pong, 2026-11-12: "Add Dada as
 // auditee"; Dada is the only other one). The owner has both sides.
@@ -756,7 +758,7 @@ app.get("/dashboard/login", async (req: Request, res: Response) => {
   const lapsed = readDash(parseCookies(req)[DASH_COOKIE])
   if (lapsed && DASHBOARD_LINE_USER_IDS.has(lapsed.sub)) {
     res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
-    await audit(req, { sub: lapsed.sub, name: String(lapsed.name || "") }, "session.idle")
+    await audit(req, { sub: lapsed.sub, name: staffName(lapsed.name) }, "session.idle")
   }
   const msg = DASH_LOGIN_ERRORS[String(req.query.error || "")]
   res.setHeader("Content-Type", "text/html; charset=utf-8")
@@ -815,8 +817,8 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
       await audit(req, { sub, name: String(v.data.name || "") }, "login.refused")
       return res.redirect(302, "/dashboard/login?error=not_allowed")
     }
-    setDashCookie(res, sub, v.data.name || "", Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
-    await audit(req, { sub, name: String(v.data.name || "") }, "login.success")
+    setDashCookie(res, sub, staffName(v.data.name), Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
+    await audit(req, { sub, name: staffName(v.data.name) }, "login.success")
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
     console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
@@ -831,7 +833,7 @@ app.post("/dashboard/logout", async (req: Request, res: Response) => {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
   if (o && DASHBOARD_LINE_USER_IDS.has(o.sub)) {
-    await audit(req, { sub: o.sub, name: String(o.name || "") }, req.query.reason === "idle" ? "session.idle" : "session.logout")
+    await audit(req, { sub: o.sub, name: staffName(o.name) }, req.query.reason === "idle" ? "session.idle" : "session.logout")
   }
   res.json({ ok: true })
 })

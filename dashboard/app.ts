@@ -5,6 +5,15 @@
 ;(function () {
     "use strict"
 
+    // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
+    // a copy of lib/staff-names.ts). New saves already carry the Thai name;
+    // this covers rows saved before.
+    const STAFF_NAMES: Record<string, string> = { pongsit: "ปองสิทธิ์", dada: "กานดา" }
+    const staffName = (name: unknown): string => {
+        const s = String(name == null ? "" : name).trim()
+        return STAFF_NAMES[s.toLowerCase()] || s
+    }
+
     // ── Desktop-only gate — the inverse of the LIFF pages' mobile gate ───
     const mobileBlock = document.getElementById("mobile-block") as HTMLElement
     if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
@@ -429,7 +438,7 @@
                 const li = el("li", "log-entry")
                 li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)))
                 const body = el("div", "log-body")
-                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + e.logged_by + ")" : "")))
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + staffName(e.logged_by) + ")" : "")))
                 if (e.note) body.appendChild(el("p", "note", e.note))
                 li.appendChild(body)
                 const del = el("button", "icon-btn log-delete") as HTMLButtonElement
@@ -777,7 +786,7 @@
     budgetN.addEventListener("input", paintBudget)
 
     const showBudgetMeta = (b: MonthBudget | null | undefined): void => {
-        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), b.updated_by || ""].filter(Boolean) : []
+        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), staffName(b.updated_by)].filter(Boolean) : []
         budgetMeta.textContent = bits.join(" · ")
         budgetMeta.classList.toggle("hidden", !bits.length)
     }
@@ -959,7 +968,7 @@
             case "followup.add":
             case "followup.delete":
                 add(monthLabel(t.month)); add(t.physician); add(CHANNEL_LABEL[t.channel as Channel])
-                if (a.action === "followup.delete" && t.logged_by) add("บันทึกโดย " + t.logged_by + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""))
+                if (a.action === "followup.delete" && t.logged_by) add("บันทึกโดย " + staffName(t.logged_by) + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""))
                 break
             case "login.refused":
                 add("LINE " + a.actor_line_id)
@@ -1085,8 +1094,8 @@
         const tr = el("tr", /\.(delete|reject)$/.test(a.action) || a.action === "login.refused" ? "warn"
             : /^(followup\.add|roster\.(add|edit)|access\.approve|review\.(inputs|submit)|staffing\.save)$/.test(a.action) ? "change" : "")
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)))
-        const who = el("td", "who", a.actor_name || "—")
-        who.title = a.actor_name
+        const who = el("td", "who", staffName(a.actor_name) || "—")
+        who.title = staffName(a.actor_name)
         tr.appendChild(who)
         tr.appendChild(el("td", "what", ACTION_LABEL[a.action] || a.action))
         tr.appendChild(auditDetail(a))
@@ -1140,7 +1149,7 @@
             // Keep the chosen person while refreshing the list of names.
             const chosen = auditActor.value
             auditActor.replaceChildren(el("option", undefined, "ทุกคน"), ...data.actors.map((p) => {
-                const o = el("option", undefined, p.name || p.id) as HTMLOptionElement
+                const o = el("option", undefined, staffName(p.name) || p.id) as HTMLOptionElement
                 o.value = p.id
                 return o
             }))
@@ -1957,7 +1966,7 @@
         sfDaily.value = String(d.daily)
         sfError.classList.add("hidden")
         sfMeta.textContent = d.updated_at
-            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), d.updated_by || ""].filter(Boolean).join(" · ")
+            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), staffName(d.updated_by)].filter(Boolean).join(" · ")
             : "ค่าตั้งต้นจากแผ่น" + (staffing ? staffing.source : "")
         sfMeta.classList.remove("hidden")
         paintStaffing()
