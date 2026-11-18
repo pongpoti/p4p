@@ -1110,8 +1110,10 @@ app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
   }
 })
 
-// ── รายชื่อ tab: the /admin/ roster editor, owner only ─────────────────────
-// Like ประวัติการใช้งาน, only the owner (Pong) may use it; anyone else gets 404.
+// ── รายชื่อ tab: the /admin/ roster editor ─────────────────────────────────
+// Every dashboard user may read it (Pong, 2026-11-18: กานดา gets the tab
+// "but disable edit / delete"); adding, editing, deleting and the access
+// requests stay with the owner (Pong), and anyone else gets 404 there.
 // Same reads and writes as the /admin/ routes below (service key, the month
 // must be a live roster table, the body is filtered to real non-PK columns),
 // behind the dashboard session instead of the /admin/ cookie. Every write is
@@ -1135,7 +1137,6 @@ app.get("/dashboard/api/roster", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
     res.json({ tables: tables.slice().sort().reverse() })
@@ -1150,7 +1151,6 @@ app.get("/dashboard/api/roster/:table", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  if (!isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
   try {
     const table = await dashRosterTable(req, res)
     if (!table) return

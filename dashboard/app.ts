@@ -244,7 +244,7 @@
     // for bookmarks. (The code and API still say "audit".)
     if (location.hash === "#audit") history.replaceState(null, "", "#history")
     const currentView = (): string =>
-        location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
+        location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
             : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : location.hash === "#staffing" ? "staffing"
             : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview"
@@ -1194,7 +1194,10 @@
         void loadAudit()
     })
 
-    // ── รายชื่อ: the LINE /admin/ roster editor (owner only) ─────────────
+    // ── รายชื่อ: the LINE /admin/ roster editor ──────────────────────────
+    // Every dashboard user sees the list; only the owner gets add, edit,
+    // delete and the access requests (Pong, 2026-11-18: กานดา "access, but
+    // disable edit / delete"). The server refuses those to anyone else too.
     // Same data and rules as admin/app.ts: one month table at a time
     // (newest first, this month by default), search by name or department,
     // a department filter, add / edit / delete a row, and the access
@@ -1311,7 +1314,7 @@
 
     const rosterEmpty = (text: string, cls?: string): HTMLElement => {
         const tr = emptyRow(text, cls)
-        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", "7")
+        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", isOwner ? "7" : "6")
         return tr
     }
     const rosterRow = (r: RowRecord, no: number): HTMLElement => {
@@ -1331,6 +1334,7 @@
         tr.appendChild(kindTd)
         tr.appendChild(el("td", "score", fmtScore(r.score)))
         tr.appendChild(el("td", "sent" + (r.submitted_at ? "" : " none"), r.submitted_at ? fmtWhen(r.submitted_at) : "ยังไม่ส่ง"))
+        if (!isOwner) return tr
         const acts = el("td", "acts")
         const edit = el("button", "icon-btn") as HTMLButtonElement
         edit.type = "button"
@@ -1414,7 +1418,7 @@
         const seq = ++rosterSeq
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"))
         rosterWrap.scrollTop = 0
-        void loadRequests()
+        if (isOwner) void loadRequests()
         try {
             if (!rosterTables) {
                 const t: { tables: string[] } = await rosterApi("/dashboard/api/roster")
@@ -1519,7 +1523,7 @@
         const first = rosterFields.querySelector<HTMLInputElement>(row ? '[data-col="firstname"]' : '[data-col="prefix"]')
         if (first) first.focus()
     }
-    rosterAdd.addEventListener("click", () => openRosterForm(null))
+    rosterAdd.addEventListener("click", () => { if (isOwner) openRosterForm(null) })
 
     const collectRoster = (): RowRecord => {
         const out: RowRecord = {}
@@ -2062,7 +2066,15 @@
                 // review.js reads this before drawing: ผู้จัดทำ only, no switch.
                 if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
                 auditNav.classList.toggle("hidden", !isOwner)
-                rosterNav.classList.toggle("hidden", !isOwner)
+                rosterNav.classList.remove("hidden")
+                // รายชื่อ read-only: no add, no access requests, no edit column.
+                if (!isOwner) {
+                    rosterAdd.remove()
+                    reqBtn.remove()
+                    const rt = rosterRows.closest("table") as HTMLTableElement
+                    rt.querySelector("col.c-act")?.remove()
+                    rt.tHead!.rows[0].lastElementChild?.remove()
+                }
                 reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee)
             }
         } catch (e) {

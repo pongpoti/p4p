@@ -218,7 +218,7 @@
     // for bookmarks. (The code and API still say "audit".)
     if (location.hash === "#audit")
         history.replaceState(null, "", "#history");
-    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
+    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
         : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : location.hash === "#staffing" ? "staffing"
                 : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview";
@@ -1384,7 +1384,7 @@
     const fromLocalInput = (v) => new Date(v + ":00+07:00").toISOString();
     const rosterEmpty = (text, cls) => {
         const tr = emptyRow(text, cls);
-        tr.firstElementChild.setAttribute("colspan", "7");
+        tr.firstElementChild.setAttribute("colspan", isOwner ? "7" : "6");
         return tr;
     };
     const rosterRow = (r, no) => {
@@ -1404,6 +1404,8 @@
         tr.appendChild(kindTd);
         tr.appendChild(el("td", "score", fmtScore(r.score)));
         tr.appendChild(el("td", "sent" + (r.submitted_at ? "" : " none"), r.submitted_at ? fmtWhen(r.submitted_at) : "ยังไม่ส่ง"));
+        if (!isOwner)
+            return tr;
         const acts = el("td", "acts");
         const edit = el("button", "icon-btn");
         edit.type = "button";
@@ -1483,7 +1485,8 @@
         const seq = ++rosterSeq;
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"));
         rosterWrap.scrollTop = 0;
-        void loadRequests();
+        if (isOwner)
+            void loadRequests();
         try {
             if (!rosterTables) {
                 const t = await rosterApi("/dashboard/api/roster");
@@ -1601,7 +1604,8 @@
         if (first)
             first.focus();
     };
-    rosterAdd.addEventListener("click", () => openRosterForm(null));
+    rosterAdd.addEventListener("click", () => { if (isOwner)
+        openRosterForm(null); });
     const collectRoster = () => {
         const out = {};
         for (const input of Array.from(rosterFields.querySelectorAll("[data-col]"))) {
@@ -2137,6 +2141,7 @@
         }
     });
     (async function main() {
+        var _a, _b;
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" });
             if (r.status === 401) {
@@ -2155,7 +2160,15 @@
                 if (reviewAuditee)
                     document.body.dataset.reviewSide = "auditee";
                 auditNav.classList.toggle("hidden", !isOwner);
-                rosterNav.classList.toggle("hidden", !isOwner);
+                rosterNav.classList.remove("hidden");
+                // รายชื่อ read-only: no add, no access requests, no edit column.
+                if (!isOwner) {
+                    rosterAdd.remove();
+                    reqBtn.remove();
+                    const rt = rosterRows.closest("table");
+                    (_a = rt.querySelector("col.c-act")) === null || _a === void 0 ? void 0 : _a.remove();
+                    (_b = rt.tHead.rows[0].lastElementChild) === null || _b === void 0 ? void 0 : _b.remove();
+                }
                 reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee);
             }
         }
