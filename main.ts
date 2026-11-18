@@ -1142,9 +1142,10 @@ function sendJoinPage(res: Response, card: string, refresh = false, status = 200
   res.setHeader("Cache-Control", "no-store")
   res.setHeader("Referrer-Policy", "no-referrer")
   res.setHeader("X-Robots-Tag", "noindex")
+  // Function replacers: a "$&" or "$'" in a LINE display name stays text.
   res.status(status).send(dashboardJoinTemplate
-    .replace("__JOIN_REFRESH__", refresh ? '<meta http-equiv="refresh" content="5">' : "")
-    .replace("__JOIN_BODY__", '<section class="card">' + card + "</section>"))
+    .replace("__JOIN_REFRESH__", () => (refresh ? '<meta http-equiv="refresh" content="5">' : ""))
+    .replace("__JOIN_BODY__", () => '<section class="card">' + card + "</section>"))
 }
 const joinError = (res: Response, e: string): void => {
   const msg = JOIN_MESSAGES[e] || JOIN_MESSAGES.invalid
