@@ -233,6 +233,7 @@
     let canBudget = false
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false
+    let sessionKnown = false
     // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
     let reviewAuditee = false
     const auditView = document.getElementById("audit-view") as HTMLElement
@@ -243,11 +244,23 @@
     // ประวัติการใช้งาน is #history; #audit is its old address, kept working
     // for bookmarks. (The code and API still say "audit".)
     if (location.hash === "#audit") history.replaceState(null, "", "#history")
+    // Until the session call answers, #review and #history stay what they
+    // ask for (the tab's frame, empty), not ภาพรวม for a moment; the call
+    // then decides, as before.
     const currentView = (): string =>
         location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
-            : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
+            : location.hash === "#review" && (isOwner || reviewAuditee || !sessionKnown) ? "review"
             : location.hash === "#staffing" ? "staffing"
-            : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview"
+            : (location.hash === "#history" || location.hash === "#audit") && (isOwner || !sessionKnown) ? "audit" : "overview"
+    // The nav's current tile, alone: it paints before the tab is drawn.
+    const markNav = (view: string): void => {
+        for (const a of navBtns) {
+            const on = a.dataset.view === view
+            a.classList.toggle("active", on)
+            if (on) a.setAttribute("aria-current", "page")
+            else a.removeAttribute("aria-current")
+        }
+    }
     // ตรวจสอบ is drawn by review.js, which listens for this.
     const showReview = (): void => { window.dispatchEvent(new CustomEvent("dashboard:review")) }
     const render = (): void => {
@@ -257,12 +270,9 @@
         staffingView.classList.toggle("hidden", view !== "staffing")
         rosterView.classList.toggle("hidden", view !== "roster")
         reviewView.classList.toggle("hidden", view !== "review")
-        for (const a of navBtns) {
-            const on = a.dataset.view === view
-            a.classList.toggle("active", on)
-            if (on) a.setAttribute("aria-current", "page")
-            else a.removeAttribute("aria-current")
-        }
+        // The two looks (index.html): ภาพรวม and ตามส่ง, or the rest.
+        document.body.classList.toggle("cards-view", !audit)
+        markNav(view)
         titleEl.textContent = view === "roster" && !isOwner ? "รายชื่อ — รายชื่อแพทย์รายเดือน (ดูอย่างเดียว)" : TITLES[view]
         if (audit) {
             monthsEl.classList.add("hidden")
@@ -295,15 +305,24 @@
     // Switch at once with the counts already loaded; ตามส่ง then refreshes
     // them in the background (the server is a slow round trip away).
     // Each tab visit is logged for the owner (?view=), so ภาพรวม reloads too.
+    // The tile pressed turns brown at once; the tab is drawn in the next
+    // task, after that paint (2026-11-18: un-hiding ตรวจสอบ's long page in
+    // the same frame held the tile back ~140 ms).
+    let navSeq = 0
     window.addEventListener("hashchange", () => {
         if (location.hash === "#audit") history.replaceState(null, "", "#history")
-        render()
-        const view = currentView()
-        if (view === "audit") void loadAudit()
-        else if (view === "roster") void loadRoster(true)
-        else if (view === "review") showReview()
-        else if (view === "staffing") void loadStaffing(true)
-        else void loadOverview(view)
+        markNav(currentView())
+        const seq = ++navSeq
+        requestAnimationFrame(() => setTimeout(() => {
+            if (seq !== navSeq) return
+            render()
+            const view = currentView()
+            if (view === "audit") void loadAudit()
+            else if (view === "roster") void loadRoster(true)
+            else if (view === "review") showReview()
+            else if (view === "staffing") void loadStaffing(true)
+            else void loadOverview(view)
+        }, 0))
     })
     render()
 
@@ -1361,9 +1380,33 @@
         return tr
     }
 
+    // Every row of the month is drawn once, in name order; a search or a
+    // กลุ่มงาน filter only hides rows and renumbers the ones shown, so a
+    // key or a pick does not build 230 rows again (2026-11-18).
+    let rosterDrawn: RowRecord[] | null = null
+    let rosterTrs = new Map<RowRecord, HTMLElement>()
+    let rosterNone: HTMLElement | null = null
     const showRoster = (): void => {
-        rosterRows.replaceChildren(...(rosterShown.length ? rosterShown.map((r, i) => rosterRow(r, i + 1))
-            : [rosterEmpty(rosterAll.length ? "ไม่พบรายชื่อที่ค้นหา" : "ยังไม่มีรายชื่อในเดือนนี้")]))
+        if (!rosterAll.length) { rosterDrawn = null; rosterRows.replaceChildren(rosterEmpty("ยังไม่มีรายชื่อในเดือนนี้")); return }
+        if (rosterDrawn !== rosterAll || !rosterNone || rosterNone.parentNode !== rosterRows) {
+            const order = [...rosterAll].sort((a, b) => thCmp(sortName(a), sortName(b)))
+            const trs = new Map<RowRecord, HTMLElement>()
+            for (const r of order) trs.set(r, rosterTrs.get(r) || rosterRow(r, 0))
+            rosterTrs = trs
+            rosterNone = rosterEmpty("ไม่พบรายชื่อที่ค้นหา")
+            rosterRows.replaceChildren(...trs.values(), rosterNone)
+            rosterDrawn = rosterAll
+        }
+        const no = new Map<RowRecord, number>()
+        rosterShown.forEach((r, i) => no.set(r, i + 1))
+        for (const [r, tr] of rosterTrs) {
+            const n = no.get(r)
+            const hide = n === undefined
+            if (tr.classList.contains("hidden") !== hide) tr.classList.toggle("hidden", hide)
+            const cell = tr.firstElementChild
+            if (n !== undefined && cell && cell.textContent !== String(n)) cell.textContent = String(n)
+        }
+        rosterNone.classList.toggle("hidden", rosterShown.length > 0)
     }
 
     const populateDept = (): void => {
@@ -1378,13 +1421,16 @@
         rosterDept.value = present.includes(chosen) ? chosen : ""
     }
 
+    // One Thai collator for every sort (localeCompare with a locale builds
+    // one per call: slow on 230 names).
+    const thCmp = new Intl.Collator("th").compare
     const applyRosterFilter = (): void => {
         const q = rosterSearch.value.trim().toLowerCase()
         const dept = rosterDept.value
         rosterShown = rosterAll.filter((r) => {
             if (dept && r.department !== dept) return false
             return !q || (fullName(r) + " " + (r.department || "")).toLowerCase().includes(q)
-        }).sort((a, b) => sortName(a).localeCompare(sortName(b), "th"))
+        }).sort((a, b) => thCmp(sortName(a), sortName(b)))
         rosterCount.textContent = fmtNum(rosterShown.length) + " จาก " + fmtNum(rosterAll.length) + " คน"
         showRoster()
     }
@@ -1458,8 +1504,15 @@
     }
 
     rosterMonth.addEventListener("change", () => { rosterDept.value = ""; void loadRoster(true) })
-    rosterSearch.addEventListener("input", () => { applyRosterFilter(); rosterWrap.scrollTop = 0 })
-    rosterDept.addEventListener("change", () => { applyRosterFilter(); rosterWrap.scrollTop = 0 })
+    // Typing redraws the list once the keys pause (as ตรวจสอบ's search
+    // does), so each key shows at once (2026-11-18).
+    let rosterSearchT: number | undefined
+    const filterRosterNow = (): void => { clearTimeout(rosterSearchT); rosterSearchT = undefined; applyRosterFilter(); rosterWrap.scrollTop = 0 }
+    rosterSearch.addEventListener("input", () => {
+        clearTimeout(rosterSearchT)
+        rosterSearchT = window.setTimeout(filterRosterNow, rosterSearch.value ? 180 : 0)
+    })
+    rosterDept.addEventListener("change", filterRosterNow)
 
     // ── Add / edit one row ──
     let rosterEditing: RowRecord | null = null
@@ -2088,6 +2141,7 @@
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
         }
+        sessionKnown = true
         // รายชื่อ: เพิ่มรายชื่อ and คำขอเข้าใช้งาน start hidden (index.html) and
         // appear for the owner only; anyone else, or a failed session call,
         // gets the read-only table without its edit/delete column.

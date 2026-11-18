@@ -77,11 +77,27 @@
         }
         render();
     }
+    // A filter pressed shows as pressed at once; the list it picks (up to
+    // 230 rows) is drawn after that paint, so the press is never left
+    // without an answer while the rows are worked out (2026-11-18).
+    let filterSeq = 0;
+    function pressFirst(b, go) {
+        const g = b.parentElement;
+        if (g)
+            for (const x of Array.from(g.children))
+                if (x instanceof HTMLElement && x.hasAttribute("aria-pressed"))
+                    x.setAttribute("aria-pressed", String(x === b));
+        const seq = ++filterSeq;
+        requestAnimationFrame(() => setTimeout(() => { if (seq === filterSeq)
+            go(); }, 0));
+    }
     // Layout reads (where the bars stick, scrolling the panel into place)
     // wait for the next frame, so a click's own work ends sooner and the
     // browser lays the page out once (2026-11-18).
     let frameWork;
     let wantSpot = false;
+    // A note to scroll into the person panel's view once it is drawn.
+    let revealId = "";
     function afterFrame(spot = false) {
         if (spot)
             wantSpot = true;
@@ -94,8 +110,26 @@
                 wantSpot = false;
                 toWorkingSpot();
             }
+            const n = revealId ? document.getElementById(revealId) : null;
+            if (n) {
+                revealId = "";
+                inPanelView(n);
+            }
+            else if (boxFor && boxFor === selected) {
+                const box = body.querySelector(".rv-person .rv-remark-box");
+                if (box)
+                    inPanelView(box);
+            }
         });
     }
+    // The person whose remark box was opened with them: kept above the
+    // decide row while their detail arrives and moves things, until the
+    // auditor scrolls or presses in the panel themselves.
+    let boxFor = "";
+    const handsOn = (ev) => { if (ev.target instanceof Element && ev.target.closest(".rv-person"))
+        boxFor = ""; };
+    for (const t of ["wheel", "touchstart", "pointerdown", "keydown"])
+        document.addEventListener(t, handsOn, { capture: true, passive: true });
     const monthBox = document.getElementById("review-months");
     const roleBtns = Array.from(document.querySelectorAll("#review-role button"));
     const live = document.getElementById("review-live");
@@ -352,7 +386,24 @@
     }
     // A step's follow-up loading: its button spins, the notes stay.
     const holdBusy = (s, spot) => { inflight.add(flightKey(s, spot)); };
-    const end = (s, spot) => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true; };
+    const end = (s, spot) => {
+        inflight.delete(flightKey(s, spot));
+        pressedFor.delete(flightKey(s, spot));
+        dirty = true;
+        for (const f of idleWaiters.splice(0))
+            f();
+    };
+    // ผู้จัดทำ's score edits and answers still being saved for a month: the
+    // send waits for them, so a round never goes without one (2026-11-18).
+    const idleWaiters = [];
+    const sideSaving = (m) => Array.from(inflight).some((k) => k.startsWith(m + "|score-") || k.startsWith(m + "|answer-"));
+    const whenSideSaved = (m) => new Promise((res) => {
+        const check = () => { if (sideSaving(m))
+            idleWaiters.push(check);
+        else
+            res(); };
+        check();
+    });
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text, id, retry) {
         const box = el("div", "rv-fail");
@@ -634,12 +685,20 @@
         rowsSeq++;
         editing = "";
         moreOpen = false;
+        // A failed decision save's note stays through the switch (the row
+        // it put back is in the month kept), naming its month when it is
+        // not the one shown.
+        const failTop = notes.get("top");
         drafts.clear();
         fieldErrs.clear();
         notes.clear();
         draftScope = "";
         remarkOpen.clear();
         kept.clear();
+        if (failTop && failTop.fail && failTop.failSeq !== undefined) {
+            const f = failTop.fail;
+            notes.set("top", { kind: "err", text: f.m === month ? f.text : "เดือน " + monthName(f.m) + ": " + f.text, failSeq: failTop.failSeq, fail: f });
+        }
         pl = null;
         lc = null;
         moreBox = null;
@@ -987,6 +1046,10 @@
         const viewTop = view.scrollTop;
         const list = body.querySelector(".rv-people-list");
         const listTop = list ? list.scrollTop : 0;
+        // The person panel is drawn new: the same person keeps its scroll.
+        const per = body.querySelector(".rv-person");
+        const perTop = per ? per.scrollTop : 0;
+        const perWho = selected;
         refreshLists(s);
         const top = [];
         if (loadError)
@@ -1005,6 +1068,9 @@
         const list2 = body.querySelector(".rv-people-list");
         if (list2 && list2 !== list && listTop)
             list2.scrollTop = listTop;
+        const per2 = perTop && selected === perWho ? body.querySelector(".rv-person") : null;
+        if (per2 && per2 !== per)
+            per2.scrollTop = perTop;
         if (inBody) {
             const f = focusId ? document.getElementById(focusId) : null;
             if (f && document.activeElement !== f)
@@ -1194,6 +1260,9 @@
         if (req) {
             const p = el("p", "rv-progress", q2text(req));
             row.append(p);
+            // Said here, not under the table, so the table keeps its rows.
+            if (s.build && auditeeTurn(s))
+                row.append(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"));
         }
         else {
             const link = (text, id, url) => {
@@ -1400,7 +1469,11 @@
             b.append(n);
             b.type = "button";
             b.id = "rv-flt-" + k;
-            b.addEventListener("click", () => { aFilter = k; render(); say(t + " " + int((rows || []).filter(f).length) + " คน"); });
+            b.addEventListener("click", () => {
+                aFilter = k;
+                pressFirst(b, () => { if (st)
+                    render(); say(t + " " + int((rows || []).filter(f).length) + " คน"); });
+            });
             fl.append(b);
             flt.set(k, { b, n });
         }
@@ -1587,7 +1660,8 @@
         // Long enough to need it: the table gives up height to fit the
         // window (a short one keeps its own height; .rv-fill has a floor).
         c.classList.toggle("rv-fill", shown.length > 3);
-        if (openRequest(s) || all.some(pending))
+        // While a build runs this is said in the left column, by its progress.
+        if (!openRequest(s) && all.some(pending))
             kids.push(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"));
         const n = noteEl("score");
         if (n)
@@ -1865,14 +1939,14 @@
             send.setAttribute("aria-disabled", "true");
             send.setAttribute("aria-describedby", reason.id);
         }
-        if (flying(s, "send"))
+        if (flying(s, "send") || savesWait === send.id)
             markBusy(send);
         send.addEventListener("click", () => {
             if (why.length) {
                 say("ยังส่งไม่ได้: " + why.join(" · "));
                 return;
             }
-            openConfirm(s, next);
+            afterSaves(send, () => openConfirm(s, next), () => sideSaving(s.month), () => whenSideSaved(s.month));
         });
         bar.append(send, reason);
         return bar;
@@ -2264,8 +2338,24 @@
             if (c)
                 c.focus();
         });
+        // Tab out of it closes it too (open, it covers the search under it).
+        w.addEventListener("focusout", (ev) => {
+            const to = ev.relatedTarget;
+            if (!mailOpen || !(to instanceof Node) || w.contains(to) || confirmDlg.contains(to))
+                return;
+            mailOpen = false;
+            renderSoon();
+        });
         return w;
     }
+    // Esc closes it wherever the focus is.
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape" || !mailOpen || ev.defaultPrevented || document.querySelector("dialog[open]"))
+            return;
+        mailOpen = false;
+        if (st)
+            render();
+    });
     document.addEventListener("click", (ev) => {
         if (!mailOpen || confirmDlg.open)
             return;
@@ -2734,6 +2824,7 @@
         }
         else if (c.fix > 0 || openIssues > 0) {
             btn.textContent = "ส่งกลับให้ผู้จัดทำแก้";
+            btn.dataset.step = "return";
             why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน" + others;
             btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน" + others),
@@ -2742,6 +2833,7 @@
         }
         else {
             btn.textContent = "อนุมัติทั้งหมด";
+            btn.dataset.step = "approve";
             why.textContent = "อนุมัติครบ " + int(c.approve) + " คน";
             btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
@@ -2758,24 +2850,28 @@
     // waits for every decision still being saved (2026-11-18), so nothing
     // is sent with one unsaved. The button spins meanwhile, then is pressed
     // again as drawn from the saved names (a failed save may have put
-    // someone back to รอตรวจ).
+    // someone back to รอตรวจ), but only when it is still the same step:
+    // a failed save can turn ส่งกลับ into อนุมัติทั้งหมด (or back), and a
+    // step not pressed never opens by itself; the failure note says why.
     let savesWait = "";
-    function afterSaves(btn, go) {
-        if (!flights.size) {
+    function afterSaves(btn, go, busyNow = () => flights.size > 0, wait = settled) {
+        if (!busyNow()) {
             go();
             return;
         }
         if (savesWait)
             return;
         savesWait = btn.id;
+        const step = btn.dataset.step || "";
+        const m = month;
         markBusy(btn);
-        void settled().then(() => {
+        void wait().then(() => {
             savesWait = "";
             if (!st || view.classList.contains("hidden"))
                 return;
             render();
             const b = document.getElementById(btn.id);
-            if (b && b.getAttribute("aria-disabled") !== "true")
+            if (b && month === m && (b.dataset.step || "") === step && b.getAttribute("aria-disabled") !== "true")
                 b.click();
         });
     }
@@ -3227,13 +3323,15 @@
             b.addEventListener("click", () => {
                 filter = st.key;
                 kept.clear();
-                // The panel follows: the first of the group when the person
-                // on screen is not in it.
-                const list = visiblePeople();
-                if (list.length && !list.some((x) => x.index === selected))
-                    selected = list[0].index;
-                render();
-                say(st.label + " " + int((people || []).filter(st.test).length) + " คน");
+                pressFirst(b, () => {
+                    // The panel follows: the first of the group when the
+                    // person on screen is not in it.
+                    const list = visiblePeople();
+                    if (list.length && !list.some((x) => x.index === selected))
+                        selected = list[0].index;
+                    render();
+                    say(st.label + " " + int((people || []).filter(st.test).length) + " คน");
+                });
             });
             tilesBox.append(b);
             tiles.set(st.key, { b, n });
@@ -3506,7 +3604,27 @@
         const fin = body.querySelector(".rv-finish");
         const top = wrap.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
         view.scrollTop = Math.max(0, top - (fin ? fin.offsetHeight : 0) - 10);
+        // A remark box open with the person (the only way on for a
+        // ไม่ตรงกัน) is not left under the pinned decide row.
+        const box = body.querySelector(".rv-person .rv-remark-box");
+        boxFor = box ? selected : "";
+        if (box)
+            inPanelView(box);
         markStuck();
+    }
+    // Scrolls the person panel (only it) the least that brings el above
+    // the pinned decide row, never past the panel's top.
+    function inPanelView(t) {
+        const panel = t.closest(".rv-person");
+        if (!panel || panel.scrollHeight <= panel.clientHeight + 1)
+            return;
+        const row = panel.querySelector(".rv-decide-row");
+        const pr = panel.getBoundingClientRect();
+        const r = t.getBoundingClientRect();
+        const floor = (row ? row.getBoundingClientRect().top : pr.bottom) - 8;
+        const by = Math.min(r.bottom - floor, r.top - pr.top - 8);
+        if (by > 0)
+            panel.scrollTop += by;
     }
     // The counts bar's height (it wraps on narrow windows) sets where the
     // people list and the decision row stick, and how much of the top a
@@ -3519,19 +3637,21 @@
         // Rounded down: clientHeight can round a fractional height up (a
         // zoomed window), and the half pixel over would bring a scrollbar.
         const vh = Math.floor(view.getBoundingClientRect().height) + "px";
-        const foot = body.querySelector(".rv-decide-foot");
-        const padB = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
+        // What sits above the names and the person (a note, a failure box)
+        // comes off their height, so the decide row stays in the window.
+        const wrap = body.querySelector(":scope > .rv-review");
+        const above = (wrap ? Math.max(0, Math.round(wrap.getBoundingClientRect().top - body.getBoundingClientRect().top)) : 0) + "px";
         const vs = view.style;
         if (vs.getPropertyValue("--rv-fin") !== h + "px")
             vs.setProperty("--rv-fin", h + "px");
         if (vs.getPropertyValue("--rv-view-h") !== vh)
             vs.setProperty("--rv-view-h", vh);
-        // Focus never lands under the counts bar at the top or the
-        // buttons bar pinned at the bottom.
+        if (vs.getPropertyValue("--rv-above") !== above)
+            vs.setProperty("--rv-above", above);
+        // Focus never lands under the counts bar at the top (the decide
+        // row's own room is kept by markStuck).
         if (vs.scrollPaddingTop !== h + 10 + "px")
             vs.scrollPaddingTop = h + 10 + "px";
-        if (vs.scrollPaddingBottom !== padB)
-            vs.scrollPaddingBottom = padB;
         markStuck(true);
         syncSide();
     }
@@ -3565,6 +3685,11 @@
         const nav = bar.querySelector(".rv-decide-nav");
         if (btns && nav && nav.offsetTop > btns.offsetTop + 4)
             bar.classList.add("tight");
+        // Focus never lands under the pinned row, whatever its height now
+        // (it wraps on narrower windows).
+        const padB = bar.offsetHeight + 10 + "px";
+        if (panel && panel.style.scrollPaddingBottom !== padB)
+            panel.style.scrollPaddingBottom = padB;
     }
     view.addEventListener("scroll", () => markStuck(), { passive: true });
     window.addEventListener("resize", syncStick);
@@ -3725,10 +3850,6 @@
             keysBox.append(keys);
         }
         bar.append(btns, who, keysBox, nav);
-        // A failed save shows in the row, which is on screen even when pinned.
-        const n = noteEl(spot);
-        if (n)
-            bar.append(n);
         out.push(bar);
         const why = el("div", "rv-decide-hint");
         why.id = "rv-approve-why";
@@ -3846,6 +3967,11 @@
             box.append(lab, line, err);
             out.push(box);
         }
+        // A failed save shows just above the pinned row (not in it, so the
+        // row keeps its height); it is scrolled into view when it comes.
+        const n = noteEl(spot);
+        if (n)
+            out.push(n);
         return out;
     }
     // Load one person's detail once (only the score row's name is used now).
@@ -3954,8 +4080,12 @@
         p.decision = decision;
         p.remark = rem;
         p.carried = false;
-        forget(s, "remark:" + index);
-        fieldErrs.delete("remark:" + index);
+        // The typed remark stays a draft until the server has it (a failed
+        // save gives it back); only its error goes now.
+        const draftKey = "remark:" + index;
+        const typed = decision === "fix" ? remark : "";
+        const draftAtPress = drafts.get(draftKey);
+        fieldErrs.delete(draftKey);
         notes.delete(spot);
         if (decision !== "fix")
             remarkOpen.delete(index);
@@ -3987,8 +4117,19 @@
         const run = before.then(() => post(monthApi(s) + "/decisions/" + index, { decision, remark }, "PUT")).then(() => {
             pendBase.set(key, { decision, remark: rem, carried: false });
             const e = pend.get(key);
-            if (e && e.seq === seq)
+            if (e && e.seq === seq) {
                 e.done = performance.now();
+                // Saved: the draft goes, unless more was typed since.
+                if (m === month && drafts.get(draftKey) === draftAtPress)
+                    drafts.delete(draftKey);
+            }
+            // A failed save's note at the top goes with the next save that
+            // works after it.
+            const t = notes.get("top");
+            if (m === month && t && t.failSeq !== undefined && t.failSeq < seq) {
+                notes.delete("top");
+                renderSoon();
+            }
         }, (err) => {
             if (signedOut(err))
                 return;
@@ -4005,10 +4146,33 @@
                 cur.remark = b.remark;
                 cur.carried = b.carried;
             }
-            // Shown in the person's decision row while they are open, else at the top.
-            tell(s, m === month && selected === index ? spot : "top", "err", name + ": " + errText(err, "บันทึกไม่สำเร็จ"));
-            if (m === month)
-                renderSoon();
+            // What was typed comes back in the box, open.
+            if (m === month && typed.trim()) {
+                if (!drafts.has(draftKey) || drafts.get(draftKey) === "")
+                    drafts.set(draftKey, typed);
+                remarkOpen.add(index);
+            }
+            // Shown above the person's decision row while they are open,
+            // else at the top (until a later save works).
+            const here = m === month && selected === index;
+            tell(s, here ? spot : "top", "err", name + ": " + errText(err, "บันทึกไม่สำเร็จ"));
+            if (here)
+                revealId = noteId(spot);
+            else {
+                const t = notes.get("top");
+                if (t) {
+                    t.failSeq = decSeq;
+                    t.fail = { m, text: name + ": " + errText(err, "บันทึกไม่สำเร็จ") };
+                }
+            }
+            // No clear answer (no connection, a server error): the save may
+            // have gone through, so the names are read again; saves still on
+            // their way keep their result.
+            const status = err instanceof ApiError ? err.status : 0;
+            const r2 = st && st.month === m ? liveRound(st) : null;
+            if (m === month && st && r2 && (status === 0 || status >= 500))
+                void loadPeople(st, r2);
+            renderSoon();
         });
         const tail = run.finally(() => {
             flights.delete(tail);
