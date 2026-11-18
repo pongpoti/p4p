@@ -1226,16 +1226,25 @@
             row.append(kv("งบประมาณ (บาท)", baht(inp.budget)), kv("จำนวนแพทย์ (N)", inp.doctors ? int(inp.doctors) : "–"), kv(en("per P4P"), baht(inp.per_p4p)));
             c.append(row);
         }
-        // Only the admin (owner) has the งบ button (Pong, 2026-11-17): the
-        // ผู้จัดทำ sees the numbers, or that the admin has yet to type them.
+        // The owner and the ผู้จัดทำ have the ข้อมูล button (Pong,
+        // 2026-11-18): a ผู้ตรวจสอบ alone sees the numbers, or that the
+        // ผู้จัดทำ has yet to type them.
         if (!set)
-            c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (auditeeOnly() ? " (ผู้ดูแลระบบกรอก)" : "")));
-        if (!auditeeOnly()) {
-            // Typed already: a quiet link; not yet: the button to go and type them.
-            const go = el("a", set ? "rv-link" : "btn-primary rv-go");
-            go.append(el("span", undefined, set ? "แก้ที่หน้าภาพรวม" : "กรอกที่หน้าภาพรวม"), iconEl("arrow-right"));
+            c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (auditorOnly() ? " (ผู้จัดทำกรอก)" : "")));
+        const a = s.alloc;
+        if (a && a.installed) {
+            c.append(el("p", a.uploaded && !a.without ? "rv-hint" : "rv-none", !a.uploaded
+                ? "ยังไม่ได้อัปโหลดเอกสารจัดสรร"
+                : a.without ? "เอกสารจัดสรร: ยังไม่มีเลข " + int(a.without) + " คน"
+                    : "เอกสารจัดสรร: มีเลขครบ " + int(a.roster) + " คน"));
+        }
+        if (!auditorOnly()) {
+            // All in already: a quiet link; not yet: the button to go and add them.
+            const done = set && (!a || !a.installed || (a.uploaded && !a.without));
+            const go = el("a", done ? "rv-link" : "btn-primary rv-go");
+            go.append(el("span", undefined, done ? "แก้ที่ปุ่มข้อมูล หน้าภาพรวม" : "กรอกที่ปุ่มข้อมูล หน้าภาพรวม"), iconEl("arrow-right"));
             go.href = "/dashboard/#overview";
-            if (set) {
+            if (done) {
                 const r = el("div", "rv-go-row");
                 r.append(go);
                 c.append(r);
@@ -1906,8 +1915,18 @@
             return ["ส่งให้ผู้ตรวจสอบแล้ว"];
         if (s.roster.sent < s.roster.total)
             why.push("รอแพทย์ส่งครบ");
+        // งบรายเดือน and เอกสารจัดสรร: both from the ข้อมูล button on
+        // ภาพรวม, which the owner and the ผู้จัดทำ have (Pong, 2026-11-18).
+        // The card above links to them; here the reason only.
         if (!s.inputs || !s.inputs.doctors)
-            why.push(auditeeOnly() ? "รอผู้ดูแลระบบกรอกงบประมาณ" : "กรอกงบประมาณที่หน้าภาพรวม");
+            why.push(auditorOnly() ? "รอผู้จัดทำกรอกงบรายเดือน" : "กรอกงบรายเดือนก่อน");
+        const a = s.alloc;
+        if (a && !a.installed)
+            why.push("ยังไม่ได้ติดตั้งเอกสารจัดสรร (SQL ขั้นที่ 29)");
+        else if (a && !a.uploaded)
+            why.push(auditorOnly() ? "รอผู้จัดทำอัปโหลดเอกสารจัดสรร" : "อัปโหลดเอกสารจัดสรรก่อน");
+        else if (a && a.without > 0)
+            why.push("ใส่เลขเอกสารจัดสรรอีก " + int(a.without) + " คน");
         if (openRequest(s))
             why.push("รอสร้างไฟล์ใหม่เสร็จ");
         else if (!s.build)

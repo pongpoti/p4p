@@ -1572,27 +1572,54 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    // The owner (admin) also gets each month's budget and N (review_inputs),
-    // for the งบ button on the month cards. Others get none, and no button
-    // (Pong, 2026-11-17: the ผู้จัดทำ no longer types them).
-    const canBudget = isDashOwner(s.sub)
+    // The owner (admin) and the ผู้จัดทำ also get each month's budget and N
+    // (review_inputs), for the ข้อมูล button on the month cards (Pong,
+    // 2026-11-18; the owner alone 17 to 18 Nov). Others get none, and no
+    // button.
+    const canBudget = isDashOwner(s.sub) || isReviewAuditee(s.sub)
     const budgets: Record<string, unknown> = {}
+    // And, for the same button (ข้อมูล since 2026-11-18), whether each
+    // month's เอกสารจัดสรร is in (alloc_uploads, scripts/alloc-ids-2026-11.sql):
+    // when, by whom, and how many names it could not place. allocInstalled
+    // false: the SQL is not run yet.
+    const allocs: Record<string, unknown> = {}
+    let allocInstalled = true
     if (canBudget) {
-      try {
-        const keys = months.map((m) => m.key).join(",")
-        const r = await axios.get(
+      const keys = months.map((m) => m.key).join(",")
+      await Promise.all([
+        axios.get(
           SUPABASE_URL + "/rest/v1/review_inputs?select=month,budget,per_p4p,doctors,updated_at,updated_by&month=in.(" + keys + ")",
           { headers: SERVICE_HEADERS(), timeout: 8000 },
-        )
-        for (const row of r.data as { month: string; budget: string; per_p4p: string; doctors: number | null; updated_at: string; updated_by: string }[]) {
-          budgets[row.month] = { budget: Number(row.budget), per_p4p: Number(row.per_p4p), doctors: row.doctors, updated_at: row.updated_at, updated_by: row.updated_by }
-        }
-      } catch (e: any) {
-        // Not installed yet, or Supabase busy: the cards show no budget.
-        console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
-      }
+        ).then((r) => {
+          for (const row of r.data as { month: string; budget: string; per_p4p: string; doctors: number | null; updated_at: string; updated_by: string }[]) {
+            budgets[row.month] = { budget: Number(row.budget), per_p4p: Number(row.per_p4p), doctors: row.doctors, updated_at: row.updated_at, updated_by: row.updated_by }
+          }
+        }, (e: any) => {
+          // Not installed yet, or Supabase busy: the cards show no budget.
+          console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+        }),
+        axios.get(
+          SUPABASE_URL + "/rest/v1/alloc_uploads?select=month,uploaded_at,uploaded_by,missing,ambiguous&month=in.(" + keys + ")",
+          { headers: SERVICE_HEADERS(), timeout: 8000 },
+        ).then((r) => {
+          for (const row of r.data as { month: string; uploaded_at: string; uploaded_by: string; missing: unknown[]; ambiguous: unknown[] }[]) {
+            allocs[row.month] = {
+              uploaded_at: row.uploaded_at, uploaded_by: row.uploaded_by,
+              without: (Array.isArray(row.missing) ? row.missing.length : 0) + (Array.isArray(row.ambiguous) ? row.ambiguous.length : 0),
+            }
+          }
+        }, (e: any) => {
+          const code = String((e.response && e.response.data && e.response.data.code) || "")
+          if (["PGRST205", "42P01"].includes(code)) { allocInstalled = false; return }
+          console.error("[dashboard] overview alloc failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+        }),
+      ])
     }
-    res.json({ months: canBudget ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null })) : months, canBudget })
+    res.json({
+      months: canBudget ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null, alloc: allocs[m.key] ?? null })) : months,
+      canBudget,
+      ...(canBudget ? { allocInstalled } : {}),
+    })
   } catch (e: any) {
     console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load overview" })
@@ -1755,7 +1782,7 @@ const AUDIT_GROUPS: Record<string, string> = {
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
     "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save," +
-    "user.approve,user.reject,user.edit,user.suspend,user.import)",
+    "user.approve,user.reject,user.edit,user.suspend,user.import,alloc.upload,alloc.set)",
   refused: "action=in.(login.refused,user.claim_refused,user.bad_code)",
   users: "action=like.user.*",
 }

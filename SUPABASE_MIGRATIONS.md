@@ -244,7 +244,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     (budget, N, per P4P), overwriting any row there, and ends with a check
     query (17 months, 0 mismatches). PART 2 adds `review_inputs.tg_pending`
     and the function `budget_save` (service_role only) behind the overview
-    page's งบ button: it saves budget and N, and queues workflow 2.2 for the
+    page's งบ button (ข้อมูล, then งบรายเดือน, since 2026-11-18): it saves budget and N, and queues workflow 2.2 for the
     month when its roster is complete. Since 2026-11-11 workflow 2.2 takes
     the SK03's budget (staff Y9) and per P4P (intern W9) from that table,
     not from FORMULA.md, and sends Pong a Telegram once a saved budget is in
@@ -303,6 +303,22 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     this file is not installed, and nothing is saved. End with the check
     query (auditor_ok = true, check_ok = true, anon_0 = 0). Safe to re-run;
     no backslashes.
+29. `scripts/alloc-ids-2026-11.sql` — **not applied yet; paste it.**
+    เอกสารจัดสรร (Pong, 2026-11-18): the hospital's monthly list of everyone
+    paid, uploaded from a month card's ข้อมูล button on ภาพรวม by the owner
+    or the ผู้จัดทำ. The app keeps only the last 4 digits of each roster
+    doctor's No (`ID-<yy>-<MM>-<4 digits>`) in `alloc_ids`, and the last
+    upload's summary in `alloc_uploads`; the file itself is never stored.
+    The allocation sheet (รายละเอียดการจัดสรรเงินรายบุคคล) writes the
+    digits after `ID-<yy>-<MM>-` in its No column, and the ผู้จัดทำ cannot
+    send a month to the auditor until every doctor has them. Functions
+    `alloc_ids_save` (an upload) and `alloc_id_set` (4 digits typed on the
+    page). Both tables and both functions are service_role only. Needs
+    nothing else. Until it runs, the เอกสารจัดสรร box and the ตรวจสอบ send
+    bar say it is not installed, sending a month is refused (503), and the
+    allocation sheet's No stays `ID-<yy>-<MM>-`. End with the check query
+    (tables_2 = 2, functions_2 = 2, anon_0 = 0). Safe to re-run; no
+    backslashes.
 
 ## Superseded — do NOT run
 
