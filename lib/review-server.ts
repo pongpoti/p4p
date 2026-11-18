@@ -365,9 +365,10 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { fail(res, "withdraw", e) }
   })
 
-  // The ส่งอีเมล button: the live round's email again (a month sent before
-  // the email SQL, a failed email, or a test). The SQL refuses while one is
-  // on its way or once a real one went out.
+  // The email box's button (ส่งอีเมลอีกครั้ง / ส่งอีเมลจริง / ส่งอีเมล): the live
+  // round's email again, shown only while one is owed (a failed email, a
+  // test send once test mode is off, a round with no email). The SQL refuses
+  // while one is on its way or once a real one went out.
   app.post("/dashboard/api/review/:month/email", async (req: Request, res: Response) => {
     const g = await gate(req, res, "auditee")
     if (!g) return

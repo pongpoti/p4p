@@ -9,7 +9,7 @@
  * marked แก้ไขครั้งที่ N, naming the people whose numbers changed.
  *
  * scripts/review-email-2026-11.sql queues one review_emails row per round
- * sent (and per press of the tab's ส่งอีเมล button). The always-on relay
+ * sent (and per press of the tab's email button, shown only while one is owed). The always-on relay
  * (scripts/drain-uploads.ts, with the 2.2 and 2.8 starts) calls
  * sendQueuedReviewEmail() every 30 s; it claims one row, attaches the two
  * files exactly as the round's build stored them (Storage, review-files),
@@ -355,7 +355,7 @@ export async function sendQueuedReviewEmail(deps?: ReviewEmailDeps): Promise<boo
     ).eq("id", r.id);
     if (error) console.error(`│  ❌  ตรวจสอบ tab email: could not record the failure: ${error.message}`);
     if (final) {
-      await tell(d, `❌ ส่งอีเมล P4P ${(() => { try { return thaiMonth(r.month); } catch { return r.month; } })()} รอบที่ ${r.round_no} ไม่สำเร็จ: ${why}\nกด "ส่งอีเมล" ในแท็บตรวจสอบเพื่อลองอีกครั้ง`);
+      await tell(d, `❌ ส่งอีเมล P4P ${(() => { try { return thaiMonth(r.month); } catch { return r.month; } })()} รอบที่ ${r.round_no} ไม่สำเร็จ: ${why}\nกด "ส่งอีเมลอีกครั้ง" ในแท็บตรวจสอบ`);
     }
     return false;
   }

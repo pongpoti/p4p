@@ -707,6 +707,9 @@ const DASH_LOGIN_ERRORS: Record<string, string> = {
 const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
 // LINE display names shown as the Thai names Pong set (lib/staff-names.ts).
 const { staffName } = require("./lib/staff-names") as typeof import("./lib/staff-names")
+// History rows: a dashboard user's older rows carry the LINE name, so they
+// get the Thai one; a refused stranger keeps the name LINE gave.
+const shownActor = (sub: string, name: string): string => DASHBOARD_LINE_USER_IDS.has(sub) ? staffName(name) : name
 // The ตรวจสอบ tab's ผู้จัดทำ (auditee) side, and the overview's งบ button:
 // every dashboard user who is not the owner (Pong, 2026-11-12: "Add Dada as
 // auditee"; Dada is the only other one). The owner has both sides.
@@ -1097,10 +1100,11 @@ app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
     await logged
     const actors = new Map<string, string>()
     for (const p of people.data as { actor_line_id: string; actor_name: string }[]) {
-      if (p.actor_line_id && !actors.has(p.actor_line_id)) actors.set(p.actor_line_id, p.actor_name)
+      if (p.actor_line_id && !actors.has(p.actor_line_id)) actors.set(p.actor_line_id, shownActor(p.actor_line_id, p.actor_name))
     }
     res.json({
-      entries: r.data.slice(0, 50),
+      entries: r.data.slice(0, 50).map((e: { actor_line_id: string; actor_name: string }) =>
+        ({ ...e, actor_name: shownActor(e.actor_line_id, e.actor_name) })),
       more: r.data.length > 50,
       actors: Array.from(actors, ([id, name]) => ({ id, name })),
     })

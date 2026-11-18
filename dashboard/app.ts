@@ -8,10 +8,10 @@
     // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
     // a copy of lib/staff-names.ts). New saves already carry the Thai name;
     // this covers rows saved before.
-    const STAFF_NAMES: Record<string, string> = { pongsit: "ปองสิทธิ์", dada: "กานดา" }
+    const STAFF_NAMES = new Map<string, string>([["pongsit", "ปองสิทธิ์"], ["dada", "กานดา"]])
     const staffName = (name: unknown): string => {
         const s = String(name == null ? "" : name).trim()
-        return STAFF_NAMES[s.toLowerCase()] || s
+        return STAFF_NAMES.get(s.toLowerCase()) || s
     }
 
     // ── Desktop-only gate — the inverse of the LIFF pages' mobile gate ───
@@ -1094,8 +1094,8 @@
         const tr = el("tr", /\.(delete|reject)$/.test(a.action) || a.action === "login.refused" ? "warn"
             : /^(followup\.add|roster\.(add|edit)|access\.approve|review\.(inputs|submit)|staffing\.save)$/.test(a.action) ? "change" : "")
         tr.appendChild(el("td", "when", fmtWhen(a.created_at)))
-        const who = el("td", "who", staffName(a.actor_name) || "—")
-        who.title = staffName(a.actor_name)
+        const who = el("td", "who", a.actor_name || "—")
+        who.title = a.actor_name
         tr.appendChild(who)
         tr.appendChild(el("td", "what", ACTION_LABEL[a.action] || a.action))
         tr.appendChild(auditDetail(a))
@@ -1149,7 +1149,7 @@
             // Keep the chosen person while refreshing the list of names.
             const chosen = auditActor.value
             auditActor.replaceChildren(el("option", undefined, "ทุกคน"), ...data.actors.map((p) => {
-                const o = el("option", undefined, staffName(p.name) || p.id) as HTMLOptionElement
+                const o = el("option", undefined, p.name || p.id) as HTMLOptionElement
                 o.value = p.id
                 return o
             }))

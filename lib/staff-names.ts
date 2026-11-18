@@ -7,13 +7,13 @@
  * same map: dashboard/app.ts and dashboard/review.ts hold a copy of it (they
  * are plain browser scripts), and process/review-pdf.ts uses this one.
  */
-export const STAFF_NAMES: Record<string, string> = {
-  pongsit: "ปองสิทธิ์",
-  dada: "กานดา",
-}
+export const STAFF_NAMES: ReadonlyMap<string, string> = new Map([
+  ["pongsit", "ปองสิทธิ์"],
+  ["dada", "กานดา"],
+])
 
 /** The shown name for a LINE display name (matched without case or spaces). */
 export function staffName(name: unknown): string {
   const s = String(name ?? "").trim()
-  return STAFF_NAMES[s.toLowerCase()] || s
+  return STAFF_NAMES.get(s.toLowerCase()) || s
 }

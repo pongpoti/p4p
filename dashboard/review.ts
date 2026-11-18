@@ -24,10 +24,10 @@
     // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
     // a copy of lib/staff-names.ts). New saves already carry the Thai name;
     // this covers rows saved before.
-    const STAFF_NAMES: Record<string, string> = { pongsit: "ปองสิทธิ์", dada: "กานดา" }
+    const STAFF_NAMES = new Map<string, string>([["pongsit", "ปองสิทธิ์"], ["dada", "กานดา"]])
     const staffName = (name: unknown): string => {
         const s = String(name == null ? "" : name).trim()
-        return STAFF_NAMES[s.toLowerCase()] || s
+        return STAFF_NAMES.get(s.toLowerCase()) || s
     }
 
     interface Build {
@@ -1522,9 +1522,12 @@
 
     // The round's email to the auditor (Pong, 2026-11-12): sending a round
     // queues it and the always-on relay sends it within about a minute.
-    // Pong, 2026-11-18: no ส่งอีเมล button after a send, since the email
-    // goes out by itself; the only button left is ส่งอีเมลอีกครั้ง after the
-    // relay gave up on a failed email. The SQL refuses once a real one went out.
+    // Pong, 2026-11-18: no ส่งอีเมล button once the email went out, since
+    // sending the round emails by itself (in test mode, to the test address
+    // only). A button shows only while an email is still owed: ส่งอีเมลอีกครั้ง
+    // after the relay gave up, ส่งอีเมลจริง after a test send once test mode
+    // is off, ส่งอีเมล for a round with no email at all. The SQL refuses once
+    // a real one went out.
     const roundEmails = (s: State, r: Round): Email[] => (s.emails || []).filter((e) => e.round_id === r.id)
     function emailWaiting(s: State): boolean {
         const r = liveRound(s)
@@ -1559,8 +1562,13 @@
             button = "ส่งอีเมลอีกครั้ง"
         } else if (last && last.status === "sent" && last.test) {
             w.append(el("p", "rv-hint", "ส่งอีเมลทดสอบแล้ว " + when(last.sent_at) + (mail && !mail.test ? " · ยังไม่ได้ส่งจริง" : " · ถึงที่อยู่ทดสอบเท่านั้น")))
+            // Only the test address has it and test mode is now off: the
+            // real email is still owed, so the owner can send it.
+            if (mail && !mail.test) button = "ส่งอีเมลจริง"
         } else {
+            // No email row at all (a round sent before the email SQL).
             w.append(el("p", "rv-hint", "ยังไม่ได้ส่งอีเมลถึงผู้ตรวจสอบ"))
+            button = "ส่งอีเมล"
         }
         if (button) {
             const row = el("div", "rv-actions")
@@ -1660,7 +1668,7 @@
         g.append(kv("ส่งถึง", realTo(m).replace(/^ถึง/, "")), kv("หัวเรื่อง", "เอกสาร P4P เดือน… (ไม่มี [ทดสอบ])"))
         askConfirm("ปิดโหมดทดสอบ ส่งอีเมลจริง?", [
             g,
-            el("p", undefined, "ปิดแล้วยังไม่ส่งอะไรทันที · ส่งจริงเมื่อกด ส่ง เดือนใหม่ หรือกด ส่งอีเมล"),
+            el("p", undefined, "ปิดแล้วยังไม่ส่งอะไรทันที · ส่งจริงเมื่อกด ส่ง เดือนใหม่ หรือกด ส่งอีเมลจริง ในเดือนที่ส่งแบบทดสอบไปแล้ว"),
             el("p", "rv-hint", "เปิดโหมดทดสอบกลับได้ตลอด ไม่ต้องยืนยัน"),
         ], "ปิดโหมดทดสอบ", mailOff)
     }
