@@ -134,8 +134,77 @@
     // button. render() fills it; everything else that draws the body alone
     // (loading, a failure, no month) empties it, so no stale button stays.
     const side = document.getElementById("review-side") as HTMLElement
+    // The side's main button sits in its own slot under the part that
+    // scrolls, so it never covers the figures (render() moves every
+    // .rv-dock of sideOut there).
+    const dock = document.getElementById("review-dock") as HTMLElement
+    const sideScroll = side.parentElement as HTMLElement
+    const inSide = (n: Node | null): boolean => !!n && (side.contains(n) || dock.contains(n))
     let sideOut: Node[] = []
-    const show = (...nodes: Node[]): void => { side.replaceChildren(); body.replaceChildren(...nodes) }
+    const show = (...nodes: Node[]): void => { side.replaceChildren(); dock.replaceChildren(); body.replaceChildren(...nodes); syncSide() }
+    // A reply that arrives while a mouse button is down on the tab waits
+    // for the click (2026-11-18): redrawing the button under the pointer
+    // between press and release makes the browser drop the click.
+    let pressing = false
+    let heldRender = false
+    let pressT: number | undefined
+    function release(): void {
+        clearTimeout(pressT)
+        if (!pressing) return
+        pressing = false
+        if (heldRender) render()
+    }
+    document.addEventListener("pointerdown", (ev) => {
+        if (!ev.isPrimary || !(ev.target instanceof Node) || !view.contains(ev.target)) return
+        pressing = true
+        clearTimeout(pressT)
+        pressT = window.setTimeout(release, 3000)
+    }, true)
+    // After the click: the timer runs once the click has been handled.
+    for (const t of ["pointerup", "pointercancel"]) document.addEventListener(t, () => { if (pressing) setTimeout(release, 0) }, true)
+    // The redraw for a reply: now, or after the press.
+    function renderSoon(): void {
+        if (pressing) { heldRender = true; return }
+        render()
+    }
+    // A filter pressed shows as pressed at once; the list it picks (up to
+    // 230 rows) is drawn after that paint, so the press is never left
+    // without an answer while the rows are worked out (2026-11-18).
+    let filterSeq = 0
+    function pressFirst(b: HTMLElement, go: () => void): void {
+        const g = b.parentElement
+        if (g) for (const x of Array.from(g.children)) if (x instanceof HTMLElement && x.hasAttribute("aria-pressed")) x.setAttribute("aria-pressed", String(x === b))
+        const seq = ++filterSeq
+        requestAnimationFrame(() => setTimeout(() => { if (seq === filterSeq) go() }, 0))
+    }
+    // Layout reads (where the bars stick, scrolling the panel into place)
+    // wait for the next frame, so a click's own work ends sooner and the
+    // browser lays the page out once (2026-11-18).
+    let frameWork: number | undefined
+    let wantSpot = false
+    // A note to scroll into the person panel's view once it is drawn.
+    let revealId = ""
+    function afterFrame(spot = false): void {
+        if (spot) wantSpot = true
+        if (frameWork !== undefined) return
+        frameWork = requestAnimationFrame(() => {
+            frameWork = undefined
+            syncStick()
+            if (wantSpot) { wantSpot = false; toWorkingSpot() }
+            const n = revealId ? document.getElementById(revealId) : null
+            if (n) { revealId = ""; inPanelView(n) }
+            else if (boxFor && boxFor === selected) {
+                const box = body.querySelector<HTMLElement>(".rv-person .rv-remark-box")
+                if (box) inPanelView(box)
+            }
+        })
+    }
+    // The person whose remark box was opened with them: kept above the
+    // decide row while their detail arrives and moves things, until the
+    // auditor scrolls or presses in the panel themselves.
+    let boxFor = ""
+    const handsOn = (ev: Event): void => { if (ev.target instanceof Element && ev.target.closest(".rv-person")) boxFor = "" }
+    for (const t of ["wheel", "touchstart", "pointerdown", "keydown"]) document.addEventListener(t, handsOn, { capture: true, passive: true })
     const monthBox = document.getElementById("review-months") as HTMLElement
     const roleBtns = Array.from(document.querySelectorAll<HTMLButtonElement>("#review-role button"))
     const live = document.getElementById("review-live") as HTMLElement
@@ -151,6 +220,25 @@
         if (text !== undefined) e.textContent = text
         return e
     }
+    // Writes only what differs: an unchanged attribute or text costs the
+    // browser nothing to draw again.
+    function setAttr(e: Element, name: string, v: string | null): void {
+        if (v === null) { if (e.hasAttribute(name)) e.removeAttribute(name) } else if (e.getAttribute(name) !== v) e.setAttribute(name, v)
+    }
+    function setText(e: Node, t: string): void { if (e.textContent !== t) e.textContent = t }
+    function setHidden(e: HTMLElement, h: boolean): void { if (e.hidden !== h) e.hidden = h }
+    // Puts exactly these nodes in parent, in this order, moving only what is
+    // out of place (2026-11-18, the tab's lag): a part kept from the last
+    // redraw (the names, the auditee's table) stays where it is, so it is
+    // not laid out again and keeps its scroll, focus and any press on it.
+    function patchChildren(parent: Node, nodes: Node[]): void {
+        let ref: ChildNode | null = parent.firstChild
+        for (const n of nodes) {
+            if (n === ref) { ref = ref.nextSibling; continue }
+            parent.insertBefore(n, ref)
+        }
+        while (ref) { const nx: ChildNode | null = ref.nextSibling; parent.removeChild(ref); ref = nx }
+    }
     const THAI_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
     const THAI_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
     const monthName = (key: string, short = false): string => {
@@ -162,18 +250,40 @@
         const m = /^(\d{4})_(\d{2})$/.exec(key)
         return m ? THAI_SHORT[Number(m[2]) - 1] + " " + m[1].slice(2) : key
     }
+    // One formatter each, made once (2026-11-18, the tab's lag): each
+    // toLocaleString call builds a new one, and a 230-row table made
+    // hundreds per redraw. The words they write are the same.
+    const DATE_TH = new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+    const NUM_TH2 = new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const NUM_TH = new Intl.NumberFormat("th-TH")
+    const NUM_EN2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     const when = (iso: string | null | undefined): string => {
         if (!iso) return ""
         const d = new Date(iso)
         if (isNaN(d.getTime())) return ""
-        return d.toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " น."
+        return DATE_TH.format(d) + " น."
     }
     const baht = (n: number | null | undefined): string =>
-        n === null || n === undefined ? "—" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    const int = (n: number): string => Number(n || 0).toLocaleString("th-TH")
-    // The budget is whole baht: no decimals, unless an older one was saved with satang.
-    const budgetText = (n: number | null | undefined): string =>
-        n === null || n === undefined ? "—" : Number.isInteger(Number(n)) ? int(Number(n)) : baht(n)
+        n === null || n === undefined ? "—" : NUM_TH2.format(Number(n))
+    const int = (n: number): string => NUM_TH.format(Number(n || 0))
+    // Latin words inside Thai text (SK03, PDF, per P4P) read in English.
+    const en = (t: string): HTMLElement => { const x = el("span", undefined, t); x.lang = "en"; return x }
+    // Roving focus in a group of controls (months, the side switch, the
+    // names): the arrows move the focus by step, Home / End to the ends; the
+    // one focused becomes the group's one tab stop. Returns it, or null.
+    function rove(items: HTMLElement[], ev: KeyboardEvent, steps: Record<string, number>): HTMLElement | null {
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return null
+        const i = items.indexOf(ev.target as HTMLElement)
+        if (i < 0) return null
+        const j = ev.key === "Home" ? 0 : ev.key === "End" ? items.length - 1
+            : steps[ev.key] !== undefined ? Math.max(0, Math.min(items.length - 1, i + steps[ev.key])) : -1
+        if (j < 0) return null
+        ev.preventDefault()
+        for (const x of items) x.tabIndex = -1
+        items[j].tabIndex = 0
+        items[j].focus()
+        return items[j]
+    }
     const sizeText = (b: number): string => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"
     const say = (msg: string): void => { live.textContent = ""; setTimeout(() => { live.textContent = msg }, 50) }
     // A failure is announced at once (role=alert); say() is the polite one.
@@ -246,7 +356,7 @@
 
     // What the last action at each place said, drawn next to its control by
     // every render until that place is used again or the month changes.
-    const notes = new Map<string, { kind: "ok" | "err"; text: string; scope?: string }>()
+    const notes = new Map<string, { kind: "ok" | "err"; text: string; scope?: string; failSeq?: number; fail?: { m: string; text: string } }>()
     const noteId = (spot: string): string => "rv-note-" + spot.replace(/[^A-Za-z0-9_-]/g, "-")
     function tell(s: State, spot: string, kind: "ok" | "err", text: string): void {
         // Finished after a switch to another month: say so at the top.
@@ -262,7 +372,7 @@
         const p = el("p", "rv-note rv-note-" + n.kind)
         p.id = noteId(spot)
         if (n.kind === "err") p.append(el("strong", undefined, "ไม่สำเร็จ "), n.text)
-        else p.textContent = "✓ " + n.text
+        else p.textContent = n.text
         return p
     }
     // One request at a time per control: a second click while the first runs
@@ -289,7 +399,20 @@
         if (btn) markBusy(btn)
         return true
     }
-    const end = (s: State, spot: string): void => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true }
+    // A step's follow-up loading: its button spins, the notes stay.
+    const holdBusy = (s: State, spot: string): void => { inflight.add(flightKey(s, spot)) }
+    const end = (s: State, spot: string): void => {
+        inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true
+        for (const f of idleWaiters.splice(0)) f()
+    }
+    // ผู้จัดทำ's score edits and answers still being saved for a month: the
+    // send waits for them, so a round never goes without one (2026-11-18).
+    const idleWaiters: Array<() => void> = []
+    const sideSaving = (m: string): boolean => Array.from(inflight).some((k) => k.startsWith(m + "|score-") || k.startsWith(m + "|answer-"))
+    const whenSideSaved = (m: string): Promise<void> => new Promise((res) => {
+        const check = (): void => { if (sideSaving(m)) idleWaiters.push(check); else res() }
+        check()
+    })
 
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text: string, id: string, retry: () => void): HTMLElement {
@@ -379,11 +502,14 @@
         syncRole()
         const a = document.activeElement
         const had = a instanceof HTMLElement && monthBox.contains(a) ? a.id : ""
+        const keepTop = monthBox.scrollTop
         monthBox.replaceChildren(...monthRows.map((m) => {
             const b = el("button", "rv-mtab")
             b.type = "button"
             b.id = "rv-m-" + m.month
-            b.setAttribute("aria-pressed", String(m.month === month))
+            b.setAttribute("role", "radio")
+            b.setAttribute("aria-checked", String(m.month === month))
+            b.tabIndex = -1
             const ms = monthStatus(m)
             const t = el("span", "rv-mtab-s rv-ms-" + ms.kind, ms.text)
             if (ms.sr) t.setAttribute("aria-hidden", "true")
@@ -409,13 +535,34 @@
             })
             return b
         }))
+        // One tab stop: the month focused, else the one open, else the first.
+        const on = monthBox.querySelector<HTMLElement>('[aria-checked="true"]')
+        const stop = (had && document.getElementById(had)) || on || monthBox.querySelector<HTMLElement>(".rv-mtab")
+        if (stop) stop.tabIndex = 0
+        monthBox.scrollTop = keepTop
+        // A month newly open is scrolled into the months box (the box only).
+        if (on && month !== tabsShown) {
+            const top = on.offsetTop, bottom = top + on.offsetHeight
+            if (top < monthBox.scrollTop) monthBox.scrollTop = top
+            else if (bottom > monthBox.scrollTop + monthBox.clientHeight) monthBox.scrollTop = bottom - monthBox.clientHeight
+        }
+        tabsShown = month
         if (had) { const f = document.getElementById(had); if (f) f.focus() }
     }
+    let tabsShown = ""
+    // The arrows move between months (up and down by a row of two); Enter
+    // or Space opens one, so arrowing past months loads none.
+    monthBox.addEventListener("keydown", (ev) => {
+        rove(Array.from(monthBox.querySelectorAll<HTMLElement>(".rv-mtab")), ev, { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 })
+    })
     function pickMonth(m: string): void {
         if (!m || m === month) return
         month = m
         resetMonth()
         drawTabs()
+        // A month seen before shows at once, as it was, and is looked at
+        // again behind it (2026-11-18: a blank loading line for 2-3 s).
+        if (st) { render(); void loadPicked(true); return }
         show(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"))
         void loadPicked()
     }
@@ -430,19 +577,34 @@
     // them can spin.
     let listsLoading = 0
     let roleLists = false
-    async function loadPicked(): Promise<void> {
+    // quiet: the month is on screen already (kept from before): no spin,
+    // and no redraw when nothing changed.
+    async function loadPicked(quiet = false): Promise<void> {
         // Only the newest load ends the spin: an older one of the same month
         // can come back first.
         const tok = ++pickSeq
-        loadingFor = month
+        if (!quiet) loadingFor = month
         syncBusy()
+        prefetchLists()
         try {
-            await loadState(true)
+            await loadState(true, false, quiet)
         } catch (e) {
             loadFailed(e)
         } finally {
             if (tok === pickSeq) { loadingFor = ""; roleLoad = false; syncBusy() }
         }
+    }
+    // Asked for with the month's state, not after it (2026-11-18): the
+    // names and the issues of the round the months list says is open, when
+    // the side shown lists them (the auditor's round to check, the
+    // auditee's round sent back).
+    function prefetchLists(): void {
+        const m = monthRows.find((x) => x.month === month)
+        const rr = m ? m.round : null
+        if (!rr || !(role === "auditor" ? rr.status === "submitted" : rr.status === "returned")) return
+        const s0 = { month } as State
+        if (peopleKey !== month + ":" + rr.round_no && !peopleErr) void loadPeople(s0, { round_no: rr.round_no } as Round)
+        if (issuesKey !== month && !issuesErr) void loadIssues(s0)
     }
     function syncBusy(): void {
         for (const m of monthRows) {
@@ -457,6 +619,12 @@
     // month's state, lists, drafts and notes, and any reply still on its way
     // for it (the sequence numbers no longer match).
     function resetMonth(): void {
+        // The month being left is kept for a switch back.
+        if (st && st.month && st.month !== month && !loadError) {
+            // A list still on its way is asked for again on the way back.
+            monthKeep.set(st.month, { st, stJson, people, peopleKey: people && !peopleErr ? peopleKey : "", issues, issuesKey: issues && !issuesErr ? issuesKey : "",
+                rows, rowsKey: rows && !rowsErr ? rowsKey : "", details: new Map(details), selected, lastRoundKey, pl, lc, moreBox })
+        }
         st = null; stJson = ""; loadError = ""; loadSeq++
         clearTimeout(poll); poll = undefined; pollFails = 0
         people = null; peopleKey = ""; peopleErr = ""; peopleSeq++
@@ -464,8 +632,37 @@
         details.clear(); detailErrs.clear(); detailLoading.clear(); detailSeq++
         selected = ""; lastRoundKey = ""
         rows = null; rowsKey = ""; rowsErr = ""; rowsSeq++; editing = ""; moreOpen = false
+        // A failed decision save's note stays through the switch (the row
+        // it put back is in the month kept), naming its month when it is
+        // not the one shown.
+        const failTop = notes.get("top")
         drafts.clear(); fieldErrs.clear(); notes.clear(); draftScope = ""; remarkOpen.clear(); kept.clear()
+        if (failTop && failTop.fail && failTop.failSeq !== undefined) {
+            const f = failTop.fail
+            notes.set("top", { kind: "err", text: f.m === month ? f.text : "เดือน " + monthName(f.m) + ": " + f.text, failSeq: failTop.failSeq, fail: f })
+        }
+        pl = null; lc = null; moreBox = null
+        const k = month ? monthKeep.get(month) : undefined
+        if (k) {
+            monthKeep.delete(month)
+            st = k.st; stJson = k.stJson
+            people = k.people; peopleKey = k.peopleKey; issues = k.issues; issuesKey = k.issuesKey
+            rows = k.rows; rowsKey = k.rowsKey
+            for (const [a, b] of k.details) details.set(a, b)
+            selected = k.selected; lastRoundKey = k.lastRoundKey
+            pl = k.pl; lc = k.lc; moreBox = k.moreBox
+            // Saves still on their way for it are shown again.
+            if (people) reapply(month, people, 0)
+        }
     }
+    // What a month showed, kept for a switch back to it (2026-11-18).
+    interface Kept {
+        st: State; stJson: string
+        people: Person[] | null; peopleKey: string; issues: Issue[] | null; issuesKey: string
+        rows: Row[] | null; rowsKey: string; details: Map<string, Detail>; selected: string; lastRoundKey: string
+        pl: PList | null; lc: LCard | null; moreBox: { sec: HTMLElement; t: HTMLButtonElement; inner: HTMLElement } | null
+    }
+    const monthKeep = new Map<string, Kept>()
     const monthStatus = (m: MonthRow): { kind: string; text: string; sr?: string } => {
         const r = m.round
         const me = role === "auditee"
@@ -480,7 +677,7 @@
     // Only the newest load of the month picked may draw: a slower reply for
     // another month, or an older one for this month, is dropped. fromPoll:
     // the 15 s look, which draws nothing when the state is unchanged.
-    async function loadState(logView: boolean, fromPoll = false): Promise<void> {
+    async function loadState(logView: boolean, fromPoll = false, quiet = false): Promise<void> {
         if (!month) return
         const m = month
         const seq = ++loadSeq
@@ -503,7 +700,7 @@
         loadError = ""
         // A load that started before the switch was flipped brings the old mode.
         if (s.mail !== undefined && !mailBusy && seq > mailSeq) mail = s.mail
-        if (!(fromPoll && same)) { freshState = true; render() }
+        if (!((fromPoll || quiet) && same)) { freshState = true; renderSoon() }
         clearTimeout(poll)
         poll = undefined
         const r = liveRound(s)
@@ -532,7 +729,7 @@
     }
     // The loading line takes the focus a pressed retry button had.
     function loadingLine(text: string): void {
-        const hadFocus = body.contains(document.activeElement) || side.contains(document.activeElement)
+        const hadFocus = body.contains(document.activeElement) || inSide(document.activeElement)
         const p = el("p", "rv-loading", text)
         p.tabIndex = -1
         show(p)
@@ -570,7 +767,8 @@
     function syncRole(): void {
         for (const b of roleBtns) {
             const on = b.dataset.role === role
-            b.setAttribute("aria-pressed", String(on))
+            b.setAttribute("aria-selected", String(on))
+            b.tabIndex = on ? 0 : -1
             if (on && ((roleLoad && loadingFor) || (roleLists && listsLoading > 0))) b.setAttribute("aria-busy", "true")
             else b.removeAttribute("aria-busy")
         }
@@ -583,12 +781,18 @@
             const sw = document.getElementById("review-role")
             if (sw) sw.classList.add("hidden")
         }
-        if (!fromButton) loadingLine("กำลังโหลด…")
+        // Back on the tab with its month still here (2026-11-18): it stays
+        // on screen, and the months and the month are looked at again
+        // together instead of a blank loading line and one after the other.
+        const warm = !fromButton && !!st && st.month === month && !loadError && !!body.firstChild
+        const asked = month
+        const again = warm ? loadState(true, false, true).then(() => null, (e: unknown) => e) : null
+        if (!fromButton && !warm) loadingLine("กำลังโหลด…")
         try {
             if (!(await loadMonths(true))) {
                 // Still no month: the loading line, or the spinning button
                 // that asked, gives way to the card (with a fresh button).
-                if (body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]')) show(noMonthCard())
+                if (warm || body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]')) show(noMonthCard())
                 return
             }
         } catch (e) {
@@ -598,6 +802,14 @@
             show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(true) }))
             return
         }
+        if (again && month === asked) {
+            const e = await again
+            if (e && month === asked) loadFailed(e)
+            return
+        }
+        // Another month now: kept from before, it shows at once.
+        if (st && st.month === month) { render(); await loadPicked(true); return }
+        if (warm) loadingLine("กำลังโหลด…")
         await loadPicked()
     }
     window.addEventListener("dashboard:review", () => { void open() })
@@ -606,7 +818,7 @@
             if (auditeeOnly() || b.getAttribute("aria-busy") === "true") return
             role = b.dataset.role === "auditor" ? "auditor" : "auditee"
             try { localStorage.setItem(ROLE_KEY, role) } catch (e) { /* ignore */ }
-            for (const x of roleBtns) x.setAttribute("aria-pressed", String(x.dataset.role === role))
+            for (const x of roleBtns) { const on = x.dataset.role === role; x.setAttribute("aria-selected", String(on)); x.tabIndex = on ? 0 : -1 }
             // Neither side stays on a month it cannot open (each side locks
             // its own months), and a side gets a month back after the
             // other side had none to show.
@@ -624,10 +836,14 @@
                 if (!listsLoading) roleLists = false
                 syncRole()
             }
-            drawMail()
             say("มุมมอง" + (role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ"))
         })
     }
+
+    // The side switch is a tab list: the arrows move between the two sides,
+    // Enter or Space switches.
+    const roleBox = document.getElementById("review-role")
+    if (roleBox) roleBox.addEventListener("keydown", (ev) => { rove(roleBtns, ev, { ArrowLeft: -1, ArrowRight: 1 }) })
 
     // ── Rendering ────────────────────────────────────────────────────────
     function card(title: string, children: Node[], id?: string): HTMLElement {
@@ -640,22 +856,14 @@
     }
     function turn(kind: "you" | "wait" | "ok" | "bad", tag: string, title: string, sub?: string): HTMLElement {
         const t = el("div", "rv-turn rv-" + kind)
-        t.setAttribute("role", "status")
         t.append(el("span", "rv-tag", tag), el("strong", undefined, title))
         if (sub) t.append(el("span", "rv-sub", sub))
         return t
     }
-    function line(kind: "ok" | "bad" | "warn" | "info", text: string, extra?: Node): HTMLElement {
-        const li = el("li", "rv-check rv-" + kind)
-        const mark = el("span", "rv-mark", kind === "ok" ? "ถูกต้อง" : kind === "bad" ? "ต้องแก้" : kind === "warn" ? "ให้ผู้ตรวจดู" : "ข้อมูล")
-        li.append(mark, el("span", undefined, text))
-        if (extra) li.append(extra)
-        return li
-    }
 
     function renderNotInstalled(): void {
         show(card("ยังเปิดใช้แท็บนี้ไม่ได้", [
-            el("p", undefined, "ฐานข้อมูลยังไม่มีตารางของแท็บตรวจสอบ หรือยังเป็นรุ่นเก่า ผู้ดูแลระบบต้องรันไฟล์ scripts/review-tab-2026-11.sql แล้วตามด้วย scripts/review-tab-2026-11-auditee.sql ใน Supabase SQL editor แล้วรีเฟรชหน้านี้"),
+            el("p", undefined, "ฐานข้อมูลยังไม่มีตารางของแท็บตรวจสอบ หรือยังเป็นรุ่นเก่า แจ้งผู้ดูแลระบบ แล้วรีเฟรชหน้านี้"),
         ]))
     }
 
@@ -664,6 +872,7 @@
     // comes back to the same control; if it is gone, to the heading of the
     // part it was in, never to the page.
     function render(): void {
+        heldRender = false
         syncRole()
         if (!st) return
         const s = st
@@ -682,10 +891,10 @@
             else if (n.scope !== noteScope) notes.delete(k)
         }
         const a = document.activeElement as HTMLElement | null
-        const inBody = !!a && a !== body && a !== side && (body.contains(a) || side.contains(a))
+        const inBody = !!a && a !== body && a !== side && a !== dock && (body.contains(a) || inSide(a))
         const focusId = inBody && a ? a.id : ""
         const holder = inBody && a ? a.closest("[aria-labelledby]") : null
-        const holderId = holder && (body.contains(holder) || side.contains(holder)) ? holder.getAttribute("aria-labelledby") || "" : ""
+        const holderId = holder && (body.contains(holder) || inSide(holder)) ? holder.getAttribute("aria-labelledby") || "" : ""
         let selA: number | null = null, selB: number | null = null
         if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) {
             try { selA = a.selectionStart; selB = a.selectionEnd } catch (e) { /* not a text field */ }
@@ -693,23 +902,32 @@
         const viewTop = view.scrollTop
         const list = body.querySelector(".rv-people-list")
         const listTop = list ? list.scrollTop : 0
+        // The person panel is drawn new: the same person keeps its scroll.
+        const per = body.querySelector<HTMLElement>(".rv-person")
+        const perTop = per ? per.scrollTop : 0
+        const perWho = selected
         refreshLists(s)
         const top: Node[] = []
         if (loadError) top.push(failBox(loadError, "rv-retry-load", () => { void reload() }))
         const tn = noteEl("top")
         if (tn) top.push(tn)
         sideOut = []
+        chipDrawn = false
         const main = role === "auditee" ? auditee(s) : auditor(s)
-        side.replaceChildren(...sideOut)
-        body.replaceChildren(...top, ...main)
-        drawMail()
+        const docked = (n: Node): boolean => n instanceof HTMLElement && n.classList.contains("rv-dock")
+        // The parts kept from the last redraw stay in place; the rest is new.
+        patchChildren(side, sideOut.filter((n) => !docked(n)))
+        patchChildren(dock, sideOut.filter(docked))
+        patchChildren(body, [...top, ...main])
         const list2 = body.querySelector(".rv-people-list")
-        if (list2) list2.scrollTop = listTop
+        if (list2 && list2 !== list && listTop) list2.scrollTop = listTop
+        const per2 = perTop && selected === perWho ? body.querySelector<HTMLElement>(".rv-person") : null
+        if (per2 && per2 !== per) per2.scrollTop = perTop
         if (inBody) {
             const f = focusId ? document.getElementById(focusId) : null
-            if (f) f.focus({ preventScroll: true })
+            if (f && document.activeElement !== f) f.focus({ preventScroll: true })
             if (f && document.activeElement === f) {
-                if (selA !== null && (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement)) {
+                if (selA !== null && (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && (f.selectionStart !== selA || f.selectionEnd !== selB)) {
                     try { f.setSelectionRange(selA, selB === null ? selA : selB) } catch (e) { /* not a text field */ }
                 }
             } else {
@@ -717,8 +935,10 @@
                 if (h) { if (!h.hasAttribute("tabindex")) h.tabIndex = -1; h.focus({ preventScroll: true }) }
             }
         }
-        view.scrollTop = viewTop
-        syncStick()
+        // Unscrolled (the usual case at Pong's size): nothing to put back,
+        // and no layout to force here.
+        if (viewTop && view.scrollTop !== viewTop) view.scrollTop = viewTop
+        afterFrame()
         markOpened(s)
     }
 
@@ -755,23 +975,19 @@
             out.push(returnedCard(s, r))
             ensureIssues(s)
             if (issuesShown()) out.push(issuesCard(s, "auditee"))
-            const more = el("section", "rv-card glass rv-more")
-            const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด")
-            h.id = "rv-h-more"
-            more.setAttribute("aria-labelledby", h.id)
-            const row = el("div", "rv-actions")
-            const t = el("button", "btn-ghost", moreOpen ? "ซ่อน" : "แสดง")
-            t.type = "button"
-            t.id = "rv-more-toggle"
-            t.setAttribute("aria-expanded", String(moreOpen))
-            t.setAttribute("aria-controls", "rv-more-body")
-            t.addEventListener("click", () => { moreOpen = !moreOpen; render() })
-            row.append(t)
-            const inner = el("div", "rv-stack")
-            inner.id = "rv-more-body"
-            if (moreOpen) inner.append(...buildAlerts(s), listCard(s))
-            else inner.hidden = true
-            more.append(h, row, inner)
+            // Kept like the table in it, so opening it again shows the
+            // table built before (2026-11-18).
+            if (!moreBox) moreBox = newMoreBox()
+            const { sec: more, t, inner } = moreBox
+            setText(t, moreOpen ? "ซ่อน" : "แสดง")
+            setAttr(t, "aria-expanded", String(moreOpen))
+            if (moreOpen) {
+                const lc = listCard(s)
+                patchChildren(inner, [...buildAlerts(s), lc])
+                // Open, a long list shares the window's height with the fixes above.
+                more.classList.toggle("rv-fill", lc.classList.contains("rv-fill"))
+            } else { patchChildren(inner, []); more.classList.remove("rv-fill") }
+            setHidden(inner, !moreOpen)
             out.push(more)
             if (!moreOpen) out.push(...buildAlerts(s).filter((n) => (n as HTMLElement).dataset.blocking === "1"))
         } else {
@@ -781,6 +997,24 @@
         return out
     }
     let moreOpen = false
+    let moreBox: { sec: HTMLElement; t: HTMLButtonElement; inner: HTMLElement } | null = null
+    function newMoreBox(): { sec: HTMLElement; t: HTMLButtonElement; inner: HTMLElement } {
+        const sec = el("section", "rv-card glass rv-more")
+        const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด")
+        h.id = "rv-h-more"
+        sec.setAttribute("aria-labelledby", h.id)
+        const row = el("div", "rv-actions")
+        const t = el("button", "btn-ghost", "แสดง")
+        t.type = "button"
+        t.id = "rv-more-toggle"
+        t.setAttribute("aria-controls", "rv-more-body")
+        t.addEventListener("click", () => { moreOpen = !moreOpen; render() })
+        row.append(t)
+        const inner = el("div", "rv-stack")
+        inner.id = "rv-more-body"
+        sec.append(h, row, inner)
+        return { sec, t, inner }
+    }
 
     function waitingCard(s: State): HTMLElement {
         const left = Math.max(0, s.roster.total - s.roster.sent)
@@ -791,7 +1025,7 @@
         const top = el("div", "rv-actions rv-spread")
         const a = el("a", "rv-link", "ดูรายชื่อในแท็บตามส่ง")
         a.href = "/dashboard/#followup"
-        top.append(h, a)
+        top.append(headRow(h), a)
         const bar = el("div", "rv-bar")
         bar.setAttribute("role", "progressbar")
         bar.setAttribute("aria-label", "แพทย์ส่งแล้ว")
@@ -807,7 +1041,7 @@
     }
 
     const fmt2 = (n: number | null | undefined): string =>
-        n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        n === null || n === undefined ? "" : NUM_EN2.format(Number(n))
 
     // Budget and N are typed on the overview page (ภาพรวม, the month card's
     // งบ button; Pong, 2026-11-11), which also starts the month's build.
@@ -818,20 +1052,23 @@
         h.id = "rv-h-inputs"
         c.setAttribute("aria-labelledby", h.id)
         const inp = s.inputs
-        const row = el("div", "rv-ro")
         const set = !!(inp && inp.doctors)
+        c.append(h)
         if (inp) {
-            row.append(kv("งบประมาณ (บาท)", budgetText(inp.budget)), kv("จำนวนแพทย์ (N)", inp.doctors ? int(inp.doctors) : "–"), kv("per P4P", baht(inp.per_p4p)))
+            const row = el("dl", "rv-ro")
+            row.append(kv("งบประมาณ (บาท)", baht(inp.budget)), kv("จำนวนแพทย์ (N)", inp.doctors ? int(inp.doctors) : "–"), kv(en("per P4P"), baht(inp.per_p4p)))
+            c.append(row)
         }
         // Only the admin (owner) has the งบ button (Pong, 2026-11-17): the
         // ผู้จัดทำ sees the numbers, or that the admin has yet to type them.
-        if (!set) row.append(el("span", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (auditeeOnly() ? " (ผู้ดูแลระบบกรอก)" : "")))
+        if (!set) c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (auditeeOnly() ? " (ผู้ดูแลระบบกรอก)" : "")))
         if (!auditeeOnly()) {
-            const go = el("a", (set ? "btn-ghost" : "btn-primary") + " rv-go", set ? "แก้ที่หน้าภาพรวม →" : "กรอกที่หน้าภาพรวม →") as HTMLAnchorElement
+            // Typed already: a quiet link; not yet: the button to go and type them.
+            const go = el("a", set ? "rv-link" : "btn-primary rv-go") as HTMLAnchorElement
+            go.append(el("span", undefined, set ? "แก้ที่หน้าภาพรวม" : "กรอกที่หน้าภาพรวม"), iconEl("arrow-right"))
             go.href = "/dashboard/#overview"
-            row.append(go)
+            if (set) { const r = el("div", "rv-go-row"); r.append(go); c.append(r) } else c.append(go)
         }
-        c.append(h, row)
         if (s.build || openRequest(s) || s.request) c.append(filesRow(s))
         return c
     }
@@ -840,7 +1077,8 @@
     // files that are sent (that is the build the system checked).
     function filesRow(s: State): HTMLElement {
         const w = el("div", "rv-files")
-        const lab = el("span", "rv-label", "ไฟล์ใน Google Drive ")
+        const lab = el("span", "rv-label", "ไฟล์ใน ")
+        lab.append(en("Google Drive"), " ")
         const b = s.build
         const req = openRequest(s)
         if (!req) lab.append(el("span", "rv-hint", "· ดูอย่างเดียว"))
@@ -849,18 +1087,19 @@
         if (req) {
             const p = el("p", "rv-progress", q2text(req))
             row.append(p)
+            // Said here, not under the table, so the table keeps its rows.
+            if (s.build && auditeeTurn(s)) row.append(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"))
         } else {
             const link = (text: string, id: string | undefined, url: (x: string) => string): HTMLElement => {
                 // No id: a build from before the file's id was kept, or the
                 // upload failed. The next build stores it.
                 if (!id) return el("span", "rv-hint", text + ": ยังไม่มีลิงก์")
-                const a = el("a", "rv-link", text + " ")
+                const a = el("a", "rv-link")
                 a.href = url(id)
                 a.target = "_blank"
                 a.rel = "noopener"
-                const arrow = el("span", undefined, "↗")
-                arrow.setAttribute("aria-hidden", "true")
-                a.append(arrow, el("span", "sr-only", " " + shortMonth(s.month) + " (เปิดในแท็บใหม่)"))
+                a.append(/^[A-Za-z0-9]+$/.test(text) ? en(text) : el("span", undefined, text), iconEl("external"),
+                    el("span", "sr-only", " " + shortMonth(s.month) + " (เปิดในแท็บใหม่)"))
                 return a
             }
             if (b) {
@@ -999,6 +1238,8 @@
     let editing = ""
     let searchSay: number | undefined
     const rowsWant = (s: State): string => s.month + ":" + (s.build ? s.build.id : "") + ":" + s.stale + ":" + s.edits
+    // A score save loads the list itself, with the state (rowsHold).
+    let rowsHold = false
     async function loadRows(s: State): Promise<void> {
         const seq = ++rowsSeq
         rowsKey = rowsWant(s)
@@ -1013,9 +1254,9 @@
             rowsErr = errText(e, "โหลดรายชื่อไม่สำเร็จ")
             shout("โหลดรายชื่อไม่สำเร็จ: " + rowsErr)
         }
-        render()
+        renderSoon()
     }
-    const ensureRows = (s: State): void => { if (s.build && rowsKey !== rowsWant(s) && !rowsErr) void loadRows(s) }
+    const ensureRows = (s: State): void => { if (s.build && rowsKey !== rowsWant(s) && !rowsErr && !rowsHold) void loadRows(s) }
 
     const sameScore = (a: number | null, b: number | null): boolean =>
         a === null || b === null ? a === b : Math.abs(Number(a) - Number(b)) < 0.005
@@ -1039,29 +1280,54 @@
         uncached: "ยอดรวมในไฟล์แพทย์เป็นสูตรที่ไม่ได้บันทึกค่า", none: "ไม่พบยอดรวมในไฟล์แพทย์", empty: "ไฟล์แพทย์ว่าง", "no-sheet": "ไม่พบไฟล์แพทย์",
     }
 
-    function listCard(s: State): HTMLElement {
-        const c = el("section", "rv-card glass")
+    // The table, built once per month and kept (2026-11-18, the tab's lag:
+    // about 3,000 new elements on every filter click, keystroke and edit).
+    // Each redraw patches it: the filters' counts, which rows a filter or
+    // the search hides, and only the rows whose person or edit box changed.
+    interface LRow { tr: HTMLTableRowElement; tr2: HTMLTableRowElement | null; sig: string }
+    interface LCard {
+        card: HTMLElement
+        h: HTMLElement
+        head: HTMLElement
+        flt: Map<string, { b: HTMLButtonElement; n: HTMLElement }>
+        fl: HTMLElement
+        sl: HTMLElement
+        si: HTMLInputElement
+        box: HTMLElement
+        cap: HTMLElement
+        thead: HTMLElement
+        tbody: HTMLElement
+        empty: HTMLTableRowElement
+        emptyTd: HTMLTableCellElement
+        rows: Map<string, LRow>
+        canEdit: boolean | null
+    }
+    let lc: LCard | null = null
+    let aSearchT: number | undefined
+    const rowJson = new WeakMap<Row, string>()
+    const rowData = (p: Row): string => { let j = rowJson.get(p); if (j === undefined) { j = JSON.stringify(p); rowJson.set(p, j) } return j }
+    function newListCard(): LCard {
+        const card = el("section", "rv-card glass")
         const h = el("h2", "rv-card-h", "รายชื่อ")
         h.id = "rv-h-list"
-        c.setAttribute("aria-labelledby", h.id)
-        if (!s.build) {
-            c.append(h, el("p", "rv-hint", openRequest(s) ? "รอสร้างไฟล์เสร็จ แล้วรายชื่อและผลเทียบจะขึ้นที่นี่" : "รายชื่อและผลเทียบจะขึ้นที่นี่เมื่อระบบสร้างไฟล์แล้ว"))
-            return c
-        }
-        ensureRows(s)
+        card.setAttribute("aria-labelledby", h.id)
         const head = el("div", "rv-actions rv-list-head")
-        head.append(h)
-        const all = rows || []
         const fl = el("div", "rv-filters")
         fl.setAttribute("role", "group")
         fl.setAttribute("aria-label", "แสดง")
+        const flt = new Map<string, { b: HTMLButtonElement; n: HTMLElement }>()
         for (const [k, t, f] of FILTERS) {
-            const b = el("button", "rv-flt", t + " " + int(all.filter(f).length))
+            const b = el("button", "rv-flt", t + " ")
+            const n = el("span", "rv-count", "")
+            b.append(n)
             b.type = "button"
             b.id = "rv-flt-" + k
-            b.setAttribute("aria-pressed", String(aFilter === k))
-            b.addEventListener("click", () => { aFilter = k; render(); say(t + " " + int(all.filter(f).length) + " คน") })
+            b.addEventListener("click", () => {
+                aFilter = k
+                pressFirst(b, () => { if (st) render(); say(t + " " + int((rows || []).filter(f).length) + " คน") })
+            })
             fl.append(b)
+            flt.set(k, { b, n })
         }
         const sl = el("label", "rv-search")
         sl.append(el("span", "sr-only", "ค้นหาชื่อหรือกลุ่มงาน"))
@@ -1071,17 +1337,84 @@
         si.placeholder = "ค้นหาชื่อหรือกลุ่มงาน"
         si.autocomplete = "off"
         si.value = aSearch
+        // The table follows once typing pauses (120 ms), not on every key.
         si.addEventListener("input", () => {
             aSearch = si.value
-            render()
+            clearTimeout(aSearchT)
+            aSearchT = window.setTimeout(() => { aSearchT = undefined; if (st) render() }, 120)
             clearTimeout(searchSay)
-            searchSay = window.setTimeout(() => { say(int(body.querySelectorAll(".rv-table tbody tr[data-i]").length) + " คน") }, 700)
+            searchSay = window.setTimeout(() => { say(int(body.querySelectorAll(".rv-table tbody tr[data-i]:not([hidden])").length) + " คน") }, 700)
         })
         sl.append(si)
-        head.append(fl, sl)
-        c.append(head)
-        if (rowsErr) { c.append(failBox("โหลดรายชื่อไม่สำเร็จ: " + rowsErr, "rv-retry-rows", () => { rowsErr = ""; render() })); return c }
-        if (!rows) { c.append(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return c }
+        const box = el("div", "rv-table-box")
+        const tbl = el("table", "rv-table")
+        const cap = el("caption", "sr-only", "")
+        const thead = el("thead")
+        const tbody = el("tbody")
+        const empty = el("tr")
+        const emptyTd = el("td", "rv-hint", "ไม่มีรายชื่อ")
+        empty.append(emptyTd)
+        empty.hidden = true
+        tbody.append(empty)
+        tbl.append(cap, thead, tbody)
+        box.append(tbl)
+        return { card, h, head, flt, fl, sl, si, box, cap, thead, tbody, empty, emptyTd, rows: new Map(), canEdit: null }
+    }
+    // One person's row (and, while their score is edited, the row of its
+    // buttons under it), drawn new.
+    function listRow(s: State, p: Row, canEdit: boolean, editingHere: boolean): LRow {
+        const tr = el("tr", editingHere ? "on" : "")
+        tr.dataset.i = p.index
+        const name = el("td", undefined, p.name)
+        const dept = el("td", undefined, p.intern ? "INTERN" : p.department)
+        const sc = el("td", "num")
+        if (editingHere) sc.append(...scoreEditor(s, p, "list"))
+        else scoreCell(sc, p)
+        const stated = el("td", "num", p.stated === null ? "–" : num2(p.stated))
+        const res = el("td")
+        res.append(...resultChips(p))
+        tr.append(name, dept, sc, stated, res)
+        if (canEdit) {
+            const td = el("td", "rv-edit-cell")
+            if (!editingHere) td.append(editButton(p, "list"))
+            tr.append(td)
+        }
+        let tr2: HTMLTableRowElement | null = null
+        if (editingHere) {
+            tr2 = el("tr", "on")
+            const td = el("td")
+            td.colSpan = 6
+            td.append(editActions(s, p, "list"))
+            tr2.append(td)
+        }
+        return { tr, tr2, sig: "" }
+    }
+
+    function listCard(s: State): HTMLElement {
+        if (!s.build) {
+            const c = el("section", "rv-card glass")
+            const h = el("h2", "rv-card-h", "รายชื่อ")
+            h.id = "rv-h-list"
+            c.setAttribute("aria-labelledby", h.id)
+            c.append(headRow(h), el("p", "rv-hint", openRequest(s) ? "รอสร้างไฟล์เสร็จ แล้วรายชื่อและผลเทียบจะขึ้นที่นี่" : "รายชื่อและผลเทียบจะขึ้นที่นี่เมื่อระบบสร้างไฟล์แล้ว"))
+            return c
+        }
+        ensureRows(s)
+        if (!lc) lc = newListCard()
+        const L = lc
+        const c = L.card
+        patchChildren(L.head, [headRow(L.h), L.fl, L.sl])
+        const all = rows || []
+        for (const [k, , f] of FILTERS) {
+            const x = L.flt.get(k)
+            if (!x) continue
+            setText(x.n, int(all.filter(f).length))
+            setAttr(x.b, "aria-pressed", String(aFilter === k))
+        }
+        if (L.si.value !== aSearch) L.si.value = aSearch
+        if (rowsErr) { patchChildren(c, [L.head, failBox("โหลดรายชื่อไม่สำเร็จ: " + rowsErr, "rv-retry-rows", () => { rowsErr = ""; render() })]); c.classList.remove("rv-fill"); return c }
+        if (!rows) { patchChildren(c, [L.head, el("p", "rv-loading", "กำลังโหลดรายชื่อ…")]); c.classList.remove("rv-fill"); return c }
+        const kids: Node[] = [L.head]
 
         // The alert: scores of 30,000 or more, or under 2,200.
         const high = all.filter((p) => flagOf(curScore(p)) === "high").length
@@ -1097,63 +1430,67 @@
                 b.addEventListener("click", () => { aFilter = "flag"; render(); const f = document.getElementById("rv-flt-flag"); if (f) f.focus() })
                 w.append(b)
             }
-            c.append(w)
+            kids.push(w)
         }
 
         const q = aSearch.trim().toLowerCase()
         const pick = (FILTERS.find((x) => x[0] === aFilter) || FILTERS[0])[2]
         const shown = all.filter((p) => pick(p) && (!q || p.name.toLowerCase().includes(q) || p.department.toLowerCase().includes(q)))
-        const box = el("div", "rv-table-box")
-        const tbl = el("table", "rv-table")
-        const cap = el("caption", "sr-only", "รายชื่อ " + shortMonth(s.month) + " · " + int(shown.length) + " คน")
-        const hr = el("tr")
-        for (const [x, cls] of [["ชื่อ-นามสกุล", ""], ["กลุ่มงาน", ""], ["คะแนน", "num"], ["ไฟล์แพทย์", "num"], ["ผล", ""]]) {
-            const th = el("th", cls, x); th.scope = "col"; hr.append(th)
-        }
+        const vis = new Set(shown.map((p) => p.index))
+        setText(L.cap, "รายชื่อ " + shortMonth(s.month) + " · " + int(shown.length) + " คน")
         const canEdit = auditeeTurn(s)
-        if (canEdit) { const th = el("th"); th.scope = "col"; th.append(el("span", "sr-only", "แก้คะแนน")); hr.append(th) }
-        const thead = el("thead"); thead.append(hr)
-        const tbody = el("tbody")
-        for (const p of shown) {
+        if (L.canEdit !== canEdit) {
+            const hr = el("tr")
+            for (const [x, cls] of [["ชื่อ-นามสกุล", ""], ["กลุ่มงาน", ""], ["คะแนน", "num"], ["ไฟล์แพทย์", "num"], ["ผล", ""]]) {
+                const th = el("th", cls, x); th.scope = "col"; hr.append(th)
+            }
+            if (canEdit) { const th = el("th"); th.scope = "col"; th.append(el("span", "sr-only", "แก้คะแนน")); hr.append(th) }
+            L.thead.replaceChildren(hr)
+            L.emptyTd.colSpan = canEdit ? 6 : 5
+            L.canEdit = canEdit
+        }
+        // Each row is drawn again only when what it shows changed; a new one
+        // takes its old one's place, so the rows around it stay put.
+        const want: Node[] = []
+        const next = new Map<string, LRow>()
+        for (const p of all) {
             const editingHere = canEdit && editing === "list:" + p.index
-            const tr = el("tr", editingHere ? "on" : "")
-            tr.dataset.i = p.index
-            const name = el("td", undefined, p.name)
-            const dept = el("td", undefined, p.intern ? "INTERN" : p.department)
-            const sc = el("td", "num")
-            if (editingHere) sc.append(...scoreEditor(s, p, "list"))
-            else scoreCell(sc, p)
-            const st = el("td", "num", p.stated === null ? "–" : num2(p.stated))
-            const res = el("td")
-            res.append(...resultChips(p))
-            tr.append(name, dept, sc, st, res)
-            if (canEdit) {
-                const td = el("td", "rv-edit-cell")
-                if (!editingHere) td.append(editButton(p, "list"))
-                tr.append(td)
+            const spot = "score-" + p.index
+            const n = notes.get(spot)
+            const sig = rowData(p) + "|" + canEdit + "|" + editingHere +
+                (editingHere ? "|" + (fieldErrs.get("score:" + p.index) || "") + "|" + (n ? n.kind + n.text : "") + "|" + flying(s, spot) : "")
+            let r = L.rows.get(p.index)
+            if (!r || r.sig !== sig) {
+                const nr = listRow(s, p, canEdit, editingHere)
+                nr.sig = sig
+                if (r && r.tr.parentNode === L.tbody) {
+                    r.tr.replaceWith(nr.tr)
+                    if (r.tr2) { if (nr.tr2) r.tr2.replaceWith(nr.tr2); else r.tr2.remove() } else if (nr.tr2) nr.tr.after(nr.tr2)
+                }
+                r = nr
             }
-            tbody.append(tr)
-            if (editingHere) {
-                const tr2 = el("tr", "on")
-                const td = el("td")
-                td.colSpan = 6
-                td.append(editActions(s, p, "list"))
-                tr2.append(td)
-                tbody.append(tr2)
-            }
+            next.set(p.index, r)
+            const h = !vis.has(p.index)
+            setHidden(r.tr, h)
+            want.push(r.tr)
+            if (r.tr2) { setHidden(r.tr2, h); want.push(r.tr2) }
         }
-        if (!shown.length) {
-            const tr = el("tr"); const td = el("td", "rv-hint", "ไม่มีรายชื่อ"); td.colSpan = canEdit ? 6 : 5; tr.append(td); tbody.append(tr)
-        }
-        tbl.append(cap, thead, tbody)
-        box.append(tbl)
-        c.append(box)
-        if (openRequest(s) || all.some(pending)) c.append(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"))
+        want.push(L.empty)
+        L.rows = next
+        patchChildren(L.tbody, want)
+        setHidden(L.empty, shown.length > 0)
+        kids.push(L.box)
+        // Long enough to need it: the table gives up height to fit the
+        // window (a short one keeps its own height; .rv-fill has a floor).
+        c.classList.toggle("rv-fill", shown.length > 3)
+        // While a build runs this is said in the left column, by its progress.
+        if (!openRequest(s) && all.some(pending)) kids.push(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"))
         const n = noteEl("score")
-        if (n) c.append(n)
+        if (n) kids.push(n)
+        patchChildren(c, kids)
         return c
     }
-    const num2 = (n: number | null): string => n === null ? "–" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const num2 = (n: number | null): string => n === null ? "–" : NUM_TH2.format(Number(n))
 
     function scoreCell(td: HTMLElement, p: Row): void {
         const cur = curScore(p)
@@ -1166,23 +1503,21 @@
     function resultChips(p: Row): Node[] {
         const out: Node[] = []
         const fl = flagOf(curScore(p))
-        if (fl) out.push(chip("warn", FLAG_TEXT[fl]))
-        if (resent(p)) out.push(chip("warn", "แพทย์ส่งไฟล์ใหม่หลังแก้"))
+        if (fl) out.push(chip("flag", FLAG_TEXT[fl]))
+        if (resent(p)) out.push(chip("resent", "แพทย์ส่งไฟล์ใหม่หลังแก้"))
         else if (p.edit) out.push(chip("edit", "แก้แล้ว"))
         if (!pending(p)) {
             if (p.scoreCheck === "mismatch") out.push(chip("bad", "คะแนนไม่ตรง"))
             if (p.moneyCheck === "mismatch") out.push(chip("bad", "เงินไม่ตรง"))
             if (p.scoreCheck === "missing" || p.moneyCheck === "missing") {
                 out.push(chip("miss", "ไม่พบข้อมูล"))
-                out.push(el("span", "rv-old", p.scoreCheck === "missing" ? (MISS_TEXT[p.statedHow] || "ไม่พบยอดรวมในไฟล์แพทย์")
+                out.push(el("span", "rv-old rv-miss-why", p.scoreCheck === "missing" ? (MISS_TEXT[p.statedHow] || "ไม่พบยอดรวมในไฟล์แพทย์")
                     : p.sk03Row === null ? "ไม่มีใน SK03" : "ไม่พบในชีตกลุ่มงาน"))
             }
         }
         if (!out.length) {
             const ok = el("span", "rv-ok-mark")
-            const m = el("span", undefined, "✓")
-            m.setAttribute("aria-hidden", "true")
-            ok.append(m, el("span", "sr-only", "ตรงกัน"))
+            ok.append(iconEl("check-circle"), el("span", undefined, "ตรงกัน"))
             out.push(ok)
         }
         return out
@@ -1229,7 +1564,9 @@
         err.id = id + "-e"
         const warn = el("p", "rv-warn-text")
         warn.id = id + "-w"
-        const paint = (): void => { const w = scoreWarn(i.value); warn.textContent = w; warn.hidden = !w }
+        // Written only when it changes: in the table, any write lays the
+        // whole table out again (2026-11-18).
+        const paint = (): void => { const w = scoreWarn(i.value); setText(warn, w); setHidden(warn, !w) }
         paint()
         i.addEventListener("input", paint)
         if (fe) i.setAttribute("aria-invalid", "true")
@@ -1298,9 +1635,11 @@
         if (!begin(s, spot, btn)) return
         busy = true
         let ok = false
+        let out: ScoreReply | null = null
         try {
-            const r = await post<{ changed: boolean }>(monthApi(s) + "/scores/" + p.index, { score: v, note: ni ? ni.value : "" }, "PUT")
+            const r = await post<ScoreReply>(monthApi(s) + "/scores/" + p.index, { score: v, note: ni ? ni.value : "" }, "PUT")
             ok = true
+            out = r
             tell(s, "score", "ok", p.name + ": " + (r.changed ? "บันทึกคะแนน " + num2(Number(v)) + " แล้ว · กำลังสร้างไฟล์ใหม่" : "คะแนนเท่าเดิม"))
         } catch (e) {
             const msg = errText(e, "บันทึกไม่สำเร็จ")
@@ -1310,17 +1649,37 @@
             busy = false
             end(s, spot)
         }
-        if (ok) {
-            editing = ""
-            forget(s, "score:" + p.index, "enote:" + p.index)
-            rowsKey = ""
-            if (people && s.month === month) peopleKey = ""
+        if (!ok || s.month !== month) { await reload(); return }
+        editing = ""
+        forget(s, "score:" + p.index, "enote:" + p.index)
+        // The row shows the new score from the reply at once (2026-11-18),
+        // and a build queued shows as on its way; then the state, the list
+        // (and the names of a returned round) load together, not one after
+        // another.
+        const e = out && out.changed ? out.edit : null
+        const row = e && rows ? rows.find((x) => x.index === p.index) : undefined
+        if (e && row) {
+            row.roster = Number(e.new_score)
+            row.edit = { old: e.old_score === null ? null : Number(e.old_score), new: Number(e.new_score), note: e.note || "", at: e.created_at || "", by: e.created_by || "" }
+            rowJson.delete(row)
         }
-        await reload()
-        if (ok) {
-            const b = document.getElementById(eid("edit", where, p)) || document.getElementById(where === "fix" ? "rv-h-ans" : "rv-h-list")
-            if (b) { if (!b.hasAttribute("tabindex") && b.tagName === "H2") b.tabIndex = -1; b.focus() }
-        }
+        if (out && out.request && st && st.month === s.month) st.request = out.request
+        render()
+        const b = document.getElementById(eid("edit", where, p)) || document.getElementById(where === "fix" ? "rv-h-ans" : "rv-h-list")
+        if (b) { if (!b.hasAttribute("tabindex") && b.tagName === "H2") b.tabIndex = -1; b.focus() }
+        rowsHold = true
+        const loads: Promise<unknown>[] = [reload(), loadRows(s)]
+        const r = liveRound(s)
+        if (people && r) loads.push(loadPeople(s, r))
+        try { await Promise.all(loads) } finally { rowsHold = false }
+        // The list was asked for after the save: it is the newest state's.
+        if (st && st.month === s.month && !rowsErr) rowsKey = rowsWant(st)
+        if (s.month === month) render()
+    }
+    interface ScoreReply {
+        changed: boolean
+        edit: { old_score: number | null; new_score: number; note?: string; created_at?: string; created_by?: string } | null
+        request: Request | null
     }
 
     // ── Send ─────────────────────────────────────────────────────────────
@@ -1346,7 +1705,7 @@
         const why = submitReasons(s)
         const r = liveRound(s)
         const next = r ? r.round_no + 1 : 1
-        const bar = el("div", "rv-sendbar glass")
+        const bar = el("div", "rv-sendbar rv-dock")
         const reason = el("span", "rv-hint")
         reason.id = "rv-send-why"
         const send = el("button", "btn-primary rv-lg", next > 1 ? "ส่งรอบที่ " + next : "ส่งให้ผู้ตรวจสอบ")
@@ -1357,23 +1716,26 @@
             send.setAttribute("aria-disabled", "true")
             send.setAttribute("aria-describedby", reason.id)
         }
-        if (flying(s, "send")) markBusy(send)
+        if (flying(s, "send") || savesWait === send.id) markBusy(send)
         send.addEventListener("click", () => {
             if (why.length) { say("ยังส่งไม่ได้: " + why.join(" · ")); return }
-            openConfirm(s, next)
+            afterSaves(send, () => openConfirm(s, next), () => sideSaving(s.month), () => whenSideSaved(s.month))
         })
-        bar.append(reason, send)
+        bar.append(send, reason)
         return bar
     }
 
-    function kv(label: string, value: string): HTMLElement {
+    // One figure: <div class="rv-kv"><dt>label</dt><dd>value</dd></div>, in a <dl>.
+    function kv(label: string | Node, value: string): HTMLElement {
         const d = el("div", "rv-kv")
-        d.append(el("span", undefined, label), el("b", undefined, value))
+        const dt = el("dt")
+        dt.append(label)
+        d.append(dt, el("dd", undefined, value))
         return d
     }
     function kvGrid(budget: number | null, doctors: number | null | undefined, perP4p: number | null, edits?: number): HTMLElement {
-        const g = el("div", "rv-kvs")
-        g.append(kv("งบประมาณ", budgetText(budget)), kv("จำนวนแพทย์", doctors ? int(doctors) : "–"), kv("per P4P", baht(perP4p)))
+        const g = el("dl", "rv-kvs")
+        g.append(kv("งบประมาณ", baht(budget)), kv("จำนวนแพทย์", doctors ? int(doctors) : "–"), kv(en("per P4P"), baht(perP4p)))
         if (edits !== undefined) g.append(kv("แก้คะแนน", int(edits) + " คน"))
         return g
     }
@@ -1398,7 +1760,8 @@
     let confirmBusy = false
     let confirmReturn = ""
     let confirmErr: HTMLElement | null = null
-    function askConfirm(title: string, kids: Node[], button: string, action: () => Promise<void>): void {
+    // danger: the step undoes something (ส่งกลับ, reopening): a red button.
+    function askConfirm(title: string, kids: Node[], button: string, action: () => Promise<void>, danger = false): void {
         confirmTitle.textContent = title
         const err = el("p", "rv-err rv-confirm-err")
         err.id = "review-confirm-err"
@@ -1406,6 +1769,7 @@
         confirmErr = err
         confirmBody.replaceChildren(...kids, err)
         confirmSend.textContent = button
+        confirmSend.classList.toggle("btn-danger", danger)
         if (!confirmBusy) {
             confirmSend.removeAttribute("aria-disabled")
             confirmSend.removeAttribute("aria-busy")
@@ -1416,12 +1780,13 @@
         confirmDlg.showModal()
     }
     confirmSend.addEventListener("click", () => { if (confirmAction && !confirmBusy) void confirmAction() })
-    // Esc and ยกเลิก do not close it while the step is being sent (the
+    // Esc, × and ยกเลิก do not close it while the step is being sent (the
     // capture listener runs before the shared data-close one in app.ts).
     confirmDlg.addEventListener("cancel", (ev) => { if (confirmBusy) ev.preventDefault() })
-    const confirmCancel = confirmDlg.querySelector<HTMLElement>("[data-close]")
+    const confirmCancels = Array.from(confirmDlg.querySelectorAll<HTMLElement>("[data-close]"))
     confirmDlg.addEventListener("click", (ev) => {
-        if (confirmBusy && confirmCancel && ev.target instanceof Node && confirmCancel.contains(ev.target)) { ev.stopPropagation(); ev.preventDefault() }
+        const t = ev.target
+        if (confirmBusy && t instanceof Node && confirmCancels.some((x) => x.contains(t))) { ev.stopPropagation(); ev.preventDefault() }
     }, true)
     // The button that opened it may have been redrawn while it was open.
     confirmDlg.addEventListener("close", () => {
@@ -1439,7 +1804,7 @@
         if (confirmBusy) return false
         confirmBusy = true
         markBusy(confirmSend)
-        if (confirmCancel) confirmCancel.setAttribute("aria-disabled", "true")
+        for (const x of confirmCancels) x.setAttribute("aria-disabled", "true")
         const sent = confirmAction
         const err = confirmErr
         if (err) err.textContent = ""
@@ -1457,7 +1822,7 @@
             return false
         } finally {
             confirmBusy = false
-            if (confirmCancel) confirmCancel.removeAttribute("aria-disabled")
+            for (const x of confirmCancels) x.removeAttribute("aria-disabled")
             confirmSend.removeAttribute("aria-disabled")
             confirmSend.removeAttribute("aria-busy")
         }
@@ -1467,9 +1832,16 @@
             const r = await post<{ round: { round_no: number } }>(monthApi(s) + "/rounds")
             return "ส่งรอบที่ " + r.round.round_no + " ให้ผู้ตรวจสอบแล้ว"
         })
-        if (ok) { moreOpen = false; await loadMonths().catch(() => false) }
-        await reload()
-        if (ok) focusTop()
+        if (!ok) { await reload(); return }
+        // Sent: the note and a spinning ส่ง show at once; the month and the
+        // months load together.
+        moreOpen = false
+        holdBusy(s, "send")
+        if (s.month === month) render()
+        await Promise.all([loadMonths().catch(() => false), reload()])
+        end(s, "send")
+        if (s.month === month) render()
+        focusTop()
     }
     function focusTop(): void {
         const h = body.querySelector<HTMLElement>(".rv-turn, .rv-card-h")
@@ -1515,8 +1887,7 @@
         } finally {
             end(s, "withdraw")
         }
-        if (ok) await loadMonths().catch(() => false)
-        await reload()
+        await Promise.all([ok ? loadMonths().catch(() => false) : Promise.resolve(false), reload()])
         if (ok) focusTop()
     }
 
@@ -1534,7 +1905,15 @@
         return !!r && roundEmails(s, r).some((e) => e.status === "queued" || e.status === "sending")
     }
     function emailBox(s: State, r: Round): HTMLElement | null {
-        if (!s.emails) return null
+        if (!s.emails) {
+            // No email SQL: only the switch, when there is one.
+            const mp = mailPanel()
+            if (!mp) return null
+            const w0 = el("div", "rv-email")
+            w0.id = "rv-email"
+            w0.append(mp)
+            return w0
+        }
         const list = roundEmails(s, r)
         const real = list.find((e) => e.status === "sent" && !e.test)
         const open = list.find((e) => e.status === "queued" || e.status === "sending")
@@ -1544,8 +1923,9 @@
         let button = ""
         if (real) {
             const p = el("p", "rv-hint")
-            const mark = el("span", "rv-ok-mark", "✓ ")
+            const mark = el("span", "rv-ok-mark")
             mark.setAttribute("aria-hidden", "true")
+            mark.append(iconEl("check"))
             p.append(mark, "ส่งอีเมลถึงผู้ตรวจสอบแล้ว " + when(real.sent_at) + (real.fix_no ? " · แก้ไขครั้งที่ " + real.fix_no : ""))
             w.append(p)
         } else if (open) {
@@ -1581,6 +1961,10 @@
         }
         const n = noteEl("email")
         if (n) w.append(n)
+        // The test mode switch (owner, ผู้จัดทำ side) sits in this box once
+        // the month is sent (2026-11-18).
+        const mp = mailPanel()
+        if (mp) w.append(mp)
         return w
     }
     function askEmail(s: State, r: Round): void {
@@ -1609,17 +1993,15 @@
     let mailBusy = false
     let mailErr = ""
     let mailSeq = 0 // the last load started before the switch's last change
-    const mailBox = document.getElementById("review-mail") as HTMLElement | null
     // "ถึงผู้ตรวจสอบ และอีก 3 ที่อยู่": the first address is the auditor's.
     const realTo = (m: MailMode): string => m.recipients > 1 ? "ถึงผู้ตรวจสอบ และอีก " + int(m.recipients - 1) + " ที่อยู่"
         : m.recipients === 1 ? "ถึงผู้ตรวจสอบ" : "ยังไม่มีที่อยู่ผู้รับ"
-    function drawMail(): void {
-        if (!mailBox) return
+    // The switch with its words: in the email box of a sent or approved
+    // month, else in the panel the chip by the list's title opens.
+    function mailPanel(): HTMLElement | null {
         const m = role === "auditee" ? mail : null
-        const a = document.activeElement
-        const had = a instanceof HTMLElement && mailBox.contains(a) ? a.id : ""
-        if (!m) { mailBox.hidden = true; mailBox.replaceChildren(); return }
-        mailBox.hidden = false
+        if (!m) return null
+        const box = el("div", "rv-mail")
         const sw = el("button", "rv-switch")
         sw.type = "button"
         sw.id = "rv-mail-switch"
@@ -1640,14 +2022,81 @@
             el("span", "rv-mail-hint", m.test ? "ส่งถึง " + m.testTo + " เท่านั้น · หัวเรื่องมี [ทดสอบ]" : realTo(m)))
         const row = el("div", "rv-mail-row")
         row.append(sw, text)
-        mailBox.replaceChildren(el("span", "rv-mail-h", "อีเมลถึงผู้ตรวจสอบ"), row)
+        box.append(el("span", "rv-mail-h", "อีเมลถึงผู้ตรวจสอบ"), row)
         if (mailErr) {
             const p = el("p", "rv-note rv-note-err")
             p.append(el("strong", undefined, "ไม่สำเร็จ "), mailErr)
-            mailBox.append(p)
+            box.append(p)
         }
-        if (had) { const f = document.getElementById(had); if (f) f.focus({ preventScroll: true }) }
+        return box
     }
+    // Before the month is sent: a chip by the title says the mode (โหมดทดสอบ
+    // or ส่งจริง) and opens the switch under it. Esc or a click elsewhere
+    // closes it.
+    let mailOpen = false
+    function mailChip(): HTMLElement | null {
+        const m = role === "auditee" ? mail : null
+        if (!m) return null
+        const w = el("div", "rv-mail-pop")
+        const b = el("button", "rv-mail-chip" + (m.test ? "" : " rv-mail-chip-real"))
+        b.type = "button"
+        b.id = "rv-mail-chip"
+        b.setAttribute("aria-expanded", String(mailOpen))
+        b.setAttribute("aria-controls", "rv-mail-panel")
+        b.append(el("span", undefined, m.test ? "โหมดทดสอบ" : "ส่งจริง"), el("span", "sr-only", " อีเมลถึงผู้ตรวจสอบ"), iconEl("chevron-down"))
+        b.addEventListener("click", () => { mailOpen = !mailOpen; render() })
+        w.append(b)
+        const panel = mailPanel()
+        if (panel) {
+            panel.id = "rv-mail-panel"
+            panel.classList.add("rv-mail-panel")
+            panel.hidden = !mailOpen
+            w.append(panel)
+        }
+        w.addEventListener("keydown", (ev) => {
+            if (ev.key !== "Escape" || !mailOpen) return
+            ev.preventDefault()
+            mailOpen = false
+            render()
+            const c = document.getElementById("rv-mail-chip")
+            if (c) c.focus()
+        })
+        // Tab out of it closes it too (open, it covers the search under it).
+        w.addEventListener("focusout", (ev) => {
+            const to = ev.relatedTarget
+            if (!mailOpen || !(to instanceof Node) || w.contains(to) || confirmDlg.contains(to)) return
+            mailOpen = false
+            renderSoon()
+        })
+        return w
+    }
+    // Esc closes it wherever the focus is.
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape" || !mailOpen || ev.defaultPrevented || document.querySelector("dialog[open]")) return
+        mailOpen = false
+        if (st) render()
+    })
+    document.addEventListener("click", (ev) => {
+        if (!mailOpen || confirmDlg.open) return
+        const t = ev.target
+        if (t instanceof Element && (t.closest(".rv-mail-pop") || confirmDlg.contains(t))) return
+        mailOpen = false
+        if (st) render()
+    })
+    // A card title with the chip after it, when there is one: only on the
+    // first card drawn (a returned round with รายชื่อทั้งหมด open has two
+    // card titles, and the chip and its panel have fixed ids).
+    let chipDrawn = false
+    function headRow(h: HTMLElement): HTMLElement {
+        const c = chipDrawn ? null : mailChip()
+        if (!c) return h
+        chipDrawn = true
+        const r = el("div", "rv-head-row")
+        r.append(h, c)
+        return r
+    }
+    // The switch is part of the page now: a change draws the page again.
+    function drawMail(): void { if (st) { dirty = true; render() } }
     async function putMail(on: boolean): Promise<string> {
         const r = await post<{ mail: MailMode | null }>("/dashboard/api/review/email-mode", { test: on }, "PUT")
         if (r && r.mail) mail = r.mail
@@ -1659,12 +2108,12 @@
             : "ปิดโหมดทดสอบแล้ว อีเมลต่อไปส่งจริง" + realTo(m)
     }
     // After a switch: the email texts on the page follow the new mode.
-    const mailDrawn = (): void => { if (st) { dirty = true; render() } else drawMail() }
+    const mailDrawn = (): void => drawMail()
     function toggleMail(): void {
         const m = mail
         if (!m) return
         if (!m.test) { void mailOn(); return }
-        const g = el("div", "rv-kvs")
+        const g = el("dl", "rv-kvs")
         g.append(kv("ส่งถึง", realTo(m).replace(/^ถึง/, "")), kv("หัวเรื่อง", "เอกสาร P4P เดือน… (ไม่มี [ทดสอบ])"))
         askConfirm("ปิดโหมดทดสอบ ส่งอีเมลจริง?", [
             g,
@@ -1713,11 +2162,15 @@
         h.id = "rv-h-ans"
         c.setAttribute("aria-labelledby", h.id)
         const top = el("div", "rv-actions rv-spread")
-        top.append(h, el("span", "rv-hint", "รอบที่ " + r.round_no + " · " + when(r.returned_at)))
+        top.append(headRow(h), el("span", "rv-hint", "รอบที่ " + r.round_no + " · " + when(r.returned_at)))
         c.append(top)
         if (peopleErr) c.append(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
         else if (!people) c.append(el("p", "rv-loading", "กำลังโหลด…"))
         else if (!fixes.length) c.append(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้ ดูปัญหาอื่น ๆ"))
+        // The fixes scroll in their own box when the window is short.
+        const list = el("div", "rv-fix-list")
+        if (fixes.length) c.append(list)
+        if (fixes.length > 1) c.classList.add("rv-fill")
         const canEdit = auditeeTurn(s)
         for (const p of fixes) {
             const item = el("article", "rv-fix")
@@ -1728,7 +2181,7 @@
             const who = el("div")
             who.append(nm, el("span", "rv-old", p.intern ? "INTERN" : p.department))
             const remark = el("p", "rv-remark")
-            remark.append(el("span", "sr-only", "หมายเหตุผู้ตรวจสอบ: "), p.remark)
+            remark.append(el("span", "rv-remark-label", "หมายเหตุผู้ตรวจสอบ"), p.remark)
             const row = (rows || []).find((x) => x.index === p.index) || null
             const sc = el("div", "rv-fix-score num")
             const fixEditing = !!row && canEdit && editing === "fix:" + row.index
@@ -1738,7 +2191,7 @@
                 const cell = el("span")
                 scoreCell(cell, row)
                 sc.append(cell)
-                if (row.edit) sc.append(chip(resent(row) ? "warn" : "edit", resent(row) ? "แพทย์ส่งไฟล์ใหม่หลังแก้" : "แก้แล้ว"))
+                if (row.edit) sc.append(chip(resent(row) ? "resent" : "edit", resent(row) ? "แพทย์ส่งไฟล์ใหม่หลังแก้" : "แก้แล้ว"))
                 if (canEdit) sc.append(editButton(row, "fix"))
             } else {
                 sc.append(el("span", undefined, num2(p.score)))
@@ -1764,7 +2217,7 @@
             item.append(form)
             const n = noteEl(spot)
             if (n) item.append(n)
-            c.append(item)
+            list.append(item)
         }
         const n = moreOpen ? null : noteEl("score")
         if (n) c.append(n)
@@ -1834,8 +2287,6 @@
     // People whose ต้องแก้ไข box the auditor opened, kept outside the page so
     // a re-render (the sheet arriving, a reload) leaves it open.
     const remarkOpen = new Set<string>()
-    let swapAt = 0 // when the panel last drew another person
-    let shownPerson = "" // the person the panel last drew
     // People decided while this filter is on stay in the list where they
     // were, their row showing the result, instead of a green note above the
     // names (Pong, 2026-11-12). Cleared when the filter changes.
@@ -1856,10 +2307,14 @@
         const seq = ++peopleSeq
         peopleKey = key
         peopleErr = ""
+        const asked = performance.now()
         try {
             const res = await api<{ people: Person[] }>(monthApi(s) + "/people?round=" + r.round_no)
             if (seq !== peopleSeq || s.month !== month) return
-            people = res.people || []
+            const list = res.people || []
+            // A decision still being saved is not undone by a list asked for before it ended.
+            reapply(s.month, list, asked)
+            people = list
             if (!selected || !people.some((p) => p.index === selected)) {
                 const first = people.find((p) => p.decision === null) || people[0]
                 selected = first ? first.index : ""
@@ -1870,7 +2325,7 @@
             peopleErr = errText(e, "โหลดรายชื่อไม่สำเร็จ")
             shout("โหลดรายชื่อไม่สำเร็จ: " + peopleErr)
         }
-        render()
+        renderSoon()
     }
     async function loadIssues(s: State): Promise<void> {
         listsLoading++
@@ -1890,7 +2345,7 @@
             issuesErr = errText(e, "โหลดปัญหาอื่น ๆ ไม่สำเร็จ")
             shout("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr)
         }
-        render()
+        renderSoon()
     }
     const needPeople = (s: State, r: Round): boolean => peopleKey !== s.month + ":" + r.round_no
     const ensureIssues = (s: State): void => { if (issuesKey !== s.month && !issuesErr) void loadIssues(s) }
@@ -1906,13 +2361,37 @@
     // Retry: forget the failure and draw again, which loads again.
     const retryPeople = (): void => { peopleErr = ""; render() }
     const retryIssues = (): void => { issuesErr = ""; render() }
+    // The counts of a round: from its names once they are here (they show
+    // a decision the moment it is made, 2026-11-18), else the state's.
+    function countsOf(s: State, r: Round): Round["counts"] {
+        if (!people || s.month !== month || peopleKey !== s.month + ":" + r.round_no) return r.counts
+        let approve = 0, fix = 0, waiting = 0, carried = 0
+        for (const p of people) {
+            if (p.decision === "approve") approve++
+            else if (p.decision === "fix") fix++
+            else waiting++
+            if (p.carried) carried++
+        }
+        return { approve, fix, waiting, carried }
+    }
     // A new state (another round, a decision made elsewhere) reloads both.
+    // Counts that only show this screen's own decisions are not news
+    // (2026-11-18: they reloaded both lists after every decision).
     let lastRoundKey = ""
     function refreshLists(s: State): void {
         const r = liveRound(s)
         if (!r) return
         const k = roundKey(s, r)
         if (k === lastRoundKey) return
+        // The month's first state: the names asked for with it are this round's.
+        if (!lastRoundKey && peopleKey === s.month + ":" + r.round_no) { lastRoundKey = k; return }
+        const sameStep = lastRoundKey.split(":").slice(0, 3).join(":") === s.month + ":" + r.round_no + ":" + r.status
+        if (sameStep && people && peopleKey === s.month + ":" + r.round_no) {
+            const c = countsOf(s, r)
+            if (c.approve === r.counts.approve && c.fix === r.counts.fix && c.waiting === r.counts.waiting) { lastRoundKey = k; return }
+            // The server has yet to get this screen's saves: look again later.
+            if (savingIn(s.month)) return
+        }
         // Another round: its people are not the old round's.
         if (lastRoundKey.split(":").slice(0, 2).join(":") !== s.month + ":" + r.round_no) people = null
         lastRoundKey = k
@@ -1934,13 +2413,14 @@
     const bothMatch = (p: Person): boolean => p.scoreCheck === "match" && p.moneyCheck === "match"
     const decisionText = (p: Person): string => p.decision === "approve" ? (p.carried ? "อนุมัติ (คงผลรอบก่อน)" : "อนุมัติ")
         : p.decision === "fix" ? "ต้องแก้ไข" : "รอตรวจ"
-    const num = (n: number | null): string => n === null ? "—" : Number(n).toLocaleString("th-TH", { maximumFractionDigits: 2 })
+    const num = (n: number | null): string => n === null ? "—" : NUM_TH2.format(Number(n))
 
     function chip(kind: string, text: string): HTMLElement {
         return el("span", "rv-chip rv-chip-" + kind, text)
     }
 
     // ผู้ตรวจสอบ ───────────────────────────────────────────────────────────
+    const reviewWrap = el("div", "rv-review")
     function auditor(s: State): Node[] {
         const r = liveRound(s)
         if (!r) return [turn("wait", "รอผู้จัดทำ", "ผู้จัดทำยังไม่ได้ส่งข้อมูลเดือน " + monthName(s.month, true), "เมื่อส่งแล้วจะขึ้นที่นี่")]
@@ -1966,31 +2446,32 @@
         ensure(s, r)
         // The round, the counts and ส่งผลตรวจ sit in the left column, so the
         // names and the checks start at the top (Pong, 2026-11-12).
-        sideOut.push(finishBar(s, r))
+        sideOut.push(...finishBar(s, r))
         const out: Node[] = []
         if (peopleErr) out.push(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
         if (!people) { if (!peopleErr) out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…")); return out }
-        const wrap = el("div", "rv-review")
-        wrap.append(peopleList(), personPanel(s, r))
-        out.push(wrap)
+        // The names stay; the person panel is drawn new (it is small).
+        patchChildren(reviewWrap, [peopleList(), personPanel(s, r)])
+        out.push(reviewWrap)
         if (issuesShown()) out.push(issuesCard(s, "auditor"))
         return out
     }
 
-    function finishBar(s: State, r: Round): HTMLElement {
-        const c = r.counts
+    // The left column's foot on the auditor's side: the round and its
+    // figures, then the dock (อนุมัติทุกคนที่รอตรวจ, ส่งผลตรวจ, each with the
+    // reason it cannot be pressed yet under it).
+    function finishBar(s: State, r: Round): HTMLElement[] {
+        const c = countsOf(s, r)
         // Not known until the issues load: no "0 open" and no approve-all before that.
         const openIssues = issues ? issues.filter((i) => i.status === "open").length : null
-        const bar = el("div", "rv-finish glass")
-        const info = el("div", "rv-round-line")
+        const bar = el("div", "rv-finish")
+        const dock = el("div", "rv-dock")
         // The month chip above already says พร้อมตรวจ; who sent it and when
         // are left out (Pong, 2026-11-12).
-        info.append(el("span", "rv-round-title", "รอบที่ " + r.round_no + " · " + monthName(s.month, true)),
-            el("span", undefined, "งบ " + budgetText(r.budget)),
-            el("span", undefined, "จำนวนแพทย์ " + (r.doctors ? int(r.doctors) : "–")),
-            el("span", undefined, "per P4P " + baht(r.per_p4p)))
-        if (r.edits) info.append(el("span", undefined, "ผู้จัดทำแก้คะแนน " + int(r.edits) + " คน"))
-        bar.append(info)
+        const info = el("dl", "rv-ro")
+        info.append(kv("งบ", baht(r.budget)), kv("จำนวนแพทย์", r.doctors ? int(r.doctors) : "–"), kv(en("per P4P"), baht(r.per_p4p)))
+        if (r.edits) info.append(kv("ผู้จัดทำแก้คะแนน", int(r.edits) + " คน"))
+        bar.append(el("p", "rv-round-title", "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), info)
         // The counts of each status are the tiles above the names now (Pong,
         // 2026-11-12). ปัญหาอื่น ๆ is gone; only a reopened month still has
         // one open, and then it is counted here.
@@ -2001,7 +2482,7 @@
             counts.append(li)
             bar.append(counts)
         }
-        if (c.waiting > 0) bar.append(approveAllBox(s, r))
+        if (c.waiting > 0) dock.append(approveAllBox(s, r))
         const btn = el("button", "btn-primary")
         btn.type = "button"
         btn.id = "rv-finish"
@@ -2009,15 +2490,16 @@
         why.id = "rv-finish-why"
         const others = openIssues ? " · ปัญหาอื่น " + int(openIssues) + " เรื่อง" : ""
         if (c.waiting > 0) {
-            // The reason line under the button is gone (Pong, 2026-11-12):
-            // รอตรวจ above says how many are left; hover and click still say it.
+            // Why it waits, under it (2026-11-18: shown again, so the
+            // button that cannot be pressed says why without a hover).
             const left = "ส่งได้เมื่อตรวจครบทุกคน (เหลือ " + int(c.waiting) + " คน)"
             btn.textContent = "ส่งผลตรวจ"
             btn.setAttribute("aria-disabled", "true")
-            btn.title = left
+            btn.setAttribute("aria-describedby", why.id)
+            why.textContent = left
             btn.addEventListener("click", () => say(left))
-            bar.append(btn)
-            return bar
+            dock.append(btn, why)
+            return [bar, dock]
         }
         if (openIssues === null) {
             btn.textContent = "ส่งผลตรวจ"
@@ -2027,21 +2509,49 @@
             btn.addEventListener("click", () => say(why.textContent || ""))
         } else if (c.fix > 0 || openIssues > 0) {
             btn.textContent = "ส่งกลับให้ผู้จัดทำแก้"
+            btn.dataset.step = "return"
             why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน" + others
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน" + others),
-                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"))
-            })
+                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"), true)
+            }))
         } else {
             btn.textContent = "อนุมัติทั้งหมด"
+            btn.dataset.step = "approve"
             why.textContent = "อนุมัติครบ " + int(c.approve) + " คน"
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
                     el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep(s, "approve", "อนุมัติแล้ว"))
-            })
+            }))
         }
-        bar.append(btn, why)
-        return bar
+        // Waiting for the saves, or the step's follow-up loading: it spins.
+        if (savesWait === btn.id || flying(s, "finish")) markBusy(btn)
+        dock.append(btn, why)
+        return [bar, dock]
+    }
+
+    // A step that hands the round on (ส่งกลับ, อนุมัติทั้งหมด, อนุมัติ N คน)
+    // waits for every decision still being saved (2026-11-18), so nothing
+    // is sent with one unsaved. The button spins meanwhile, then is pressed
+    // again as drawn from the saved names (a failed save may have put
+    // someone back to รอตรวจ), but only when it is still the same step:
+    // a failed save can turn ส่งกลับ into อนุมัติทั้งหมด (or back), and a
+    // step not pressed never opens by itself; the failure note says why.
+    let savesWait = ""
+    function afterSaves(btn: HTMLElement, go: () => void, busyNow: () => boolean = () => flights.size > 0, wait: () => Promise<void> = settled): void {
+        if (!busyNow()) { go(); return }
+        if (savesWait) return
+        savesWait = btn.id
+        const step = btn.dataset.step || ""
+        const m = month
+        markBusy(btn)
+        void wait().then(() => {
+            savesWait = ""
+            if (!st || view.classList.contains("hidden")) return
+            render()
+            const b = document.getElementById(btn.id)
+            if (b && month === m && (b.dataset.step || "") === step && b.getAttribute("aria-disabled") !== "true") b.click()
+        })
     }
 
     // อนุมัติทุกคนที่รอตรวจ (Pong, 2026-11-12): one press approves everyone
@@ -2088,43 +2598,53 @@
             }
             b.addEventListener("click", () => say(why.textContent || ""))
         } else {
-            b.addEventListener("click", () => {
+            b.addEventListener("click", () => afterSaves(b, () => {
                 // Short labelled lines (Pong, 2026-11-12: the sentences
                 // were hard to read).
-                const done = r.counts.approve + r.counts.fix
-                const g = el("div", "rv-kvs")
+                const cc = countsOf(s, r)
+                const done = cc.approve + cc.fix
+                const g = el("dl", "rv-kvs")
                 g.append(kv("เดือน", monthName(s.month) + " รอบที่ " + r.round_no), kv("อนุมัติครั้งนี้", int(n) + " คน"),
                     kv("ตัดสินแล้ว (คงเดิม)", done ? int(done) + " คน" : "–"))
                 askConfirm("อนุมัติทุกคนที่รอตรวจ", [
                     g,
-                    el("p", undefined, "✓ ทุกคนที่จะอนุมัติ เทียบคะแนนและเทียบเงินตรงกัน"),
+                    tick("ทุกคนที่จะอนุมัติ เทียบคะแนนและเทียบเงินตรงกัน"),
                 ], "อนุมัติ " + int(n) + " คน", () => approveAll(s, r))
-            })
+            }))
         }
+        if (savesWait === b.id || flying(s, "approve-all")) markBusy(b)
         box.append(b, why)
         return box
     }
 
+    const tick = (text: string): HTMLElement => { const p = el("p"); p.append(iconEl("check"), text); return p }
     async function approveAll(s: State, r: Round): Promise<void> {
         let said = ""
-        const waiting = (people || []).filter((x) => x.decision === null).map((x) => x.index)
+        let waiting: string[] = []
         const ok = await confirmRun(s, async () => {
+            await settled()
+            waiting = (people || []).filter((x) => x.decision === null).map((x) => x.index)
             const res = await post<{ approved: number }>(monthApi(s) + "/approve-all", { round: r.round_no })
             said = "อนุมัติแล้ว " + int(Number(res && res.approved) || 0) + " คน"
             return said
         })
-        if (ok) {
-            // No note above the names: everyone just approved stays in the
-            // list with an approved row, and the tiles show the new counts.
-            if (s.month === month) {
-                notes.delete("top")
-                for (const i of waiting) kept.add(i)
-                peopleKey = ""; issuesKey = ""
-            }
-            say(said)
-            await loadMonths().catch(() => false)
+        if (!ok || s.month !== month) { if (s.month === month) await reload(); return }
+        // No note above the names: everyone just approved stays in the
+        // list with an approved row, and the tiles show the new counts at
+        // once (2026-11-18); the round, the names and the months are then
+        // loaded together, not one after another.
+        notes.delete("top")
+        for (const i of waiting) {
+            kept.add(i)
+            const p = (people || []).find((x) => x.index === i)
+            if (p && p.decision === null) { p.decision = "approve"; p.remark = ""; p.carried = false }
         }
-        await reload()
+        say(said)
+        holdBusy(s, "approve-all")
+        render()
+        await Promise.all([loadMonths().catch(() => false), reload(), loadPeople(s, r), loadIssues(s)])
+        end(s, "approve-all")
+        if (s.month === month) render()
     }
 
     // ── Approved: the document, a retry, and reopening ───────────────────
@@ -2137,14 +2657,14 @@
         c.append(h, el("p", "rv-hint", when(r.approved_at) + " · รอบที่ " + r.round_no + (r.approved_by ? " · " + staffName(r.approved_by) : "")))
         if (status === "ready") {
             const row = el("div", "rv-actions")
-            const a = el("a", "rv-link", "เปิดเอกสารเบิกจ่าย PDF ")
+            const a = el("a", "rv-link")
             a.href = "/dashboard/api/review/" + s.month + "/pdf"
             a.target = "_blank"
             a.rel = "noopener"
             a.id = "rv-pdf"
-            const arrow = el("span", undefined, "↗")
-            arrow.setAttribute("aria-hidden", "true")
-            a.append(arrow, el("span", "sr-only", " (เปิดในแท็บใหม่)"))
+            const at = el("span", undefined, "เปิดเอกสารเบิกจ่าย ")
+            at.append(en("PDF"))
+            a.append(at, iconEl("external"), el("span", "sr-only", " (เปิดในแท็บใหม่)"))
             const d = el("a", "rv-link", "ดาวน์โหลด")
             d.href = "/dashboard/api/review/" + s.month + "/pdf?download=1"
             d.id = "rv-pdf-dl"
@@ -2176,7 +2696,10 @@
         // auditor side only (the server lets only the owner have it).
         if (side === "auditor") {
             const xl = el("div", "rv-actions")
-            const xa = el("a", "rv-link", "ดาวน์โหลดรายละเอียดการจัดสรรเงินรายบุคคล (Excel)")
+            const xa = el("a", "rv-link")
+            const xt = el("span", undefined, "ดาวน์โหลดรายละเอียดการจัดสรรเงินรายบุคคล (")
+            xt.append(en("Excel"), ")")
+            xa.append(xt)
             xa.href = "/dashboard/api/review/" + s.month + "/allocation"
             xa.id = "rv-allocation-dl"
             xa.append(el("span", "sr-only", " " + shortMonth(s.month)))
@@ -2194,7 +2717,7 @@
         const out: Node[] = [c]
         if (side === "auditor") {
             const row = el("div", "rv-actions")
-            const b = el("button", "btn-ghost", "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง…")
+            const b = el("button", "btn-danger", "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง…")
             b.type = "button"
             b.id = "rv-reopen"
             b.addEventListener("click", () => askReopen(s, r))
@@ -2317,16 +2840,16 @@
             })
             if (!ok) return
             if (s.month === month) { peopleKey = ""; issuesKey = "" }
-            await loadMonths().catch(() => false)
-            await reload()
-        })
+            await Promise.all([loadMonths().catch(() => false), reload()])
+        }, true)
         setTimeout(() => ta.focus(), 0)
     }
 
     // approve / return come from the confirm dialog (which stays open with
     // the reason when refused); unreturn is a plain button (btn).
     async function roundStep(s: State, step: "return" | "unreturn" | "approve", done: string, btn?: HTMLButtonElement): Promise<void> {
-        const call = async (): Promise<string> => { await post(monthApi(s) + "/" + step); return done }
+        // Never with a decision still being saved.
+        const call = async (): Promise<string> => { await settled(); await post(monthApi(s) + "/" + step); return done }
         let ok = false
         if (btn) {
             if (!begin(s, step, btn)) return
@@ -2341,11 +2864,15 @@
         } else {
             ok = await confirmRun(s, call)
         }
-        if (ok) {
-            if (s.month === month) { peopleKey = ""; issuesKey = "" }
-            await loadMonths().catch(() => false)
-        }
-        await reload()
+        if (!ok) { await reload(); return }
+        // Done: the note shows and the button spins while the month, its
+        // lists and the months load together (2026-11-18: one after another).
+        if (s.month === month) { peopleKey = ""; issuesKey = "" }
+        holdBusy(s, "finish")
+        if (s.month === month) render()
+        await Promise.all([loadMonths().catch(() => false), reload()])
+        end(s, "finish")
+        if (s.month === month) render()
     }
 
     // The status types (Pong, 2026-11-12: "display status types of user").
@@ -2375,40 +2902,59 @@
     // The decision as a small round mark at the start of a name's row.
     function decisionMark(p: Person): HTMLElement {
         const kind = p.decision === "approve" ? "ok" : p.decision === "fix" ? "fix" : "wait"
-        const m = el("span", "rv-dmark rv-dmark-" + kind, p.decision === "approve" ? "✓" : p.decision === "fix" ? "!" : "")
+        const m = el("span", "rv-dmark rv-dmark-" + kind)
         m.setAttribute("aria-hidden", "true")
         return m
     }
 
-    function peopleList(): HTMLElement {
-        const side = el("div", "rv-people glass")
-        const all = people || []
+    // The names: built once per month and kept (2026-11-18, the tab's lag;
+    // it was about 1,700 new elements on every click). Each redraw patches
+    // it: the tiles' counts and pressed state, the rows whose person
+    // changed, which rows a filter or the search hides, and the row open.
+    interface PRow { li: HTMLLIElement; b: HTMLButtonElement; sig: string }
+    interface PList {
+        root: HTMLElement
+        tiles: Map<string, { b: HTMLButtonElement; n: HTMLElement }>
+        si: HTMLInputElement
+        count: HTMLElement
+        ul: HTMLUListElement
+        empty: HTMLLIElement
+        rows: Map<string, PRow>
+        of: Person[] | null
+    }
+    let pl: PList | null = null
+    let searchT: number | undefined
+    function newPeopleList(): PList {
+        const root = el("div", "rv-people glass")
         // Status tiles: the count of each type, and the filter.
-        const tiles = el("div", "rv-status")
-        tiles.setAttribute("role", "group")
-        tiles.setAttribute("aria-label", "สถานะ: เลือกเพื่อแสดงเฉพาะกลุ่มนั้น")
+        const tilesBox = el("div", "rv-status")
+        tilesBox.setAttribute("role", "group")
+        tilesBox.setAttribute("aria-label", "สถานะ: เลือกเพื่อแสดงเฉพาะกลุ่มนั้น")
+        const tiles = new Map<string, { b: HTMLButtonElement; n: HTMLElement }>()
         for (const st of STATUSES) {
-            const n = all.filter(st.test).length
-            const b = el("button", "rv-st rv-st-" + st.tone + (n === 0 && st.key !== "all" ? " rv-st-zero" : ""))
+            const b = el("button", "rv-st rv-st-" + st.tone)
             b.type = "button"
             b.id = "rv-st-" + st.key
             b.dataset.filter = st.key
-            b.setAttribute("aria-pressed", String(filter === st.key))
             const lab = el("span", "rv-st-label")
             if (st.tone !== "all") { const dot = el("span", "rv-st-dot"); dot.setAttribute("aria-hidden", "true"); lab.append(dot) }
             lab.append(st.label)
-            b.append(lab, el("b", "rv-st-n", int(n)))
+            const n = el("b", "rv-st-n", "")
+            b.append(lab, n)
             b.addEventListener("click", () => {
                 filter = st.key
                 kept.clear()
-                // The panel follows: the first of the group when the person
-                // on screen is not in it.
-                const list = visiblePeople()
-                if (list.length && !list.some((x) => x.index === selected)) selected = list[0].index
-                render()
-                say(st.label + " " + int(n) + " คน")
+                pressFirst(b, () => {
+                    // The panel follows: the first of the group when the
+                    // person on screen is not in it.
+                    const list = visiblePeople()
+                    if (list.length && !list.some((x) => x.index === selected)) selected = list[0].index
+                    render()
+                    say(st.label + " " + int((people || []).filter(st.test).length) + " คน")
+                })
             })
-            tiles.append(b)
+            tilesBox.append(b)
+            tiles.set(st.key, { b, n })
         }
         const sl = el("label", "rv-search rv-people-search")
         sl.append(el("span", "sr-only", "ค้นหาชื่อหรือกลุ่มงาน"))
@@ -2418,45 +2964,122 @@
         si.placeholder = "ค้นหาชื่อหรือกลุ่มงาน"
         si.value = search
         si.autocomplete = "off"
-        si.addEventListener("input", () => { search = si.value; render() })
+        // The list follows once typing pauses (120 ms), not on every key.
+        si.addEventListener("input", () => {
+            search = si.value
+            clearTimeout(searchT)
+            searchT = window.setTimeout(() => { searchT = undefined; if (st) render() }, 120)
+        })
         sl.append(si)
-        const shown = visiblePeople()
-        side.append(tiles, sl)
         // With a search, how many of the group it leaves.
-        if (search.trim()) {
-            const count = el("p", "rv-hint rv-people-count", "พบ " + int(shown.length) + " คน")
-            count.setAttribute("aria-live", "polite")
-            side.append(count)
-        }
+        const count = el("p", "rv-hint rv-people-count")
+        count.setAttribute("aria-live", "polite")
+        count.hidden = true
         const ul = el("ul", "rv-people-list")
         ul.setAttribute("aria-label", "รายชื่อในรอบนี้")
-        for (const p of shown) {
-            const li = el("li")
-            const tone = p.decision === "approve" ? " rv-p-ok" : p.decision === "fix" ? " rv-p-fix" : ""
-            const b = el("button", "rv-person-btn" + tone + (p.index === selected ? " current" : ""))
-            b.type = "button"
-            b.id = "rv-p-" + p.index
-            if (p.index === selected) b.setAttribute("aria-current", "true")
-            const line = el("span", "rv-pline")
-            line.append(el("span", "rv-pname", p.name))
-            if (isMismatch(p)) line.append(chip("bad", "ไม่ตรงกัน"))
-            else if (isMissing(p)) line.append(chip("miss", "ไม่พบ"))
-            // The result in the row itself (Pong, 2026-11-12): a soft green
-            // or orange row, and อนุมัติ / ต้องแก้ไข after the department.
-            const sub = el("span", "rv-psub", p.intern ? "อินเทิร์น" : p.department)
-            if (p.decision) sub.append(" · ", el("span", "rv-pdec rv-pdec-" + (p.decision === "approve" ? "ok" : "fix"), p.decision === "approve" ? "อนุมัติ" : "ต้องแก้ไข"))
-            if (p.carried) sub.append(" · คงผลรอบก่อน")
-            const text = el("span", "rv-ptext")
-            text.append(line, sub)
-            b.append(decisionMark(p), text)
-            if (!p.decision) b.append(el("span", "sr-only", " · รอตรวจ"))
-            b.addEventListener("click", () => { openPerson(p.index) })
-            li.append(b)
-            ul.append(li)
+        const empty = el("li", "rv-hint")
+        empty.hidden = true
+        ul.append(empty)
+        // A list box: one tab stop (the person open); up and down open the
+        // person above or below, Home / End the first or last.
+        ul.addEventListener("keydown", (ev) => {
+            const opts = Array.from(ul.querySelectorAll<HTMLElement>('[role="option"]')).filter((b) => !(b.parentElement as HTMLElement).hidden)
+            const to = rove(opts, ev, { ArrowUp: -1, ArrowDown: 1 })
+            if (!to || !to.dataset.i || to.dataset.i === selected) return
+            selected = to.dataset.i
+            render()
+            const f = document.getElementById(to.id)
+            if (f && document.activeElement !== f) f.focus()
+        })
+        root.append(tilesBox, sl, count, ul)
+        return { root, tiles, si, count, ul, empty, rows: new Map(), of: null }
+    }
+    // What a row shows; the row is drawn again only when this changes.
+    const rowSig = (p: Person): string => [p.name, p.department, p.intern, p.decision, p.carried, isMismatch(p), isMissing(p)].join("|")
+    function fillRow(r: PRow, p: Person, sig: string): void {
+        const b = r.b
+        const tone = p.decision === "approve" ? " rv-p-ok" : p.decision === "fix" ? " rv-p-fix" : ""
+        b.className = "rv-person-btn" + tone + (p.index === selected ? " current" : "")
+        const line = el("span", "rv-pline")
+        line.append(el("span", "rv-pname", p.name))
+        if (isMismatch(p)) line.append(chip("bad", "ไม่ตรงกัน"))
+        else if (isMissing(p)) line.append(chip("miss", "ไม่พบ"))
+        // The result in the row itself (Pong, 2026-11-12): a soft green
+        // or orange row, and อนุมัติ / ต้องแก้ไข after the department.
+        const sub = el("span", "rv-psub", p.intern ? "อินเทิร์น" : p.department)
+        if (p.decision) sub.append(" · ", el("span", "rv-pdec rv-pdec-" + (p.decision === "approve" ? "ok" : "fix"), p.decision === "approve" ? "อนุมัติ" : "ต้องแก้ไข"))
+        if (p.carried) sub.append(" · คงผลรอบก่อน")
+        const text = el("span", "rv-ptext")
+        text.append(line, sub)
+        const kids: Node[] = [decisionMark(p), text]
+        if (!p.decision) kids.push(el("span", "sr-only", " · รอตรวจ"))
+        b.replaceChildren(...kids)
+        r.sig = sig
+    }
+    function newRow(p: Person): PRow {
+        const li = el("li")
+        li.setAttribute("role", "none")
+        const b = el("button", "rv-person-btn")
+        b.type = "button"
+        b.id = "rv-p-" + p.index
+        b.dataset.i = p.index
+        b.setAttribute("role", "option")
+        b.tabIndex = -1
+        const index = p.index
+        b.addEventListener("click", () => { openPerson(index) })
+        li.append(b)
+        return { li, b, sig: "" }
+    }
+
+    function peopleList(): HTMLElement {
+        if (!pl) pl = newPeopleList()
+        const L = pl
+        const all = people || []
+        for (const st of STATUSES) {
+            const n = all.filter(st.test).length
+            const t = L.tiles.get(st.key)
+            if (!t) continue
+            setText(t.n, int(n))
+            t.b.classList.toggle("rv-st-zero", n === 0 && st.key !== "all")
+            setAttr(t.b, "aria-pressed", String(filter === st.key))
         }
-        if (!shown.length) ul.append(el("li", "rv-hint", filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"))
-        side.append(ul)
-        return side
+        if (L.si.value !== search) L.si.value = search
+        const shown = visiblePeople()
+        const vis = new Set(shown.map((p) => p.index))
+        // A new list (a load, another round): rows in its order, a person
+        // no longer in it gone.
+        if (L.of !== all) {
+            const rows = new Map<string, PRow>()
+            const want: Node[] = []
+            for (const p of all) {
+                const r = L.rows.get(p.index) || newRow(p)
+                rows.set(p.index, r)
+                want.push(r.li)
+            }
+            want.push(L.empty)
+            L.rows = rows
+            patchChildren(L.ul, want)
+            L.of = all
+        }
+        const stopAt = vis.has(selected) ? selected : shown.length ? shown[0].index : ""
+        for (const p of all) {
+            const r = L.rows.get(p.index)
+            if (!r) continue
+            const sig = rowSig(p)
+            if (sig !== r.sig) fillRow(r, p, sig)
+            setHidden(r.li, !vis.has(p.index))
+            const on = p.index === selected
+            if (r.b.classList.contains("current") !== on) r.b.classList.toggle("current", on)
+            setAttr(r.b, "aria-selected", String(on))
+            const ti = p.index === stopAt ? 0 : -1
+            if (r.b.tabIndex !== ti) r.b.tabIndex = ti
+        }
+        setAttr(L.ul, "role", shown.length ? "listbox" : null)
+        setHidden(L.empty, shown.length > 0)
+        if (!shown.length) setText(L.empty, filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ")
+        setHidden(L.count, !search.trim())
+        if (search.trim()) setText(L.count, "พบ " + int(shown.length) + " คน")
+        return L.root
     }
 
     // One person on the auditor's side. Top to bottom: name, the two checks
@@ -2476,8 +3099,6 @@
         const top = el("div", "rv-person-top")
         top.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + " · " + decisionText(p)))
         panel.append(top)
-        // A person drawn for the first time starts the click guard (tooSoon).
-        if (p.index !== shownPerson) { shownPerson = p.index; swapAt = Date.now() }
         // The name of the doctor's score row (its first text in columns A-C)
         // comes with the person's detail, loaded once in the background.
         const key = s.month + ":" + r.round_no + ":" + p.index
@@ -2509,7 +3130,7 @@
             th.append(el("b", undefined, label), el("span", "rv-src", what))
             const res = el("td")
             res.append(chip(check === "match" ? "ok" : check === "missing" ? "miss" : "bad", CHECK_TEXT[check]))
-            if (check === "mismatch" && diff) res.append(el("span", "rv-src", diff))
+            if (check === "mismatch" && diff) res.append(el("span", "rv-diff", diff))
             tr.append(th, res, a, b)
             return tr
         }
@@ -2545,7 +3166,11 @@
         // 'check': a check is not ตรงกัน in the new build; say which kind.
         const whyText = p.why === "check" && p.scoreCheck !== "mismatch" && p.moneyCheck !== "mismatch" ? "ไม่พบข้อมูลให้เทียบ" : (WHY_TEXT[p.why || ""] || p.why)
         if (p.why) panel.append(el("p", "rv-why", "ตรวจอีกครั้งเพราะ: " + whyText))
-        if (p.edit) panel.append(el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old) + " → " + num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : "")))
+        if (p.edit) {
+            const w = el("p", "rv-why", "ผู้จัดทำแก้คะแนน " + num(p.edit.old))
+            w.append(iconEl("arrow-right"), el("span", "sr-only", " → "), num(p.edit.new) + (p.edit.note ? " · " + p.edit.note : ""))
+            panel.append(w)
+        }
         if (p.prev && (p.prev.remark || p.prev.reply)) {
             const prev = el("div", "rv-prev")
             if (p.prev.remark) prev.append(el("p", undefined, "รอบก่อน ผู้ตรวจสอบ: " + p.prev.remark))
@@ -2554,8 +3179,9 @@
         }
         panel.append(foot)
         panel.addEventListener("scroll", () => markStuck(), { passive: true })
-        // The next person still to check: their detail is ready when the app moves on.
-        const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index)
+        // The person a decision here moves on to: their detail is ready when
+        // the app gets there.
+        const next = nextAfter(p.index)
         if (next) loadDetail(s, r, next.index)
         return panel
     }
@@ -2566,7 +3192,7 @@
     function openPerson(index: string): void {
         selected = index
         render()
-        toWorkingSpot()
+        afterFrame(true)
         const h = document.getElementById("rv-person-h")
         if (h) h.focus({ preventScroll: true })
     }
@@ -2576,7 +3202,24 @@
         const fin = body.querySelector<HTMLElement>(".rv-finish")
         const top = wrap.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop
         view.scrollTop = Math.max(0, top - (fin ? fin.offsetHeight : 0) - 10)
+        // A remark box open with the person (the only way on for a
+        // ไม่ตรงกัน) is not left under the pinned decide row.
+        const box = body.querySelector<HTMLElement>(".rv-person .rv-remark-box")
+        boxFor = box ? selected : ""
+        if (box) inPanelView(box)
         markStuck()
+    }
+    // Scrolls the person panel (only it) the least that brings el above
+    // the pinned decide row, never past the panel's top.
+    function inPanelView(t: HTMLElement): void {
+        const panel = t.closest<HTMLElement>(".rv-person")
+        if (!panel || panel.scrollHeight <= panel.clientHeight + 1) return
+        const row = panel.querySelector<HTMLElement>(".rv-decide-row")
+        const pr = panel.getBoundingClientRect()
+        const r = t.getBoundingClientRect()
+        const floor = (row ? row.getBoundingClientRect().top : pr.bottom) - 8
+        const by = Math.min(r.bottom - floor, r.top - pr.top - 8)
+        if (by > 0) panel.scrollTop += by
     }
     // The counts bar's height (it wraps on narrow windows) sets where the
     // people list and the decision row stick, and how much of the top a
@@ -2584,17 +3227,31 @@
     function syncStick(): void {
         const fin = body.querySelector<HTMLElement>(".rv-finish")
         const h = fin ? fin.offsetHeight : 0
-        view.style.setProperty("--rv-fin", h + "px")
+        // Read first, then written only when changed (2026-11-18): each
+        // write would make the browser lay the page out again.
         // Rounded down: clientHeight can round a fractional height up (a
         // zoomed window), and the half pixel over would bring a scrollbar.
-        view.style.setProperty("--rv-view-h", Math.floor(view.getBoundingClientRect().height) + "px")
-        // Focus never lands under the counts bar at the top or the
-        // buttons bar pinned at the bottom.
-        view.style.scrollPaddingTop = h + 10 + "px"
-        const foot = body.querySelector<HTMLElement>(".rv-decide-foot")
-        view.style.scrollPaddingBottom = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px"
+        const vh = Math.floor(view.getBoundingClientRect().height) + "px"
+        // What sits above the names and the person (a note, a failure box)
+        // comes off their height, so the decide row stays in the window.
+        const wrap = body.querySelector<HTMLElement>(":scope > .rv-review")
+        const above = (wrap ? Math.max(0, Math.round(wrap.getBoundingClientRect().top - body.getBoundingClientRect().top)) : 0) + "px"
+        const vs = view.style
+        if (vs.getPropertyValue("--rv-fin") !== h + "px") vs.setProperty("--rv-fin", h + "px")
+        if (vs.getPropertyValue("--rv-view-h") !== vh) vs.setProperty("--rv-view-h", vh)
+        if (vs.getPropertyValue("--rv-above") !== above) vs.setProperty("--rv-above", above)
+        // Focus never lands under the counts bar at the top (the decide
+        // row's own room is kept by markStuck).
+        if (vs.scrollPaddingTop !== h + 10 + "px") vs.scrollPaddingTop = h + 10 + "px"
         markStuck(true)
+        syncSide()
     }
+    // A shadow over the dock while the side has more under the fold.
+    function syncSide(): void {
+        const more = sideScroll.scrollHeight - sideScroll.scrollTop - sideScroll.clientHeight > 1 && dock.childElementCount > 0
+        sideScroll.parentElement?.classList.toggle("rv-side-more", more)
+    }
+    sideScroll.addEventListener("scroll", syncSide, { passive: true })
     // Once the checks have scrolled up out of sight, the bottom bar also
     // names the person.
     function markStuck(force = false): void {
@@ -2610,11 +3267,15 @@
         if (!force && stuck === bar.classList.contains("stuck")) return
         bar.classList.toggle("stuck", stuck)
         // The name shown in the pinned row only when the row still fits on
-        // one line with it.
+        // one line with it; when even the keys do not fit, they go too.
         bar.classList.remove("tight")
         const btns = bar.querySelector<HTMLElement>(".rv-decide-btns")
         const nav = bar.querySelector<HTMLElement>(".rv-decide-nav")
-        if (stuck && btns && nav && nav.offsetTop > btns.offsetTop + 4) bar.classList.add("tight")
+        if (btns && nav && nav.offsetTop > btns.offsetTop + 4) bar.classList.add("tight")
+        // Focus never lands under the pinned row, whatever its height now
+        // (it wraps on narrower windows).
+        const padB = bar.offsetHeight + 10 + "px"
+        if (panel && panel.style.scrollPaddingBottom !== padB) panel.style.scrollPaddingBottom = padB
     }
     view.addEventListener("scroll", () => markStuck(), { passive: true })
     window.addEventListener("resize", syncStick)
@@ -2622,12 +3283,19 @@
     // F ต้องแก้ไข, ← / → the person before / after. By key position
     // (ev.code), so they work with the Thai layout on too; never while
     // typing, in a dialog, or with a modifier.
+    // 2026-11-18: only while the focus is in the names or the person (so
+    // the arrows elsewhere, the months and the side switch, are theirs), and
+    // only while ปุ่มลัด is on (kept per computer; on by default).
+    const KEYS_KEY = "review.keys"
+    let keysOn = true
+    try { if (localStorage.getItem(KEYS_KEY) === "off") keysOn = false } catch (e) { /* private window */ }
     document.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat || ev.defaultPrevented) return
-        if (role !== "auditor" || view.classList.contains("hidden") || !body.querySelector(".rv-decide-row")) return
+        if (!keysOn || role !== "auditor" || view.classList.contains("hidden") || !body.querySelector(".rv-decide-row")) return
         if (document.querySelector("dialog[open]")) return
         const t = ev.target as HTMLElement | null
-        if (t && (t.closest("input, textarea, select, [contenteditable]"))) return
+        if (!t || !t.closest(".rv-review")) return
+        if (t.closest("input, textarea, select, [contenteditable]")) return
         const id = ev.code === "KeyA" ? "rv-approve" : ev.code === "KeyF" ? "rv-fix"
             : ev.code === "ArrowLeft" ? "rv-prev-person" : ev.code === "ArrowRight" ? "rv-next-person" : ""
         if (!id) return
@@ -2637,11 +3305,12 @@
         b.click()
     })
 
-    // The click that decided one person must not land on the next one's
-    // button: ignore pointer clicks for half a second after the panel shows
-    // another person, and the second click of a double-click. Keys (detail 0)
-    // always work.
-    const tooSoon = (ev: MouseEvent): boolean => ev.detail > 1 || (ev.detail === 1 && Date.now() - swapAt < 500)
+    // The second click of a double-click must not decide the next person
+    // too (the first one moved the panel on). Every other click counts
+    // (2026-11-18: the half-second guard after the panel changed person
+    // dropped real clicks); keys (detail 0) always work, and the keys
+    // ignore a held key's repeats.
+    const dbl = (ev: MouseEvent): boolean => ev.detail > 1
 
     // What the auditor would most likely write, ready to edit.
     function suggestRemark(p: Person): string {
@@ -2668,16 +3337,25 @@
         bar.setAttribute("role", "group")
         bar.setAttribute("aria-label", "ตัดสินผล " + p.name)
         const btns = el("div", "rv-decide-btns")
-        const approve = el("button", "btn-primary" + (ok ? "" : " rv-off"), p.decision === "approve" ? "✓ อนุมัติแล้ว" : "อนุมัติ")
+        const approve = el("button", "btn-primary" + (ok ? "" : " rv-off"))
+        if (p.decision === "approve") approve.append(iconEl("check"), "อนุมัติแล้ว")
+        else approve.append("อนุมัติ")
         approve.type = "button"
         approve.id = "rv-approve"
-        approve.setAttribute("aria-keyshortcuts", "A")
-        approve.title = "ปุ่มลัด A"
-        const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""), p.decision === "fix" ? "✓ ต้องแก้ไขแล้ว" : "ต้องแก้ไข")
+        const fix = el("button", (ok ? "btn-ghost" : "btn-primary") + (open && ok ? " rv-pressed" : ""))
+        if (p.decision === "fix") fix.append(iconEl("check"), "ต้องแก้ไขแล้ว")
+        else fix.append("ต้องแก้ไข")
         fix.type = "button"
         fix.id = "rv-fix"
-        fix.setAttribute("aria-keyshortcuts", "F")
-        fix.title = "ปุ่มลัด F"
+        // It opens the remark box under the checks.
+        fix.setAttribute("aria-expanded", String(open))
+        fix.setAttribute("aria-controls", "rv-remark-box")
+        if (keysOn) {
+            approve.setAttribute("aria-keyshortcuts", "A")
+            approve.title = "ปุ่มลัด A"
+            fix.setAttribute("aria-keyshortcuts", "F")
+            fix.title = "ปุ่มลัด F"
+        }
         btns.append(approve, fix)
         let undo: HTMLButtonElement | null = null
         if (p.decision) {
@@ -2685,7 +3363,7 @@
             undo.type = "button"
             undo.id = "rv-undo"
             const u = undo
-            u.addEventListener("click", (ev) => { if (!tooSoon(ev)) void decide(s, p, null, "", u) })
+            u.addEventListener("click", (ev) => { if (!dbl(ev)) decide(p.index, null, "") })
             btns.append(u)
         }
         const who = el("span", "rv-decide-who", p.name)
@@ -2694,23 +3372,47 @@
         const list = visiblePeople()
         const i = list.findIndex((x) => x.index === p.index)
         const go = (d: number, text: string): HTMLButtonElement => {
-            const b = el("button", "btn-ghost", text)
+            const b = el("button", "btn-ghost")
+            if (d < 0) b.append(iconEl("arrow-left"), text)
+            else b.append(text, iconEl("arrow-right"))
             b.type = "button"
             b.id = d < 0 ? "rv-prev-person" : "rv-next-person"
-            b.setAttribute("aria-keyshortcuts", d < 0 ? "ArrowLeft" : "ArrowRight")
-            b.title = "ปุ่มลัด " + (d < 0 ? "←" : "→")
+            if (keysOn) {
+                b.setAttribute("aria-keyshortcuts", d < 0 ? "ArrowLeft" : "ArrowRight")
+                b.title = "ปุ่มลัด " + (d < 0 ? "←" : "→")
+            }
             const target = list[i + d]
             b.disabled = !target
             b.addEventListener("click", () => { if (target) openPerson(target.index) })
             return b
         }
-        nav.append(go(-1, "← คนก่อนหน้า"), go(1, "คนถัดไป →"))
-        const keys = el("span", "rv-keys", "ปุ่มลัด A · F · ← →")
-        keys.setAttribute("aria-hidden", "true")
-        bar.append(btns, who, keys, nav)
-        // A failed save shows in the row, which is on screen even when pinned.
-        const n = noteEl(spot)
-        if (n) bar.append(n)
+        nav.append(go(-1, "คนก่อนหน้า"), go(1, "คนถัดไป"))
+        // ปุ่มลัด: a switch for the keys, and the keys while they are on.
+        const keysBox = el("div", "rv-keys-box")
+        // A switch named ปุ่มลัด; the word after it shows its state, which
+        // aria-checked says to a screen reader.
+        const kt = el("button", "rv-keys-toggle", "ปุ่มลัด ")
+        const state = el("span", undefined, keysOn ? "เปิด" : "ปิด")
+        state.setAttribute("aria-hidden", "true")
+        kt.append(state)
+        kt.type = "button"
+        kt.id = "rv-keys-toggle"
+        kt.setAttribute("role", "switch")
+        kt.setAttribute("aria-checked", String(keysOn))
+        kt.addEventListener("click", () => {
+            keysOn = !keysOn
+            try { localStorage.setItem(KEYS_KEY, keysOn ? "on" : "off") } catch (e) { /* private window */ }
+            render()
+            say(keysOn ? "ปุ่มลัด เปิด" : "ปุ่มลัด ปิด")
+        })
+        keysBox.append(kt)
+        if (keysOn) {
+            const kbd = (k: string | Node, sr?: string): HTMLElement => { const x = el("kbd"); x.append(k); if (sr) x.append(el("span", "sr-only", sr)); return x }
+            const keys = el("span", "rv-keys")
+            keys.append(kbd("A"), " · ", kbd("F"), " · ", kbd(iconEl("arrow-left"), "←"), " ", kbd(iconEl("arrow-right"), "→"))
+            keysBox.append(keys)
+        }
+        bar.append(btns, who, keysBox, nav)
         out.push(bar)
 
         const why = el("div", "rv-decide-hint")
@@ -2731,32 +3433,29 @@
             // newest รวมค่าคะแนน file in Drive, view only.
             const fid = s.build && s.build.merged_file_id
             if (fid) {
-                const a = el("a", "rv-link", "เปิดไฟล์รวมค่าคะแนน ")
+                const a = el("a", "rv-link")
                 a.id = "rv-open-merged"
                 a.href = "https://drive.google.com/file/d/" + encodeURIComponent(fid) + "/view"
                 a.target = "_blank"
                 a.rel = "noopener"
-                const arrow = el("span", undefined, "↗")
-                arrow.setAttribute("aria-hidden", "true")
-                a.append(arrow, el("span", "sr-only", " (เปิดในแท็บใหม่)"))
+                a.append(el("span", undefined, "เปิดไฟล์รวมค่าคะแนน"), iconEl("external"), el("span", "sr-only", " (เปิดในแท็บใหม่)"))
                 why.append(a)
             }
             out.push(why)
         }
         approve.addEventListener("click", (ev) => {
-            if (tooSoon(ev)) return
+            if (dbl(ev)) return
             if (!ok) { say(why.textContent || ""); return }
-            void decide(s, p, "approve", "", approve)
+            decide(p.index, "approve", "")
         })
         fix.addEventListener("click", (ev) => {
-            if (tooSoon(ev)) return
+            if (dbl(ev)) return
             remarkOpen.add(p.index)
             if (!open) render()
             const ta = document.getElementById("rv-remark")
             if (ta) ta.focus()
         })
 
-        let save: HTMLButtonElement | null = null
         if (open) {
             const box = el("div", "rv-remark-box")
             box.id = "rv-remark-box"
@@ -2773,9 +3472,8 @@
             const sv = el("button", "btn-primary", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "บันทึก")
             sv.type = "button"
             sv.id = "rv-fix-save"
-            save = sv
             sv.addEventListener("click", (ev) => {
-                if (tooSoon(ev)) return
+                if (dbl(ev)) return
                 if (!ta.value.trim()) {
                     err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร"
                     fieldErrs.set(draftKey, err.textContent)
@@ -2785,7 +3483,7 @@
                     return
                 }
                 fieldErrs.delete(draftKey)
-                void decide(s, p, "fix", ta.value, sv)
+                decide(p.index, "fix", ta.value)
             })
             const acts = el("div", "rv-actions")
             acts.append(sv)
@@ -2816,10 +3514,10 @@
             box.append(lab, line, err)
             out.push(box)
         }
-        if (flying(s, spot)) {
-            const pressed = pressedFor.get(flightKey(s, spot)) || "rv-approve"
-            for (const b of [approve, fix, save, undo]) if (b) markBusy(b, b.id === pressed)
-        }
+        // A failed save shows just above the pinned row (not in it, so the
+        // row keeps its height); it is scrolled into view when it comes.
+        const n = noteEl(spot)
+        if (n) out.push(n)
         return out
     }
 
@@ -2839,7 +3537,7 @@
             .then(() => {
                 if (seq !== detailSeq) return
                 detailLoading.delete(key)
-                if (selected === index) render()
+                if (selected === index && month === s.month) renderSoon()
             })
     }
 
@@ -2863,53 +3561,135 @@
         return t.length > 40 ? t.slice(0, 39) + "…" : t
     }
 
-    async function decide(s: State, p: Person, decision: "approve" | "fix" | null, remark: string, btn: HTMLButtonElement): Promise<void> {
-        const spot = "decide-" + p.index
-        if (!begin(s, spot, btn)) return
-        busy = true
-        let moved = false, failed = false
-        try {
-            await post(monthApi(s) + "/decisions/" + p.index, { decision, remark }, "PUT")
-            p.decision = decision
-            p.remark = decision === "fix" ? remark.trim() : ""
-            p.carried = false
-            forget(s, "remark:" + p.index)
-            fieldErrs.delete("remark:" + p.index)
-            if (decision !== "fix") remarkOpen.delete(p.index)
-            // The row shows the result and stays where it was; the words are
-            // only read out.
-            if (s.month === month) kept.add(p.index)
-            say(p.name + ": " + decisionText(p))
-            // Straight on to the next person still to check, after this one
-            // in the list (then from the top).
-            if (decision && s.month === month) {
-                const list = visiblePeople()
-                const at = list.findIndex((x) => x.index === p.index)
-                const order = at < 0 ? list : list.slice(at + 1).concat(list.slice(0, at))
-                const next = order.find((x) => x.decision === null && x.index !== p.index)
-                if (next) { selected = next.index; moved = true }
-            }
-        } catch (e) {
-            failed = true
-            tell(s, spot, "err", p.name + ": " + errText(e, "บันทึกไม่สำเร็จ"))
-        } finally {
-            busy = false
-            end(s, spot)
+    // A decision shows at once (2026-11-18, the tab's lag): the person's
+    // row, the tiles and the counts change, and the panel moves on to the
+    // next person still to check, while the save goes to the server in the
+    // background. Each person's saves go one after another; a failed save
+    // puts that person back as the server has them, shows why and says it.
+    // pend keeps what is still being saved (and what a /people reply
+    // started before the save ended cannot know yet), by month and person.
+    interface Pend { decision: Person["decision"]; remark: string; seq: number; done: number }
+    const pend = new Map<string, Pend>()
+    const pendBase = new Map<string, { decision: Person["decision"]; remark: string; carried: boolean }>()
+    const saving = new Map<string, Promise<void>>()
+    const flights = new Set<Promise<void>>()
+    let decSeq = 0
+    // Every decision still on its way, ended (a step that hands the round on
+    // waits for this, so nothing is sent with a decision unsaved).
+    async function settled(): Promise<void> { while (flights.size) await Promise.all(Array.from(flights).map((x) => x.catch(() => undefined))) }
+    const savingIn = (m: string): boolean => Array.from(pend.entries()).some(([k, e]) => !e.done && k.startsWith(m + ":"))
+    // The people of a month: the one on screen, or one kept for a switch back.
+    const peopleOf = (m: string): Person[] | null => m === month ? people : ((monthKeep.get(m) || {}) as Partial<Kept>).people || null
+    // What a /people reply cannot know yet: saves that ended after it was
+    // asked for, or have not ended. Older ones are in the reply already.
+    function reapply(m: string, list: Person[], asked: number): void {
+        for (const [k, e] of Array.from(pend.entries())) {
+            if (!k.startsWith(m + ":")) continue
+            if (e.done && e.done < asked) { pend.delete(k); pendBase.delete(k); continue }
+            const idx = k.slice(m.length + 1)
+            const cur = list.find((x) => x.index === idx)
+            if (cur) { cur.decision = e.decision; cur.remark = e.remark; cur.carried = false }
         }
-        // Show the next person at once; the reload only refreshes counts.
-        const focusHead = (): void => {
+    }
+    // The next person still to check after this one in the list (then from
+    // the top): where a decision moves on to.
+    function nextAfter(index: string): Person | null {
+        const list = visiblePeople()
+        const at = list.findIndex((x) => x.index === index)
+        const order = at < 0 ? list : list.slice(at + 1).concat(list.slice(0, at))
+        return order.find((x) => x.decision === null && x.index !== index) || null
+    }
+    function decide(index: string, decision: "approve" | "fix" | null, remark: string): void {
+        const s = st
+        if (!s || s.month !== month || !people) return
+        const p = people.find((x) => x.index === index)
+        if (!p) return
+        const m = s.month
+        const key = m + ":" + index
+        const spot = "decide-" + index
+        if (!pend.has(key)) pendBase.set(key, { decision: p.decision, remark: p.remark, carried: p.carried })
+        const seq = ++decSeq
+        const rem = decision === "fix" ? remark.trim() : ""
+        pend.set(key, { decision, remark: rem, seq, done: 0 })
+        p.decision = decision
+        p.remark = rem
+        p.carried = false
+        // The typed remark stays a draft until the server has it (a failed
+        // save gives it back); only its error goes now.
+        const draftKey = "remark:" + index
+        const typed = decision === "fix" ? remark : ""
+        const draftAtPress = drafts.get(draftKey)
+        fieldErrs.delete(draftKey)
+        notes.delete(spot)
+        if (decision !== "fix") remarkOpen.delete(index)
+        // The row shows the result and stays where it was; the words are
+        // only read out.
+        kept.add(index)
+        // Straight on to the next person still to check; the words say who.
+        const next = decision ? nextAfter(index) : null
+        if (next) selected = next.index
+        say(p.name + ": " + decisionText(p) + (next ? " · ถัดไป " + next.name : ""))
+        const pressed = document.activeElement instanceof HTMLElement ? document.activeElement.id : ""
+        render()
+        if (next) {
+            afterFrame(true)
             const hh = document.getElementById("rv-person-h")
             if (hh) hh.focus({ preventScroll: true })
+        } else {
+            // Stay on the button pressed (ยกเลิกผล becomes อนุมัติ's
+            // neighbour again), else the name.
+            const back = (pressed && document.getElementById(pressed)) || document.getElementById("rv-person-h")
+            if (back && document.activeElement !== back) back.focus({ preventScroll: true })
         }
-        if (moved && s.month === month) { render(); toWorkingSpot(); focusHead() }
-        const pressed = btn.id
-        await reload()
-        if (s.month !== month) return
-        if (moved) { toWorkingSpot(); focusHead(); return }
-        // After a failure stay on the button that was pressed.
-        const back = failed && pressed ? document.getElementById(pressed) : null
-        if (back) back.focus({ preventScroll: true })
-        else focusHead()
+        const name = p.name
+        const before = saving.get(key) || Promise.resolve()
+        const run = before.then(() => post(monthApi(s) + "/decisions/" + index, { decision, remark }, "PUT")).then(() => {
+            pendBase.set(key, { decision, remark: rem, carried: false })
+            const e = pend.get(key)
+            if (e && e.seq === seq) {
+                e.done = performance.now()
+                // Saved: the draft goes, unless more was typed since.
+                if (m === month && drafts.get(draftKey) === draftAtPress) drafts.delete(draftKey)
+            }
+            // A failed save's note at the top goes with the next save that
+            // works after it.
+            const t = notes.get("top")
+            if (m === month && t && t.failSeq !== undefined && t.failSeq < seq) { notes.delete("top"); renderSoon() }
+        }, (err) => {
+            if (signedOut(err)) return
+            const e = pend.get(key)
+            // A later decision for the same person is on its way: it decides.
+            if (!e || e.seq !== seq) return
+            const b = pendBase.get(key)
+            pend.delete(key)
+            pendBase.delete(key)
+            const cur = (peopleOf(m) || []).find((x) => x.index === index)
+            if (cur && b) { cur.decision = b.decision; cur.remark = b.remark; cur.carried = b.carried }
+            // What was typed comes back in the box, open.
+            if (m === month && typed.trim()) {
+                if (!drafts.has(draftKey) || drafts.get(draftKey) === "") drafts.set(draftKey, typed)
+                remarkOpen.add(index)
+            }
+            // Shown above the person's decision row while they are open,
+            // else at the top (until a later save works).
+            const here = m === month && selected === index
+            tell(s, here ? spot : "top", "err", name + ": " + errText(err, "บันทึกไม่สำเร็จ"))
+            if (here) revealId = noteId(spot)
+            else { const t = notes.get("top"); if (t) { t.failSeq = decSeq; t.fail = { m, text: name + ": " + errText(err, "บันทึกไม่สำเร็จ") } } }
+            // No clear answer (no connection, a server error): the save may
+            // have gone through, so the names are read again; saves still on
+            // their way keep their result.
+            const status = err instanceof ApiError ? err.status : 0
+            const r2 = st && st.month === m ? liveRound(st) : null
+            if (m === month && st && r2 && (status === 0 || status >= 500)) void loadPeople(st, r2)
+            renderSoon()
+        })
+        const tail: Promise<void> = run.finally(() => {
+            flights.delete(tail)
+            if (saving.get(key) === tail) saving.delete(key)
+        })
+        saving.set(key, tail)
+        flights.add(tail)
     }
 
     // ปัญหาอื่น ๆ (both sides), the open ones only; nothing new is added here.
@@ -2983,8 +3763,9 @@
         } finally {
             end(s, spot)
         }
-        if (s.month === month) issuesKey = ""
-        await reload()
+        // The issues load with the month, not after it.
+        if (s.month !== month) return
+        await Promise.all([reload(), loadIssues(s)])
     }
 
     // ผู้จัดทำ: the answer to one person sent back, sent with the next round.
