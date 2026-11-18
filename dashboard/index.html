@@ -169,6 +169,10 @@
            the size Noto Sans Thai had at 16px, so the root is 137.5%: every
            rem on every tab grows with it (layout widths are in px). */
         html { font-size: 137.5%; font-synthesis: none; }
+        /* TH SarabunPSK Regular reads thin on a Windows desktop (Pong,
+           2026-11-18): a 0.4px outline in the text colour thickens every
+           letter a little. ภาพรวม and ตามส่ง (Inter) keep none, below. */
+        html { -webkit-text-stroke-width: 0.4px; }
         html, body, button, input, select, textarea, dialog { font-family: var(--font-sans); }
         body {
             background: var(--background);
@@ -446,6 +450,7 @@
             font-size: 16px;
             line-height: 1.6;
             font-synthesis: auto;
+            -webkit-text-stroke-width: 0;
         }
 
         /* ── Content: the six cards fill the space 824e543 gave them (the
