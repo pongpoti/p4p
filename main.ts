@@ -618,10 +618,12 @@ app.get(["/admin", "/admin/"], (req: Request, res: Response) => {
 // ── /dashboard/ — desktop-only admin dashboard ──────────────────────────────
 // Signed in with LINE Login (web OAuth on the LIFF apps' Login channel), not
 // the /admin/ cookie: /admin/ is the phone page and stays as it is. Only the
+// owner, the users in dashboard_users (added with a QR, see below) and the
 // LINE userIds in DASHBOARD_LINE_USER_IDS get a session. That list lives in
 // the environment rather than here because this repository is public; the
 // fallback is ADMIN_LINE_USER_ID (also env-only), so with neither set nobody
-// gets a session.
+// gets a session. Since the QR invite it is only the bootstrap: its users
+// move into dashboard_users the next time they sign in.
 //
 // The channel secret is env-only (LINE_LOGIN_CHANNEL_SECRET). Without it the
 // login route refuses to start rather than signing sessions with a
@@ -637,6 +639,97 @@ if (DASHBOARD_LINE_USER_IDS.size === 0) {
 if (!LINE_LOGIN_CHANNEL_SECRET) {
   console.error("[dashboard] LINE_LOGIN_CHANNEL_SECRET is not set — dashboard login is DISABLED")
 }
+
+// ── Dashboard users and their rights (QR invite, Pong 2026-11-18) ──────────
+// Who gets what, in this order (dashPerms):
+//   1. the owner (ADMIN_LINE_USER_ID): everything, and the owner-only parts;
+//   2. a row in dashboard_users (scripts/dashboard-users-2026-11.sql): its
+//      perms while active, nothing when suspended — a row beats the env var;
+//   3. DASHBOARD_LINE_USER_IDS: LEGACY_PERMS, exactly what they had before;
+//   4. anyone else: no session.
+// Until the SQL is pasted the table answers "not installed" and only 1, 3
+// and 4 apply, which is the dashboard as it was. Rights are never put in the
+// cookie: dashSession re-reads them on every request.
+const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
+// The ผู้จัดทำ set: every right a non-owner could have before (followup,
+// read-only รายชื่อ and อัตรากำลัง, the ตรวจสอบ ผู้จัดทำ side).
+const LEGACY_PERMS = DASH_PERM_KEYS.slice()
+const OWNER_PERMS = DASH_PERM_KEYS.slice()
+// Known keys only, followup.edit brings followup.view, sorted, no repeats;
+// null when any key is unknown (or the value is not a list).
+function normalizePerms(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null
+  const out = new Set<string>()
+  for (const k of v) {
+    if (typeof k !== "string" || !DASH_PERM_KEYS.includes(k)) return null
+    out.add(k)
+  }
+  if (out.has("followup.edit")) out.add("followup.view")
+  return Array.from(out).sort()
+}
+interface DashUserRow { line_user_id: string; display_name: string; line_name: string; perms: string[]; active: boolean }
+// One copy per warm instance, read again every 30 s (one read at a time); a
+// write on this instance drops it at once. A failed read keeps the last good
+// copy for 10 minutes; after that the table's users are refused (fail closed)
+// except that a suspension in the stale copy still holds, while the owner and
+// the env users keep working.
+const DASH_USERS_TTL_MS = 30 * 1000
+const DASH_USERS_STALE_MS = 10 * 60 * 1000
+const dashUsers = {
+  rows: new Map<string, DashUserRow>(),
+  installed: null as boolean | null,
+  goodAt: 0,
+  triedAt: 0,
+  loading: null as Promise<void> | null,
+}
+// PostgREST / Postgres for "no such table or function".
+const isNotInstalledError = (e: any): boolean =>
+  ["PGRST205", "PGRST202", "42P01", "42883"].includes(String(e?.response?.data?.code || ""))
+function loadDashUsers(force = false): Promise<void> {
+  if (dashUsers.loading) return dashUsers.loading
+  if (!force && Date.now() - dashUsers.triedAt < DASH_USERS_TTL_MS) return Promise.resolve()
+  dashUsers.triedAt = Date.now()
+  dashUsers.loading = (async () => {
+    try {
+      const r = await axios.get(SUPABASE_URL + "/rest/v1/dashboard_users?select=line_user_id,display_name,line_name,perms,active",
+        { headers: SERVICE_HEADERS(), timeout: 5000 })
+      const rows = new Map<string, DashUserRow>()
+      for (const u of (Array.isArray(r.data) ? r.data : []) as DashUserRow[]) {
+        if (u && typeof u.line_user_id === "string") {
+          rows.set(u.line_user_id, { ...u, perms: normalizePerms(u.perms) || [], active: u.active === true })
+        }
+      }
+      dashUsers.rows = rows
+      dashUsers.installed = true
+      dashUsers.goodAt = Date.now()
+    } catch (e: any) {
+      if (isNotInstalledError(e)) {
+        dashUsers.rows = new Map()
+        dashUsers.installed = false
+        dashUsers.goodAt = Date.now()
+      } else {
+        console.error("[dashboard] users read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      }
+    } finally {
+      dashUsers.loading = null
+    }
+  })()
+  return dashUsers.loading
+}
+const dashUsersFresh = (): boolean => dashUsers.goodAt > 0 && Date.now() - dashUsers.goodAt < DASH_USERS_STALE_MS
+// The user's row, or null (none, or the copy is too old to trust).
+const dashUserRow = (sub: string): DashUserRow | null => (dashUsersFresh() && dashUsers.rows.get(sub)) || null
+function dashPerms(sub: string): string[] | null {
+  if (!sub) return null
+  if (isOwnerLineUserId(sub)) return OWNER_PERMS
+  const row = dashUsers.rows.get(sub)
+  if (row) {
+    if (!row.active) return null
+    if (dashUsersFresh()) return row.perms
+  }
+  return DASHBOARD_LINE_USER_IDS.has(sub) ? LEGACY_PERMS : null
+}
+
 const DASH_COOKIE = "p4p_dash"
 const DASH_STATE_COOKIE = "p4p_dash_state"
 const DASH_SESSION_SECONDS = 12 * 3600
@@ -666,13 +759,20 @@ function readDash(token: string | undefined): Record<string, any> | null {
     return o && typeof o.exp === "number" && o.exp > Date.now() / 1000 ? o : null
   } catch (e) { return null }
 }
-function dashSession(req: Request): { sub: string; name: string; exp: number } | null {
+function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[] } | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
-  if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000) return null
-  // Re-checked on every request, so removing an id from the env var locks
-  // that person out on the next deploy rather than when the cookie expires.
-  return DASHBOARD_LINE_USER_IDS.has(o.sub) ? { sub: o.sub, name: staffName(o.name), exp: o.exp } : null
+  // A payload with a typ (the phone's p4p_join) is never a session.
+  if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000 || o.typ !== undefined) return null
+  // Re-checked on every request, so a suspension or a removed right (or an
+  // id taken out of the env var) applies to the next call, not when the
+  // cookie expires.
+  const perms = dashPerms(String(o.sub || ""))
+  if (!perms) return null
+  const row = dashUserRow(o.sub)
+  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms }
 }
+// The owner can do everything; anyone else needs the right.
+const can = (s: { sub: string; perms: string[] }, perm: string): boolean => isDashOwner(s.sub) || s.perms.includes(perm)
 // (Re)issues the session cookie with a fresh idle deadline, keeping the
 // absolute 12h expiry from sign-in.
 function setDashCookie(res: Response, sub: string, name: string, exp: number): void {
@@ -714,11 +814,15 @@ const isDashOwner = (sub: string): boolean => isOwnerLineUserId(sub)
 const { staffName } = require("./lib/staff-names") as typeof import("./lib/staff-names")
 // History rows: a dashboard user's older rows carry the LINE name, so they
 // get the Thai one; a refused stranger keeps the name LINE gave.
-const shownActor = (sub: string, name: string): string => DASHBOARD_LINE_USER_IDS.has(sub) ? staffName(name) : name
-// The ตรวจสอบ tab's ผู้จัดทำ (auditee) side, and the overview's งบ button:
-// every dashboard user who is not the owner (Pong, 2026-11-12: "Add Dada as
-// auditee"; Dada is the only other one). The owner has both sides.
-const isReviewAuditee = (sub: string): boolean => DASHBOARD_LINE_USER_IDS.has(sub) && !isDashOwner(sub)
+const shownActor = (sub: string, name: string): string => {
+  const row = dashUserRow(sub)
+  if (row) return row.display_name || staffName(name)
+  return dashPerms(sub) !== null ? staffName(name) : name
+}
+// The ตรวจสอบ tab's ผู้จัดทำ (auditee) side: a dashboard user who is not the
+// owner and has review.auditee (Pong, 2026-11-12: "Add Dada as auditee";
+// every env user has it). The owner has both sides.
+const isReviewAuditee = (sub: string): boolean => !isDashOwner(sub) && (dashPerms(sub) || []).includes("review.auditee")
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -740,9 +844,45 @@ async function audit(req: Request, actor: { sub: string; name: string }, action:
 
 // Unlike the LIFF pages, the dashboard never runs inside a frame, so it
 // refuses to be framed by anyone (clickjacking on the delete buttons).
+// The approval panel shows the newcomer's LINE picture, so the dashboard's
+// img-src also allows LINE's profile-picture host (one img-src: a second
+// directive would be ignored).
+const DASH_CSP = DASHBOARD_CSP.replace("img-src 'self' data:", "img-src 'self' data: https://profile.line-scdn.net")
 app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("Content-Security-Policy", (req.path === "/login" ? CSP : DASHBOARD_CSP) + "; frame-ancestors 'none'")
+  res.setHeader("Content-Security-Policy", (req.path === "/login" ? CSP : DASH_CSP) + "; frame-ancestors 'none'")
   next()
+})
+
+// The users table, read before any dashboard route (scripts and images
+// skip it). Without the LINE Login secret nobody can sign in, so no read.
+app.use("/dashboard", async (req: Request, res: Response, next: NextFunction) => {
+  if (!LINE_LOGIN_CHANNEL_SECRET || /[.](js|css|png|svg|ico|ttf|woff2?)$/i.test(req.path)) return next()
+  await loadDashUsers()
+  next()
+})
+
+// Rights by path, before every route (mountReview and mountStaffing too).
+// It only ever adds a refusal: no session goes on to the route's own 401,
+// and the owner-only checks in the handlers stay as they are. Matched on
+// originalUrl because app.use("/dashboard") strips that prefix from
+// req.path. ภาพรวม (/api/overview, /api/pending) is everyone's.
+const DASH_PATH_RIGHTS: [RegExp, (method: string) => string | null][] = [
+  [/^[/]dashboard[/]api[/]followups([/].*)?$/, (m) => (m === "GET" || m === "HEAD" ? "followup.view" : "followup.edit")],
+  [/^[/]dashboard[/]api[/]roster([/].*)?$/, (m) => (m === "GET" || m === "HEAD" ? "roster.view" : null)],
+  [/^[/]dashboard[/]api[/]staffing$/, (m) => (m === "GET" || m === "HEAD" ? "staffing.view" : null)],
+]
+function dashPathRight(method: string, url: string): string | null {
+  const p = url.split("?")[0]
+  for (const [re, right] of DASH_PATH_RIGHTS) if (re.test(p)) return right(method)
+  return null
+}
+app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
+  const need = dashPathRight(req.method, req.originalUrl)
+  if (!need) return next()
+  const s = dashSession(req)
+  if (!s || can(s, need)) return next()
+  res.setHeader("Cache-Control", "no-store")
+  res.status(404).json({ error: "not found" })
 })
 
 // The dashboard is only ever served to a signed-in, allowlisted user;
@@ -764,7 +904,7 @@ app.get("/dashboard/login", async (req: Request, res: Response) => {
   // A session that lapsed on the server (laptop asleep, tab closed) still has
   // its signed cookie: log the idle sign-out once, then clear it.
   const lapsed = readDash(parseCookies(req)[DASH_COOKIE])
-  if (lapsed && DASHBOARD_LINE_USER_IDS.has(lapsed.sub)) {
+  if (lapsed && lapsed.typ === undefined && dashPerms(String(lapsed.sub || "")) !== null) {
     res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
     await audit(req, { sub: lapsed.sub, name: staffName(lapsed.name) }, "session.idle")
   }
@@ -777,12 +917,26 @@ app.get("/dashboard/login", async (req: Request, res: Response) => {
 })
 
 // Starts LINE Login; LINE sends the browser back to /dashboard/auth/callback.
+// ?join=<token>: the phone of someone who scanned the owner's QR (see the
+// QR invite routes below). Same channel, same callback, same scopes; the
+// token itself never goes to LINE, only its hash, in the signed state cookie.
 app.get("/dashboard/auth/line", (req: Request, res: Response) => {
+  const joining = req.query.join !== undefined
+  if (joining) {
+    res.setHeader("Referrer-Policy", "no-referrer")
+    res.setHeader("Cache-Control", "no-store")
+    if (!joinRateOk(req, "join")) return res.redirect(302, "/dashboard/join/done?e=busy")
+    if (!LINE_LOGIN_CHANNEL_SECRET) return res.redirect(302, "/dashboard/join/done?e=not_ready")
+    if (!JOIN_TOKEN_RE.test(String(req.query.join))) return res.redirect(302, "/dashboard/join/done?e=invalid")
+  }
   if (!LINE_LOGIN_CHANNEL_SECRET) return res.redirect(302, "/dashboard/login?error=login_disabled")
-  const state = crypto.randomBytes(16).toString("hex")
+  // "j." marks a join even when the cookie is lost on the way back.
+  const state = (joining ? "j." : "") + crypto.randomBytes(16).toString("hex")
   const nonce = crypto.randomBytes(16).toString("hex")
   const exp = Math.floor(Date.now() / 1000) + 600
-  res.append("Set-Cookie", DASH_STATE_COOKIE + "=" + signDash({ state, nonce, exp }) + "; " + COOKIE_BASE + "; Max-Age=600")
+  const saved: Record<string, unknown> = { state, nonce, exp }
+  if (joining) saved.join = sha256Hex(String(req.query.join))
+  res.append("Set-Cookie", DASH_STATE_COOKIE + "=" + signDash(saved) + "; " + COOKIE_BASE + "; Max-Age=600")
   const q = new URLSearchParams({
     response_type: "code",
     client_id: LINE_LOGIN_CHANNEL_ID,
@@ -798,7 +952,16 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
   const saved = readDash(parseCookies(req)[DASH_STATE_COOKIE])
   res.append("Set-Cookie", DASH_STATE_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
   const code = String(req.query.code || "")
-  if (!saved || !code || String(req.query.state || "") !== saved.state) {
+  const queryState = String(req.query.state || "")
+  // A phone that scanned the QR comes back to the phone pages, never to the
+  // desktop-only login page.
+  const joining = (saved && typeof saved.join === "string") || queryState.startsWith("j.")
+  if (joining) {
+    res.setHeader("Referrer-Policy", "no-referrer")
+    res.setHeader("Cache-Control", "no-store")
+  }
+  if (!saved || !code || queryState !== saved.state) {
+    if (joining) return res.redirect(302, "/dashboard/join/done?e=" + (req.query.error === "access_denied" ? "denied" : "bad_state"))
     return res.redirect(302, "/dashboard/login?error=bad_state")
   }
   try {
@@ -820,19 +983,45 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
       { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 8000 },
     )
     const sub = String(v.data.sub || "")
-    if (!DASHBOARD_LINE_USER_IDS.has(sub)) {
+    // The QR join: records who scanned, never signs anyone in.
+    if (typeof saved.join === "string") return await joinClaim(req, res, saved.join, v.data)
+    // Someone this instance does not know yet may have been approved on
+    // another one a moment ago: read the table again once before refusing.
+    if (dashPerms(sub) === null && !dashUsers.rows.has(sub)) await loadDashUsers(true)
+    if (dashPerms(sub) === null) {
       console.warn("[dashboard] LINE login refused for " + sub)
       await audit(req, { sub, name: String(v.data.name || "") }, "login.refused")
       return res.redirect(302, "/dashboard/login?error=not_allowed")
     }
-    setDashCookie(res, sub, staffName(v.data.name), Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
-    await audit(req, { sub, name: staffName(v.data.name) }, "login.success")
+    const row = dashUserRow(sub)
+    const name = (row && row.display_name) || staffName(v.data.name)
+    setDashCookie(res, sub, name, Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
+    await Promise.all([audit(req, { sub, name }, "login.success"), importEnvUser(req, sub, v.data)])
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
     console.error("[dashboard] LINE login failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    if (joining) return res.redirect(302, "/dashboard/join/done?e=failed")
     res.redirect(302, "/dashboard/login?error=login_failed")
   }
 })
+
+// An env-listed user (not the owner) with no row yet gets one, with the
+// rights they have today, so the owner can edit or suspend them on the
+// page. Never throws; does nothing until the SQL is in.
+async function importEnvUser(req: Request, sub: string, profile: Record<string, any>): Promise<void> {
+  if (isDashOwner(sub) || !DASHBOARD_LINE_USER_IDS.has(sub) || dashUsers.installed !== true || dashUsers.rows.has(sub)) return
+  try {
+    const r = await callServiceRpc("dashboard_user_import", {
+      p_sub: sub, p_line_name: String(profile.name || "").slice(0, 100), p_display_name: staffName(profile.name).slice(0, 60),
+    })
+    if (r && r.inserted) {
+      await audit(req, { sub, name: staffName(profile.name) }, "user.import", { perms: LEGACY_PERMS })
+      void loadDashUsers(true)
+    }
+  } catch (e: any) {
+    console.error("[dashboard] user import failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+  }
+}
 
 // ?reason=idle when the page signs itself out after 15 idle minutes. By then
 // the server's idle deadline has usually passed too, so the cookie is read
@@ -840,19 +1029,480 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
 app.post("/dashboard/logout", async (req: Request, res: Response) => {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   res.append("Set-Cookie", DASH_COOKIE + "=; " + COOKIE_BASE + "; Max-Age=0")
-  if (o && DASHBOARD_LINE_USER_IDS.has(o.sub)) {
-    await audit(req, { sub: o.sub, name: staffName(o.name) }, req.query.reason === "idle" ? "session.idle" : "session.logout")
+  if (o && o.typ === undefined && dashPerms(String(o.sub || "")) !== null) {
+    const row = dashUserRow(o.sub)
+    await Promise.all([
+      audit(req, { sub: o.sub, name: (row && row.display_name) || staffName(o.name) }, req.query.reason === "idle" ? "session.idle" : "session.logout"),
+      // Signing out also cancels the owner's QR that nobody scanned yet.
+      isDashOwner(o.sub) && dashUsers.installed !== false
+        ? callServiceRpc("dashboard_invite_cancel", { p_actor: o.sub, p_id: null }).catch(() => null) : null,
+    ])
   }
   res.json({ ok: true })
 })
 
 // Also the page's keep-alive: each call slides the idle deadline forward.
-app.get("/dashboard/api/session", (req: Request, res: Response) => {
+// perms: the tabs this user has (the page shows only those; the server
+// checks every call anyway). The owner also gets how many QR scans wait for
+// approval, and whether the users table is installed yet.
+app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
   setDashCookie(res, s.sub, s.name, s.exp)
-  res.json({ ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: isDashOwner(s.sub), reviewAuditee: isReviewAuditee(s.sub) })
+  const owner = isDashOwner(s.sub)
+  const body: Record<string, unknown> = {
+    ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), perms: s.perms,
+  }
+  if (owner) {
+    body.usersInstalled = dashUsers.installed !== false
+    body.pendingUsers = dashUsers.installed === false ? 0 : await pendingInviteCount(s.sub)
+  }
+  res.json(body)
+})
+
+// ── QR invite: a new dashboard user (Pong, 2026-11-18: "Go QR") ────────────
+// The owner's เพิ่มผู้ใช้ด้วย QR makes a QR that works once and expires in 10
+// minutes (dashboard_invites keeps only the token's sha256). The newcomer
+// scans it with the LINE app: /dashboard/join (the landing card, which only
+// peeks at the QR) → /dashboard/auth/line?join= → LINE Login on the same
+// channel and callback as the desktop sign-in → the callback records the
+// LINE ID that LINE verified, with a 4-digit code, and sends the phone to
+// /dashboard/join/wait, which shows the code. The owner types that code in
+// the approval panel, picks the rights, and approves; only then does the
+// LINE ID get a row in dashboard_users. The join never sets p4p_dash.
+const JOIN_TOKEN_RE = /^[A-Za-z0-9_-]{22}$/
+const JOIN_COOKIE = "p4p_join"
+const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex")
+const dashboardJoinTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, "dashboard", "join.html"), "utf8"),
+  "dashboard",
+)
+const escapeHtml = (s: unknown): string => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string)
+// Bangkok clock time, e.g. "07:41 น."
+const bkkTime = (iso: string | number | Date): string =>
+  new Date(iso).toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }) + " น."
+// "ตามส่ง (บันทึก) · รายชื่อ (ดู) · อัตรากำลัง (ดู) · ตรวจสอบ (ผู้จัดทำ)"
+function permsSummary(perms: unknown, sep = " · "): string {
+  const p = normalizePerms(perms) || []
+  const out: string[] = []
+  if (p.includes("followup.edit")) out.push("ตามส่ง (บันทึก)")
+  else if (p.includes("followup.view")) out.push("ตามส่ง (ดู)")
+  if (p.includes("roster.view")) out.push("รายชื่อ (ดู)")
+  if (p.includes("staffing.view")) out.push("อัตรากำลัง (ดู)")
+  if (p.includes("review.auditee")) out.push("ตรวจสอบ (ผู้จัดทำ)")
+  return out.length ? out.join(sep) : "ภาพรวมเท่านั้น"
+}
+
+// Per instance and best effort (the database holds the real limits): 30
+// requests per 10 minutes per IP on the landing page, the LINE hop and the
+// error cards. The wait page reloads itself every 5 s, so it has its own,
+// larger allowance.
+const JOIN_WINDOW_MS = 10 * 60 * 1000
+const JOIN_LIMITS: Record<string, number> = { join: 30, wait: 200 }
+const joinHits = new Map<string, number[]>()
+function joinRateOk(req: Request, bucket: "join" | "wait"): boolean {
+  const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || ""
+  const key = bucket + ":" + ip
+  const now = Date.now()
+  const hits = (joinHits.get(key) || []).filter((t) => now - t < JOIN_WINDOW_MS)
+  hits.push(now)
+  joinHits.set(key, hits)
+  if (joinHits.size > 5000) {
+    for (const [k, v] of joinHits) if (!v.length || now - v[v.length - 1] >= JOIN_WINDOW_MS) joinHits.delete(k)
+  }
+  return hits.length <= JOIN_LIMITS[bucket]
+}
+
+// Fixed cards: ?e= picks one, it is never echoed.
+const JOIN_MESSAGES: Record<string, string> = {
+  expired: "QR นี้หมดอายุแล้ว ขอให้ผู้ดูแลสร้าง QR ใหม่",
+  used: "QR นี้ถูกใช้แล้ว — ถ้าไม่ใช่คุณที่สแกน ให้แจ้งผู้ดูแลทันที",
+  invalid: "QR ไม่ถูกต้อง ขอให้ผู้ดูแลสร้าง QR ใหม่",
+  already: "บัญชี LINE นี้มีสิทธิ์เข้าใช้อยู่แล้ว เข้าใช้งานบนคอมพิวเตอร์ได้เลย",
+  owner: "นี่คือบัญชีผู้ดูแลระบบ ให้ผู้ใช้ใหม่เป็นผู้สแกน",
+  bad_state: "เปิดลิงก์ไม่สำเร็จ กรุณาสแกน QR อีกครั้งด้วยแอป LINE",
+  denied: "ยกเลิกการยืนยันตัวตนแล้ว",
+  failed: "ยืนยันตัวตนไม่สำเร็จ กรุณาลองใหม่",
+  busy: "ลองบ่อยเกินไป กรุณารอสักครู่",
+  not_ready: "ระบบยังไม่พร้อมใช้งาน กรุณาติดต่อผู้ดูแล",
+}
+const JOIN_SVG: Record<string, string> = {
+  ok: '<path d="M20 6 9 17l-5-5"/>',
+  no: '<path d="M18 6 6 18M6 6l12 12"/>',
+  warn: '<path d="M12 6v8M12 18v.5"/>',
+}
+const joinMark = (kind: "ok" | "no" | "warn"): string =>
+  '<div class="mark ' + kind + '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' + JOIN_SVG[kind] + "</svg></div>"
+const JOIN_SITE = '<span class="nowrap">p4p-sakhonmso.vercel.app</span>'
+function sendJoinPage(res: Response, card: string, refresh = false, status = 200): void {
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  res.setHeader("Cache-Control", "no-store")
+  res.setHeader("Referrer-Policy", "no-referrer")
+  res.setHeader("X-Robots-Tag", "noindex")
+  res.status(status).send(dashboardJoinTemplate
+    .replace("__JOIN_REFRESH__", refresh ? '<meta http-equiv="refresh" content="5">' : "")
+    .replace("__JOIN_BODY__", '<section class="card">' + card + "</section>"))
+}
+const joinError = (res: Response, e: string): void => {
+  const msg = JOIN_MESSAGES[e] || JOIN_MESSAGES.invalid
+  sendJoinPage(res, joinMark(e === "denied" || e === "busy" ? "warn" : "no") + '<h1 role="alert">' + escapeHtml(msg) + "</h1>")
+}
+
+// The QR's address. It only peeks: a link preview or prefetch cannot use
+// the QR up; the scan counts at the callback.
+app.get("/dashboard/join", async (req: Request, res: Response) => {
+  if (!joinRateOk(req, "join")) return joinError(res, "busy")
+  if (!LINE_LOGIN_CHANNEL_SECRET) return joinError(res, "not_ready")
+  const token = String(req.query.i || "")
+  if (!JOIN_TOKEN_RE.test(token)) return joinError(res, "invalid")
+  try {
+    const r = await callServiceRpc("dashboard_invite_peek", { p_token_hash: sha256Hex(token) })
+    const status = r && r.status
+    if (status !== "open") return joinError(res, status === "expired" || status === "used" ? status : "invalid")
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return joinError(res, "not_ready")
+    console.error("[dashboard] join peek failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    return joinError(res, "failed")
+  }
+  sendJoinPage(res,
+    "<h1>ขอเข้าใช้งานแดชบอร์ด P4P</h1>" +
+    "<p>ผู้ดูแลเชิญคุณเข้าใช้แดชบอร์ด กรุณายืนยันตัวตนด้วยบัญชี LINE ที่จะใช้เข้าสู่ระบบบนคอมพิวเตอร์</p>" +
+    '<a class="line" href="/dashboard/auth/line?join=' + encodeURIComponent(token) + '"><i aria-hidden="true">LINE</i>ยืนยันตัวตนด้วย LINE</a>' +
+    '<p class="fine">ระบบจะได้รับเฉพาะชื่อและรูปโปรไฟล์ LINE ของคุณ · หน้านี้ไม่ขอรหัสผ่าน · ที่อยู่เว็บต้องเป็น ' + JOIN_SITE + "</p>")
+})
+
+app.get("/dashboard/join/done", (req: Request, res: Response) => {
+  if (!joinRateOk(req, "join")) return joinError(res, "busy")
+  joinError(res, String(req.query.e || ""))
+})
+
+// The callback's join branch: LINE has verified the ID token, so v.data.sub
+// is the same LINE ID the newcomer's desktop sign-in will carry.
+async function joinClaim(req: Request, res: Response, tokenHash: string, profile: Record<string, any>): Promise<void> {
+  const sub = String(profile.sub || "")
+  if (!/^U[0-9a-f]{32}$/.test(sub)) return res.redirect(302, "/dashboard/join/done?e=failed")
+  const name = String(profile.name || "").slice(0, 100)
+  const picture = typeof profile.picture === "string" && profile.picture.startsWith("https://profile.line-scdn.net/")
+    ? profile.picture.slice(0, 500) : null
+  if (isDashOwner(sub)) return res.redirect(302, "/dashboard/join/done?e=owner")
+  if (dashPerms(sub) !== null) return res.redirect(302, "/dashboard/join/done?e=already")
+  let r: { result?: string; id?: string }
+  try {
+    r = (await callServiceRpc("dashboard_invite_claim", {
+      p_token_hash: tokenHash, p_sub: sub, p_name: name, p_picture: picture,
+      p_code: String(crypto.randomInt(0, 10000)).padStart(4, "0"),
+    })) || {}
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return res.redirect(302, "/dashboard/join/done?e=not_ready")
+    throw e
+  }
+  const invite = String(r.id || "").slice(0, 8)
+  if (r.result === "ok" && r.id) {
+    const exp = Math.floor(Date.now() / 1000) + 24 * 3600
+    res.append("Set-Cookie", JOIN_COOKIE + "=" + signDash({ typ: "join", inv: r.id, sub, exp }) +
+      "; HttpOnly; Secure; SameSite=Lax; Path=/dashboard/join; Max-Age=" + 24 * 3600)
+    await Promise.all([
+      audit(req, { sub, name }, "user.claim", { invite }),
+      tg.sendTelegram("[P4P] มีผู้สแกน QR ขอสิทธิ์แดชบอร์ด — LINE: " + name + " เวลา " + bkkTime(Date.now()) +
+        " อนุมัติได้บนแดชบอร์ดเท่านั้น ถ้าไม่ได้สร้าง QR นี้ ให้ปฏิเสธทันที"),
+    ])
+    return res.redirect(302, "/dashboard/join/wait")
+  }
+  const reason = ["used", "expired", "already", "invalid"].includes(String(r.result)) ? String(r.result) : "invalid"
+  console.warn("[dashboard] QR claim refused (" + reason + ")")
+  await Promise.all([
+    audit(req, { sub, name }, "user.claim_refused", { invite, reason }),
+    reason === "used" ? tg.sendTelegram("[P4P] QR ที่ใช้แล้วถูกสแกนซ้ำโดย " + name + " — ตรวจว่า QR ไม่ได้หลุดออกไป") : null,
+  ])
+  res.redirect(302, "/dashboard/join/done?e=" + reason)
+}
+
+// The newcomer's phone after the scan: the code while the owner decides
+// (reloading itself every 5 s, no script), then the answer.
+app.get("/dashboard/join/wait", async (req: Request, res: Response) => {
+  if (!joinRateOk(req, "wait")) return joinError(res, "busy")
+  const o = readDash(parseCookies(req)[JOIN_COOKIE])
+  if (!o || o.typ !== "join" || typeof o.inv !== "string" || typeof o.sub !== "string") return joinError(res, "bad_state")
+  let st: { status?: string; code?: string | null; name?: string | null; perms?: string[] }
+  try {
+    st = (await callServiceRpc("dashboard_invite_status", { p_id: o.inv, p_sub: o.sub })) || {}
+  } catch (e: any) {
+    console.error("[dashboard] join status failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    return joinError(res, isNotInstalledError(e) ? "not_ready" : "failed")
+  }
+  if (st.status === "scanned" && st.code) {
+    return sendJoinPage(res,
+      "<h1>รหัสยืนยันของคุณ</h1>" +
+      '<div class="code" aria-label="' + escapeHtml(st.code.split("").join(" ")) + '">' + escapeHtml(st.code) + "</div>" +
+      "<p>แสดงรหัสนี้ให้ผู้ดูแลกรอกบนคอมพิวเตอร์</p>" +
+      '<p class="fine">ในนาม ' + escapeHtml(st.name || "") + "</p>" +
+      '<span class="spin" role="status">รอผู้ดูแลอนุมัติ… หน้านี้จะอัปเดตเอง</span>', true)
+  }
+  if (st.status === "approved") {
+    return sendJoinPage(res, joinMark("ok") +
+      "<h1>ได้รับอนุมัติแล้ว</h1>" +
+      "<p>สิทธิ์ของคุณ: " + escapeHtml(permsSummary(st.perms)) + "</p>" +
+      '<div class="info">แดชบอร์ดใช้งานบนคอมพิวเตอร์เท่านั้น เปิด <span class="nowrap">p4p-sakhonmso.vercel.app/dashboard</span> ' +
+      "แล้วกด “เข้าสู่ระบบด้วย LINE” ด้วยบัญชีนี้</div>")
+  }
+  if (st.status === "rejected") {
+    return sendJoinPage(res, joinMark("no") + "<h1>คำขอไม่ได้รับอนุมัติ</h1><p>หากคิดว่าผิดพลาด กรุณาติดต่อผู้ดูแลระบบ</p>")
+  }
+  if (st.status === "invalid") return joinError(res, "bad_state")
+  // cancelled, expired, locked
+  sendJoinPage(res, joinMark("warn") + "<h1>คำขอนี้ถูกยกเลิกหรือหมดเวลาแล้ว</h1><p>ขอให้ผู้ดูแลสร้าง QR ใหม่</p>")
+})
+
+// ── The owner's side: QR, approval, users (anyone else gets 404) ──────────
+const qrcodeGenerator = require("qrcode-generator") as typeof import("qrcode-generator")
+function qrDataUri(text: string): string {
+  const qr = qrcodeGenerator(0, "M")
+  qr.addData(text)
+  qr.make()
+  const svg = qr.createSvgTag({ cellSize: 6, margin: 24, scalable: true } as any)
+  return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64")
+}
+const ADMIN_ORIGIN = (() => { try { return new URL(ADMIN_BASE_URL).origin } catch (e) { return "" } })()
+// The owner's session, or null after answering 401 / 404 (and 403 for a
+// write from another origin: the writes take JSON under a Lax cookie, and
+// must also come from this site).
+function usersOwner(req: Request, res: Response, write = false): { sub: string; name: string; exp: number; perms: string[] } | null {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) { res.status(401).json({ error: "not authenticated" }); return null }
+  if (!isDashOwner(s.sub)) { res.status(404).json({ error: "not found" }); return null }
+  if (write) {
+    const origin = String(req.headers.origin || "")
+    let sameHost = false
+    try { sameHost = !!origin && new URL(origin).host === String(req.headers.host || "") } catch (e) { sameHost = false }
+    if (!(origin && (origin === ADMIN_ORIGIN || sameHost))) { res.status(403).json({ error: "bad origin" }); return null }
+  }
+  return s
+}
+const usersNotInstalled = (res: Response): void => {
+  res.status(409).json({ error: "not_installed", installed: false })
+}
+async function pendingInviteCount(owner: string): Promise<number> {
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/dashboard_invites?select=id&status=eq.scanned&created_by=eq." + owner +
+      "&expires_at=gt." + encodeURIComponent(new Date().toISOString()) + "&limit=50", { headers: SERVICE_HEADERS(), timeout: 5000 })
+    return Array.isArray(r.data) ? r.data.length : 0
+  } catch (e: any) {
+    if (isNotInstalledError(e)) dashUsers.installed = false
+    return 0
+  }
+}
+// What the owner's page may see of a request: never the code or the whole ID.
+interface InviteRow {
+  id: string; status: string; created_at: string; expires_at: string; claimed_sub: string | null; claimed_name: string | null
+  claimed_picture: string | null; claimed_at: string | null; code_tries: number; perms: string[] | null; decided_at: string | null
+}
+const INVITE_COLS = "id,status,created_at,expires_at,claimed_sub,claimed_name,claimed_picture,claimed_at,code_tries,perms,decided_at"
+const inviteView = (r: InviteRow): Record<string, unknown> => ({
+  id: r.id,
+  status: (r.status === "open" || r.status === "scanned") && Date.parse(r.expires_at) <= Date.now() ? "expired" : r.status,
+  expiresAt: r.expires_at,
+  triesLeft: Math.max(0, 3 - (r.code_tries || 0)),
+  claim: r.claimed_sub ? {
+    name: r.claimed_name || "", picture: r.claimed_picture || null, subTail: r.claimed_sub.slice(-4), at: r.claimed_at,
+  } : null,
+  perms: r.perms || null,
+})
+// The name typed for the dashboard, cleaned like an approved physician's
+// name (cleanApprovalName); over 60 characters is refused, not cut.
+const cleanDisplayName = (v: string): string => (cleanApprovalName(v.slice(0, 200)) || "")
+const pgMessage = (e: any): string => String(e?.response?.data?.message || e?.message || "")
+
+app.post("/dashboard/api/users/invites", express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+  const s = usersOwner(req, res, true)
+  if (!s) return
+  const token = crypto.randomBytes(16).toString("base64url")
+  try {
+    const r = await callServiceRpc("dashboard_invite_create", { p_actor: s.sub, p_token_hash: sha256Hex(token) })
+    const qr = qrDataUri(ADMIN_BASE_URL.replace(/[/]$/, "") + "/dashboard/join?i=" + token)
+    await audit(req, s, "user.invite", { invite: String(r.id).slice(0, 8) })
+    res.json({ id: r.id, expiresAt: r.expires_at, qr })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    if (/rate_limited/.test(pgMessage(e))) {
+      return res.status(429).json({ error: "rate_limited", message: "สร้าง QR บ่อยเกินไป ลองใหม่ในอีกสักครู่" })
+    }
+    console.error("[dashboard] invite create failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+// Polled every 2 s by the open QR dialog (not logged).
+app.get("/dashboard/api/users/invites/:id", async (req: Request, res: Response) => {
+  const s = usersOwner(req, res)
+  if (!s) return
+  const id = String(req.params.id)
+  if (!UUID_RE.test(id)) return res.status(404).json({ error: "not found" })
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/dashboard_invites?select=" + INVITE_COLS + "&id=eq." + id +
+      "&created_by=eq." + s.sub, { headers: SERVICE_HEADERS(), timeout: 5000 })
+    if (!r.data.length) return res.status(404).json({ error: "not found" })
+    res.json(inviteView(r.data[0]))
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    console.error("[dashboard] invite read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+// The LINE ID approved is the one on the invite row (verified by LINE at the
+// scan); any ID in the body is ignored.
+app.post("/dashboard/api/users/invites/:id/approve", express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
+  const s = usersOwner(req, res, true)
+  if (!s) return
+  const id = String(req.params.id)
+  if (!UUID_RE.test(id)) return res.status(404).json({ error: "not found" })
+  const code = String(req.body?.code ?? "")
+  const perms = normalizePerms(req.body?.perms)
+  const displayName = typeof req.body?.displayName === "string" ? cleanDisplayName(req.body.displayName) : ""
+  if (!/^[0-9]{4}$/.test(code) || !perms || displayName.length < 1 || displayName.length > 60) {
+    return res.status(400).json({ error: "bad request" })
+  }
+  try {
+    const r = await callServiceRpc("dashboard_invite_decide", {
+      p_actor: s.sub, p_id: id, p_decision: "approve", p_code: code, p_perms: perms, p_display_name: displayName,
+    })
+    const invite = id.slice(0, 8)
+    if (r.result === "bad_code" || r.result === "locked") {
+      const tries = 3 - Number(r.tries_left || 0)
+      await Promise.all([
+        audit(req, s, "user.bad_code", { invite, tries }),
+        r.result === "locked" ? tg.sendTelegram("[P4P] กรอกรหัสยืนยันผิด 3 ครั้ง — ยกเลิกคำขอแล้ว") : null,
+      ])
+      return res.status(r.result === "locked" ? 409 : 400).json({ error: r.result, triesLeft: Number(r.tries_left || 0) })
+    }
+    if (r.result !== "ok") return res.status(409).json({ error: r.result || "not_pending" })
+    dashUsers.triedAt = 0
+    await loadDashUsers(true)
+    const after = r.after || {}
+    await Promise.all([
+      audit(req, s, "user.approve", { invite, sub: after.line_user_id, name: after.display_name, line_name: after.line_name, perms: after.perms }),
+      tg.sendTelegram("[P4P] เพิ่มผู้ใช้แดชบอร์ด: " + after.display_name + " โดย " + s.name + " — สิทธิ์: " + permsSummary(after.perms, ", ")),
+    ])
+    res.json({ ok: true, user: { displayName: after.display_name, perms: after.perms } })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    console.error("[dashboard] invite approve failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+app.post("/dashboard/api/users/invites/:id/reject", express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+  const s = usersOwner(req, res, true)
+  if (!s) return
+  const id = String(req.params.id)
+  if (!UUID_RE.test(id)) return res.status(404).json({ error: "not found" })
+  try {
+    const r = await callServiceRpc("dashboard_invite_decide", {
+      p_actor: s.sub, p_id: id, p_decision: "reject", p_code: null, p_perms: null, p_display_name: null,
+    })
+    if (r.result !== "ok") return res.status(409).json({ error: r.result || "not_pending" })
+    await Promise.all([
+      audit(req, s, "user.reject", { invite: id.slice(0, 8), sub: r.sub, name: r.name }),
+      tg.sendTelegram("[P4P] ปฏิเสธคำขอของ " + (r.name || "")),
+    ])
+    res.json({ ok: true })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    console.error("[dashboard] invite reject failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+// The dialog closed before anyone scanned (sent with keepalive).
+app.post("/dashboard/api/users/invites/:id/cancel", express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+  const s = usersOwner(req, res, true)
+  if (!s) return
+  const id = String(req.params.id)
+  if (!UUID_RE.test(id)) return res.status(404).json({ error: "not found" })
+  try {
+    const r = await callServiceRpc("dashboard_invite_cancel", { p_actor: s.sub, p_id: id })
+    if (r && r.cancelled) await audit(req, s, "user.cancel", { invite: id.slice(0, 8), reason: "closed" })
+    res.json({ ok: true, cancelled: !!(r && r.cancelled) })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    console.error("[dashboard] invite cancel failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+// ผู้ใช้งานและสิทธิ์: the users and the scans waiting for approval.
+app.get("/dashboard/api/users", async (req: Request, res: Response) => {
+  const s = usersOwner(req, res)
+  if (!s) return
+  try {
+    const [users, pending] = await Promise.all([
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_users?select=line_user_id,line_name,display_name,perms,active,source,added_at,suspended_at" +
+        "&order=added_at.asc", { headers: SERVICE_HEADERS(), timeout: 8000 }),
+      axios.get(SUPABASE_URL + "/rest/v1/dashboard_invites?select=" + INVITE_COLS + "&status=eq.scanned&created_by=eq." + s.sub +
+        "&expires_at=gt." + encodeURIComponent(new Date().toISOString()) + "&order=claimed_at.asc&limit=50",
+      { headers: SERVICE_HEADERS(), timeout: 8000 }),
+    ])
+    res.json({
+      installed: true,
+      owner: { name: s.name },
+      users: (users.data as Record<string, any>[]).map((u) => ({
+        id: u.line_user_id, lineName: u.line_name || "", displayName: u.display_name, perms: normalizePerms(u.perms) || [],
+        active: u.active === true, source: u.source, addedAt: u.added_at, suspendedAt: u.suspended_at || null,
+      })),
+      pending: (pending.data as InviteRow[]).map(inviteView),
+    })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return res.json({ installed: false, owner: { name: s.name }, users: [], pending: [] })
+    console.error("[dashboard] users read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
+})
+
+// Edit one user's rights or shown name, suspend or re-enable them. Never
+// the owner, who has no row.
+app.patch("/dashboard/api/users/:sub", express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
+  const s = usersOwner(req, res, true)
+  if (!s) return
+  const sub = String(req.params.sub)
+  if (!/^U[0-9a-f]{32}$/.test(sub) || isDashOwner(sub)) return res.status(404).json({ error: "not found" })
+  const perms = normalizePerms(req.body?.perms)
+  const displayName = typeof req.body?.displayName === "string" ? cleanDisplayName(req.body.displayName) : ""
+  const active = req.body?.active
+  if (!perms || displayName.length < 1 || displayName.length > 60 || typeof active !== "boolean") {
+    return res.status(400).json({ error: "bad request" })
+  }
+  try {
+    const r = await callServiceRpc("dashboard_user_save", {
+      p_actor: s.sub, p_sub: sub, p_perms: perms, p_display_name: displayName, p_active: active,
+    })
+    dashUsers.triedAt = 0
+    await loadDashUsers(true)
+    const before = r.before || {}
+    const after = r.after || {}
+    const suspended = before.active === true && after.active === false
+    await Promise.all([
+      suspended
+        ? audit(req, s, "user.suspend", { sub, name: after.display_name })
+        : audit(req, s, "user.edit", {
+          sub, name: after.display_name,
+          before: { displayName: before.display_name, perms: before.perms, active: before.active },
+          after: { displayName: after.display_name, perms: after.perms, active: after.active },
+        }),
+      tg.sendTelegram(suspended ? "[P4P] ระงับผู้ใช้ " + after.display_name
+        : "[P4P] แก้ไขสิทธิ์ " + after.display_name + ": " + (after.active ? permsSummary(after.perms, ", ") : "ระงับแล้ว")),
+    ])
+    res.json({ ok: true, user: { id: sub, displayName: after.display_name, perms: normalizePerms(after.perms) || [], active: after.active === true } })
+  } catch (e: any) {
+    if (isNotInstalledError(e)) return usersNotInstalled(res)
+    if (/not_found/.test(pgMessage(e))) return res.status(404).json({ error: "not found" })
+    if (/too_many/.test(pgMessage(e))) return res.status(409).json({ error: "too_many" })
+    console.error("[dashboard] user save failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "failed" })
+  }
 })
 
 // Excel submission status for the six months before the current one
@@ -1070,8 +1720,10 @@ const AUDIT_GROUPS: Record<string, string> = {
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
-    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save)",
-  refused: "action=eq.login.refused",
+    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save," +
+    "user.approve,user.reject,user.edit,user.suspend,user.import)",
+  refused: "action=in.(login.refused,user.claim_refused,user.bad_code)",
+  users: "action=like.user.*",
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
@@ -1099,7 +1751,7 @@ app.get("/dashboard/api/audit", async (req: Request, res: Response) => {
         { headers: SERVICE_HEADERS(), timeout: 8000 }),
       // Everyone who has signed in or tried to, for the person filter.
       axios.get(SUPABASE_URL + "/rest/v1/dashboard_audit_log?select=actor_line_id,actor_name" +
-        "&action=in.(login.success,login.refused)&order=id.desc&limit=500",
+        "&action=in.(login.success,login.refused,user.claim)&order=id.desc&limit=500",
         { headers: SERVICE_HEADERS(), timeout: 8000 }),
     ])
     await logged
