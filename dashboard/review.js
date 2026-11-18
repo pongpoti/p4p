@@ -44,6 +44,58 @@
     const inSide = (n) => !!n && (side.contains(n) || dock.contains(n));
     let sideOut = [];
     const show = (...nodes) => { side.replaceChildren(); dock.replaceChildren(); body.replaceChildren(...nodes); syncSide(); };
+    // A reply that arrives while a mouse button is down on the tab waits
+    // for the click (2026-11-18): redrawing the button under the pointer
+    // between press and release makes the browser drop the click.
+    let pressing = false;
+    let heldRender = false;
+    let pressT;
+    function release() {
+        clearTimeout(pressT);
+        if (!pressing)
+            return;
+        pressing = false;
+        if (heldRender)
+            render();
+    }
+    document.addEventListener("pointerdown", (ev) => {
+        if (!ev.isPrimary || !(ev.target instanceof Node) || !view.contains(ev.target))
+            return;
+        pressing = true;
+        clearTimeout(pressT);
+        pressT = window.setTimeout(release, 3000);
+    }, true);
+    // After the click: the timer runs once the click has been handled.
+    for (const t of ["pointerup", "pointercancel"])
+        document.addEventListener(t, () => { if (pressing)
+            setTimeout(release, 0); }, true);
+    // The redraw for a reply: now, or after the press.
+    function renderSoon() {
+        if (pressing) {
+            heldRender = true;
+            return;
+        }
+        render();
+    }
+    // Layout reads (where the bars stick, scrolling the panel into place)
+    // wait for the next frame, so a click's own work ends sooner and the
+    // browser lays the page out once (2026-11-18).
+    let frameWork;
+    let wantSpot = false;
+    function afterFrame(spot = false) {
+        if (spot)
+            wantSpot = true;
+        if (frameWork !== undefined)
+            return;
+        frameWork = requestAnimationFrame(() => {
+            frameWork = undefined;
+            syncStick();
+            if (wantSpot) {
+                wantSpot = false;
+                toWorkingSpot();
+            }
+        });
+    }
     const monthBox = document.getElementById("review-months");
     const roleBtns = Array.from(document.querySelectorAll("#review-role button"));
     const live = document.getElementById("review-live");
@@ -60,6 +112,39 @@
             e.textContent = text;
         return e;
     }
+    // Writes only what differs: an unchanged attribute or text costs the
+    // browser nothing to draw again.
+    function setAttr(e, name, v) {
+        if (v === null) {
+            if (e.hasAttribute(name))
+                e.removeAttribute(name);
+        }
+        else if (e.getAttribute(name) !== v)
+            e.setAttribute(name, v);
+    }
+    function setText(e, t) { if (e.textContent !== t)
+        e.textContent = t; }
+    function setHidden(e, h) { if (e.hidden !== h)
+        e.hidden = h; }
+    // Puts exactly these nodes in parent, in this order, moving only what is
+    // out of place (2026-11-18, the tab's lag): a part kept from the last
+    // redraw (the names, the auditee's table) stays where it is, so it is
+    // not laid out again and keeps its scroll, focus and any press on it.
+    function patchChildren(parent, nodes) {
+        let ref = parent.firstChild;
+        for (const n of nodes) {
+            if (n === ref) {
+                ref = ref.nextSibling;
+                continue;
+            }
+            parent.insertBefore(n, ref);
+        }
+        while (ref) {
+            const nx = ref.nextSibling;
+            parent.removeChild(ref);
+            ref = nx;
+        }
+    }
     const THAI_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
     const THAI_SHORT = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
     const monthName = (key, short = false) => {
@@ -71,16 +156,23 @@
         const m = /^(\d{4})_(\d{2})$/.exec(key);
         return m ? THAI_SHORT[Number(m[2]) - 1] + " " + m[1].slice(2) : key;
     };
+    // One formatter each, made once (2026-11-18, the tab's lag): each
+    // toLocaleString call builds a new one, and a 230-row table made
+    // hundreds per redraw. The words they write are the same.
+    const DATE_TH = new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const NUM_TH2 = new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const NUM_TH = new Intl.NumberFormat("th-TH");
+    const NUM_EN2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const when = (iso) => {
         if (!iso)
             return "";
         const d = new Date(iso);
         if (isNaN(d.getTime()))
             return "";
-        return d.toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " น.";
+        return DATE_TH.format(d) + " น.";
     };
-    const baht = (n) => n === null || n === undefined ? "—" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const int = (n) => Number(n || 0).toLocaleString("th-TH");
+    const baht = (n) => n === null || n === undefined ? "—" : NUM_TH2.format(Number(n));
+    const int = (n) => NUM_TH.format(Number(n || 0));
     // Latin words inside Thai text (SK03, PDF, per P4P) read in English.
     const en = (t) => { const x = el("span", undefined, t); x.lang = "en"; return x; };
     // Roving focus in a group of controls (months, the side switch, the
@@ -258,6 +350,8 @@
             markBusy(btn);
         return true;
     }
+    // A step's follow-up loading: its button spins, the notes stay.
+    const holdBusy = (s, spot) => { inflight.add(flightKey(s, spot)); };
     const end = (s, spot) => { inflight.delete(flightKey(s, spot)); pressedFor.delete(flightKey(s, spot)); dirty = true; };
     // A visible failure with a way to try again (role=alert is on shout()).
     function failBox(text, id, retry) {
@@ -431,6 +525,13 @@
         month = m;
         resetMonth();
         drawTabs();
+        // A month seen before shows at once, as it was, and is looked at
+        // again behind it (2026-11-18: a blank loading line for 2-3 s).
+        if (st) {
+            render();
+            void loadPicked(true);
+            return;
+        }
         show(el("p", "rv-loading", "กำลังโหลดเดือน " + monthName(month) + "…"));
         void loadPicked();
     }
@@ -445,14 +546,18 @@
     // them can spin.
     let listsLoading = 0;
     let roleLists = false;
-    async function loadPicked() {
+    // quiet: the month is on screen already (kept from before): no spin,
+    // and no redraw when nothing changed.
+    async function loadPicked(quiet = false) {
         // Only the newest load ends the spin: an older one of the same month
         // can come back first.
         const tok = ++pickSeq;
-        loadingFor = month;
+        if (!quiet)
+            loadingFor = month;
         syncBusy();
+        prefetchLists();
         try {
-            await loadState(true);
+            await loadState(true, false, quiet);
         }
         catch (e) {
             loadFailed(e);
@@ -464,6 +569,21 @@
                 syncBusy();
             }
         }
+    }
+    // Asked for with the month's state, not after it (2026-11-18): the
+    // names and the issues of the round the months list says is open, when
+    // the side shown lists them (the auditor's round to check, the
+    // auditee's round sent back).
+    function prefetchLists() {
+        const m = monthRows.find((x) => x.month === month);
+        const rr = m ? m.round : null;
+        if (!rr || !(role === "auditor" ? rr.status === "submitted" : rr.status === "returned"))
+            return;
+        const s0 = { month };
+        if (peopleKey !== month + ":" + rr.round_no && !peopleErr)
+            void loadPeople(s0, { round_no: rr.round_no });
+        if (issuesKey !== month && !issuesErr)
+            void loadIssues(s0);
     }
     function syncBusy() {
         for (const m of monthRows) {
@@ -481,6 +601,12 @@
     // month's state, lists, drafts and notes, and any reply still on its way
     // for it (the sequence numbers no longer match).
     function resetMonth() {
+        // The month being left is kept for a switch back.
+        if (st && st.month && st.month !== month && !loadError) {
+            // A list still on its way is asked for again on the way back.
+            monthKeep.set(st.month, { st, stJson, people, peopleKey: people && !peopleErr ? peopleKey : "", issues, issuesKey: issues && !issuesErr ? issuesKey : "",
+                rows, rowsKey: rows && !rowsErr ? rowsKey : "", details: new Map(details), selected, lastRoundKey, pl, lc, moreBox });
+        }
         st = null;
         stJson = "";
         loadError = "";
@@ -514,7 +640,33 @@
         draftScope = "";
         remarkOpen.clear();
         kept.clear();
+        pl = null;
+        lc = null;
+        moreBox = null;
+        const k = month ? monthKeep.get(month) : undefined;
+        if (k) {
+            monthKeep.delete(month);
+            st = k.st;
+            stJson = k.stJson;
+            people = k.people;
+            peopleKey = k.peopleKey;
+            issues = k.issues;
+            issuesKey = k.issuesKey;
+            rows = k.rows;
+            rowsKey = k.rowsKey;
+            for (const [a, b] of k.details)
+                details.set(a, b);
+            selected = k.selected;
+            lastRoundKey = k.lastRoundKey;
+            pl = k.pl;
+            lc = k.lc;
+            moreBox = k.moreBox;
+            // Saves still on their way for it are shown again.
+            if (people)
+                reapply(month, people, 0);
+        }
     }
+    const monthKeep = new Map();
     const monthStatus = (m) => {
         const r = m.round;
         const me = role === "auditee";
@@ -532,7 +684,7 @@
     // Only the newest load of the month picked may draw: a slower reply for
     // another month, or an older one for this month, is dropped. fromPoll:
     // the 15 s look, which draws nothing when the state is unchanged.
-    async function loadState(logView, fromPoll = false) {
+    async function loadState(logView, fromPoll = false, quiet = false) {
         if (!month)
             return;
         const m = month;
@@ -568,9 +720,9 @@
         // A load that started before the switch was flipped brings the old mode.
         if (s.mail !== undefined && !mailBusy && seq > mailSeq)
             mail = s.mail;
-        if (!(fromPoll && same)) {
+        if (!((fromPoll || quiet) && same)) {
             freshState = true;
-            render();
+            renderSoon();
         }
         clearTimeout(poll);
         poll = undefined;
@@ -672,13 +824,19 @@
             if (sw)
                 sw.classList.add("hidden");
         }
-        if (!fromButton)
+        // Back on the tab with its month still here (2026-11-18): it stays
+        // on screen, and the months and the month are looked at again
+        // together instead of a blank loading line and one after the other.
+        const warm = !fromButton && !!st && st.month === month && !loadError && !!body.firstChild;
+        const asked = month;
+        const again = warm ? loadState(true, false, true).then(() => null, (e) => e) : null;
+        if (!fromButton && !warm)
             loadingLine("กำลังโหลด…");
         try {
             if (!(await loadMonths(true))) {
                 // Still no month: the loading line, or the spinning button
                 // that asked, gives way to the card (with a fresh button).
-                if (body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]'))
+                if (warm || body.querySelector('.rv-loading, #rv-months-again[aria-busy="true"], #rv-retry-open[aria-busy="true"]'))
                     show(noMonthCard());
                 return;
             }
@@ -691,6 +849,20 @@
             show(failBox("โหลดแท็บตรวจสอบไม่สำเร็จ: " + msg, "rv-retry-open", () => { void open(true); }));
             return;
         }
+        if (again && month === asked) {
+            const e = await again;
+            if (e && month === asked)
+                loadFailed(e);
+            return;
+        }
+        // Another month now: kept from before, it shows at once.
+        if (st && st.month === month) {
+            render();
+            await loadPicked(true);
+            return;
+        }
+        if (warm)
+            loadingLine("กำลังโหลด…");
         await loadPicked();
     }
     window.addEventListener("dashboard:review", () => { void open(); });
@@ -769,6 +941,7 @@
     // comes back to the same control; if it is gone, to the heading of the
     // part it was in, never to the page.
     function render() {
+        heldRender = false;
         syncRole();
         if (!st)
             return;
@@ -825,18 +998,19 @@
         chipDrawn = false;
         const main = role === "auditee" ? auditee(s) : auditor(s);
         const docked = (n) => n instanceof HTMLElement && n.classList.contains("rv-dock");
-        side.replaceChildren(...sideOut.filter((n) => !docked(n)));
-        dock.replaceChildren(...sideOut.filter(docked));
-        body.replaceChildren(...top, ...main);
+        // The parts kept from the last redraw stay in place; the rest is new.
+        patchChildren(side, sideOut.filter((n) => !docked(n)));
+        patchChildren(dock, sideOut.filter(docked));
+        patchChildren(body, [...top, ...main]);
         const list2 = body.querySelector(".rv-people-list");
-        if (list2)
+        if (list2 && list2 !== list && listTop)
             list2.scrollTop = listTop;
         if (inBody) {
             const f = focusId ? document.getElementById(focusId) : null;
-            if (f)
+            if (f && document.activeElement !== f)
                 f.focus({ preventScroll: true });
             if (f && document.activeElement === f) {
-                if (selA !== null && (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement)) {
+                if (selA !== null && (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && (f.selectionStart !== selA || f.selectionEnd !== selB)) {
                     try {
                         f.setSelectionRange(selA, selB === null ? selA : selB);
                     }
@@ -852,8 +1026,11 @@
                 }
             }
         }
-        view.scrollTop = viewTop;
-        syncStick();
+        // Unscrolled (the usual case at Pong's size): nothing to put back,
+        // and no layout to force here.
+        if (viewTop && view.scrollTop !== viewTop)
+            view.scrollTop = viewTop;
+        afterFrame();
         markOpened(s);
     }
     // Opening a round on your side stops the other side taking it back.
@@ -894,30 +1071,24 @@
             ensureIssues(s);
             if (issuesShown())
                 out.push(issuesCard(s, "auditee"));
-            const more = el("section", "rv-card glass rv-more");
-            const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด");
-            h.id = "rv-h-more";
-            more.setAttribute("aria-labelledby", h.id);
-            const row = el("div", "rv-actions");
-            const t = el("button", "btn-ghost", moreOpen ? "ซ่อน" : "แสดง");
-            t.type = "button";
-            t.id = "rv-more-toggle";
-            t.setAttribute("aria-expanded", String(moreOpen));
-            t.setAttribute("aria-controls", "rv-more-body");
-            t.addEventListener("click", () => { moreOpen = !moreOpen; render(); });
-            row.append(t);
-            const inner = el("div", "rv-stack");
-            inner.id = "rv-more-body";
+            // Kept like the table in it, so opening it again shows the
+            // table built before (2026-11-18).
+            if (!moreBox)
+                moreBox = newMoreBox();
+            const { sec: more, t, inner } = moreBox;
+            setText(t, moreOpen ? "ซ่อน" : "แสดง");
+            setAttr(t, "aria-expanded", String(moreOpen));
             if (moreOpen) {
                 const lc = listCard(s);
-                inner.append(...buildAlerts(s), lc);
+                patchChildren(inner, [...buildAlerts(s), lc]);
                 // Open, a long list shares the window's height with the fixes above.
-                if (lc.classList.contains("rv-fill"))
-                    more.classList.add("rv-fill");
+                more.classList.toggle("rv-fill", lc.classList.contains("rv-fill"));
             }
-            else
-                inner.hidden = true;
-            more.append(h, row, inner);
+            else {
+                patchChildren(inner, []);
+                more.classList.remove("rv-fill");
+            }
+            setHidden(inner, !moreOpen);
             out.push(more);
             if (!moreOpen)
                 out.push(...buildAlerts(s).filter((n) => n.dataset.blocking === "1"));
@@ -929,6 +1100,24 @@
         return out;
     }
     let moreOpen = false;
+    let moreBox = null;
+    function newMoreBox() {
+        const sec = el("section", "rv-card glass rv-more");
+        const h = el("h2", "rv-card-h", "รายชื่อทั้งหมด");
+        h.id = "rv-h-more";
+        sec.setAttribute("aria-labelledby", h.id);
+        const row = el("div", "rv-actions");
+        const t = el("button", "btn-ghost", "แสดง");
+        t.type = "button";
+        t.id = "rv-more-toggle";
+        t.setAttribute("aria-controls", "rv-more-body");
+        t.addEventListener("click", () => { moreOpen = !moreOpen; render(); });
+        row.append(t);
+        const inner = el("div", "rv-stack");
+        inner.id = "rv-more-body";
+        sec.append(h, row, inner);
+        return { sec, t, inner };
+    }
     function waitingCard(s) {
         const left = Math.max(0, s.roster.total - s.roster.sent);
         const c = el("section", "rv-card glass");
@@ -952,7 +1141,7 @@
         c.append(top, bar, el("p", "rv-hint", "ส่งแล้ว " + int(s.roster.sent) + " จาก " + int(s.roster.total) + " · ระบบสร้าง SK03 ให้เองเมื่อส่งครบ"));
         return c;
     }
-    const fmt2 = (n) => n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt2 = (n) => n === null || n === undefined ? "" : NUM_EN2.format(Number(n));
     // Budget and N are typed on the overview page (ภาพรวม, the month card's
     // งบ button; Pong, 2026-11-11), which also starts the month's build.
     // Here they are shown only, with a way there, and the two Drive files.
@@ -1146,6 +1335,8 @@
     let editing = "";
     let searchSay;
     const rowsWant = (s) => s.month + ":" + (s.build ? s.build.id : "") + ":" + s.stale + ":" + s.edits;
+    // A score save loads the list itself, with the state (rowsHold).
+    let rowsHold = false;
     async function loadRows(s) {
         const seq = ++rowsSeq;
         rowsKey = rowsWant(s);
@@ -1163,9 +1354,9 @@
             rowsErr = errText(e, "โหลดรายชื่อไม่สำเร็จ");
             shout("โหลดรายชื่อไม่สำเร็จ: " + rowsErr);
         }
-        render();
+        renderSoon();
     }
-    const ensureRows = (s) => { if (s.build && rowsKey !== rowsWant(s) && !rowsErr)
+    const ensureRows = (s) => { if (s.build && rowsKey !== rowsWant(s) && !rowsErr && !rowsHold)
         void loadRows(s); };
     const sameScore = (a, b) => a === null || b === null ? a === b : Math.abs(Number(a) - Number(b)) < 0.005;
     // The score now on the roster (where an edit goes), else the build's.
@@ -1186,30 +1377,32 @@
     const MISS_TEXT = {
         uncached: "ยอดรวมในไฟล์แพทย์เป็นสูตรที่ไม่ได้บันทึกค่า", none: "ไม่พบยอดรวมในไฟล์แพทย์", empty: "ไฟล์แพทย์ว่าง", "no-sheet": "ไม่พบไฟล์แพทย์",
     };
-    function listCard(s) {
-        const c = el("section", "rv-card glass");
+    let lc = null;
+    let aSearchT;
+    const rowJson = new WeakMap();
+    const rowData = (p) => { let j = rowJson.get(p); if (j === undefined) {
+        j = JSON.stringify(p);
+        rowJson.set(p, j);
+    } return j; };
+    function newListCard() {
+        const card = el("section", "rv-card glass");
         const h = el("h2", "rv-card-h", "รายชื่อ");
         h.id = "rv-h-list";
-        c.setAttribute("aria-labelledby", h.id);
-        if (!s.build) {
-            c.append(headRow(h), el("p", "rv-hint", openRequest(s) ? "รอสร้างไฟล์เสร็จ แล้วรายชื่อและผลเทียบจะขึ้นที่นี่" : "รายชื่อและผลเทียบจะขึ้นที่นี่เมื่อระบบสร้างไฟล์แล้ว"));
-            return c;
-        }
-        ensureRows(s);
+        card.setAttribute("aria-labelledby", h.id);
         const head = el("div", "rv-actions rv-list-head");
-        head.append(headRow(h));
-        const all = rows || [];
         const fl = el("div", "rv-filters");
         fl.setAttribute("role", "group");
         fl.setAttribute("aria-label", "แสดง");
+        const flt = new Map();
         for (const [k, t, f] of FILTERS) {
             const b = el("button", "rv-flt", t + " ");
-            b.append(el("span", "rv-count", int(all.filter(f).length)));
+            const n = el("span", "rv-count", "");
+            b.append(n);
             b.type = "button";
             b.id = "rv-flt-" + k;
-            b.setAttribute("aria-pressed", String(aFilter === k));
-            b.addEventListener("click", () => { aFilter = k; render(); say(t + " " + int(all.filter(f).length) + " คน"); });
+            b.addEventListener("click", () => { aFilter = k; render(); say(t + " " + int((rows || []).filter(f).length) + " คน"); });
             fl.append(b);
+            flt.set(k, { b, n });
         }
         const sl = el("label", "rv-search");
         sl.append(el("span", "sr-only", "ค้นหาชื่อหรือกลุ่มงาน"));
@@ -1219,23 +1412,98 @@
         si.placeholder = "ค้นหาชื่อหรือกลุ่มงาน";
         si.autocomplete = "off";
         si.value = aSearch;
+        // The table follows once typing pauses (120 ms), not on every key.
         si.addEventListener("input", () => {
             aSearch = si.value;
-            render();
+            clearTimeout(aSearchT);
+            aSearchT = window.setTimeout(() => { aSearchT = undefined; if (st)
+                render(); }, 120);
             clearTimeout(searchSay);
-            searchSay = window.setTimeout(() => { say(int(body.querySelectorAll(".rv-table tbody tr[data-i]").length) + " คน"); }, 700);
+            searchSay = window.setTimeout(() => { say(int(body.querySelectorAll(".rv-table tbody tr[data-i]:not([hidden])").length) + " คน"); }, 700);
         });
         sl.append(si);
-        head.append(fl, sl);
-        c.append(head);
+        const box = el("div", "rv-table-box");
+        const tbl = el("table", "rv-table");
+        const cap = el("caption", "sr-only", "");
+        const thead = el("thead");
+        const tbody = el("tbody");
+        const empty = el("tr");
+        const emptyTd = el("td", "rv-hint", "ไม่มีรายชื่อ");
+        empty.append(emptyTd);
+        empty.hidden = true;
+        tbody.append(empty);
+        tbl.append(cap, thead, tbody);
+        box.append(tbl);
+        return { card, h, head, flt, fl, sl, si, box, cap, thead, tbody, empty, emptyTd, rows: new Map(), canEdit: null };
+    }
+    // One person's row (and, while their score is edited, the row of its
+    // buttons under it), drawn new.
+    function listRow(s, p, canEdit, editingHere) {
+        const tr = el("tr", editingHere ? "on" : "");
+        tr.dataset.i = p.index;
+        const name = el("td", undefined, p.name);
+        const dept = el("td", undefined, p.intern ? "INTERN" : p.department);
+        const sc = el("td", "num");
+        if (editingHere)
+            sc.append(...scoreEditor(s, p, "list"));
+        else
+            scoreCell(sc, p);
+        const stated = el("td", "num", p.stated === null ? "–" : num2(p.stated));
+        const res = el("td");
+        res.append(...resultChips(p));
+        tr.append(name, dept, sc, stated, res);
+        if (canEdit) {
+            const td = el("td", "rv-edit-cell");
+            if (!editingHere)
+                td.append(editButton(p, "list"));
+            tr.append(td);
+        }
+        let tr2 = null;
+        if (editingHere) {
+            tr2 = el("tr", "on");
+            const td = el("td");
+            td.colSpan = 6;
+            td.append(editActions(s, p, "list"));
+            tr2.append(td);
+        }
+        return { tr, tr2, sig: "" };
+    }
+    function listCard(s) {
+        if (!s.build) {
+            const c = el("section", "rv-card glass");
+            const h = el("h2", "rv-card-h", "รายชื่อ");
+            h.id = "rv-h-list";
+            c.setAttribute("aria-labelledby", h.id);
+            c.append(headRow(h), el("p", "rv-hint", openRequest(s) ? "รอสร้างไฟล์เสร็จ แล้วรายชื่อและผลเทียบจะขึ้นที่นี่" : "รายชื่อและผลเทียบจะขึ้นที่นี่เมื่อระบบสร้างไฟล์แล้ว"));
+            return c;
+        }
+        ensureRows(s);
+        if (!lc)
+            lc = newListCard();
+        const L = lc;
+        const c = L.card;
+        patchChildren(L.head, [headRow(L.h), L.fl, L.sl]);
+        const all = rows || [];
+        for (const [k, , f] of FILTERS) {
+            const x = L.flt.get(k);
+            if (!x)
+                continue;
+            setText(x.n, int(all.filter(f).length));
+            setAttr(x.b, "aria-pressed", String(aFilter === k));
+        }
+        if (L.si.value !== aSearch)
+            L.si.value = aSearch;
         if (rowsErr) {
-            c.append(failBox("โหลดรายชื่อไม่สำเร็จ: " + rowsErr, "rv-retry-rows", () => { rowsErr = ""; render(); }));
+            patchChildren(c, [L.head, failBox("โหลดรายชื่อไม่สำเร็จ: " + rowsErr, "rv-retry-rows", () => { rowsErr = ""; render(); })]);
+            c.classList.remove("rv-fill");
             return c;
         }
         if (!rows) {
-            c.append(el("p", "rv-loading", "กำลังโหลดรายชื่อ…"));
+            patchChildren(c, [L.head, el("p", "rv-loading", "กำลังโหลดรายชื่อ…")]);
+            c.classList.remove("rv-fill");
             return c;
         }
+        const kids = [L.head];
         // The alert: scores of 30,000 or more, or under 2,200.
         const high = all.filter((p) => flagOf(curScore(p)) === "high").length;
         const low = all.filter((p) => flagOf(curScore(p)) === "low").length;
@@ -1250,83 +1518,84 @@
                     f.focus(); });
                 w.append(b);
             }
-            c.append(w);
+            kids.push(w);
         }
         const q = aSearch.trim().toLowerCase();
         const pick = (FILTERS.find((x) => x[0] === aFilter) || FILTERS[0])[2];
         const shown = all.filter((p) => pick(p) && (!q || p.name.toLowerCase().includes(q) || p.department.toLowerCase().includes(q)));
-        const box = el("div", "rv-table-box");
-        const tbl = el("table", "rv-table");
-        const cap = el("caption", "sr-only", "รายชื่อ " + shortMonth(s.month) + " · " + int(shown.length) + " คน");
-        const hr = el("tr");
-        for (const [x, cls] of [["ชื่อ-นามสกุล", ""], ["กลุ่มงาน", ""], ["คะแนน", "num"], ["ไฟล์แพทย์", "num"], ["ผล", ""]]) {
-            const th = el("th", cls, x);
-            th.scope = "col";
-            hr.append(th);
-        }
+        const vis = new Set(shown.map((p) => p.index));
+        setText(L.cap, "รายชื่อ " + shortMonth(s.month) + " · " + int(shown.length) + " คน");
         const canEdit = auditeeTurn(s);
-        if (canEdit) {
-            const th = el("th");
-            th.scope = "col";
-            th.append(el("span", "sr-only", "แก้คะแนน"));
-            hr.append(th);
-        }
-        const thead = el("thead");
-        thead.append(hr);
-        const tbody = el("tbody");
-        for (const p of shown) {
-            const editingHere = canEdit && editing === "list:" + p.index;
-            const tr = el("tr", editingHere ? "on" : "");
-            tr.dataset.i = p.index;
-            const name = el("td", undefined, p.name);
-            const dept = el("td", undefined, p.intern ? "INTERN" : p.department);
-            const sc = el("td", "num");
-            if (editingHere)
-                sc.append(...scoreEditor(s, p, "list"));
-            else
-                scoreCell(sc, p);
-            const st = el("td", "num", p.stated === null ? "–" : num2(p.stated));
-            const res = el("td");
-            res.append(...resultChips(p));
-            tr.append(name, dept, sc, st, res);
+        if (L.canEdit !== canEdit) {
+            const hr = el("tr");
+            for (const [x, cls] of [["ชื่อ-นามสกุล", ""], ["กลุ่มงาน", ""], ["คะแนน", "num"], ["ไฟล์แพทย์", "num"], ["ผล", ""]]) {
+                const th = el("th", cls, x);
+                th.scope = "col";
+                hr.append(th);
+            }
             if (canEdit) {
-                const td = el("td", "rv-edit-cell");
-                if (!editingHere)
-                    td.append(editButton(p, "list"));
-                tr.append(td);
+                const th = el("th");
+                th.scope = "col";
+                th.append(el("span", "sr-only", "แก้คะแนน"));
+                hr.append(th);
             }
-            tbody.append(tr);
-            if (editingHere) {
-                const tr2 = el("tr", "on");
-                const td = el("td");
-                td.colSpan = 6;
-                td.append(editActions(s, p, "list"));
-                tr2.append(td);
-                tbody.append(tr2);
+            L.thead.replaceChildren(hr);
+            L.emptyTd.colSpan = canEdit ? 6 : 5;
+            L.canEdit = canEdit;
+        }
+        // Each row is drawn again only when what it shows changed; a new one
+        // takes its old one's place, so the rows around it stay put.
+        const want = [];
+        const next = new Map();
+        for (const p of all) {
+            const editingHere = canEdit && editing === "list:" + p.index;
+            const spot = "score-" + p.index;
+            const n = notes.get(spot);
+            const sig = rowData(p) + "|" + canEdit + "|" + editingHere +
+                (editingHere ? "|" + (fieldErrs.get("score:" + p.index) || "") + "|" + (n ? n.kind + n.text : "") + "|" + flying(s, spot) : "");
+            let r = L.rows.get(p.index);
+            if (!r || r.sig !== sig) {
+                const nr = listRow(s, p, canEdit, editingHere);
+                nr.sig = sig;
+                if (r && r.tr.parentNode === L.tbody) {
+                    r.tr.replaceWith(nr.tr);
+                    if (r.tr2) {
+                        if (nr.tr2)
+                            r.tr2.replaceWith(nr.tr2);
+                        else
+                            r.tr2.remove();
+                    }
+                    else if (nr.tr2)
+                        nr.tr.after(nr.tr2);
+                }
+                r = nr;
+            }
+            next.set(p.index, r);
+            const h = !vis.has(p.index);
+            setHidden(r.tr, h);
+            want.push(r.tr);
+            if (r.tr2) {
+                setHidden(r.tr2, h);
+                want.push(r.tr2);
             }
         }
-        if (!shown.length) {
-            const tr = el("tr");
-            const td = el("td", "rv-hint", "ไม่มีรายชื่อ");
-            td.colSpan = canEdit ? 6 : 5;
-            tr.append(td);
-            tbody.append(tr);
-        }
-        tbl.append(cap, thead, tbody);
-        box.append(tbl);
-        c.append(box);
+        want.push(L.empty);
+        L.rows = next;
+        patchChildren(L.tbody, want);
+        setHidden(L.empty, shown.length > 0);
+        kids.push(L.box);
         // Long enough to need it: the table gives up height to fit the
         // window (a short one keeps its own height; .rv-fill has a floor).
-        if (shown.length > 3)
-            c.classList.add("rv-fill");
+        c.classList.toggle("rv-fill", shown.length > 3);
         if (openRequest(s) || all.some(pending))
-            c.append(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"));
+            kids.push(el("p", "rv-hint", "ผลเทียบจะอัปเดตเมื่อสร้างไฟล์ใหม่เสร็จ"));
         const n = noteEl("score");
         if (n)
-            c.append(n);
+            kids.push(n);
+        patchChildren(c, kids);
         return c;
     }
-    const num2 = (n) => n === null ? "–" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const num2 = (n) => n === null ? "–" : NUM_TH2.format(Number(n));
     function scoreCell(td, p) {
         const cur = curScore(p);
         td.append(el("span", flagOf(cur) ? "rv-flagged" : "", num2(cur)));
@@ -1405,7 +1674,9 @@
         err.id = id + "-e";
         const warn = el("p", "rv-warn-text");
         warn.id = id + "-w";
-        const paint = () => { const w = scoreWarn(i.value); warn.textContent = w; warn.hidden = !w; };
+        // Written only when it changes: in the table, any write lays the
+        // whole table out again (2026-11-18).
+        const paint = () => { const w = scoreWarn(i.value); setText(warn, w); setHidden(warn, !w); };
         paint();
         i.addEventListener("input", paint);
         if (fe)
@@ -1492,9 +1763,11 @@
             return;
         busy = true;
         let ok = false;
+        let out = null;
         try {
             const r = await post(monthApi(s) + "/scores/" + p.index, { score: v, note: ni ? ni.value : "" }, "PUT");
             ok = true;
+            out = r;
             tell(s, "score", "ok", p.name + ": " + (r.changed ? "บันทึกคะแนน " + num2(Number(v)) + " แล้ว · กำลังสร้างไฟล์ใหม่" : "คะแนนเท่าเดิม"));
         }
         catch (e) {
@@ -1507,22 +1780,48 @@
             busy = false;
             end(s, spot);
         }
-        if (ok) {
-            editing = "";
-            forget(s, "score:" + p.index, "enote:" + p.index);
-            rowsKey = "";
-            if (people && s.month === month)
-                peopleKey = "";
+        if (!ok || s.month !== month) {
+            await reload();
+            return;
         }
-        await reload();
-        if (ok) {
-            const b = document.getElementById(eid("edit", where, p)) || document.getElementById(where === "fix" ? "rv-h-ans" : "rv-h-list");
-            if (b) {
-                if (!b.hasAttribute("tabindex") && b.tagName === "H2")
-                    b.tabIndex = -1;
-                b.focus();
-            }
+        editing = "";
+        forget(s, "score:" + p.index, "enote:" + p.index);
+        // The row shows the new score from the reply at once (2026-11-18),
+        // and a build queued shows as on its way; then the state, the list
+        // (and the names of a returned round) load together, not one after
+        // another.
+        const e = out && out.changed ? out.edit : null;
+        const row = e && rows ? rows.find((x) => x.index === p.index) : undefined;
+        if (e && row) {
+            row.roster = Number(e.new_score);
+            row.edit = { old: e.old_score === null ? null : Number(e.old_score), new: Number(e.new_score), note: e.note || "", at: e.created_at || "", by: e.created_by || "" };
+            rowJson.delete(row);
         }
+        if (out && out.request && st && st.month === s.month)
+            st.request = out.request;
+        render();
+        const b = document.getElementById(eid("edit", where, p)) || document.getElementById(where === "fix" ? "rv-h-ans" : "rv-h-list");
+        if (b) {
+            if (!b.hasAttribute("tabindex") && b.tagName === "H2")
+                b.tabIndex = -1;
+            b.focus();
+        }
+        rowsHold = true;
+        const loads = [reload(), loadRows(s)];
+        const r = liveRound(s);
+        if (people && r)
+            loads.push(loadPeople(s, r));
+        try {
+            await Promise.all(loads);
+        }
+        finally {
+            rowsHold = false;
+        }
+        // The list was asked for after the save: it is the newest state's.
+        if (st && st.month === s.month && !rowsErr)
+            rowsKey = rowsWant(st);
+        if (s.month === month)
+            render();
     }
     // ── Send ─────────────────────────────────────────────────────────────
     function submitReasons(s) {
@@ -1710,13 +2009,21 @@
             const r = await post(monthApi(s) + "/rounds");
             return "ส่งรอบที่ " + r.round.round_no + " ให้ผู้ตรวจสอบแล้ว";
         });
-        if (ok) {
-            moreOpen = false;
-            await loadMonths().catch(() => false);
+        if (!ok) {
+            await reload();
+            return;
         }
-        await reload();
-        if (ok)
-            focusTop();
+        // Sent: the note and a spinning ส่ง show at once; the month and the
+        // months load together.
+        moreOpen = false;
+        holdBusy(s, "send");
+        if (s.month === month)
+            render();
+        await Promise.all([loadMonths().catch(() => false), reload()]);
+        end(s, "send");
+        if (s.month === month)
+            render();
+        focusTop();
     }
     function focusTop() {
         const h = body.querySelector(".rv-turn, .rv-card-h");
@@ -1770,9 +2077,7 @@
         finally {
             end(s, "withdraw");
         }
-        if (ok)
-            await loadMonths().catch(() => false);
-        await reload();
+        await Promise.all([ok ? loadMonths().catch(() => false) : Promise.resolve(false), reload()]);
         if (ok)
             focusTop();
     }
@@ -2163,8 +2468,6 @@
     // People whose ต้องแก้ไข box the auditor opened, kept outside the page so
     // a re-render (the sheet arriving, a reload) leaves it open.
     const remarkOpen = new Set();
-    let swapAt = 0; // when the panel last drew another person
-    let shownPerson = ""; // the person the panel last drew
     // People decided while this filter is on stay in the list where they
     // were, their row showing the result, instead of a green note above the
     // names (Pong, 2026-11-12). Cleared when the filter changes.
@@ -2190,11 +2493,15 @@
         const seq = ++peopleSeq;
         peopleKey = key;
         peopleErr = "";
+        const asked = performance.now();
         try {
             const res = await api(monthApi(s) + "/people?round=" + r.round_no);
             if (seq !== peopleSeq || s.month !== month)
                 return;
-            people = res.people || [];
+            const list = res.people || [];
+            // A decision still being saved is not undone by a list asked for before it ended.
+            reapply(s.month, list, asked);
+            people = list;
             if (!selected || !people.some((p) => p.index === selected)) {
                 const first = people.find((p) => p.decision === null) || people[0];
                 selected = first ? first.index : "";
@@ -2207,7 +2514,7 @@
             peopleErr = errText(e, "โหลดรายชื่อไม่สำเร็จ");
             shout("โหลดรายชื่อไม่สำเร็จ: " + peopleErr);
         }
-        render();
+        renderSoon();
     }
     async function loadIssues(s) {
         listsLoading++;
@@ -2235,7 +2542,7 @@
             issuesErr = errText(e, "โหลดปัญหาอื่น ๆ ไม่สำเร็จ");
             shout("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr);
         }
-        render();
+        renderSoon();
     }
     const needPeople = (s, r) => peopleKey !== s.month + ":" + r.round_no;
     const ensureIssues = (s) => { if (issuesKey !== s.month && !issuesErr)
@@ -2253,7 +2560,27 @@
     // Retry: forget the failure and draw again, which loads again.
     const retryPeople = () => { peopleErr = ""; render(); };
     const retryIssues = () => { issuesErr = ""; render(); };
+    // The counts of a round: from its names once they are here (they show
+    // a decision the moment it is made, 2026-11-18), else the state's.
+    function countsOf(s, r) {
+        if (!people || s.month !== month || peopleKey !== s.month + ":" + r.round_no)
+            return r.counts;
+        let approve = 0, fix = 0, waiting = 0, carried = 0;
+        for (const p of people) {
+            if (p.decision === "approve")
+                approve++;
+            else if (p.decision === "fix")
+                fix++;
+            else
+                waiting++;
+            if (p.carried)
+                carried++;
+        }
+        return { approve, fix, waiting, carried };
+    }
     // A new state (another round, a decision made elsewhere) reloads both.
+    // Counts that only show this screen's own decisions are not news
+    // (2026-11-18: they reloaded both lists after every decision).
     let lastRoundKey = "";
     function refreshLists(s) {
         const r = liveRound(s);
@@ -2262,6 +2589,22 @@
         const k = roundKey(s, r);
         if (k === lastRoundKey)
             return;
+        // The month's first state: the names asked for with it are this round's.
+        if (!lastRoundKey && peopleKey === s.month + ":" + r.round_no) {
+            lastRoundKey = k;
+            return;
+        }
+        const sameStep = lastRoundKey.split(":").slice(0, 3).join(":") === s.month + ":" + r.round_no + ":" + r.status;
+        if (sameStep && people && peopleKey === s.month + ":" + r.round_no) {
+            const c = countsOf(s, r);
+            if (c.approve === r.counts.approve && c.fix === r.counts.fix && c.waiting === r.counts.waiting) {
+                lastRoundKey = k;
+                return;
+            }
+            // The server has yet to get this screen's saves: look again later.
+            if (savingIn(s.month))
+                return;
+        }
         // Another round: its people are not the old round's.
         if (lastRoundKey.split(":").slice(0, 2).join(":") !== s.month + ":" + r.round_no)
             people = null;
@@ -2286,11 +2629,12 @@
     const bothMatch = (p) => p.scoreCheck === "match" && p.moneyCheck === "match";
     const decisionText = (p) => p.decision === "approve" ? (p.carried ? "อนุมัติ (คงผลรอบก่อน)" : "อนุมัติ")
         : p.decision === "fix" ? "ต้องแก้ไข" : "รอตรวจ";
-    const num = (n) => n === null ? "—" : Number(n).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const num = (n) => n === null ? "—" : NUM_TH2.format(Number(n));
     function chip(kind, text) {
         return el("span", "rv-chip rv-chip-" + kind, text);
     }
     // ผู้ตรวจสอบ ───────────────────────────────────────────────────────────
+    const reviewWrap = el("div", "rv-review");
     function auditor(s) {
         const r = liveRound(s);
         if (!r)
@@ -2328,9 +2672,9 @@
                 out.push(el("p", "rv-loading", "กำลังโหลดรายชื่อ…"));
             return out;
         }
-        const wrap = el("div", "rv-review");
-        wrap.append(peopleList(), personPanel(s, r));
-        out.push(wrap);
+        // The names stay; the person panel is drawn new (it is small).
+        patchChildren(reviewWrap, [peopleList(), personPanel(s, r)]);
+        out.push(reviewWrap);
         if (issuesShown())
             out.push(issuesCard(s, "auditor"));
         return out;
@@ -2339,7 +2683,7 @@
     // figures, then the dock (อนุมัติทุกคนที่รอตรวจ, ส่งผลตรวจ, each with the
     // reason it cannot be pressed yet under it).
     function finishBar(s, r) {
-        const c = r.counts;
+        const c = countsOf(s, r);
         // Not known until the issues load: no "0 open" and no approve-all before that.
         const openIssues = issues ? issues.filter((i) => i.status === "open").length : null;
         const bar = el("div", "rv-finish");
@@ -2391,21 +2735,49 @@
         else if (c.fix > 0 || openIssues > 0) {
             btn.textContent = "ส่งกลับให้ผู้จัดทำแก้";
             why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน" + others;
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน" + others),
                     el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"), true);
-            });
+            }));
         }
         else {
             btn.textContent = "อนุมัติทั้งหมด";
             why.textContent = "อนุมัติครบ " + int(c.approve) + " คน";
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", () => afterSaves(btn, () => {
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
                     el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep(s, "approve", "อนุมัติแล้ว"));
-            });
+            }));
         }
+        // Waiting for the saves, or the step's follow-up loading: it spins.
+        if (savesWait === btn.id || flying(s, "finish"))
+            markBusy(btn);
         dock.append(btn, why);
         return [bar, dock];
+    }
+    // A step that hands the round on (ส่งกลับ, อนุมัติทั้งหมด, อนุมัติ N คน)
+    // waits for every decision still being saved (2026-11-18), so nothing
+    // is sent with one unsaved. The button spins meanwhile, then is pressed
+    // again as drawn from the saved names (a failed save may have put
+    // someone back to รอตรวจ).
+    let savesWait = "";
+    function afterSaves(btn, go) {
+        if (!flights.size) {
+            go();
+            return;
+        }
+        if (savesWait)
+            return;
+        savesWait = btn.id;
+        markBusy(btn);
+        void settled().then(() => {
+            savesWait = "";
+            if (!st || view.classList.contains("hidden"))
+                return;
+            render();
+            const b = document.getElementById(btn.id);
+            if (b && b.getAttribute("aria-disabled") !== "true")
+                b.click();
+        });
     }
     // อนุมัติทุกคนที่รอตรวจ (Pong, 2026-11-12): one press approves everyone
     // still to check, usable only when none of them has a ไม่ตรงกัน or ไม่พบ
@@ -2457,44 +2829,61 @@
             b.addEventListener("click", () => say(why.textContent || ""));
         }
         else {
-            b.addEventListener("click", () => {
+            b.addEventListener("click", () => afterSaves(b, () => {
                 // Short labelled lines (Pong, 2026-11-12: the sentences
                 // were hard to read).
-                const done = r.counts.approve + r.counts.fix;
+                const cc = countsOf(s, r);
+                const done = cc.approve + cc.fix;
                 const g = el("dl", "rv-kvs");
                 g.append(kv("เดือน", monthName(s.month) + " รอบที่ " + r.round_no), kv("อนุมัติครั้งนี้", int(n) + " คน"), kv("ตัดสินแล้ว (คงเดิม)", done ? int(done) + " คน" : "–"));
                 askConfirm("อนุมัติทุกคนที่รอตรวจ", [
                     g,
                     tick("ทุกคนที่จะอนุมัติ เทียบคะแนนและเทียบเงินตรงกัน"),
                 ], "อนุมัติ " + int(n) + " คน", () => approveAll(s, r));
-            });
+            }));
         }
+        if (savesWait === b.id || flying(s, "approve-all"))
+            markBusy(b);
         box.append(b, why);
         return box;
     }
     const tick = (text) => { const p = el("p"); p.append(iconEl("check"), text); return p; };
     async function approveAll(s, r) {
         let said = "";
-        const waiting = (people || []).filter((x) => x.decision === null).map((x) => x.index);
+        let waiting = [];
         const ok = await confirmRun(s, async () => {
+            await settled();
+            waiting = (people || []).filter((x) => x.decision === null).map((x) => x.index);
             const res = await post(monthApi(s) + "/approve-all", { round: r.round_no });
             said = "อนุมัติแล้ว " + int(Number(res && res.approved) || 0) + " คน";
             return said;
         });
-        if (ok) {
-            // No note above the names: everyone just approved stays in the
-            // list with an approved row, and the tiles show the new counts.
-            if (s.month === month) {
-                notes.delete("top");
-                for (const i of waiting)
-                    kept.add(i);
-                peopleKey = "";
-                issuesKey = "";
-            }
-            say(said);
-            await loadMonths().catch(() => false);
+        if (!ok || s.month !== month) {
+            if (s.month === month)
+                await reload();
+            return;
         }
-        await reload();
+        // No note above the names: everyone just approved stays in the
+        // list with an approved row, and the tiles show the new counts at
+        // once (2026-11-18); the round, the names and the months are then
+        // loaded together, not one after another.
+        notes.delete("top");
+        for (const i of waiting) {
+            kept.add(i);
+            const p = (people || []).find((x) => x.index === i);
+            if (p && p.decision === null) {
+                p.decision = "approve";
+                p.remark = "";
+                p.carried = false;
+            }
+        }
+        say(said);
+        holdBusy(s, "approve-all");
+        render();
+        await Promise.all([loadMonths().catch(() => false), reload(), loadPeople(s, r), loadIssues(s)]);
+        end(s, "approve-all");
+        if (s.month === month)
+            render();
     }
     // ── Approved: the document, a retry, and reopening ───────────────────
     function approvedView(s, r, side) {
@@ -2737,15 +3126,15 @@
                 peopleKey = "";
                 issuesKey = "";
             }
-            await loadMonths().catch(() => false);
-            await reload();
+            await Promise.all([loadMonths().catch(() => false), reload()]);
         }, true);
         setTimeout(() => ta.focus(), 0);
     }
     // approve / return come from the confirm dialog (which stays open with
     // the reason when refused); unreturn is a plain button (btn).
     async function roundStep(s, step, done, btn) {
-        const call = async () => { await post(monthApi(s) + "/" + step); return done; };
+        // Never with a decision still being saved.
+        const call = async () => { await settled(); await post(monthApi(s) + "/" + step); return done; };
         let ok = false;
         if (btn) {
             if (!begin(s, step, btn))
@@ -2764,14 +3153,23 @@
         else {
             ok = await confirmRun(s, call);
         }
-        if (ok) {
-            if (s.month === month) {
-                peopleKey = "";
-                issuesKey = "";
-            }
-            await loadMonths().catch(() => false);
+        if (!ok) {
+            await reload();
+            return;
         }
-        await reload();
+        // Done: the note shows and the button spins while the month, its
+        // lists and the months load together (2026-11-18: one after another).
+        if (s.month === month) {
+            peopleKey = "";
+            issuesKey = "";
+        }
+        holdBusy(s, "finish");
+        if (s.month === month)
+            render();
+        await Promise.all([loadMonths().catch(() => false), reload()]);
+        end(s, "finish");
+        if (s.month === month)
+            render();
     }
     // The status types (Pong, 2026-11-12: "display status types of user").
     // The first three are the auditor's decision, the last two the checks'
@@ -2803,20 +3201,20 @@
         m.setAttribute("aria-hidden", "true");
         return m;
     }
-    function peopleList() {
-        const side = el("div", "rv-people glass");
-        const all = people || [];
+    let pl = null;
+    let searchT;
+    function newPeopleList() {
+        const root = el("div", "rv-people glass");
         // Status tiles: the count of each type, and the filter.
-        const tiles = el("div", "rv-status");
-        tiles.setAttribute("role", "group");
-        tiles.setAttribute("aria-label", "สถานะ: เลือกเพื่อแสดงเฉพาะกลุ่มนั้น");
+        const tilesBox = el("div", "rv-status");
+        tilesBox.setAttribute("role", "group");
+        tilesBox.setAttribute("aria-label", "สถานะ: เลือกเพื่อแสดงเฉพาะกลุ่มนั้น");
+        const tiles = new Map();
         for (const st of STATUSES) {
-            const n = all.filter(st.test).length;
-            const b = el("button", "rv-st rv-st-" + st.tone + (n === 0 && st.key !== "all" ? " rv-st-zero" : ""));
+            const b = el("button", "rv-st rv-st-" + st.tone);
             b.type = "button";
             b.id = "rv-st-" + st.key;
             b.dataset.filter = st.key;
-            b.setAttribute("aria-pressed", String(filter === st.key));
             const lab = el("span", "rv-st-label");
             if (st.tone !== "all") {
                 const dot = el("span", "rv-st-dot");
@@ -2824,7 +3222,8 @@
                 lab.append(dot);
             }
             lab.append(st.label);
-            b.append(lab, el("b", "rv-st-n", int(n)));
+            const n = el("b", "rv-st-n", "");
+            b.append(lab, n);
             b.addEventListener("click", () => {
                 filter = st.key;
                 kept.clear();
@@ -2834,9 +3233,10 @@
                 if (list.length && !list.some((x) => x.index === selected))
                     selected = list[0].index;
                 render();
-                say(st.label + " " + int(n) + " คน");
+                say(st.label + " " + int((people || []).filter(st.test).length) + " คน");
             });
-            tiles.append(b);
+            tilesBox.append(b);
+            tiles.set(st.key, { b, n });
         }
         const sl = el("label", "rv-search rv-people-search");
         sl.append(el("span", "sr-only", "ค้นหาชื่อหรือกลุ่มงาน"));
@@ -2846,71 +3246,138 @@
         si.placeholder = "ค้นหาชื่อหรือกลุ่มงาน";
         si.value = search;
         si.autocomplete = "off";
-        si.addEventListener("input", () => { search = si.value; render(); });
+        // The list follows once typing pauses (120 ms), not on every key.
+        si.addEventListener("input", () => {
+            search = si.value;
+            clearTimeout(searchT);
+            searchT = window.setTimeout(() => { searchT = undefined; if (st)
+                render(); }, 120);
+        });
         sl.append(si);
-        const shown = visiblePeople();
-        side.append(tiles, sl);
         // With a search, how many of the group it leaves.
-        if (search.trim()) {
-            const count = el("p", "rv-hint rv-people-count", "พบ " + int(shown.length) + " คน");
-            count.setAttribute("aria-live", "polite");
-            side.append(count);
-        }
+        const count = el("p", "rv-hint rv-people-count");
+        count.setAttribute("aria-live", "polite");
+        count.hidden = true;
         const ul = el("ul", "rv-people-list");
         ul.setAttribute("aria-label", "รายชื่อในรอบนี้");
+        const empty = el("li", "rv-hint");
+        empty.hidden = true;
+        ul.append(empty);
         // A list box: one tab stop (the person open); up and down open the
         // person above or below, Home / End the first or last.
-        if (shown.length)
-            ul.setAttribute("role", "listbox");
-        const stopAt = shown.some((p) => p.index === selected) ? selected : shown.length ? shown[0].index : "";
-        for (const p of shown) {
-            const li = el("li");
-            li.setAttribute("role", "none");
-            const tone = p.decision === "approve" ? " rv-p-ok" : p.decision === "fix" ? " rv-p-fix" : "";
-            const b = el("button", "rv-person-btn" + tone + (p.index === selected ? " current" : ""));
-            b.type = "button";
-            b.id = "rv-p-" + p.index;
-            b.dataset.i = p.index;
-            b.setAttribute("role", "option");
-            b.setAttribute("aria-selected", String(p.index === selected));
-            b.tabIndex = p.index === stopAt ? 0 : -1;
-            const line = el("span", "rv-pline");
-            line.append(el("span", "rv-pname", p.name));
-            if (isMismatch(p))
-                line.append(chip("bad", "ไม่ตรงกัน"));
-            else if (isMissing(p))
-                line.append(chip("miss", "ไม่พบ"));
-            // The result in the row itself (Pong, 2026-11-12): a soft green
-            // or orange row, and อนุมัติ / ต้องแก้ไข after the department.
-            const sub = el("span", "rv-psub", p.intern ? "อินเทิร์น" : p.department);
-            if (p.decision)
-                sub.append(" · ", el("span", "rv-pdec rv-pdec-" + (p.decision === "approve" ? "ok" : "fix"), p.decision === "approve" ? "อนุมัติ" : "ต้องแก้ไข"));
-            if (p.carried)
-                sub.append(" · คงผลรอบก่อน");
-            const text = el("span", "rv-ptext");
-            text.append(line, sub);
-            b.append(decisionMark(p), text);
-            if (!p.decision)
-                b.append(el("span", "sr-only", " · รอตรวจ"));
-            b.addEventListener("click", () => { openPerson(p.index); });
-            li.append(b);
-            ul.append(li);
-        }
-        if (!shown.length)
-            ul.append(el("li", "rv-hint", filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ"));
         ul.addEventListener("keydown", (ev) => {
-            const opts = Array.from(ul.querySelectorAll('[role="option"]'));
+            const opts = Array.from(ul.querySelectorAll('[role="option"]')).filter((b) => !b.parentElement.hidden);
             const to = rove(opts, ev, { ArrowUp: -1, ArrowDown: 1 });
             if (!to || !to.dataset.i || to.dataset.i === selected)
                 return;
             selected = to.dataset.i;
             render();
             const f = document.getElementById(to.id);
-            if (f)
+            if (f && document.activeElement !== f)
                 f.focus();
         });
-        side.append(ul);
-        return side;
+        root.append(tilesBox, sl, count, ul);
+        return { root, tiles, si, count, ul, empty, rows: new Map(), of: null };
+    }
+    // What a row shows; the row is drawn again only when this changes.
+    const rowSig = (p) => [p.name, p.department, p.intern, p.decision, p.carried, isMismatch(p), isMissing(p)].join("|");
+    function fillRow(r, p, sig) {
+        const b = r.b;
+        const tone = p.decision === "approve" ? " rv-p-ok" : p.decision === "fix" ? " rv-p-fix" : "";
+        b.className = "rv-person-btn" + tone + (p.index === selected ? " current" : "");
+        const line = el("span", "rv-pline");
+        line.append(el("span", "rv-pname", p.name));
+        if (isMismatch(p))
+            line.append(chip("bad", "ไม่ตรงกัน"));
+        else if (isMissing(p))
+            line.append(chip("miss", "ไม่พบ"));
+        // The result in the row itself (Pong, 2026-11-12): a soft green
+        // or orange row, and อนุมัติ / ต้องแก้ไข after the department.
+        const sub = el("span", "rv-psub", p.intern ? "อินเทิร์น" : p.department);
+        if (p.decision)
+            sub.append(" · ", el("span", "rv-pdec rv-pdec-" + (p.decision === "approve" ? "ok" : "fix"), p.decision === "approve" ? "อนุมัติ" : "ต้องแก้ไข"));
+        if (p.carried)
+            sub.append(" · คงผลรอบก่อน");
+        const text = el("span", "rv-ptext");
+        text.append(line, sub);
+        const kids = [decisionMark(p), text];
+        if (!p.decision)
+            kids.push(el("span", "sr-only", " · รอตรวจ"));
+        b.replaceChildren(...kids);
+        r.sig = sig;
+    }
+    function newRow(p) {
+        const li = el("li");
+        li.setAttribute("role", "none");
+        const b = el("button", "rv-person-btn");
+        b.type = "button";
+        b.id = "rv-p-" + p.index;
+        b.dataset.i = p.index;
+        b.setAttribute("role", "option");
+        b.tabIndex = -1;
+        const index = p.index;
+        b.addEventListener("click", () => { openPerson(index); });
+        li.append(b);
+        return { li, b, sig: "" };
+    }
+    function peopleList() {
+        if (!pl)
+            pl = newPeopleList();
+        const L = pl;
+        const all = people || [];
+        for (const st of STATUSES) {
+            const n = all.filter(st.test).length;
+            const t = L.tiles.get(st.key);
+            if (!t)
+                continue;
+            setText(t.n, int(n));
+            t.b.classList.toggle("rv-st-zero", n === 0 && st.key !== "all");
+            setAttr(t.b, "aria-pressed", String(filter === st.key));
+        }
+        if (L.si.value !== search)
+            L.si.value = search;
+        const shown = visiblePeople();
+        const vis = new Set(shown.map((p) => p.index));
+        // A new list (a load, another round): rows in its order, a person
+        // no longer in it gone.
+        if (L.of !== all) {
+            const rows = new Map();
+            const want = [];
+            for (const p of all) {
+                const r = L.rows.get(p.index) || newRow(p);
+                rows.set(p.index, r);
+                want.push(r.li);
+            }
+            want.push(L.empty);
+            L.rows = rows;
+            patchChildren(L.ul, want);
+            L.of = all;
+        }
+        const stopAt = vis.has(selected) ? selected : shown.length ? shown[0].index : "";
+        for (const p of all) {
+            const r = L.rows.get(p.index);
+            if (!r)
+                continue;
+            const sig = rowSig(p);
+            if (sig !== r.sig)
+                fillRow(r, p, sig);
+            setHidden(r.li, !vis.has(p.index));
+            const on = p.index === selected;
+            if (r.b.classList.contains("current") !== on)
+                r.b.classList.toggle("current", on);
+            setAttr(r.b, "aria-selected", String(on));
+            const ti = p.index === stopAt ? 0 : -1;
+            if (r.b.tabIndex !== ti)
+                r.b.tabIndex = ti;
+        }
+        setAttr(L.ul, "role", shown.length ? "listbox" : null);
+        setHidden(L.empty, shown.length > 0);
+        if (!shown.length)
+            setText(L.empty, filter === "todo" && !search.trim() ? "ตรวจครบทุกคนแล้ว" : "ไม่มีรายชื่อ");
+        setHidden(L.count, !search.trim());
+        if (search.trim())
+            setText(L.count, "พบ " + int(shown.length) + " คน");
+        return L.root;
     }
     // One person on the auditor's side. Top to bottom: name, the two checks
     // with where each number comes from, the one-line round-2 notes, the
@@ -2932,11 +3399,6 @@
         const top = el("div", "rv-person-top");
         top.append(h, el("p", "rv-hint", (p.intern ? "อินเทิร์น" : "staff · " + p.department) + " · " + decisionText(p)));
         panel.append(top);
-        // A person drawn for the first time starts the click guard (tooSoon).
-        if (p.index !== shownPerson) {
-            shownPerson = p.index;
-            swapAt = Date.now();
-        }
         // The name of the doctor's score row (its first text in columns A-C)
         // comes with the person's detail, loaded once in the background.
         const key = s.month + ":" + r.round_no + ":" + p.index;
@@ -3019,8 +3481,9 @@
         }
         panel.append(foot);
         panel.addEventListener("scroll", () => markStuck(), { passive: true });
-        // The next person still to check: their detail is ready when the app moves on.
-        const next = visiblePeople().find((x) => x.decision === null && x.index !== p.index);
+        // The person a decision here moves on to: their detail is ready when
+        // the app gets there.
+        const next = nextAfter(p.index);
         if (next)
             loadDetail(s, r, next.index);
         return panel;
@@ -3031,7 +3494,7 @@
     function openPerson(index) {
         selected = index;
         render();
-        toWorkingSpot();
+        afterFrame(true);
         const h = document.getElementById("rv-person-h");
         if (h)
             h.focus({ preventScroll: true });
@@ -3051,15 +3514,24 @@
     function syncStick() {
         const fin = body.querySelector(".rv-finish");
         const h = fin ? fin.offsetHeight : 0;
-        view.style.setProperty("--rv-fin", h + "px");
+        // Read first, then written only when changed (2026-11-18): each
+        // write would make the browser lay the page out again.
         // Rounded down: clientHeight can round a fractional height up (a
         // zoomed window), and the half pixel over would bring a scrollbar.
-        view.style.setProperty("--rv-view-h", Math.floor(view.getBoundingClientRect().height) + "px");
+        const vh = Math.floor(view.getBoundingClientRect().height) + "px";
+        const foot = body.querySelector(".rv-decide-foot");
+        const padB = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
+        const vs = view.style;
+        if (vs.getPropertyValue("--rv-fin") !== h + "px")
+            vs.setProperty("--rv-fin", h + "px");
+        if (vs.getPropertyValue("--rv-view-h") !== vh)
+            vs.setProperty("--rv-view-h", vh);
         // Focus never lands under the counts bar at the top or the
         // buttons bar pinned at the bottom.
-        view.style.scrollPaddingTop = h + 10 + "px";
-        const foot = body.querySelector(".rv-decide-foot");
-        view.style.scrollPaddingBottom = (foot && getComputedStyle(foot).position === "sticky" ? foot.offsetHeight + 10 : 0) + "px";
+        if (vs.scrollPaddingTop !== h + 10 + "px")
+            vs.scrollPaddingTop = h + 10 + "px";
+        if (vs.scrollPaddingBottom !== padB)
+            vs.scrollPaddingBottom = padB;
         markStuck(true);
         syncSide();
     }
@@ -3132,11 +3604,12 @@
         ev.preventDefault();
         b.click();
     });
-    // The click that decided one person must not land on the next one's
-    // button: ignore pointer clicks for half a second after the panel shows
-    // another person, and the second click of a double-click. Keys (detail 0)
-    // always work.
-    const tooSoon = (ev) => ev.detail > 1 || (ev.detail === 1 && Date.now() - swapAt < 500);
+    // The second click of a double-click must not decide the next person
+    // too (the first one moved the panel on). Every other click counts
+    // (2026-11-18: the half-second guard after the panel changed person
+    // dropped real clicks); keys (detail 0) always work, and the keys
+    // ignore a held key's repeats.
+    const dbl = (ev) => ev.detail > 1;
     // What the auditor would most likely write, ready to edit.
     function suggestRemark(p) {
         if (p.scoreCheck === "mismatch")
@@ -3194,8 +3667,8 @@
             undo.type = "button";
             undo.id = "rv-undo";
             const u = undo;
-            u.addEventListener("click", (ev) => { if (!tooSoon(ev))
-                void decide(s, p, null, "", u); });
+            u.addEventListener("click", (ev) => { if (!dbl(ev))
+                decide(p.index, null, ""); });
             btns.append(u);
         }
         const who = el("span", "rv-decide-who", p.name);
@@ -3287,16 +3760,16 @@
             out.push(why);
         }
         approve.addEventListener("click", (ev) => {
-            if (tooSoon(ev))
+            if (dbl(ev))
                 return;
             if (!ok) {
                 say(why.textContent || "");
                 return;
             }
-            void decide(s, p, "approve", "", approve);
+            decide(p.index, "approve", "");
         });
         fix.addEventListener("click", (ev) => {
-            if (tooSoon(ev))
+            if (dbl(ev))
                 return;
             remarkOpen.add(p.index);
             if (!open)
@@ -3305,7 +3778,6 @@
             if (ta)
                 ta.focus();
         });
-        let save = null;
         if (open) {
             const box = el("div", "rv-remark-box");
             box.id = "rv-remark-box";
@@ -3323,9 +3795,8 @@
             const sv = el("button", "btn-primary", p.decision === "fix" ? "บันทึกหมายเหตุใหม่" : "บันทึก");
             sv.type = "button";
             sv.id = "rv-fix-save";
-            save = sv;
             sv.addEventListener("click", (ev) => {
-                if (tooSoon(ev))
+                if (dbl(ev))
                     return;
                 if (!ta.value.trim()) {
                     err.textContent = "พิมพ์หมายเหตุว่าต้องแก้อะไร";
@@ -3336,7 +3807,7 @@
                     return;
                 }
                 fieldErrs.delete(draftKey);
-                void decide(s, p, "fix", ta.value, sv);
+                decide(p.index, "fix", ta.value);
             });
             const acts = el("div", "rv-actions");
             acts.append(sv);
@@ -3375,12 +3846,6 @@
             box.append(lab, line, err);
             out.push(box);
         }
-        if (flying(s, spot)) {
-            const pressed = pressedFor.get(flightKey(s, spot)) || "rv-approve";
-            for (const b of [approve, fix, save, undo])
-                if (b)
-                    markBusy(b, b.id === pressed);
-        }
         return out;
     }
     // Load one person's detail once (only the score row's name is used now).
@@ -3403,8 +3868,8 @@
             if (seq !== detailSeq)
                 return;
             detailLoading.delete(key);
-            if (selected === index)
-                render();
+            if (selected === index && month === s.month)
+                renderSoon();
         });
     }
     function cellRC(name) {
@@ -3431,75 +3896,127 @@
         const t = best ? best[1].replace(/\s+/g, " ") : "";
         return t.length > 40 ? t.slice(0, 39) + "…" : t;
     }
-    async function decide(s, p, decision, remark, btn) {
-        const spot = "decide-" + p.index;
-        if (!begin(s, spot, btn))
-            return;
-        busy = true;
-        let moved = false, failed = false;
-        try {
-            await post(monthApi(s) + "/decisions/" + p.index, { decision, remark }, "PUT");
-            p.decision = decision;
-            p.remark = decision === "fix" ? remark.trim() : "";
-            p.carried = false;
-            forget(s, "remark:" + p.index);
-            fieldErrs.delete("remark:" + p.index);
-            if (decision !== "fix")
-                remarkOpen.delete(p.index);
-            // The row shows the result and stays where it was; the words are
-            // only read out.
-            if (s.month === month)
-                kept.add(p.index);
-            // Straight on to the next person still to check, after this one
-            // in the list (then from the top); the words say who is next.
-            let nextName = "";
-            if (decision && s.month === month) {
-                const list = visiblePeople();
-                const at = list.findIndex((x) => x.index === p.index);
-                const order = at < 0 ? list : list.slice(at + 1).concat(list.slice(0, at));
-                const next = order.find((x) => x.decision === null && x.index !== p.index);
-                if (next) {
-                    selected = next.index;
-                    moved = true;
-                    nextName = next.name;
-                }
+    const pend = new Map();
+    const pendBase = new Map();
+    const saving = new Map();
+    const flights = new Set();
+    let decSeq = 0;
+    // Every decision still on its way, ended (a step that hands the round on
+    // waits for this, so nothing is sent with a decision unsaved).
+    async function settled() { while (flights.size)
+        await Promise.all(Array.from(flights).map((x) => x.catch(() => undefined))); }
+    const savingIn = (m) => Array.from(pend.entries()).some(([k, e]) => !e.done && k.startsWith(m + ":"));
+    // The people of a month: the one on screen, or one kept for a switch back.
+    const peopleOf = (m) => m === month ? people : (monthKeep.get(m) || {}).people || null;
+    // What a /people reply cannot know yet: saves that ended after it was
+    // asked for, or have not ended. Older ones are in the reply already.
+    function reapply(m, list, asked) {
+        for (const [k, e] of Array.from(pend.entries())) {
+            if (!k.startsWith(m + ":"))
+                continue;
+            if (e.done && e.done < asked) {
+                pend.delete(k);
+                pendBase.delete(k);
+                continue;
             }
-            say(p.name + ": " + decisionText(p) + (nextName ? " · ถัดไป " + nextName : ""));
+            const idx = k.slice(m.length + 1);
+            const cur = list.find((x) => x.index === idx);
+            if (cur) {
+                cur.decision = e.decision;
+                cur.remark = e.remark;
+                cur.carried = false;
+            }
         }
-        catch (e) {
-            failed = true;
-            tell(s, spot, "err", p.name + ": " + errText(e, "บันทึกไม่สำเร็จ"));
-        }
-        finally {
-            busy = false;
-            end(s, spot);
-        }
-        // Show the next person at once; the reload only refreshes counts.
-        const focusHead = () => {
+    }
+    // The next person still to check after this one in the list (then from
+    // the top): where a decision moves on to.
+    function nextAfter(index) {
+        const list = visiblePeople();
+        const at = list.findIndex((x) => x.index === index);
+        const order = at < 0 ? list : list.slice(at + 1).concat(list.slice(0, at));
+        return order.find((x) => x.decision === null && x.index !== index) || null;
+    }
+    function decide(index, decision, remark) {
+        const s = st;
+        if (!s || s.month !== month || !people)
+            return;
+        const p = people.find((x) => x.index === index);
+        if (!p)
+            return;
+        const m = s.month;
+        const key = m + ":" + index;
+        const spot = "decide-" + index;
+        if (!pend.has(key))
+            pendBase.set(key, { decision: p.decision, remark: p.remark, carried: p.carried });
+        const seq = ++decSeq;
+        const rem = decision === "fix" ? remark.trim() : "";
+        pend.set(key, { decision, remark: rem, seq, done: 0 });
+        p.decision = decision;
+        p.remark = rem;
+        p.carried = false;
+        forget(s, "remark:" + index);
+        fieldErrs.delete("remark:" + index);
+        notes.delete(spot);
+        if (decision !== "fix")
+            remarkOpen.delete(index);
+        // The row shows the result and stays where it was; the words are
+        // only read out.
+        kept.add(index);
+        // Straight on to the next person still to check; the words say who.
+        const next = decision ? nextAfter(index) : null;
+        if (next)
+            selected = next.index;
+        say(p.name + ": " + decisionText(p) + (next ? " · ถัดไป " + next.name : ""));
+        const pressed = document.activeElement instanceof HTMLElement ? document.activeElement.id : "";
+        render();
+        if (next) {
+            afterFrame(true);
             const hh = document.getElementById("rv-person-h");
             if (hh)
                 hh.focus({ preventScroll: true });
-        };
-        if (moved && s.month === month) {
-            render();
-            toWorkingSpot();
-            focusHead();
         }
-        const pressed = btn.id;
-        await reload();
-        if (s.month !== month)
-            return;
-        if (moved) {
-            toWorkingSpot();
-            focusHead();
-            return;
+        else {
+            // Stay on the button pressed (ยกเลิกผล becomes อนุมัติ's
+            // neighbour again), else the name.
+            const back = (pressed && document.getElementById(pressed)) || document.getElementById("rv-person-h");
+            if (back && document.activeElement !== back)
+                back.focus({ preventScroll: true });
         }
-        // After a failure stay on the button that was pressed.
-        const back = failed && pressed ? document.getElementById(pressed) : null;
-        if (back)
-            back.focus({ preventScroll: true });
-        else
-            focusHead();
+        const name = p.name;
+        const before = saving.get(key) || Promise.resolve();
+        const run = before.then(() => post(monthApi(s) + "/decisions/" + index, { decision, remark }, "PUT")).then(() => {
+            pendBase.set(key, { decision, remark: rem, carried: false });
+            const e = pend.get(key);
+            if (e && e.seq === seq)
+                e.done = performance.now();
+        }, (err) => {
+            if (signedOut(err))
+                return;
+            const e = pend.get(key);
+            // A later decision for the same person is on its way: it decides.
+            if (!e || e.seq !== seq)
+                return;
+            const b = pendBase.get(key);
+            pend.delete(key);
+            pendBase.delete(key);
+            const cur = (peopleOf(m) || []).find((x) => x.index === index);
+            if (cur && b) {
+                cur.decision = b.decision;
+                cur.remark = b.remark;
+                cur.carried = b.carried;
+            }
+            // Shown in the person's decision row while they are open, else at the top.
+            tell(s, m === month && selected === index ? spot : "top", "err", name + ": " + errText(err, "บันทึกไม่สำเร็จ"));
+            if (m === month)
+                renderSoon();
+        });
+        const tail = run.finally(() => {
+            flights.delete(tail);
+            if (saving.get(key) === tail)
+                saving.delete(key);
+        });
+        saving.set(key, tail);
+        flights.add(tail);
     }
     // ปัญหาอื่น ๆ (both sides), the open ones only; nothing new is added here.
     function issuesCard(s, side) {
@@ -3588,9 +4105,10 @@
         finally {
             end(s, spot);
         }
-        if (s.month === month)
-            issuesKey = "";
-        await reload();
+        // The issues load with the month, not after it.
+        if (s.month !== month)
+            return;
+        await Promise.all([reload(), loadIssues(s)]);
     }
     // ผู้จัดทำ: the answer to one person sent back, sent with the next round.
     async function saveAnswer(s, p, text, btn) {

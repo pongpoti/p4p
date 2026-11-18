@@ -153,6 +153,25 @@ export function mountReview(d: ReviewDeps): void {
   const storage = (p: string): string => d.supabaseUrl + "/storage/v1/" + p
   const json = (extra: Record<string, string> = {}) => ({ ...d.serviceHeaders(), "Content-Type": "application/json", ...extra })
 
+  // The roster tables, kept for a minute (2026-11-18, the tab's lag): every
+  // :month route checks its month against them before its own work, and the
+  // list changes about once a month. A month that is not in the kept list
+  // asks again before it is refused, so a new month opens at once; the
+  // months load always asks (and refreshes what is kept).
+  const TABLES_TTL_MS = 60 * 1000
+  let tablesKept: { at: number; list: string[] } | null = null
+  let tablesAsk: Promise<string[]> | null = null
+  const rosterTables = (fresh = false): Promise<string[]> => {
+    if (!fresh && tablesKept && Date.now() - tablesKept.at < TABLES_TTL_MS) return Promise.resolve(tablesKept.list)
+    if (!tablesAsk) {
+      tablesAsk = d.listRosterTables().then((list) => { tablesKept = { at: Date.now(), list: list || [] }; return list || [] })
+        .finally(() => { tablesAsk = null })
+    }
+    return tablesAsk
+  }
+  const isRosterMonth = async (month: string): Promise<boolean> =>
+    (await rosterTables()).includes(month) || (await rosterTables(true)).includes(month)
+
   // Signed in, allowed this side, a real roster month, and the tables
   // installed. The owner has both sides; the other dashboard users are
   // ผู้จัดทำ only (Pong, 2026-11-12: "Add Dada as auditee"), so a route is
@@ -166,7 +185,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!owner && !(side === "auditee" && d.isReviewAuditee(s.sub))) { res.status(404).json({ error: "not found" }); return null }
     const month = String(req.params.month || "")
     if (req.params.month !== undefined) {
-      if (!core.parseMonth(month) || month < FIRST_MONTH || !(await d.listRosterTables()).includes(month)) {
+      if (!core.parseMonth(month) || month < FIRST_MONTH || !(await isRosterMonth(month))) {
         res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null
       }
     }
@@ -237,7 +256,7 @@ export function mountReview(d: ReviewDeps): void {
     const g = await gate(req, res, "auditee")
     if (!g) return
     try {
-      const tables = (await d.listRosterTables()).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort()
+      const tables = (await rosterTables(true)).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort()
       const months = await d.callServiceRpc("review_months", { p_months: tables })
       res.json({ installed: true, months: months || [] })
     } catch (e: any) { fail(res, "months", e, true) }
@@ -247,13 +266,22 @@ export function mountReview(d: ReviewDeps): void {
     const g = await gate(req, res, "auditee")
     if (!g) return
     try {
-      const st = await state(g.month)
-      // Only the first SQL file run: the tab says the second is needed.
-      if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
-      if (req.query.view === "1") await d.audit(req, g.s, "view.review", { month: g.month })
+      // The state, the emails, the mode and the visit's log line do not
+      // wait on each other (2026-11-18: one round trip to the database
+      // instead of three). emails, mailMode and audit never throw; a
+      // failed state is thrown once all four have ended.
       // The email's mode (and its test address) is for the owner only: a
       // dashboard user given the ผู้จัดทำ side alone gets no switch.
-      const [em, mail] = await Promise.all([emails(g.month), d.isDashOwner(g.s.sub) ? mailMode() : Promise.resolve(null)])
+      const [got, em, mail] = await Promise.all([
+        state(g.month).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e })),
+        emails(g.month),
+        d.isDashOwner(g.s.sub) ? mailMode() : Promise.resolve(null),
+        req.query.view === "1" ? d.audit(req, g.s, "view.review", { month: g.month }) : Promise.resolve(),
+      ])
+      if (!got.ok) throw got.e
+      const st = got.v
+      // Only the first SQL file run: the tab says the second is needed.
+      if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
       res.json({ installed: true, ...st, emails: em, mail })
     } catch (e: any) { fail(res, "state", e, true) }
   })
@@ -483,8 +511,12 @@ export function mountReview(d: ReviewDeps): void {
     const remark = decision === "fix" ? text(req.body.remark, 1000) : ""
     if (remark === null) return res.status(400).json({ error: "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร (ไม่เกิน 1,000 ตัวอักษร)" })
     try {
-      const row = await d.callServiceRpc("review_decide", { p_month: g.month, p_index: index, p_decision: decision, p_remark: remark, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.decide", { month: g.month, index, physician: await personName(index), decision, remark })
+      // The name for the log is looked up while the decision is saved.
+      const [row, physician] = await Promise.all([
+        d.callServiceRpc("review_decide", { p_month: g.month, p_index: index, p_decision: decision, p_remark: remark, p_actor: g.s.name }),
+        personName(index),
+      ])
+      await d.audit(req, g.s, "review.decide", { month: g.month, index, physician, decision, remark })
       res.json({ ok: true, decision: row })
     } catch (e: any) { fail(res, "decide", e) }
   })
@@ -496,8 +528,11 @@ export function mountReview(d: ReviewDeps): void {
     const reply = typeof (req.body && req.body.reply) === "string" ? req.body.reply.trim() : ""
     if (!UUID_RE.test(index) || reply.length > 1000) return res.status(400).json({ error: "คำตอบไม่เกิน 1,000 ตัวอักษร" })
     try {
-      await d.callServiceRpc("review_reply_decision", { p_month: g.month, p_index: index, p_reply: reply, p_actor: g.s.name })
-      await d.audit(req, g.s, "review.reply", { month: g.month, index, physician: await personName(index), reply })
+      const [, physician] = await Promise.all([
+        d.callServiceRpc("review_reply_decision", { p_month: g.month, p_index: index, p_reply: reply, p_actor: g.s.name }),
+        personName(index),
+      ])
+      await d.audit(req, g.s, "review.reply", { month: g.month, index, physician, reply })
       res.json({ ok: true })
     } catch (e: any) { fail(res, "reply", e) }
   })
@@ -630,11 +665,14 @@ export function mountReview(d: ReviewDeps): void {
     if (!reason) return res.status(400).json({ error: "เขียนเหตุผลก่อน (ไม่เกิน 1,000 ตัวอักษร)" })
     try {
       const out = await d.callServiceRpc("review_reopen_round", { p_month: g.month, p_reason: reason, p_actor: g.s.name })
-      if (out && out.old_pdf) {
-        await axios.delete(storage("object/" + BUCKET), { headers: json(), data: { prefixes: [out.old_pdf] }, timeout: 8000 })
-          .catch((e: any) => console.error("[dashboard] review: could not delete the cancelled PDF:", e.message))
-      }
-      await d.audit(req, g.s, "review.reopen", { month: g.month, round: out && out.round_no, reason })
+      // The cancelled PDF goes and the log line is written together.
+      await Promise.all([
+        out && out.old_pdf
+          ? axios.delete(storage("object/" + BUCKET), { headers: json(), data: { prefixes: [out.old_pdf] }, timeout: 8000 })
+            .catch((e: any) => console.error("[dashboard] review: could not delete the cancelled PDF:", e.message))
+          : Promise.resolve(),
+        d.audit(req, g.s, "review.reopen", { month: g.month, round: out && out.round_no, reason }),
+      ])
       res.json({ ok: true })
     } catch (e: any) { fail(res, "reopen", e) }
   })
