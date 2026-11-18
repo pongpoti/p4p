@@ -38,6 +38,8 @@ const ICON_PATHS = {
     "arrow-right": '<path d="M5 12h14M12 5l7 7-7 7"/>',
     "x": '<path d="M18 6 6 18M6 6l12 12"/>',
 };
+// icon() and iconEl() are globals for app.ts and review.ts (plain scripts,
+// no modules), so nothing in this file calls them.
 /** The icon as SVG markup: 1em square, drawn in the text colour, hidden from
  * screen readers (the words next to it carry the meaning). */
 function icon(name, cls) {
@@ -46,6 +48,7 @@ function icon(name, cls) {
         ' fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' + paths + "</svg>";
 }
 /** The same icon as an element, ready to append. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function iconEl(name, cls) {
     const t = document.createElement("template");
     t.innerHTML = icon(name, cls);
