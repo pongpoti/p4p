@@ -12,10 +12,19 @@
     <style>
         /* Design tokens and the app shell (2026-11-18 redesign): TH SarabunPSK
            on every tab, a flat 64px header, and one token set (type, space,
-           size, radius, elevation, colour, status roles, icons) that the
-           ตรวจสอบ tab is built from. The other tabs keep their shadcn-style
-           cards and read the old token names, which point at the new ones.
-           Colours keep the app's brown and tan (design.md). */
+           size, radius, elevation, colour, status roles, icons). A few old
+           names (--primary, --border, ...) point at the new ones. Colours
+           keep the app's brown and tan (design.md).
+
+           Two looks (Pong, 2026-11-18): ภาพรวม and ตามส่ง, with their
+           dialogs, keep the glass cards of 257d328 ("the previous design is
+           ok, don't edit that"); รายชื่อ, อัตรากำลัง and ประวัติการใช้งาน (the
+           tables and forms) and ตรวจสอบ use the new token set. A part both
+           share (main, .container, .glass, buttons, dialogs, fields) has a
+           rule for each look, scoped by what is on screen:
+             :where(body:has(:is(#months, #empty, #error):not(.hidden)))       ภาพรวม, ตามส่ง
+             :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) every other tab
+           :where() adds no specificity, so each rule weighs what it did. */
 
         /* TH SarabunPSK (OFL, DIP/SIPA), self-hosted: a copy installed on the
            computer first, else /dashboard/fonts/. It has Regular and Bold only. */
@@ -117,17 +126,19 @@
             --i-list: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'/%3E%3C/svg%3E");
             --i-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
 
-            /* The older names the other tabs use */
-            --background: #FAF5EE;
+            /* Older names, kept for the few rules that still read them */
+            --background: var(--c-canvas);
             --foreground: var(--c-text);
-            --card: rgba(255, 255, 255, .58);
-            --card-border: rgba(255, 255, 255, .75);
             --primary: var(--c-brand);
             --primary-foreground: #FFFFFF;
-            --accent: rgba(166, 137, 102, .14);
             --muted-foreground: var(--c-text-2);
             --border: var(--c-border);
             --ring: var(--c-focus);
+
+            /* ภาพรวม and ตามส่ง keep their 257d328 look (Pong, 2026-11-18): their glass cards read these */
+            --card: rgba(255, 255, 255, .58);
+            --card-border: rgba(255, 255, 255, .75);
+            --accent: rgba(166, 137, 102, .14);
             --success: #157F3D;
             --success-bg: rgba(21, 127, 61, .1);
             --warning: #965800;
@@ -196,9 +207,10 @@
         }
         #skip-link:focus { top: 12px; }
 
-        /* Soft colour fields behind the glass, so the blur has something
-           to pick up. Same background as login.html. */
-        #bg {
+        /* ภาพรวม, ตามส่ง: soft colour fields behind the glass, so the blur
+           has something to pick up. Same background as login.html. The other
+           tabs leave #bg unstyled and sit on the body's flat canvas. */
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) #bg {
             position: fixed;
             inset: 0;
             z-index: -1;
@@ -212,20 +224,31 @@
 
         .hidden { display: none !important; }
 
+        /* The header's bar and the content share a 36px gutter (main's 32px
+           plus each view's 4px), so their edges line up. ภาพรวม and ตามส่ง
+           keep their centred column (--content-w). */
         .container {
             width: 100%;
-            max-width: var(--content-w);
             margin: 0 auto;
             padding-left: 32px;
             padding-right: 32px;
         }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .container { max-width: var(--content-w); }
 
-        .glass {
+        /* A panel. ภาพรวม, ตามส่ง: frosted glass over #bg; every other tab:
+           white, a hairline border, a soft shadow. */
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .glass {
             background: var(--card);
             border: 1px solid var(--card-border);
             box-shadow: var(--shadow), var(--highlight);
             backdrop-filter: blur(20px) saturate(160%);
             -webkit-backdrop-filter: blur(20px) saturate(160%);
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .glass {
+            background: var(--c-surface);
+            border: 1px solid var(--c-border);
+            border-radius: var(--r-lg);
+            box-shadow: var(--elev-1);
         }
 
         .ico { width: 18px; height: 18px; flex-shrink: 0; }
@@ -243,7 +266,6 @@
         #mobile-block p { color: var(--muted-foreground); }
 
         /* ── Sticky header ────────────────────────────────────────────── */
-
         /* ── Header (every tab): a flat 64px bar across the window; the
            current page is marked by a brown bar under it (aria-current). ── */
         #header {
@@ -362,11 +384,15 @@
         .btn-secondary:hover { background: var(--c-brand-soft); }
         .btn-secondary:active { background: var(--c-selected); }
 
+        /* ════ ภาพรวม and ตามส่ง, and their dialogs (who has not sent, the
+           call/LINE log, งบประมาณจัดสรร): the look of 257d328, unchanged.
+           Rules for shared parts carry the ภาพรวม/ตามส่ง scope (see the top). ════ */
+
         /* ── Content: the six cards fill the space under the 65px header
            (64px plus its border), so
            all of them fit on one screen without scrolling. Sizes below scale
            with the window height (vh); very short windows scroll instead. */
-        main {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) main {
             display: flex;
             flex-direction: column;
             height: calc(100vh - 65px);
@@ -557,7 +583,6 @@
         .no-roster .card-content p { color: var(--muted-foreground); padding-bottom: 22px; }
 
         /* Loading placeholders (shadcn Skeleton) */
-        
         .skeleton .bar {
             margin: 22px;
             border-radius: 8px;
@@ -585,16 +610,16 @@
         .month-card.clickable { cursor: pointer; }
         .month-card.clickable:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
 
-        dialog { color: var(--foreground); font: inherit; }
-        dialog::backdrop { background: rgba(36, 28, 22, .35); backdrop-filter: blur(2px); }
-        .icon-btn {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) dialog { color: var(--foreground); font: inherit; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) dialog::backdrop { background: rgba(36, 28, 22, .35); backdrop-filter: blur(2px); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .icon-btn {
             display: inline-grid; place-items: center;
             width: 40px; height: 40px; border-radius: 10px;
             border: 1px solid var(--border); background: #fff; color: var(--muted-foreground);
             cursor: pointer;
         }
-        .icon-btn:hover { background: var(--accent); color: var(--foreground); }
-        .icon-btn svg { width: 20px; height: 20px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .icon-btn:hover { background: var(--accent); color: var(--foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .icon-btn svg { width: 20px; height: 20px; }
 
         .sheet {
             margin: auto;
@@ -614,15 +639,15 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--month) 35%, #fff), #FDFAF5);
         }
         .sheet-header .month-chip { height: 40px; font-size: 1.25rem; padding: 0 20px; background: color-mix(in srgb, var(--month) 45%, #fff); }
-        .search {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .search {
             grid-column: 1 / -1;
             display: flex; align-items: center; gap: 10px;
             height: 46px; padding: 0 14px; border-radius: 12px;
             border: 1px solid rgba(63, 47, 36, .22); background: #fff;
         }
-        .search:focus-within { outline: 2px solid var(--primary); outline-offset: 1px; }
-        .search svg { width: 20px; height: 20px; color: var(--muted-foreground); flex-shrink: 0; }
-        .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; color: var(--foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .search:focus-within { outline: 2px solid var(--primary); outline-offset: 1px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .search svg { width: 20px; height: 20px; color: var(--muted-foreground); flex-shrink: 0; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; color: var(--foreground); }
         .sheet-count { margin-top: 10px; font-size: 1.125rem; font-weight: 700; color: var(--warning); }
         .pending-list { list-style: none; margin: 0; padding: 8px 12px 24px; overflow-y: auto; flex: 1; }
         .pending-row {
@@ -662,22 +687,22 @@
         }
         .contact-btn .count.zero { display: none; }
 
-        .log-dialog {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-dialog {
             margin: auto;
             width: min(520px, 92vw); max-height: min(720px, 90vh);
             padding: 0; border: 1px solid var(--border); border-radius: 18px;
             background: #FDFAF5; box-shadow: 0 24px 60px rgba(41, 29, 20, .3);
             display: none; flex-direction: column;
         }
-        .log-dialog[open] { display: flex; }
-        .log-header {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-dialog[open] { display: flex; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-header {
             display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
             padding: 20px 22px 14px; border-bottom: 1px solid var(--border);
         }
-        .log-header h2 { font-size: 1.25rem; font-weight: 700; }
-        .log-header p { color: var(--muted-foreground); font-size: .9375rem; margin-top: 2px; }
-        .log-dialog[data-channel="phone"] .log-header { background: linear-gradient(180deg, #EFF5FF, #FDFAF5); }
-        .log-dialog[data-channel="line"] .log-header { background: linear-gradient(180deg, #E6F9EE, #FDFAF5); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-header h2 { font-size: 1.25rem; font-weight: 700; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-header p { color: var(--muted-foreground); font-size: .9375rem; margin-top: 2px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-dialog[data-channel="phone"] .log-header { background: linear-gradient(180deg, #EFF5FF, #FDFAF5); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-dialog[data-channel="line"] .log-header { background: linear-gradient(180deg, #E6F9EE, #FDFAF5); }
         .log-list { list-style: none; margin: 0; padding: 14px 22px; overflow-y: auto; flex: 1; min-height: 80px; }
         .log-entry { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px dashed var(--border); }
         .log-entry:last-child { border-bottom: 0; }
@@ -711,24 +736,21 @@
             border: 1px solid rgba(63, 47, 36, .22); background: #fff; color: var(--foreground);
         }
         .log-form textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-        .log-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
-        .btn-primary, .btn-ghost {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .log-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-primary, :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-ghost {
             height: 44px; padding: 0 18px; border-radius: 10px; font: inherit; font-weight: 700; cursor: pointer;
         }
-        .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
-        .btn-primary:disabled { opacity: .55; cursor: default; }
-        .btn-primary[aria-busy="true"] { opacity: .8; cursor: progress; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-        .spinner {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-primary { border: 0; color: #fff; background: linear-gradient(180deg, #54402F, var(--primary)); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-primary:disabled { opacity: .55; cursor: default; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-primary[aria-busy="true"] { opacity: .8; cursor: progress; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .spinner {
             width: 16px; height: 16px; border-radius: 50%;
             border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
             animation: spin .8s linear infinite;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
-        .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
-        .btn-ghost:hover { background: var(--accent); }
-        .error-text { color: #B42318; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-ghost { border: 1px solid var(--border); background: #fff; color: var(--foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .btn-ghost:hover { background: var(--accent); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .error-text { color: #B42318; }
 
         .alert {
             margin-bottom: 20px;
@@ -739,200 +761,381 @@
             border: 1px solid rgba(192, 57, 43, .25);
         }
 
-        /* ── ประวัติการใช้งาน (owner only) ─────────────────────────────── */
-        /* Fills the same space as the month grid; the table scrolls inside. */
-        #audit-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-        .audit-filters {
-            display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
-            padding: 16px 18px; border-radius: var(--radius); margin-bottom: clamp(12px, 2.2vh, 20px); flex-shrink: 0;
-        }
-        .audit-filters label { display: flex; flex-direction: column; gap: 4px; font-size: .8125rem; font-weight: 700; color: var(--muted-foreground); }
-        .audit-filters select, .audit-filters input {
-            height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px;
-            background: #fff; font: inherit; font-size: .9375rem; color: var(--foreground);
-        }
-        .audit-filters select { min-width: 170px; }
-        .audit-filters .btn-ghost { height: 40px; }
-        /* Fills the rest of the window; the rows scroll inside it under a fixed header. */
-        .audit-table-wrap { flex: 1; min-height: 0; border-radius: var(--radius); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-        .audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9375rem; }
-        .audit-table col.c-when { width: 225px; }
-        .audit-table col.c-who { width: 130px; }
-        .audit-table col.c-what { width: 205px; }
-        .audit-table col.c-ip { width: 125px; }
-        .audit-table th {
-            text-align: left; font-size: .8125rem; font-weight: 700; color: var(--muted-foreground);
-            padding: 12px 14px; background: #FCF9F4; border-bottom: 1px solid var(--border);
-            position: sticky; top: 0; z-index: 1;
-        }
-        /* One line per row; the full text is in the tooltip. */
-        .audit-table td {
-            height: 44px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .audit-table tr:last-child td { border-bottom: 0; }
-        .audit-table .when { white-space: nowrap; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-        .audit-table .who { white-space: nowrap; font-weight: 700; }
-        .audit-table .what { white-space: nowrap; }
-        .audit-table .detail q { quotes: "“" "”"; }
-        .audit-table .ip { white-space: nowrap; color: var(--muted-foreground); font-size: .8125rem; font-variant-numeric: tabular-nums; }
-        .audit-table tr.warn td { background: rgba(253, 236, 234, .7); }
-        .audit-table tr.warn .what { color: #8A1C12; font-weight: 700; }
-        .audit-table tr.change td { background: rgba(255, 248, 230, .6); }
-        .audit-table td.audit-empty { height: 88px; text-align: center; color: var(--muted-foreground); white-space: normal; }
-        /* ── รายชื่อ: the LINE /admin/ roster editor, as a desktop table ──── */
-        /* Same frame as ประวัติการใช้งาน: toolbar, then one-line rows that
-           scroll inside the box. */
-        #roster-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-        .roster-toolbar { align-items: center; flex-wrap: nowrap; }
-        .roster-toolbar select { min-width: 0; flex-shrink: 0; }
-        .roster-toolbar #roster-month { width: 130px; }
-        .roster-toolbar #roster-dept { width: 210px; }
-        .roster-toolbar .search {
-            flex: 1 1 200px; min-width: 150px; max-width: 300px; height: 40px; padding: 0 12px; border-radius: 10px; border-color: var(--border);
-            flex-direction: row; font-size: .9375rem; font-weight: 400; color: var(--foreground);
-        }
-        .roster-toolbar .search svg { width: 18px; height: 18px; }
-        .roster-toolbar .search input { height: auto; padding: 0; border: 0; }
-        #roster-count { color: var(--muted-foreground); font-size: .9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .roster-toolbar .spacer { flex: 1; }
-        .roster-toolbar button { flex-shrink: 0; white-space: nowrap; }
-        .roster-toolbar .btn-ghost, .roster-toolbar .btn-primary { height: 40px; display: inline-flex; align-items: center; gap: 8px; }
-        .roster-toolbar .btn-ghost svg, .roster-toolbar .btn-primary svg { width: 18px; height: 18px; }
-        .req-badge {
-            min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px;
-            display: inline-grid; place-items: center; font-size: .75rem; font-weight: 700; color: #fff; background: #C2410C;
-        }
-        .audit-table col.c-no { width: 60px; }
-        .audit-table col.c-dept { width: 20%; }
-        .audit-table col.c-type { width: 19%; }
-        .audit-table col.c-score { width: 84px; }
-        .audit-table col.c-sent { width: 205px; }
-        .audit-table col.c-act { width: 104px; }
-        .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
-        .roster-table th.num, .roster-table th.score { text-align: right; }
-        .roster-table .score { color: var(--foreground); }
-        .roster-table .name { font-weight: 700; }
-        .roster-table .muted { color: var(--muted-foreground); }
-        .roster-table .sent { color: var(--success); font-size: .875rem; font-variant-numeric: tabular-nums; }
-        .roster-table .sent.none { color: var(--muted-foreground); }
-        .roster-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
-        .roster-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
-        .roster-table .acts .icon-btn + .icon-btn { margin-left: 8px; }
-        .roster-table .acts .icon-btn svg { width: 18px; height: 18px; }
-        .roster-table .acts .del:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
-        .roster-table tbody tr { scroll-margin-top: 48px; }
-        .roster-table tr.flash td { background: rgba(21, 127, 61, .09); }
-
-        /* Add / edit one roster row, and the access-request list */
-        .form-dialog { width: min(640px, 94vw); }
-        .form-dialog .roster-form { padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
-        .roster-form .contents { display: contents; }
-        .roster-form label { display: flex; flex-direction: column; gap: 4px; font-size: .875rem; font-weight: 700; color: var(--muted-foreground); }
-        .roster-form label.wide { grid-column: 1 / -1; }
-        .roster-form input, .roster-form select {
-            height: 42px; padding: 0 12px; border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px;
-            background: #fff; font: inherit; font-size: 1rem; font-weight: 400; color: var(--foreground);
-        }
-        .roster-form input:focus-visible, .roster-form select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-        .roster-form .log-actions, .roster-form .error-text { grid-column: 1 / -1; }
-        .req-list { list-style: none; margin: 0; padding: 8px 22px 20px; overflow-y: auto; flex: 1; min-height: 80px; }
-        .req-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
-        .req-row:last-child { border-bottom: 0; }
-        .req-row .name { font-weight: 700; }
-        .req-row .meta { color: var(--muted-foreground); font-size: .875rem; overflow-wrap: anywhere; }
-
         /* ภาพรวม: งบประมาณจัดสรร, one month's budget and N */
         .budget-dialog { width: min(560px, 92vw); }
         .budget-dialog .log-header { background: #F6EFE6; background: linear-gradient(180deg, color-mix(in srgb, var(--month, #F6EFE6) 45%, #FDFAF5), #FDFAF5); }
-        .bd-form { box-sizing: border-box; width: 100%; padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
-        .bd-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-        .bd-field label { font-size: .875rem; font-weight: 700; color: var(--muted-foreground); }
-        .bd-field input {
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-form { box-sizing: border-box; width: 100%; padding: 18px 22px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; overflow-y: auto; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field label { font-size: .875rem; font-weight: 700; color: var(--muted-foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field input {
             box-sizing: border-box; width: 100%; min-width: 0; height: 46px; padding: 0 12px;
             border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px; background: #fff;
             font: inherit; font-size: 1.15rem; font-weight: 700; color: var(--foreground); font-variant-numeric: tabular-nums;
         }
-        .bd-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-        .bd-field input[readonly] { background: #F6EFE6; border-color: transparent; }
-        .bd-field input:disabled { background: #F6EFE6; border-color: transparent; color: var(--muted-foreground); cursor: not-allowed; opacity: 1; -webkit-text-fill-color: var(--muted-foreground); }
-        .bd-rate { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: #F6EFE6; }
-        .bd-rate .k { font-weight: 700; color: var(--muted-foreground); }
-        .bd-rate .k small { font-size: .875rem; font-weight: 400; }
-        .bd-rate .v { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field input[readonly] { background: #F6EFE6; border-color: transparent; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-field input:disabled { background: #F6EFE6; border-color: transparent; color: var(--muted-foreground); cursor: not-allowed; opacity: 1; -webkit-text-fill-color: var(--muted-foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-rate { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: #F6EFE6; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-rate .k { font-weight: 700; color: var(--muted-foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-rate .k small { font-size: .875rem; font-weight: 400; }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-rate .v { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
         .bd-ok { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border-left: 4px solid var(--success); border-radius: 6px; background: #E7F4EC; color: #0B5E2B; font-weight: 700; }
-        .bd-meta { grid-column: 1 / -1; font-size: .875rem; color: var(--muted-foreground); }
+        :where(body:has(:is(#months, #empty, #error):not(.hidden))) .bd-meta { grid-column: 1 / -1; font-size: .875rem; color: var(--muted-foreground); }
+
+        /* Under a ~695px window the cards' content was taller than their
+           row (at 257d328 a 620px page area, Pong's screen, cut the footers
+           off and scrolled the page by 5px). From 700px up nothing is cut,
+           so there 257d328's sizing stays exactly as it was. Under 700px the
+           vh-based spacing above uses a slightly smaller unit, --cvh, so the
+           content fits with no overflow at all; main may shrink to 520px as
+           on the other tabs, and the big figures to 2rem. The same cards,
+           with a little less air. */
+        @media (max-height: 699px) {
+            :where(body:has(:is(#months, #empty, #error):not(.hidden))) main { min-height: 520px; }
+            #months { --cvh: min(1vh, calc(2.198vh - 9.06px)); }
+            .card-header { padding-top: clamp(6px, calc(2.2 * var(--cvh)), 20px); }
+            .card-content { padding-top: clamp(6px, calc(2.4 * var(--cvh)), 22px); padding-bottom: clamp(6px, calc(2 * var(--cvh)), 18px); }
+            .progress { margin-top: clamp(6px, calc(2.2 * var(--cvh)), 24px); }
+            .split { margin-top: clamp(6px, calc(2.4 * var(--cvh)), 28px); }
+            .split div { padding-top: clamp(4px, calc(1.6 * var(--cvh)), 16px); padding-bottom: clamp(4px, calc(1.6 * var(--cvh)), 16px); }
+            .split dd { font-size: clamp(2rem, 7vh, 4rem); }
+            .card-footer { padding-top: clamp(6px, calc(1.5 * var(--cvh)), 14px); padding-bottom: clamp(6px, calc(1.8 * var(--cvh)), 18px); }
+            #months.followup .card-header { padding-top: clamp(6px, calc(3 * var(--cvh)), 28px); }
+            #months.followup .card-content { padding-bottom: clamp(6px, calc(2.6 * var(--cvh)), 24px); }
+        }
+
+        /* ════ รายชื่อ, อัตรากำลัง, ประวัติการใช้งาน (tables and forms), their
+           dialogs, and the parts ตรวจสอบ shares: design ข (2026-11-18).
+           Rules for shared parts carry the other-tabs scope (see the top). ════ */
+
+        /* ── Content: each of these tabs fills the space under the 65px header
+           (64px plus its border) and scrolls inside its own box, so a
+           620px page area (Pong's screen) needs no page scroll. Under that
+           the page scrolls. ── */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) main {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 65px);
+            height: calc(100dvh - 65px);
+            min-height: 520px;
+            padding-top: var(--sp-4);
+            padding-bottom: var(--sp-4);
+        }
+        /* The views sit 4px in, as #review-view's padding does */
+        main > :is(#roster-view, #staffing-view, #audit-view) { margin: var(--sp-1); font-size: var(--fs-md); color: var(--c-text); }
+
+        /* ── Buttons (these tabs and their dialogs; ตรวจสอบ has its own under
+           #review-view): primary brown, secondary outlined, 40px; the
+           dialogs' footer buttons 48px. Unavailable: a flat fill, a dashed
+           outline, full-strength words and a lock; no fading. ── */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary, :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-ghost {
+            position: relative;
+            display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+            min-height: var(--ctl-md); padding: 0 var(--sp-4);
+            border: 1px solid transparent; border-radius: var(--r-md);
+            font: inherit; font-size: var(--fs-md); font-weight: 700; line-height: var(--lh-ui);
+            white-space: nowrap; cursor: pointer;
+            transition: background-color .12s, border-color .12s;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary { background: var(--c-brand); border-color: var(--c-brand); color: #fff; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary:hover { background: var(--c-brand-hover); border-color: var(--c-brand-hover); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary:active { background: var(--c-brand-active); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-ghost { background: var(--c-surface); border-color: var(--c-border-strong); color: var(--c-brand); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-ghost:hover { background: var(--c-brand-soft); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-ghost:active { background: var(--c-selected); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.btn-primary, .btn-ghost):disabled:not([aria-busy="true"]) {
+            background: var(--c-disabled-bg); border: 1px dashed var(--c-border-strong); color: var(--c-text-3); cursor: not-allowed;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.btn-primary, .btn-ghost):disabled:not([aria-busy="true"])::before {
+            content: ""; flex: none; width: var(--icon-sm); height: var(--icon-sm); background: currentColor;
+            -webkit-mask: var(--i-lock) center / contain no-repeat; mask: var(--i-lock) center / contain no-repeat;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .btn-primary[aria-busy="true"] { cursor: progress; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .spinner {
+            flex: none; width: 18px; height: 18px; border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .error-text { color: var(--st-danger-fg); font-size: var(--fs-sm); font-weight: 700; line-height: var(--lh-text); }
+
+        /* An outlined square button with one icon (close, edit, delete) */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn {
+            display: inline-grid; place-items: center; flex: none;
+            width: var(--ctl-md); height: var(--ctl-md); padding: 0; border-radius: var(--r-md);
+            border: 1px solid var(--c-border-strong); background: var(--c-surface); color: var(--c-text-2);
+            cursor: pointer; transition: background-color .12s, color .12s;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn:hover { background: var(--c-brand-soft); color: var(--c-text); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn:active { background: var(--c-selected); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn svg { width: var(--icon-md); height: var(--icon-md); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn:disabled { background: var(--c-disabled-bg); border-style: dashed; color: var(--c-text-3); cursor: not-allowed; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .icon-btn.del:not(:disabled):hover { background: var(--st-danger-bg); border-color: var(--st-danger-solid); color: var(--st-danger-fg); }
+
+        /* Callouts: the role's tint, a 4px bar in its colour, its icon and the words */
+        :is(.sf-ok, .sf-alert) {
+            --co-fg: var(--st-info-fg); --co-bg: var(--st-info-bg); --co-line: var(--st-info-line); --co-solid: var(--st-info-solid); --co-i: var(--i-info);
+            position: relative; display: block; flex-shrink: 0; min-height: var(--ctl-md);
+            padding: var(--sp-2) var(--sp-4) var(--sp-2) 44px;
+            border: 1px solid var(--co-line); border-left: 4px solid var(--co-solid); border-radius: var(--r-sm);
+            background: var(--co-bg); color: var(--co-fg); font-size: var(--fs-sm); font-weight: 400; line-height: var(--lh-text);
+        }
+        :is(.sf-ok, .sf-alert)::before {
+            content: ""; position: absolute; left: 12px; top: 10px; width: var(--icon-md); height: var(--icon-md);
+            background: var(--co-solid); -webkit-mask: var(--co-i) center / contain no-repeat; mask: var(--co-i) center / contain no-repeat;
+        }
+        .sf-alert.error { --co-fg: var(--st-danger-fg); --co-bg: var(--st-danger-bg); --co-line: var(--st-danger-line); --co-solid: var(--st-danger-solid); --co-i: var(--i-x-circle); }
+        .sf-alert { --co-fg: var(--st-warn-fg); --co-bg: var(--st-warn-bg); --co-line: var(--st-warn-line); --co-solid: var(--st-warn-solid); --co-i: var(--i-alert-tri); }
+        .sf-ok { --co-fg: var(--st-success-fg); --co-bg: var(--st-success-bg); --co-line: var(--st-success-line); --co-solid: var(--st-success-solid); --co-i: var(--i-check-circle); }
+        /* the check from app.js repeats the callout's own icon */
+        .sf-ok > .ic:first-child { display: none; }
+        .sf-ok .ic { vertical-align: -.15em; }
+
+        /* ── Dialogs: a white box, a ruled header with the title and ×, the
+           body, then a footer bar with ยกเลิก and the action (48px). The
+           ตรวจสอบ dialog (#review-confirm) has its own rules. ── */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) dialog { color: var(--c-text); font: inherit; font-size: var(--fs-md); line-height: var(--lh-ui); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) dialog::backdrop { background: rgba(36, 28, 22, .45); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog {
+            margin: auto;
+            padding: 0;
+            border: 1px solid var(--c-border);
+            border-radius: var(--r-lg);
+            background: var(--c-surface);
+            box-shadow: var(--elev-3);
+            display: none;
+            flex-direction: column;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog { width: min(520px, 92vw); max-height: min(720px, 90vh); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog:not(.rv-dialog) { width: min(560px, 92vw); max-height: min(720px, calc(100vh - 32px)); overflow: hidden; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog[open] { display: flex; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-header {
+            display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3);
+            padding: var(--sp-4) var(--sp-6); border-bottom: 1px solid var(--c-border); background: var(--c-surface);
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-header h2 { font-size: var(--fs-lg); font-weight: 700; line-height: var(--lh-ui); padding-top: 4px; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-header p { margin-top: 2px; color: var(--c-text-2); font-size: var(--fs-sm); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-header p:empty { display: none; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog:not(.rv-dialog) .log-actions {
+            position: sticky; bottom: 0; z-index: 1;
+            display: flex; justify-content: flex-end; gap: var(--sp-3);
+            margin: var(--sp-1) calc(-1 * var(--sp-6)) 0; padding: var(--sp-4) var(--sp-6);
+            background: var(--c-surface-2); border-top: 1px solid var(--c-border);
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .log-dialog:not(.rv-dialog) .log-actions :is(.btn-primary, .btn-ghost) { min-height: var(--ctl-lg); min-width: 120px; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .search {
+            grid-column: 1 / -1;
+            display: flex; align-items: center; gap: var(--sp-2);
+            min-height: var(--ctl-md); padding: 0 var(--sp-3); border-radius: var(--r-sm);
+            border: 1px solid var(--c-border-strong); background: var(--c-surface);
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .search:hover { border-color: var(--c-text-2); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .search:focus-within { outline: 2px solid var(--c-focus); outline-offset: 0; border-color: var(--c-focus); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .search svg { width: var(--icon-sm); height: var(--icon-sm); color: var(--c-text-2); flex-shrink: 0; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .search input { flex: 1; min-width: 0; height: 38px; border: 0; outline: 0; background: transparent; font: inherit; font-size: var(--fs-md); color: var(--c-text); }
+
+        /* Text fields in the dialogs and the toolbars: 40px, a 4.6:1 outline */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.roster-form input, .roster-form select, .bd-field input, .audit-filters select, .audit-filters input):hover { border-color: var(--c-text-2); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.roster-form input, .roster-form select, .bd-field input, .audit-filters select, .audit-filters input):focus-visible { outline: 2px solid var(--c-focus); outline-offset: 0; border-color: var(--c-focus); }
+
+        /* ── ประวัติการใช้งาน, รายชื่อ, อัตรากำลัง: a toolbar panel, then the
+           table in its own box: the rows scroll under a sticky head. ── */
+        #audit-view, #roster-view, #staffing-view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
+        .audit-filters {
+            display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-3);
+            padding: var(--sp-3) var(--sp-4); flex-shrink: 0;
+        }
+        .audit-filters label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); }
+        .audit-filters select, .audit-filters input {
+            height: var(--ctl-md); padding: 0 var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--r-sm);
+            background: var(--c-surface); font: inherit; font-size: var(--fs-md); font-weight: 400; color: var(--c-text);
+        }
+        .audit-filters select { min-width: 190px; }
+        /* position: the box holds the rows' screen-reader text (.sr-only), so it scrolls with them */
+        .audit-table-wrap { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-padding: 48px 0 8px; }
+        .audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-md); line-height: var(--lh-ui); }
+        .audit-table col.c-when { width: 220px; }
+        .audit-table col.c-who { width: 140px; }
+        .audit-table col.c-what { width: 260px; }
+        .audit-table col.c-ip { width: 140px; }
+        .audit-table th {
+            position: sticky; top: 0; z-index: 1;
+            height: 40px; padding: var(--sp-1) var(--sp-3); text-align: left; vertical-align: middle;
+            font-size: var(--fs-sm); font-weight: 700; line-height: 1.25; color: var(--c-text-2);
+            background: var(--c-surface-3); border-bottom: 0; box-shadow: inset 0 -2px 0 var(--c-border-strong);
+        }
+        /* One line per row; the full text is in the tooltip. */
+        .audit-table td {
+            height: 44px; padding: 0 var(--sp-3); border-bottom: 1px solid var(--c-border); vertical-align: middle;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .audit-table tbody tr:hover > td { background: var(--c-surface-2); }
+        .audit-table tr:last-child td { border-bottom: 0; }
+        .audit-table .when { white-space: nowrap; color: var(--c-text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+        .audit-table .who { white-space: nowrap; font-weight: 700; }
+        .audit-table .what { white-space: nowrap; }
+        .audit-table .detail .ic { width: var(--icon-sm); height: var(--icon-sm); vertical-align: -2px; }
+        .audit-table .detail q { quotes: "“" "”"; }
+        .audit-table .ip { white-space: nowrap; color: var(--c-text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+        .audit-table tr.warn > td, .audit-table tbody tr.warn:hover > td { background: var(--st-danger-bg); }
+        .audit-table tr.warn .what { color: var(--st-danger-fg); font-weight: 700; }
+        .audit-table tr.change > td, .audit-table tbody tr.change:hover > td { background: #FFF8E8; }
+        .audit-table td.audit-empty { height: 88px; text-align: center; color: var(--c-text-2); white-space: normal; }
+        .audit-table td.audit-empty.error-text { color: var(--st-danger-fg); }
+
+        /* ── รายชื่อ: the LINE /admin/ roster editor, as a desktop table ──── */
+        .roster-toolbar { align-items: center; flex-wrap: nowrap; }
+        .roster-toolbar select { min-width: 0; flex-shrink: 0; }
+        .roster-toolbar #roster-month { width: 150px; }
+        .roster-toolbar #roster-dept { width: 260px; }
+        .roster-toolbar .search { flex: 1 1 220px; flex-direction: row; gap: var(--sp-2); min-width: 160px; max-width: 360px; height: var(--ctl-md); font-size: var(--fs-md); font-weight: 400; color: var(--c-text); }
+        .roster-toolbar .search svg { width: var(--icon-sm); height: var(--icon-sm); }
+        .roster-toolbar .search input { height: 38px; padding: 0; border: 0; background: transparent; }
+        .roster-toolbar .search input:focus-visible { outline: none; }
+        #roster-count { color: var(--c-text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .roster-toolbar .spacer { flex: 1; }
+        .roster-toolbar button { flex-shrink: 0; }
+        .roster-toolbar :is(.btn-ghost, .btn-primary) svg { width: 18px; height: 18px; }
+        .req-badge {
+            min-width: 24px; height: 24px; padding: 0 7px; border-radius: var(--r-pill);
+            display: inline-grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; line-height: 1; color: #fff; background: var(--st-attn-solid);
+        }
+        .audit-table col.c-no { width: 64px; }
+        .audit-table col.c-dept { width: 18%; }
+        .audit-table col.c-type { width: 20%; }
+        .audit-table col.c-score { width: 120px; }
+        .audit-table col.c-sent { width: 220px; }
+        .audit-table col.c-act { width: 112px; }
+        .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-2); }
+        .roster-table th.num, .roster-table th.score { text-align: right; }
+        .roster-table .score { color: var(--c-text); }
+        .roster-table .name { font-weight: 700; }
+        .roster-table .muted { color: var(--c-text-2); }
+        .roster-table .sent { color: var(--st-success-fg); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+        .roster-table .sent.none { color: var(--c-text-2); }
+        .roster-table .acts { text-align: right; padding: 0 var(--sp-3) 0 0; text-overflow: clip; }
+        .roster-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
+        .roster-table .acts .icon-btn + .icon-btn { margin-left: var(--sp-2); }
+        .roster-table .acts .icon-btn svg { width: 18px; height: 18px; }
+        .roster-table tbody tr { scroll-margin-top: 48px; }
+        .roster-table tr.flash > td { background: var(--st-success-bg); }
+        :is(.roster-table, .staffing-table) .acts :focus-visible { outline-offset: -1px; }
+
+        /* Add / edit one roster row, and the access-request list. The fields
+           scroll; บันทึก stays in the footer bar. */
+        .form-dialog { width: min(680px, 94vw); }
+        .form-dialog .roster-form { min-height: 0; padding: var(--sp-4) var(--sp-6) 0; display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3) var(--sp-4); overflow-y: auto; scroll-padding-bottom: 88px; }
+        .roster-form .contents { display: contents; }
+        .roster-form label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); }
+        .roster-form label.wide { grid-column: 1 / -1; }
+        .roster-form input, .roster-form select {
+            height: var(--ctl-md); padding: 0 var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--r-sm);
+            background: var(--c-surface); font: inherit; font-size: var(--fs-md); font-weight: 400; color: var(--c-text);
+        }
+        .roster-form .log-actions, .roster-form .error-text { grid-column: 1 / -1; }
+        .req-list { list-style: none; margin: 0; padding: var(--sp-2) var(--sp-6) var(--sp-4); overflow-y: auto; flex: 1; min-height: 80px; }
+        .req-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-3) 0; border-bottom: 1px solid var(--c-border); }
+        .req-row:last-child { border-bottom: 0; }
+        .req-row .name { font-weight: 700; }
+        .req-row .meta { color: var(--c-text-2); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+        .req-row .actions { display: flex; gap: var(--sp-2); }
+        .req-row .reject:not(:disabled):hover { color: var(--st-danger-fg); background: var(--st-danger-bg); border-color: var(--st-danger-solid); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-form { box-sizing: border-box; width: 100%; min-height: 0; padding: var(--sp-4) var(--sp-6) 0; display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3) var(--sp-4); overflow-y: auto; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-field { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-field label { font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-field input {
+            box-sizing: border-box; width: 100%; min-width: 0; height: var(--ctl-lg); padding: 0 var(--sp-3);
+            border: 1px solid var(--c-border-strong); border-radius: var(--r-sm); background: var(--c-surface);
+            font: inherit; font-size: var(--fs-lg); font-weight: 700; color: var(--c-text); font-variant-numeric: tabular-nums;
+        }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-field input[readonly] { background: var(--c-surface-2); border-color: var(--c-border); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-field input:disabled { background: var(--c-disabled-bg); border-style: dashed; color: var(--c-text-3); cursor: not-allowed; opacity: 1; -webkit-text-fill-color: var(--c-text-3); }
+        /* per P4P: a ruled figure, as the ตรวจสอบ tab's */
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-rate { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface-2); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-rate .k { font-size: var(--fs-md); font-weight: 700; color: var(--c-text-2); }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-rate .k small { font-size: var(--fs-sm); font-weight: 400; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-rate .v { font-size: var(--fs-2xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+        :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) .bd-meta { grid-column: 1 / -1; font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); }
         .bd-form .error-text, .bd-form .log-actions { grid-column: 1 / -1; }
         @media (max-width: 420px) { .bd-form { grid-template-columns: 1fr; } }
-        .req-row .actions { display: flex; gap: 8px; }
-        .req-row .btn-primary, .req-row .btn-ghost { height: 38px; padding: 0 14px; }
-        .req-row .reject:hover { color: #B42318; background: #FEF3F2; border-color: #FECDCA; }
 
         /* ── อัตรากำลัง: each department's staffing and multiplier ───────── */
-        /* Same frame as รายชื่อ: a summary card, then the table scrolls inside. */
-        #staffing-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
         .sf-head {
-            display: flex; align-items: center; justify-content: space-between; gap: 16px 28px; flex-wrap: wrap;
-            padding: 14px 18px; border-radius: var(--radius); margin-bottom: clamp(12px, 2.2vh, 20px); flex-shrink: 0;
+            display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3) var(--sp-6); flex-wrap: wrap;
+            padding: var(--sp-3) var(--sp-4); flex-shrink: 0;
         }
-        .sf-intro { min-width: 0; flex: 1 1 420px; }
-        .sf-intro h2 { font-size: 1.125rem; font-weight: 700; }
-        .sf-formula { font-size: .9375rem; font-variant-numeric: tabular-nums; }
-        .sf-formula .sf-dot { margin: 0 10px; color: var(--muted-foreground); }
-        .sf-sub { font-size: .875rem; color: var(--muted-foreground); }
-        .sf-sub .sf-asof { font-style: normal; margin-left: .35em; }
-        .sf-stats { display: flex; gap: 10px; margin: 0; }
-        .sf-stats div { padding: 8px 14px; border-radius: 12px; background: #F6EFE6; min-width: 112px; }
-        .sf-stats dt { font-size: .8125rem; font-weight: 700; color: var(--muted-foreground); white-space: nowrap; }
-        .sf-stats dd { margin: 0; font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .sf-stats dd small { font-size: .8125rem; font-weight: 400; color: var(--muted-foreground); }
-        .sf-alert, .sf-ok { flex-shrink: 0; margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; font-size: .9375rem; }
-        .sf-alert { color: #7A4300; background: rgba(255, 244, 222, .9); border: 1px solid rgba(217, 140, 0, .35); }
-        .sf-alert.error { color: #8A1C12; background: rgba(253, 236, 234, .85); border-color: rgba(192, 57, 43, .25); }
-        .sf-ok { border-left: 4px solid var(--success); background: #E7F4EC; color: #0B5E2B; font-weight: 700; }
-        .staffing-table col.c-sno { width: 48px; }
-        .staffing-table col.c-code { width: 60px; }
-        /* Narrow enough that department names keep about 190px, as before the monthly column. */
-        .staffing-table col.c-n { width: 60px; }
-        .staffing-table col.c-hire { width: 80px; }
-        .staffing-table col.c-lack { width: 84px; }
-        .staffing-table col.c-mult { width: 136px; }
-        .staffing-table col.c-edit { width: 56px; }
-        .staffing-table th, .staffing-table td { padding-left: 10px; padding-right: 10px; }
+        .sf-intro { min-width: 0; flex: 1 1 520px; display: flex; flex-direction: column; gap: 2px; }
+        .sf-intro h2 { font-size: var(--fs-lg); font-weight: 700; line-height: var(--lh-ui); }
+        .sf-formula { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+        .sf-formula .sf-dot { margin: 0 var(--sp-2); color: var(--c-text-2); }
+        .sf-sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); }
+        /* When the numbers were last brought up to date: its own chip, never cut in two */
+        .sf-asof {
+            display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap;
+            padding: 0 var(--sp-2) 0 6px; border: 1px solid var(--st-neutral-line); border-radius: var(--r-pill);
+            background: var(--st-neutral-bg); color: var(--st-neutral-fg); font-style: normal; font-weight: 700; line-height: 1.35;
+        }
+        .sf-asof .ic { width: var(--icon-sm); height: var(--icon-sm); }
+        /* The three figures: a ruled strip of cells */
+        .sf-stats { display: grid; grid-template-columns: repeat(3, auto); margin: 0; border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface); }
+        .sf-stats div { min-width: 140px; padding: var(--sp-2) var(--sp-4); }
+        .sf-stats div + div { border-left: 1px solid var(--c-border); }
+        .sf-stats dt { font-size: var(--fs-sm); font-weight: 400; color: var(--c-text-2); white-space: nowrap; }
+        .sf-stats dd { margin: 0; font-size: var(--fs-xl); font-weight: 700; line-height: var(--lh-ui); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .sf-stats dd small { font-size: var(--fs-sm); font-weight: 400; color: var(--c-text-2); }
+        .sf-alert, .sf-ok { margin: 0; }
+        .sf-ok { font-weight: 700; }
+        .staffing-table col.c-sno { width: 52px; }
+        .staffing-table col.c-code { width: 76px; }
+        .staffing-table col.c-n { width: 84px; }
+        .staffing-table col.c-hire { width: 100px; }
+        .staffing-table col.c-lack { width: 104px; }
+        .staffing-table col.c-mult { width: 190px; }
+        .staffing-table col.c-edit { width: 64px; }
+        .staffing-table th { height: 52px; }
         .staffing-table td { height: 40px; }
         .staffing-table td.mult { text-overflow: clip; }
         .staffing-table .num { text-align: right; font-variant-numeric: tabular-nums; }
         .staffing-table th.num { text-align: right; }
-        .staffing-table .muted { color: var(--muted-foreground); }
+        .staffing-table .muted { color: var(--c-text-2); }
         .staffing-table .name { font-weight: 700; }
-        .staffing-table .code { font-size: .8125rem; font-weight: 700; letter-spacing: .02em; color: var(--muted-foreground); }
+        .staffing-table .code { font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); }
         .staffing-table .total { font-weight: 700; }
-        .staffing-table tr.short .lack { color: var(--warning); font-weight: 700; }
+        .staffing-table tr.short .lack { color: var(--st-attn-fg); font-weight: 700; }
         .staffing-table .mult { white-space: nowrap; }
-        .staffing-table .mv { display: inline-block; min-width: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .staffing-table tr:not(.short) .mv { font-weight: 400; color: var(--muted-foreground); }
+        .staffing-table .mv { display: inline-block; min-width: 44px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .staffing-table tr:not(.short) .mv { font-weight: 400; color: var(--c-text-2); }
         /* The bar is the department's lack: full width would be 100% short (multiplier 1 + K). */
-        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 56px; height: 8px; margin-left: 10px; border-radius: 999px; background: rgba(63, 47, 36, .09); overflow: hidden; }
-        .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #E2A33A, #C2410C); }
-        .staffing-table .acts { text-align: right; padding: 0 12px 0 0; text-overflow: clip; }
-        .staffing-table .acts .icon-btn { width: 36px; height: 36px; vertical-align: middle; }
+        .staffing-table .mbar { display: inline-block; vertical-align: middle; width: 88px; height: 8px; margin-left: var(--sp-3); border-radius: var(--r-pill); background: var(--c-surface-3); box-shadow: inset 0 0 0 1px var(--c-border); overflow: hidden; }
+        .staffing-table .mbar i { display: block; height: 100%; border-radius: inherit; background: var(--st-attn-solid); }
+        .staffing-table .acts { text-align: right; padding: 0 var(--sp-3) 0 0; text-overflow: clip; }
+        .staffing-table .acts .icon-btn { width: 36px; height: 32px; vertical-align: middle; }
         .staffing-table .acts .icon-btn svg { width: 18px; height: 18px; }
-        .staffing-table .acts .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
-        .staffing-table tbody tr { scroll-margin-top: 48px; scroll-margin-bottom: 48px; }
-        .staffing-table tr.flash td { background: rgba(21, 127, 61, .09); }
-        .staffing-table tfoot td { position: sticky; bottom: 0; background: #FCF9F4; border-top: 1px solid var(--border); border-bottom: 0; font-weight: 700; }
+        .staffing-table tbody tr { scroll-margin-top: 56px; scroll-margin-bottom: 48px; }
+        .staffing-table tr.flash > td { background: var(--st-success-bg); }
+        .staffing-table tfoot td { position: sticky; bottom: 0; height: 44px; background: var(--c-surface-3); border-top: 0; box-shadow: inset 0 2px 0 var(--c-border-strong); border-bottom: 0; font-weight: 700; }
+        .staffing-table tfoot td.muted { color: var(--c-text-2); }
         .staffing-table td.audit-empty { height: 88px; }
-        .sf-dialog { width: min(680px, 94vw); }
+        /* keep a focused row clear of the sticky head and the totals row (WCAG 2.4.11) */
+        #staffing-view .audit-table-wrap { scroll-padding: 60px 0 52px; }
+        .sf-dialog { width: min(720px, 94vw); }
         .sf-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-        .sf-form .bd-field label small { font-weight: 400; }
+        .sf-form .bd-field label small { font-size: inherit; font-weight: 400; }
         .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
-        .sf-preview { align-items: center; }
-        .sf-preview .k output { margin-left: 6px; font-size: 1.15rem; font-weight: 700; color: var(--foreground); font-variant-numeric: tabular-nums; }
-        .sf-preview .k .v { font-size: 1.6rem; }
-        .sf-preview .was { font-size: 1rem; font-weight: 400; color: var(--muted-foreground); }
+        .sf-preview { align-items: center; flex-wrap: wrap; }
+        .sf-preview .k output { margin-left: var(--sp-2); font-size: var(--fs-lg); font-weight: 700; color: var(--c-text); font-variant-numeric: tabular-nums; }
+        .sf-preview .k .v { font-size: var(--fs-2xl); }
+        .sf-preview .was { font-size: var(--fs-md); font-weight: 400; color: var(--c-text-2); }
+        .sf-preview .was .ic { width: var(--icon-sm); height: var(--icon-sm); vertical-align: -2px; }
         @media (max-width: 640px) { .sf-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 400px) { .sf-form { grid-template-columns: 1fr; } }
 
+        /* Windows high contrast: the drawn icons keep their shape */
+        @media (forced-colors: active) {
+            :is(.sf-ok, .sf-alert)::before, :where(body:not(:has(:is(#months, #empty, #error):not(.hidden)))) :is(.btn-primary, .btn-ghost):disabled::before { forced-color-adjust: none; background-color: CanvasText; }
+            .nav-btn[aria-current="page"] { outline: 2px solid Highlight; outline-offset: -2px; }
+        }
 
         /* ── ตรวจสอบ tab (dashboard/review.ts) ─────────────────────────── */
         /* 2026-11-18: one solid shell (no glass, no blur, no gradients), the
@@ -941,9 +1144,7 @@
 
            Frame: the tab uses the window's width; no page scroll down to a
            500px window (Pong, 2026-11-12): the view scrolls inside instead. */
-        body:has(#review-view:not(.hidden)) #bg { background: var(--c-canvas); }
         main:has(#review-view:not(.hidden)) { min-height: 420px; padding-top: var(--sp-4); padding-bottom: var(--sp-4); }
-        #main:has(#review-view:not(.hidden)) { max-width: none; }
         #review-view {
             flex: 1 1 auto; min-height: 0; overflow-y: auto;
             display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: var(--sp-4); align-items: start;

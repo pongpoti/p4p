@@ -1300,7 +1300,6 @@
     const FIELD_ORDER = ["prefix", "position", "firstname", "lastname", "department", "type", "rank", "score", "submitted_at"];
     // Free-text columns that suggest the values already in the month.
     const SUGGEST = ["prefix", "position", "type", "rank"];
-    const EDIT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
     const rosterMonth = document.getElementById("roster-month");
     const rosterSearch = document.getElementById("roster-search");
     const rosterDept = document.getElementById("roster-dept");
@@ -1418,7 +1417,7 @@
         const acts = el("td", "acts");
         const edit = el("button", "icon-btn");
         edit.type = "button";
-        edit.innerHTML = EDIT_SVG;
+        edit.appendChild(iconEl("pencil"));
         edit.title = "แก้ไข";
         edit.setAttribute("aria-label", "แก้ไข " + name);
         edit.addEventListener("click", () => openRosterForm(r));
@@ -1781,7 +1780,6 @@
         reqDlg.showModal();
         void loadRequests();
     });
-    const PENCIL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
     const staffingRows = document.getElementById("staffing-rows");
     const staffingFoot = document.getElementById("staffing-foot");
     const staffingTable = staffingRows.closest("table");
@@ -1899,7 +1897,7 @@
             const acts = el("td", "acts");
             const b = el("button", "icon-btn edit");
             b.type = "button";
-            b.innerHTML = PENCIL_SVG;
+            b.appendChild(iconEl("pencil"));
             b.setAttribute("aria-label", "แก้ไขอัตรากำลัง" + d.name);
             if (edit === "locked") {
                 b.disabled = true;
@@ -1930,14 +1928,18 @@
         staffingK.textContent = String(data.k);
         // The แก้ไขล่าสุด column is gone (Pong, 2026-11-17); the line under
         // the title ends with when the numbers were last brought up to date,
-        // in italics: the staffing sheet's date (13-11-69 → 13 พ.ย. 69), or
-        // the latest edit in the tab if there is a later one.
+        // as a chip of its own (no italics, 2026-11-18): the staffing sheet's
+        // date (13-11-69 → 13 พ.ย. 69), or the latest edit in the tab if
+        // there is a later one.
         staffingSub.replaceChildren(data.canEdit
             ? "แก้ไขแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขใหม่เมื่อสร้างครั้งถัดไป"
             : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข");
         const asOf = sfAsOf(data);
-        if (asOf)
-            staffingSub.appendChild(el("em", "sf-asof", "ปรับปรุงข้อมูล วันที่ " + asOf));
+        if (asOf) {
+            const chip = el("span", "sf-asof");
+            chip.append(iconEl("calendar"), "ปรับปรุงข้อมูล วันที่ " + asOf);
+            staffingSub.appendChild(chip);
+        }
         if (!data.installed && data.canEdit) {
             staffingAlert.textContent = "ยังไม่ได้ติดตั้งตารางอัตรากำลังใน Supabase จึงแสดงค่าตั้งต้น " + sfSource() +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor";

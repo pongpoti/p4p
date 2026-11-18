@@ -37,6 +37,8 @@ const ICON_PATHS = {
     "arrow-left": '<path d="M19 12H5M12 19l-7-7 7-7"/>',
     "arrow-right": '<path d="M5 12h14M12 5l7 7-7 7"/>',
     "x": '<path d="M18 6 6 18M6 6l12 12"/>',
+    // อัตรากำลัง: when the numbers were last brought up to date.
+    "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
 };
 // icon() and iconEl() are globals for app.ts and review.ts (plain scripts,
 // no modules), so nothing in this file calls them.
