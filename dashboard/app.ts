@@ -272,6 +272,8 @@
         reviewView.classList.toggle("hidden", view !== "review")
         // The two looks (index.html): ภาพรวม and ตามส่ง, or the rest.
         document.body.classList.toggle("cards-view", !audit)
+        // 17 Nov's widths: a 1152px column, ตรวจสอบ up to 1680px.
+        document.body.classList.toggle("review-open", view === "review")
         markNav(view)
         titleEl.textContent = view === "roster" && !isOwner ? "รายชื่อ — รายชื่อแพทย์รายเดือน (ดูอย่างเดียว)" : TITLES[view]
         if (audit) {
