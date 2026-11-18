@@ -271,6 +271,26 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     `lib/dept-staffing.ts` with a warning. The queueing needs step 23 and
     the review-tab auditee file and is skipped without them. Each PART can be
     pasted on its own, PART 1 first; safe to re-run.
+27. `scripts/dashboard-users-2026-11.sql` — **not applied yet; paste it.**
+    The QR invite for new dashboard users (Pong, 2026-11-18: "Go QR").
+    PART 1 makes `dashboard_users` (who may use `/dashboard/` and which tabs
+    each one sees), PART 2 `dashboard_invites` (one row per QR: only the
+    sha256 of its token, 10 minutes to scan, 24 hours to decide), PART 3 the
+    ten functions the app calls (`dashboard_invite_create`, `_peek`,
+    `_claim`, `_status`, `_decide`, `_cancel`, `dashboard_user_save`,
+    `dashboard_user_import`, and the helpers `dashboard_invites_sweep` and
+    `dashboard_perms_clean`). Both tables and every function are
+    service_role only, and nothing can be deleted. Needs only step 22 (the
+    app writes the matching History rows there). The file writes no LINE ID
+    or name: rows come only from the app. Until it runs, the user menu's two
+    items say it is not installed, and sign-in works exactly as before from
+    `DASHBOARD_LINE_USER_IDS`; after it, each user in that env var is moved
+    into `dashboard_users` with the rights they have today the next time
+    they sign in, and can then be edited or suspended on the page. End with
+    the check query at the bottom (tables_2 = 2, functions_10 = 10,
+    anon_0 = 0). Each PART can be pasted on its own, in order; safe to
+    re-run; no backslashes, so it pastes through chat. Emergency stop for a
+    user: `update public.dashboard_users set active = false where ...`.
 
 ## Superseded — do NOT run
 
