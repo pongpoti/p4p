@@ -300,7 +300,9 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   `^U[0-9a-f]{32}$`), `line_name` (the LINE profile name at the scan),
   `display_name` (the name the dashboard shows, 1 to 60 characters),
   `perms` (text[] of `followup.view`, `followup.edit`, `roster.view`,
-  `staffing.view`, `review.auditee`; nothing else is accepted), `active`
+  `staffing.view`, `review.auditee` (ตรวจสอบ, ผู้จัดทำ side),
+  `review.auditor` (ตรวจสอบ, ผู้ตรวจสอบ side, from step 28); nothing else is
+  accepted, and never both ตรวจสอบ sides), `active`
   (false = suspended), `source` (`qr`, or `env` for a user moved in from
   `DASHBOARD_LINE_USER_IDS`), `added_by`, `added_at`, `updated_by`,
   `updated_at`, `suspended_by`, `suspended_at`.
@@ -312,7 +314,8 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   first sign-in). At most 20 active users.
 - **Access:** RLS on with no policies; `service_role` only (select, insert,
   update; delete and truncate revoked).
-- Migration: `scripts/dashboard-users-2026-11.sql` PART 1.
+- Migration: `scripts/dashboard-users-2026-11.sql` PART 1. The perms check is replaced by
+  `scripts/dashboard-users-auditor-2026-11.sql` (step 28).
 
 ## `dashboard_invites`
 
@@ -333,6 +336,37 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   update; delete and truncate revoked).
 - Migration: `scripts/dashboard-users-2026-11.sql` PART 2; functions in
   PART 3.
+
+## `alloc_ids`
+
+**Purpose:** The last 4 digits of each roster doctor's No in the month's
+เอกสารจัดสรร (Pong, 2026-11-18), for the No column of the allocation sheet
+(รายละเอียดการจัดสรรเงินรายบุคคล, `ID-<yy>-<MM>-<4 digits>`).
+
+- **Columns:** `month` (`YYYY_MM`), `roster_index` (the roster row's
+  `index`), `no4` (exactly 4 digits), `how` (`exact`: same name; `close`:
+  a doctor's row spelled 1 or 2 letters apart; `manual`: typed on the
+  page), `updated_at`, `updated_by`. Primary key (`month`, `roster_index`).
+- An upload replaces the month's `exact` and `close` rows; a `manual` row
+  stays unless the new file has that person by exact name (a close
+  spelling never overwrites a typed number). No name, ID card number or
+  file is stored.
+- **Access:** RLS on with no policies; `service_role` only.
+- Migration: `scripts/alloc-ids-2026-11.sql` (step 29).
+
+## `alloc_uploads`
+
+**Purpose:** One row per month: the last เอกสารจัดสรร upload, for the
+ข้อมูล menu and the เอกสารจัดสรร box on ภาพรวม.
+
+- **Columns:** `month` (primary key), `file_name`, `sheet_name`,
+  `sheet_rows` (the month's rows in the file), `roster_rows`, `close`,
+  `missing`, `ambiguous` (jsonb lists of roster people the upload matched by
+  a close spelling, could not find, or found with two different numbers),
+  `uploaded_at`, `uploaded_by`. Typing a person's digits takes them off
+  `missing` and `ambiguous`.
+- **Access:** RLS on with no policies; `service_role` only.
+- Migration: `scripts/alloc-ids-2026-11.sql` (step 29).
 
 ---
 

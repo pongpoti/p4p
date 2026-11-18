@@ -1,9 +1,10 @@
 /**
  * lib/review-server.ts
  *
- * The /dashboard/ ตรวจสอบ (review) tab's API. The owner has both sides; the
- * other dashboard users have the ผู้จัดทำ (auditee) side only (Pong,
- * 2026-11-12). Routes that are not theirs answer 404. Mounted from main.ts with its
+ * The /dashboard/ ตรวจสอบ (review) tab's API. The owner has both sides; another
+ * dashboard user has one side at most: ผู้จัดทำ (review.auditee, Pong
+ * 2026-11-12) or ผู้ตรวจสอบ (review.auditor, Pong 2026-11-18), never both.
+ * Routes that are not theirs answer 404. Mounted from main.ts with its
  * helpers passed in, so this file has no secrets or settings of its own.
  *
  * Tables, functions and the private bucket review-files come from
@@ -34,7 +35,7 @@
  * Google Drive (the state carries their ids, the tab links them view only),
  * and a round is the newest build as the system checked it. Once a month is
  * approved, both sides can download the approval PDF (:month/pdf), and the
- * auditor (the owner) the per-person allocation list (:month/allocation,
+ * auditor side the per-person allocation list (:month/allocation,
  * lib/allocation-xlsx.ts).
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
@@ -49,6 +50,7 @@ import type { Express, Request, Response } from "express"
 import type { AxiosStatic } from "axios"
 
 const allocation = require("./allocation-xlsx") as typeof import("./allocation-xlsx")
+const allocIds = require("./alloc-ids") as typeof import("./alloc-ids")
 const core = require("./review-core") as {
   parseMonth(key: unknown): { be: number; month: number } | null
   approvalPdfName(key: unknown): string | null
@@ -61,7 +63,7 @@ type Actor = { sub: string; name: string }
 
 export interface ReviewDeps {
   app: Express
-  express: { json(opts: { limit: string }): any }
+  express: { json(opts: { limit: string }): any; raw(opts: { limit: string; type: (req: any) => boolean }): any }
   axios: AxiosStatic
   supabaseUrl: string
   serviceHeaders(): Record<string, string>
@@ -71,6 +73,8 @@ export interface ReviewDeps {
   isDashOwner(sub: string): boolean
   // A dashboard user who gets the ตรวจสอบ tab's ผู้จัดทำ side only.
   isReviewAuditee(sub: string): boolean
+  // A dashboard user who gets the ตรวจสอบ tab's ผู้ตรวจสอบ side only.
+  isReviewAuditor(sub: string): boolean
   audit(req: Request, actor: Actor, action: string, target?: Record<string, unknown>): Promise<void>
 }
 
@@ -145,6 +149,9 @@ const SQL_VERSION = 2
 const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการส่งอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-2026-11.sql ใน Supabase SQL editor"
 const MAIL_MODE_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งสวิตช์โหมดทดสอบอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-test-toggle-2026-11.sql ใน Supabase SQL editor"
 const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
+const ALLOC_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการเก็บเลขจากเอกสารจัดสรร ผู้ดูแลระบบต้องรันไฟล์ scripts/alloc-ids-2026-11.sql ใน Supabase SQL editor"
+// เอกสารจัดสรร is about 200 KB; Vercel takes a request body up to 4.5 MB.
+const ALLOC_MAX_BYTES = 4 * 1024 * 1024
 const APPROVE_ALL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งปุ่มอนุมัติทุกคนที่รอตรวจ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-approve-all-2026-11.sql ใน Supabase SQL editor"
 
 export function mountReview(d: ReviewDeps): void {
@@ -173,23 +180,32 @@ export function mountReview(d: ReviewDeps): void {
     (await rosterTables()).includes(month) || (await rosterTables(true)).includes(month)
 
   // Signed in, allowed this side, a real roster month, and the tables
-  // installed. The owner has both sides; the other dashboard users are
-  // ผู้จัดทำ only (Pong, 2026-11-12: "Add Dada as auditee"), so a route is
-  // owner only unless it says "auditee". A route that is not open to them
-  // answers 404, as the owner-only tabs do.
-  const gate = async (req: Request, res: Response, side: "owner" | "auditee" = "owner"): Promise<{ s: Actor; month: string; owner: boolean } | null> => {
+  // installed. Who may call a route, by its side:
+  //   "owner"    the owner (admin) only: the email's test mode switch;
+  //   "auditor"  the owner and a ผู้ตรวจสอบ (review.auditor);
+  //   "auditee"  the owner and a ผู้จัดทำ (review.auditee, Pong 2026-11-12);
+  //   "both"     any of them: the reads both sides draw from.
+  // A route is the owner's only unless it names a side. One that is not
+  // open to the caller answers 404, as the owner-only tabs do. auditor and
+  // auditee in the answer say which sides the caller has.
+  type Side = "owner" | "auditor" | "auditee" | "both"
+  type Gated = { s: Actor; month: string; owner: boolean; auditor: boolean; auditee: boolean }
+  const gate = async (req: Request, res: Response, side: Side = "owner"): Promise<Gated | null> => {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) { res.status(401).json({ error: "not authenticated" }); return null }
     const owner = d.isDashOwner(s.sub)
-    if (!owner && !(side === "auditee" && d.isReviewAuditee(s.sub))) { res.status(404).json({ error: "not found" }); return null }
+    const auditor = owner || d.isReviewAuditor(s.sub)
+    const auditee = owner || d.isReviewAuditee(s.sub)
+    const ok = side === "owner" ? owner : side === "auditor" ? auditor : side === "auditee" ? auditee : auditor || auditee
+    if (!ok) { res.status(404).json({ error: "not found" }); return null }
     const month = String(req.params.month || "")
     if (req.params.month !== undefined) {
       if (!core.parseMonth(month) || month < FIRST_MONTH || !(await isRosterMonth(month))) {
         res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null
       }
     }
-    return { s: { sub: s.sub, name: s.name }, month, owner }
+    return { s: { sub: s.sub, name: s.name }, month, owner, auditor, auditee }
   }
 
   // Only the two loads (load = true) answer a missing install with 200
@@ -253,7 +269,7 @@ export function mountReview(d: ReviewDeps): void {
   }
 
   app.get("/dashboard/api/review/months", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     try {
       const tables = (await rosterTables(true)).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort()
@@ -263,7 +279,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.get("/dashboard/api/review/:month", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     try {
       // The state, the emails, the mode and the visit's log line do not
@@ -272,17 +288,23 @@ export function mountReview(d: ReviewDeps): void {
       // failed state is thrown once all four have ended.
       // The email's mode (and its test address) is for the owner only: a
       // dashboard user given the ผู้จัดทำ side alone gets no switch.
-      const [got, em, mail] = await Promise.all([
+      // alloc: whether the month's เอกสารจัดสรร is complete (the send bar
+      // says what is missing); null if the read fails.
+      const [got, em, mail, alloc] = await Promise.all([
         state(g.month).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e })),
         emails(g.month),
         d.isDashOwner(g.s.sub) ? mailMode() : Promise.resolve(null),
+        allocReady(g.month).catch((e: any) => {
+          console.error("[dashboard] review alloc state failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+          return null
+        }),
         req.query.view === "1" ? d.audit(req, g.s, "view.review", { month: g.month }) : Promise.resolve(),
       ])
       if (!got.ok) throw got.e
       const st = got.v
       // Only the first SQL file run: the tab says the second is needed.
       if (!st || st.v !== SQL_VERSION) return res.json({ installed: false })
-      res.json({ installed: true, ...st, emails: em, mail })
+      res.json({ installed: true, ...st, emails: em, mail, alloc })
     } catch (e: any) { fail(res, "state", e, true) }
   })
 
@@ -297,9 +319,9 @@ export function mountReview(d: ReviewDeps): void {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) return res.status(401).json({ error: "not authenticated" })
-    // The owner (admin) only, like the งบ button (Pong, 2026-11-17; the
-    // ผู้จัดทำ had it from 2026-11-12).
-    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
+    // The owner and the ผู้จัดทำ, like the ข้อมูล button (Pong, 2026-11-18:
+    // "Allow ผู้จัดทำ access to เมนู button"; owner only 17 to 18 Nov).
+    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) return res.status(404).json({ error: "not found" })
     const month = String(req.params.month || "")
     if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)
@@ -326,6 +348,179 @@ export function mountReview(d: ReviewDeps): void {
       }
       fail(res, "budget", e)
     }
+  })
+
+  // ── เอกสารจัดสรร, from the overview page's ข้อมูล button ────────────
+  // Pong, 2026-11-18: the hospital's list of everyone paid in a month,
+  // sent in advance. The owner uploads it; the app keeps the last 4 digits
+  // of each roster doctor's No (lib/alloc-ids.ts) for the allocation
+  // sheet's No column. Any roster month (not only from ส.ค. 69, unlike the
+  // ตรวจสอบ tab). The file is read in memory and never stored. The owner
+  // and the ผู้จัดทำ, like งบรายเดือน (Pong, 2026-11-18).
+  const allocGate = async (req: Request, res: Response): Promise<{ s: Actor; month: string } | null> => {
+    res.setHeader("Cache-Control", "no-store")
+    const s = d.dashSession(req)
+    if (!s) { res.status(401).json({ error: "not authenticated" }); return null }
+    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) { res.status(404).json({ error: "not found" }); return null }
+    const month = String(req.params.month || "")
+    if (!core.parseMonth(month) || !(await isRosterMonth(month))) { res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null }
+    return { s: { sub: s.sub, name: s.name }, month }
+  }
+  const allocFail = (res: Response, what: string, e: any): void => {
+    if (notInstalled(e)) {
+      console.error("[dashboard] alloc " + what + ": not installed (" + String(pgError(e).code || "") + ")")
+      res.status(503).json({ installed: false, error: ALLOC_NOT_INSTALLED_MSG }); return
+    }
+    const msg = String(pgError(e).message || "")
+    if (/alloc: bad digits/.test(msg)) { res.status(400).json({ error: "ใส่ตัวเลข 4 หลัก" }); return }
+    console.error("[dashboard] alloc " + what + " failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+    res.status(500).json({ error: "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง" })
+  }
+  const allocRoster = async (month: string): Promise<import("./alloc-ids").RosterPerson[]> => {
+    const r = await axios.get(rest(encodeURIComponent(month) + "?select=index,prefix,firstname,lastname,department"),
+      { headers: d.serviceHeaders(), timeout: 8000 })
+    return ((r.data as any[]) || []).map((x) => ({ index: String(x.index), prefix: x.prefix, firstname: x.firstname, lastname: x.lastname, department: x.department }))
+  }
+  // Where the month stands now: the last upload, and every roster doctor
+  // still without digits (people added after the upload too), with the
+  // upload's suggestion for them if it had one.
+  const allocStatus = async (month: string): Promise<Record<string, unknown>> => {
+    const [up, ids, roster] = await Promise.all([
+      axios.get(rest("alloc_uploads?select=*&month=eq." + month), { headers: d.serviceHeaders(), timeout: 8000 }),
+      axios.get(rest("alloc_ids?select=roster_index,no4,how&month=eq." + month), { headers: d.serviceHeaders(), timeout: 8000 }),
+      allocRoster(month),
+    ])
+    const upload = ((up.data as any[]) || [])[0] || null
+    const have = new Map(((ids.data as any[]) || []).map((x) => [String(x.roster_index), x]))
+    const suggest = new Map<string, unknown>()
+    for (const m of (upload && Array.isArray(upload.missing) ? upload.missing : [])) if (m && m.suggest) suggest.set(String(m.index), m.suggest)
+    const ambiguous = new Map<string, unknown>()
+    for (const m of (upload && Array.isArray(upload.ambiguous) ? upload.ambiguous : [])) if (m) ambiguous.set(String(m.index), m.nos)
+    const without = roster.filter((p) => !have.has(p.index)).map((p) => ({
+      index: p.index, name: allocIds.rosterName(p), department: allocIds.normThai(p.department),
+      suggest: suggest.get(p.index) || null, nos: ambiguous.get(p.index) || null,
+    }))
+    const inRoster = new Set(roster.map((p) => p.index))
+    return {
+      installed: true,
+      upload: upload && {
+        fileName: upload.file_name, sheetRows: upload.sheet_rows, uploadedAt: upload.uploaded_at, uploadedBy: upload.uploaded_by,
+        // A close spelling the owner has since typed over leaves the list.
+        close: (Array.isArray(upload.close) ? upload.close : []).filter((c: any) =>
+          c && inRoster.has(String(c.index)) && (have.get(String(c.index)) || {}).how === "close"),
+      },
+      roster: roster.length,
+      withDigits: roster.length - without.length,
+      manual: [...have.values()].filter((x: any) => x.how === "manual" && inRoster.has(String(x.roster_index))).length,
+      without,
+    }
+  }
+
+  // Is the month's เอกสารจัดสรร complete: uploaded, and every roster
+  // doctor has 4 digits? The ผู้จัดทำ cannot send the month to the auditor
+  // until it is (Pong, 2026-11-18), nor until the budget and N are in
+  // (review_submit_round checks those). installed false: SQL step 29 not run.
+  type AllocReady = { installed: boolean; uploaded: boolean; roster: number; without: number }
+  const allocReady = async (month: string): Promise<AllocReady> => {
+    try {
+      const st = await allocStatus(month)
+      return { installed: true, uploaded: !!st.upload, roster: Number(st.roster), without: (st.without as unknown[]).length }
+    } catch (e: any) {
+      if (notInstalled(e)) return { installed: false, uploaded: false, roster: 0, without: 0 }
+      throw e
+    }
+  }
+  const allocBlock = (a: AllocReady): [number, string] | null =>
+    !a.installed ? [503, ALLOC_NOT_INSTALLED_MSG]
+      : !a.uploaded ? [409, "ยังไม่ได้อัปโหลดเอกสารจัดสรรของเดือนนี้ อัปโหลดที่ปุ่มข้อมูล หน้าภาพรวม"]
+      : a.without > 0 ? [409, "ยังไม่มีเลขเอกสารจัดสรร " + a.without + " คน ใส่ให้ครบที่ปุ่มข้อมูล หน้าภาพรวม"]
+      : null
+
+  app.get("/dashboard/api/alloc-ids/:month", async (req: Request, res: Response) => {
+    const g = await allocGate(req, res)
+    if (!g) return
+    try { res.json(await allocStatus(g.month)) } catch (e: any) {
+      if (notInstalled(e)) { res.json({ installed: false, error: ALLOC_NOT_INSTALLED_MSG }); return }
+      allocFail(res, "status", e)
+    }
+  })
+
+  app.post("/dashboard/api/alloc-ids/:month",
+    // Who may send it is known before the file is read.
+    (req: Request, res: Response, next: () => void) => {
+      const s = d.dashSession(req)
+      if (!s) { res.status(401).json({ error: "not authenticated" }); return }
+      if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) { res.status(404).json({ error: "not found" }); return }
+      next()
+    },
+    d.express.raw({ limit: "4mb", type: () => true }),
+    async (req: Request, res: Response) => {
+      const g = await allocGate(req, res)
+      if (!g) return
+      const body = req.body as unknown
+      if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: "ไม่พบไฟล์ เลือกไฟล์ .xlsx อีกครั้ง" })
+      if (body.length > ALLOC_MAX_BYTES) return res.status(413).json({ error: "ไฟล์ใหญ่เกิน 4 MB" })
+      // An .xlsx is a zip: it starts with PK.
+      if (body[0] !== 0x50 || body[1] !== 0x4b) return res.status(400).json({ error: "ไฟล์นี้ไม่ใช่ Excel (.xlsx) ถ้าเป็น .xls ให้เปิดใน Excel แล้วบันทึกเป็น .xlsx ก่อน" })
+      let fileName = ""
+      try { fileName = decodeURIComponent(String(req.get("x-file-name") || "")).replace(/[^\x20-\uffff]/g, "").slice(0, 200) } catch { fileName = "" }
+      try {
+        // The same zip-bomb guard as the doctors' uploads (lib/p4p-score.ts),
+        // before ExcelJS inflates anything. July 2569's file: 17 entries, 1.3 MB.
+        const score = require("./p4p-score") as { checkZipSafety(buf: Buffer): unknown }
+        try { score.checkZipSafety(body as Buffer) } catch {
+          return res.status(400).json({ error: "เปิดไฟล์นี้ไม่ได้ ไฟล์ต้องเป็น Excel (.xlsx)" })
+        }
+        const ExcelJS = require("exceljs") as typeof import("exceljs")
+        const wb = new ExcelJS.Workbook()
+        try { await wb.xlsx.load(body as any) } catch {
+          return res.status(400).json({ error: "เปิดไฟล์นี้ไม่ได้ ไฟล์ต้องเป็น Excel (.xlsx)" })
+        }
+        const read = allocIds.readAllocSheet(wb, g.month)
+        if (!read.ok) {
+          if (read.error === "no_sheet") return res.status(400).json({ error: "ไม่พบตารางที่มีช่อง No และชื่อสกุล ในไฟล์นี้" })
+          const want = allocIds.idMonth(g.month)
+          return res.status(400).json({
+            error: read.found
+              ? "ไฟล์นี้เป็นของเดือนอื่น (No ขึ้นต้น ID-" + read.found + "-) เดือนนี้ต้องเป็น ID-" + want + "-"
+              : "ไม่พบเลข No แบบ ID-" + want + "-xxxx ในไฟล์นี้",
+          })
+        }
+        const roster = await allocRoster(g.month)
+        const m = allocIds.matchRoster(read.rows, roster)
+        const out = await d.callServiceRpc("alloc_ids_save", {
+          p_month: g.month,
+          p_rows: m.matched.map((x) => ({ roster_index: x.index, no4: x.no4, how: x.how })),
+          p_upload: {
+            file_name: fileName, sheet_name: read.sheet, sheet_rows: read.rows.length, roster_rows: roster.length,
+            close: m.close, missing: m.missing, ambiguous: m.ambiguous,
+          },
+          p_actor: g.s.name,
+        })
+        await d.audit(req, g.s, "alloc.upload", {
+          month: g.month, file: fileName, sheet_rows: read.rows.length, roster: roster.length,
+          matched: m.matched.length, close: m.close.length, missing: m.missing.length, ambiguous: m.ambiguous.length,
+          count: out && out.count != null ? Number(out.count) : null,
+        })
+        res.json({ ok: true, ...(await allocStatus(g.month)) })
+      } catch (e: any) { allocFail(res, "upload", e) }
+    })
+
+  app.put("/dashboard/api/alloc-ids/:month/:index", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+    const g = await allocGate(req, res)
+    if (!g) return
+    const index = String(req.params.index || "")
+    const no4 = String((req.body && req.body.no4) ?? "").trim()
+    if (!UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้" })
+    if (!/^[0-9]{4}$/.test(no4)) return res.status(400).json({ error: "ใส่ตัวเลข 4 หลัก" })
+    try {
+      const roster = await allocRoster(g.month)
+      const p = roster.find((x) => x.index === index)
+      if (!p) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้" })
+      await d.callServiceRpc("alloc_id_set", { p_month: g.month, p_index: index, p_no4: no4, p_actor: g.s.name })
+      await d.audit(req, g.s, "alloc.set", { month: g.month, index, physician: allocIds.rosterName(p), no4 })
+      res.json({ ok: true, ...(await allocStatus(g.month)) })
+    } catch (e: any) { allocFail(res, "set", e) }
   })
 
   // One person's score: written to the month's roster table, logged as a
@@ -377,6 +572,8 @@ export function mountReview(d: ReviewDeps): void {
     const g = await gate(req, res, "auditee")
     if (!g) return
     try {
+      const block = allocBlock(await allocReady(g.month))
+      if (block) return res.status(block[0]).json({ error: block[1] })
       const round = await d.callServiceRpc("review_submit_round", { p_month: g.month, p_actor: g.s.name })
       await d.audit(req, g.s, "review.submit", { month: g.month, round: round && round.round_no })
       res.json({ ok: true, round })
@@ -463,7 +660,7 @@ export function mountReview(d: ReviewDeps): void {
   }
 
   app.get("/dashboard/api/review/:month/people", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     const round = /^[1-9][0-9]{0,3}$/.test(String(req.query.round || "")) ? Number(req.query.round) : null
     try {
@@ -472,14 +669,14 @@ export function mountReview(d: ReviewDeps): void {
       // auditor has handed it back or approved it, never while the auditor is
       // still deciding (Pong, 2026-11-18: "ตรวจสอบ : access only in auditee part").
       const st = out && out.round ? String(out.round.status || "") : ""
-      if (!g.owner && out && out.round && st !== "returned" && st !== "approved") return res.status(404).json({ error: "ไม่พบในรอบนี้" })
+      if (!g.auditor && out && out.round && st !== "returned" && st !== "approved") return res.status(404).json({ error: "ไม่พบในรอบนี้" })
       res.json(out)
     } catch (e: any) { fail(res, "people", e) }
   })
 
   // One doctor's sheet for the auditor's per-person panel: the auditor's only.
   app.get("/dashboard/api/review/:month/person/:round/:index", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const round = String(req.params.round), index = String(req.params.index)
     if (!/^[1-9][0-9]{0,3}$/.test(round) || !UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
@@ -489,11 +686,11 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/opened", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     const role = req.body && req.body.role
     if (role !== "auditor" && role !== "auditee") return res.status(400).json({ error: "bad role" })
-    if (role === "auditor" && !g.owner) return res.status(404).json({ error: "not found" })
+    if (role === "auditor" ? !g.auditor : !g.auditee) return res.status(404).json({ error: "not found" })
     try {
       await d.callServiceRpc("review_mark_opened", { p_month: g.month, p_role: role })
       res.json({ ok: true })
@@ -501,7 +698,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.put("/dashboard/api/review/:month/decisions/:index", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const index = String(req.params.index)
     const decision = req.body ? req.body.decision : undefined
@@ -539,7 +736,7 @@ export function mountReview(d: ReviewDeps): void {
 
   const roundAction = (path: string, fn: string, action: string): void => {
     app.post("/dashboard/api/review/:month/" + path, async (req: Request, res: Response) => {
-      const g = await gate(req, res)
+      const g = await gate(req, res, "auditor")
       if (!g) return
       try {
         const round = await d.callServiceRpc(fn, { p_month: g.month, p_actor: g.s.name })
@@ -552,7 +749,7 @@ export function mountReview(d: ReviewDeps): void {
   // has a check that is not ตรงกัน (scripts/review-approve-all-2026-11.sql).
   // round: the round on the auditor's screen, so a newer one is not touched.
   app.post("/dashboard/api/review/:month/approve-all", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const round = req.body ? req.body.round : undefined
     if (!Number.isInteger(round) || round < 1 || round > 9999) return res.status(400).json({ error: "bad round" })
@@ -575,7 +772,7 @@ export function mountReview(d: ReviewDeps): void {
 
   // The approval document (process/review-pdf.ts, workflow 2.8).
   app.get("/dashboard/api/review/:month/pdf", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     try {
       const r = await axios.get(rest("review_rounds?select=round_no,pdf_status,pdf_path&month=eq." + g.month + "&status=eq.approved"),
@@ -601,20 +798,29 @@ export function mountReview(d: ReviewDeps): void {
   // รายละเอียดการจัดสรรเงินรายบุคคล (lib/allocation-xlsx.ts, Pong 2026-11-17):
   // made on request from the approved round's own SK03 copy, with each
   // person's department from that build, so it always matches what was
-  // approved. Nothing is stored. The auditor (the owner) only: the auditee
+  // approved. Nothing is stored. The auditor side only (the owner or a ผู้ตรวจสอบ): the auditee
   // gets a 404 like any other page they cannot see (Pong, 2026-11-17).
   app.get("/dashboard/api/review/:month/allocation", async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     try {
       const r = await axios.get(rest("review_rounds?select=round_no,build_id&month=eq." + g.month + "&status=eq.approved"),
         { headers: d.serviceHeaders(), timeout: 8000 })
       const round = (r.data as any[])[0]
       if (!round || !round.build_id) return res.status(404).json({ error: "เดือนนี้ยังไม่ได้อนุมัติ" })
-      const [b, people] = await Promise.all([
+      // The 4 digits from เอกสารจัดสรร (scripts/alloc-ids-2026-11.sql), by
+      // roster person; none (the table missing, or no upload) leaves No as
+      // "ID-<yy>-<MM>-". A failed read stops the download instead, so a
+      // file without the digits is never handed out by mistake.
+      const [b, people, ids] = await Promise.all([
         axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
-        axios.get(rest("review_build_people?select=is_intern,sk03_row,department&build_id=eq." + round.build_id),
+        axios.get(rest("review_build_people?select=roster_index,is_intern,sk03_row,department&build_id=eq." + round.build_id),
           { headers: d.serviceHeaders(), timeout: 8000 }),
+        axios.get(rest("alloc_ids?select=roster_index,no4&month=eq." + g.month), { headers: d.serviceHeaders(), timeout: 8000 })
+          .then((r) => (r.data as any[]) || [], (e: any) => {
+            if (notInstalled(e)) return [] as any[]
+            throw e
+          }),
       ])
       const path = (b.data as any[])[0]?.sk03_path
       if (!path) return res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบที่อนุมัติ" })
@@ -629,16 +835,20 @@ export function mountReview(d: ReviewDeps): void {
         return res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบที่อนุมัติไม่สำเร็จ ลองใหม่อีกครั้ง" })
       }
       const dept = new Map<string, string>()
+      const digits = new Map<string, string>(ids.map((x: any) => [String(x.roster_index), String(x.no4)]))
+      const no4 = new Map<string, string>()
       for (const p of (people.data as any[]) || []) {
         if (p.sk03_row != null && p.department) dept.set((p.is_intern ? "i" : "s") + p.sk03_row, String(p.department))
+        if (p.sk03_row != null && digits.has(String(p.roster_index))) no4.set((p.is_intern ? "i" : "s") + p.sk03_row, digits.get(String(p.roster_index)) as string)
       }
       const ExcelJS = require("exceljs") as typeof import("exceljs")
       const wb = new ExcelJS.Workbook()
       await wb.xlsx.load(file.data as ArrayBuffer)
-      const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
+      const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null,
+        (intern, row) => no4.get((intern ? "i" : "s") + row) ?? null)
       if (!rows.length) return res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบที่อนุมัติ" })
       const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
-      await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
+      await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length, digits: rows.filter((x) => x.no4).length })
       const name = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
       res.setHeader("Content-Disposition", "attachment; filename=\"allocation_" + g.month + ".xlsx\"; filename*=UTF-8''" + encodeURIComponent(name))
@@ -647,7 +857,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     try {
       const round = await d.callServiceRpc("review_retry_pdf", { p_month: g.month, p_actor: g.s.name })
@@ -659,7 +869,7 @@ export function mountReview(d: ReviewDeps): void {
   // ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the round goes back to the auditor and
   // the cancelled PDF is deleted, so no old link can fetch it.
   app.post("/dashboard/api/review/:month/reopen", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const reason = text(req.body && req.body.reason, 1000)
     if (!reason) return res.status(400).json({ error: "เขียนเหตุผลก่อน (ไม่เกิน 1,000 ตัวอักษร)" })
@@ -678,7 +888,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     try {
       res.json({ issues: (await d.callServiceRpc("review_issue_list", { p_month: g.month })) || [] })
@@ -686,7 +896,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/issues", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const body = text(req.body && req.body.body, 2000)
     const index = req.body && req.body.index ? String(req.body.index) : null
@@ -699,7 +909,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/issues/:id/replies", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res, "both")
     if (!g) return
     const id = String(req.params.id)
     const role = req.body && req.body.role
@@ -707,7 +917,7 @@ export function mountReview(d: ReviewDeps): void {
     if (!/^[1-9][0-9]{0,17}$/.test(id) || (role !== "auditor" && role !== "auditee") || !body) {
       return res.status(400).json({ error: "พิมพ์คำตอบ (ไม่เกิน 2,000 ตัวอักษร)" })
     }
-    if (role === "auditor" && !g.owner) return res.status(404).json({ error: "not found" })
+    if (role === "auditor" ? !g.auditor : !g.auditee) return res.status(404).json({ error: "not found" })
     try {
       await d.callServiceRpc("review_issue_reply", { p_month: g.month, p_issue: Number(id), p_role: role, p_body: body, p_actor: g.s.name })
       await d.audit(req, g.s, "review.issue_reply", { month: g.month, id: Number(id), role, body })
@@ -716,7 +926,7 @@ export function mountReview(d: ReviewDeps): void {
   })
 
   app.post("/dashboard/api/review/:month/issues/:id/status", d.express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
-    const g = await gate(req, res)
+    const g = await gate(req, res, "auditor")
     if (!g) return
     const id = String(req.params.id)
     const open = req.body && req.body.open === true

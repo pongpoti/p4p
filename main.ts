@@ -650,13 +650,17 @@ if (!LINE_LOGIN_CHANNEL_SECRET) {
 // Until the SQL is pasted the table answers "not installed" and only 1, 3
 // and 4 apply, which is the dashboard as it was. Rights are never put in the
 // cookie: dashSession re-reads them on every request.
-const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
+// review.auditor (Pong, 2026-11-18: "allow select ผู้ตรวจสอบ") is the
+// ตรวจสอบ tab's auditor side; a user has it or review.auditee, never both
+// (the one who prepares a month does not approve it). The owner has both.
+const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "review.auditor", "roster.view", "staffing.view"]
 // The ผู้จัดทำ set: every right a non-owner could have before (followup,
 // read-only รายชื่อ and อัตรากำลัง, the ตรวจสอบ ผู้จัดทำ side).
-const LEGACY_PERMS = DASH_PERM_KEYS.slice()
+const LEGACY_PERMS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
 const OWNER_PERMS = DASH_PERM_KEYS.slice()
 // Known keys only, followup.edit brings followup.view, sorted, no repeats;
-// null when any key is unknown (or the value is not a list).
+// null when any key is unknown, when both ตรวจสอบ sides are asked for, or
+// when the value is not a list.
 function normalizePerms(v: unknown): string[] | null {
   if (!Array.isArray(v)) return null
   const out = new Set<string>()
@@ -664,6 +668,7 @@ function normalizePerms(v: unknown): string[] | null {
     if (typeof k !== "string" || !DASH_PERM_KEYS.includes(k)) return null
     out.add(k)
   }
+  if (out.has("review.auditee") && out.has("review.auditor")) return null
   if (out.has("followup.edit")) out.add("followup.view")
   return Array.from(out).sort()
 }
@@ -759,7 +764,11 @@ function readDash(token: string | undefined): Record<string, any> | null {
     return o && typeof o.exp === "number" && o.exp > Date.now() / 1000 ? o : null
   } catch (e) { return null }
 }
-function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[] } | null {
+// The LINE profile picture shown on the header's avatar (Pong, 2026-11-18):
+// only LINE's own picture host, as the CSP's img-src allows.
+const linePicture = (v: unknown): string =>
+  typeof v === "string" && v.startsWith("https://profile.line-scdn.net/") && v.length <= 500 ? v : ""
+function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[]; pic: string } | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   // A payload with a typ (the phone's p4p_join) is never a session.
   if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000 || o.typ !== undefined) return null
@@ -769,16 +778,18 @@ function dashSession(req: Request): { sub: string; name: string; exp: number; pe
   const perms = dashPerms(String(o.sub || ""))
   if (!perms) return null
   const row = dashUserRow(o.sub)
-  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms }
+  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms, pic: linePicture(o.pic) }
 }
 // The owner can do everything; anyone else needs the right.
 const can = (s: { sub: string; perms: string[] }, perm: string): boolean => isDashOwner(s.sub) || s.perms.includes(perm)
 // (Re)issues the session cookie with a fresh idle deadline, keeping the
-// absolute 12h expiry from sign-in.
-function setDashCookie(res: Response, sub: string, name: string, exp: number): void {
+// absolute 12h expiry from sign-in. pic: the LINE picture from sign-in.
+function setDashCookie(res: Response, sub: string, name: string, exp: number, pic = ""): void {
   const now = Math.floor(Date.now() / 1000)
   const idle = Math.min(exp, now + DASH_IDLE_SECONDS)
-  res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name, exp, idle }) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
+  const o: Record<string, unknown> = { sub, name, exp, idle }
+  if (linePicture(pic)) o.pic = pic
+  res.append("Set-Cookie", DASH_COOKIE + "=" + signDash(o) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
 }
 // The callback URL must be registered on the LINE Login channel exactly, so
 // it is built from ADMIN_BASE_URL (the production origin), not the Host header.
@@ -823,6 +834,8 @@ const shownActor = (sub: string, name: string): string => {
 // owner and has review.auditee (Pong, 2026-11-12: "Add Dada as auditee";
 // every env user has it). The owner has both sides.
 const isReviewAuditee = (sub: string): boolean => !isDashOwner(sub) && (dashPerms(sub) || []).includes("review.auditee")
+// Its ผู้ตรวจสอบ (auditor) side: a user given review.auditor on the page.
+const isReviewAuditor = (sub: string): boolean => !isDashOwner(sub) && (dashPerms(sub) || []).includes("review.auditor")
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -1006,7 +1019,7 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
     }
     const row = dashUserRow(sub)
     const name = (row && row.display_name) || staffName(v.data.name)
-    setDashCookie(res, sub, name, Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
+    setDashCookie(res, sub, name, Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS, linePicture(v.data.picture))
     await Promise.all([audit(req, { sub, name }, "login.success"), importEnvUser(req, sub, v.data)])
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
@@ -1060,10 +1073,11 @@ app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  setDashCookie(res, s.sub, s.name, s.exp)
+  setDashCookie(res, s.sub, s.name, s.exp, s.pic)
   const owner = isDashOwner(s.sub)
   const body: Record<string, unknown> = {
-    ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), perms: s.perms,
+    ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), reviewAuditor: isReviewAuditor(s.sub),
+    perms: s.perms, picture: s.pic || null,
   }
   if (owner) {
     body.usersInstalled = dashUsers.installed !== false
@@ -1103,6 +1117,7 @@ function permsSummary(perms: unknown, sep = " · "): string {
   if (p.includes("roster.view")) out.push("รายชื่อ (ดู)")
   if (p.includes("staffing.view")) out.push("อัตรากำลัง (ดู)")
   if (p.includes("review.auditee")) out.push("ตรวจสอบ (ผู้จัดทำ)")
+  if (p.includes("review.auditor")) out.push("ตรวจสอบ (ผู้ตรวจสอบ)")
   return out.length ? out.join(sep) : "ภาพรวมเท่านั้น"
 }
 
@@ -1402,6 +1417,9 @@ app.post("/dashboard/api/users/invites/:id/approve", express.json({ limit: "2kb"
     res.json({ ok: true, user: { displayName: after.display_name, perms: after.perms } })
   } catch (e: any) {
     if (isNotInstalledError(e)) return usersNotInstalled(res)
+    // Only scripts/dashboard-users-auditor-2026-11.sql (step 28) lets the
+    // database take review.auditor; normalizePerms already checked the rest.
+    if (/bad perms/.test(pgMessage(e))) return res.status(409).json({ error: "auditor_not_installed" })
     console.error("[dashboard] invite approve failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed" })
   }
@@ -1512,6 +1530,7 @@ app.patch("/dashboard/api/users/:sub", express.json({ limit: "2kb" }), async (re
     if (isNotInstalledError(e)) return usersNotInstalled(res)
     if (/not_found/.test(pgMessage(e))) return res.status(404).json({ error: "not found" })
     if (/too_many/.test(pgMessage(e))) return res.status(409).json({ error: "too_many" })
+    if (/bad perms/.test(pgMessage(e))) return res.status(409).json({ error: "auditor_not_installed" })
     console.error("[dashboard] user save failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed" })
   }
@@ -1535,14 +1554,17 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
     const now = bkk.getUTCFullYear() * 12 + bkk.getUTCMonth()
     const recent = [1, 2, 3, 4, 5, 6].map((back) => [(now - back) % 12, Math.floor((now - back) / 12) + 543])
     const tables: string[] = (await callServiceRpc("admin_list_roster_tables")) || []
+    // Each month's roster indexes, for the เอกสารจัดสรร count below (not sent).
+    const rosterIdx = new Map<string, string[]>()
     const months = await Promise.all(recent.map(async ([m, year]) => {
       const key = year + "_" + String(m + 1).padStart(2, "0")
       const base = { key, name: month_array[m] + " " + year, color: color_array[m][1] }
       if (!tables.includes(key)) return { ...base, exists: false, total: 0, sent: 0, lastSubmittedAt: null }
       const r = await axios.get(
-        SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=submitted_at",
+        SUPABASE_URL + "/rest/v1/" + encodeURIComponent(key) + "?select=index,submitted_at",
         { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY }, timeout: 8000 },
       )
+      rosterIdx.set(key, (r.data as { index: string }[]).map((row) => String(row.index)))
       const stamps = (r.data as { submitted_at: string | null }[]).map((row) => row.submitted_at).filter(Boolean) as string[]
       return {
         ...base,
@@ -1553,27 +1575,62 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    // The owner (admin) also gets each month's budget and N (review_inputs),
-    // for the งบ button on the month cards. Others get none, and no button
-    // (Pong, 2026-11-17: the ผู้จัดทำ no longer types them).
-    const canBudget = isDashOwner(s.sub)
+    // The owner (admin) and the ผู้จัดทำ also get each month's budget and N
+    // (review_inputs), for the ข้อมูล button on the month cards (Pong,
+    // 2026-11-18; the owner alone 17 to 18 Nov). Others get none, and no
+    // button.
+    const canBudget = isDashOwner(s.sub) || isReviewAuditee(s.sub)
     const budgets: Record<string, unknown> = {}
+    // And, for the same button (ข้อมูล since 2026-11-18), whether each
+    // month's เอกสารจัดสรร is in (alloc_uploads, scripts/alloc-ids-2026-11.sql):
+    // when, by whom, and how many doctors on the roster today still have no
+    // 4 digits (alloc_ids), counted as the box and the ตรวจสอบ send check
+    // count them. allocInstalled false: the SQL is not run yet.
+    const allocs: Record<string, unknown> = {}
+    let allocInstalled = true
     if (canBudget) {
-      try {
-        const keys = months.map((m) => m.key).join(",")
-        const r = await axios.get(
+      const keys = months.map((m) => m.key).join(",")
+      await Promise.all([
+        axios.get(
           SUPABASE_URL + "/rest/v1/review_inputs?select=month,budget,per_p4p,doctors,updated_at,updated_by&month=in.(" + keys + ")",
           { headers: SERVICE_HEADERS(), timeout: 8000 },
-        )
-        for (const row of r.data as { month: string; budget: string; per_p4p: string; doctors: number | null; updated_at: string; updated_by: string }[]) {
-          budgets[row.month] = { budget: Number(row.budget), per_p4p: Number(row.per_p4p), doctors: row.doctors, updated_at: row.updated_at, updated_by: row.updated_by }
-        }
-      } catch (e: any) {
-        // Not installed yet, or Supabase busy: the cards show no budget.
-        console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
-      }
+        ).then((r) => {
+          for (const row of r.data as { month: string; budget: string; per_p4p: string; doctors: number | null; updated_at: string; updated_by: string }[]) {
+            budgets[row.month] = { budget: Number(row.budget), per_p4p: Number(row.per_p4p), doctors: row.doctors, updated_at: row.updated_at, updated_by: row.updated_by }
+          }
+        }, (e: any) => {
+          // Not installed yet, or Supabase busy: the cards show no budget.
+          console.error("[dashboard] overview budgets failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+        }),
+        axios.get(
+          SUPABASE_URL + "/rest/v1/alloc_uploads?select=month,uploaded_at,uploaded_by&month=in.(" + keys + ")",
+          { headers: SERVICE_HEADERS(), timeout: 8000 },
+        ).then(async (r) => {
+          // One read per uploaded month (a month is about 230 rows, under
+          // PostgREST's 1,000-row cap; six together would not be).
+          await Promise.all((r.data as { month: string; uploaded_at: string; uploaded_by: string }[]).map(async (row) => {
+            const ids = await axios.get(
+              SUPABASE_URL + "/rest/v1/alloc_ids?select=roster_index&month=eq." + encodeURIComponent(row.month),
+              { headers: SERVICE_HEADERS(), timeout: 8000 },
+            )
+            const have = new Set((ids.data as { roster_index: string }[]).map((x) => String(x.roster_index)))
+            allocs[row.month] = {
+              uploaded_at: row.uploaded_at, uploaded_by: row.uploaded_by,
+              without: (rosterIdx.get(row.month) || []).filter((i) => !have.has(i)).length,
+            }
+          }))
+        }).catch((e: any) => {
+          const code = String((e.response && e.response.data && e.response.data.code) || "")
+          if (["PGRST205", "42P01"].includes(code)) { allocInstalled = false; return }
+          console.error("[dashboard] overview alloc failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+        }),
+      ])
     }
-    res.json({ months: canBudget ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null })) : months, canBudget })
+    res.json({
+      months: canBudget ? months.map((m) => ({ ...m, budget: budgets[m.key] ?? null, alloc: allocs[m.key] ?? null })) : months,
+      canBudget,
+      ...(canBudget ? { allocInstalled } : {}),
+    })
   } catch (e: any) {
     console.error("[dashboard] overview failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed to load overview" })
@@ -1736,7 +1793,7 @@ const AUDIT_GROUPS: Record<string, string> = {
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
     "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save," +
-    "user.approve,user.reject,user.edit,user.suspend,user.import)",
+    "user.approve,user.reject,user.edit,user.suspend,user.import,alloc.upload,alloc.set)",
   refused: "action=in.(login.refused,user.claim_refused,user.bad_code)",
   users: "action=like.user.*",
 }
@@ -1934,6 +1991,7 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   dashSession,
   isDashOwner,
   isReviewAuditee,
+  isReviewAuditor,
   audit,
 })
 

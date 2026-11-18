@@ -169,38 +169,150 @@
         footer.innerHTML = CLOCK_SVG;
         footer.appendChild(el("span", undefined, m.lastSubmittedAt ? "ส่งล่าสุด " + fmtWhen(m.lastSubmittedAt) : "ยังไม่มีการส่งไฟล์"));
         if (canBudget)
-            footer.appendChild(budgetBtn(m));
+            footer.appendChild(infoBtn(m));
         card.appendChild(footer);
         return card;
     };
-    // ── งบประมาณจัดสรร (owner only) ──────────────────────────────────────
-    // Pong, 2026-11-11: each month's budget and N are typed here, on the
-    // month card's งบ button (⚠ until they are in), not in the ตรวจสอบ tab.
-    // A save starts workflow 2.2 for the month at once when every doctor
-    // has sent (otherwise the build after the last file uses them), and
-    // Pong gets a Telegram once the SK03 is built with them.
+    // ── ข้อมูล (the owner and the ผู้จัดทำ) ────────────────────────────────
+    // Pong, 2026-11-18: the month card's งบ button became ข้อมูล, a small
+    // menu of what is added to a month before it goes to the auditor:
+    // งบรายเดือน (the budget and N, typed: the budget box below) and
+    // เอกสารจัดสรร (the hospital's list, uploaded: the box after it, for the
+    // 4 digits of each doctor's No). ⚠ while either is missing; the ผู้จัดทำ
+    // cannot send the month in ตรวจสอบ until both are in.
+    // งบประมาณจัดสรร, from 2026-11-11: a save starts workflow 2.2 for the
+    // month at once when every doctor has sent (otherwise the build after
+    // the last file uses them), and Pong gets a Telegram once the SK03 is
+    // built with them.
     const WARN_SVG = '<svg class="bud-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
     const fmtRate = (n) => n.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     // As saved: whole baht without decimals, satang with both digits.
     const fmtBudget = (n) => Number.isInteger(n) ? fmtNum(n) : fmtRate(n);
-    function budgetBtn(m) {
-        const b = m.budget || null;
-        const btn = el("button", "budbtn" + (b ? "" : " missing"));
+    // เอกสารจัดสรร counts from ส.ค. 69, the first month the ตรวจสอบ tab
+    // (and its allocation sheet) has; an earlier month shows no ⚠ for it.
+    const ALLOC_FROM = "2569_08";
+    // False until SQL step 29 (scripts/alloc-ids-2026-11.sql) is run.
+    let allocInstalled = true;
+    const budgetDone = (m) => !!(m.budget && m.budget.doctors);
+    const allocDone = (m) => !!(m.alloc && !m.alloc.without);
+    const allocWanted = (m) => allocInstalled && m.key >= ALLOC_FROM;
+    const budgetLine = (m) => {
+        const b = m.budget;
+        return b ? fmtBudget(b.budget) + " บาท · N " + (b.doctors ? fmtNum(b.doctors) : "–") : "ยังไม่ได้กรอก";
+    };
+    const allocLine = (m) => {
+        if (!allocInstalled)
+            return "ยังไม่ได้ติดตั้ง";
+        const a = m.alloc;
+        if (!a)
+            return "ยังไม่ได้อัปโหลด";
+        return a.without ? "ยังไม่มีเลข " + fmtNum(a.without) + " คน" : "มีเลขครบทุกคน";
+    };
+    function infoBtn(m) {
+        const ok = budgetDone(m) && (allocDone(m) || !allocWanted(m));
+        const btn = el("button", "budbtn" + (ok ? "" : " missing"));
         btn.setAttribute("type", "button");
-        if (b)
+        if (ok)
             btn.appendChild(el("span", "dot"));
         else
             btn.innerHTML = WARN_SVG;
-        btn.appendChild(document.createTextNode("งบ"));
-        const label = b
-            ? "งบประมาณจัดสรร " + m.name + ": " + fmtBudget(b.budget) + " บาท · N " + (b.doctors ? fmtNum(b.doctors) : "–") + " · per P4P " + fmtRate(b.per_p4p)
-            : "ยังไม่ได้กรอกงบประมาณจัดสรร " + m.name;
+        btn.appendChild(document.createTextNode("ข้อมูล"));
+        const label = "ข้อมูล " + m.name + ": งบรายเดือน " + budgetLine(m) + " · เอกสารจัดสรร " + allocLine(m);
         btn.title = label;
         btn.setAttribute("aria-label", label);
-        btn.setAttribute("aria-haspopup", "dialog");
-        btn.addEventListener("click", (ev) => { ev.stopPropagation(); openBudget(m); });
+        btn.setAttribute("aria-haspopup", "menu");
+        btn.setAttribute("aria-expanded", "false");
+        btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            if (popFor === m.key && !infoPop.classList.contains("hidden"))
+                closePop(true);
+            else
+                openPop(m, btn);
+        });
         return btn;
     }
+    // The floating card: two buttons, above the ข้อมูล button (below it
+    // when there is no room). An outside click, Esc, a scroll or a resize
+    // closes it.
+    const infoPop = el("div", "info-pop hidden");
+    infoPop.id = "info-pop";
+    infoPop.setAttribute("role", "menu");
+    document.body.appendChild(infoPop);
+    let popFor = null;
+    let popBtn = null;
+    const closePop = (focusBtn = false) => {
+        if (infoPop.classList.contains("hidden"))
+            return;
+        infoPop.classList.add("hidden");
+        if (popBtn) {
+            popBtn.setAttribute("aria-expanded", "false");
+            if (focusBtn && popBtn.isConnected)
+                popBtn.focus();
+        }
+        popFor = null;
+        popBtn = null;
+    };
+    const popItem = (iconName, title, line, warn, go) => {
+        const b = el("button", "ip-item" + (warn ? " warn" : ""));
+        b.setAttribute("type", "button");
+        b.setAttribute("role", "menuitem");
+        const ico = el("span", "ip-ico");
+        ico.appendChild(iconEl(iconName));
+        const text = el("span", "ip-text");
+        text.append(el("b", undefined, title), el("small", undefined, line));
+        const mark = el("span", "ip-mark");
+        if (warn)
+            mark.innerHTML = WARN_SVG;
+        else
+            mark.appendChild(el("span", "dot"));
+        b.append(ico, text, mark);
+        b.addEventListener("click", (ev) => { ev.stopPropagation(); closePop(); go(); });
+        return b;
+    };
+    function openPop(m, btn) {
+        closePop();
+        popFor = m.key;
+        popBtn = btn;
+        btn.setAttribute("aria-expanded", "true");
+        infoPop.style.setProperty("--month", m.color);
+        infoPop.setAttribute("aria-label", "ข้อมูล " + m.name);
+        infoPop.replaceChildren(el("p", "ip-title", "ข้อมูล " + m.name), popItem("banknote", "งบรายเดือน", budgetLine(m), !budgetDone(m), () => openBudget(m)), popItem("upload", "เอกสารจัดสรร", allocLine(m), allocWanted(m) && !allocDone(m), () => { void openAlloc(m); }));
+        infoPop.classList.remove("hidden");
+        const r = btn.getBoundingClientRect();
+        const w = infoPop.offsetWidth, h = infoPop.offsetHeight;
+        const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w));
+        const above = r.top - h - 8;
+        infoPop.style.left = left + "px";
+        infoPop.style.top = (above >= 8 ? above : Math.min(window.innerHeight - h - 8, r.bottom + 8)) + "px";
+        infoPop.querySelector(".ip-item").focus();
+    }
+    document.addEventListener("click", (ev) => { if (!infoPop.contains(ev.target))
+        closePop(); });
+    // Tabbing out of the card closes it (back to its button is fine).
+    infoPop.addEventListener("focusout", (ev) => {
+        const to = ev.relatedTarget;
+        if (to instanceof Node && !infoPop.contains(to) && to !== popBtn)
+            closePop();
+    });
+    document.addEventListener("keydown", (ev) => {
+        if (infoPop.classList.contains("hidden") || document.querySelector("dialog[open]"))
+            return;
+        const inside = infoPop.contains(document.activeElement);
+        if (ev.key === "Escape" && (inside || document.activeElement === popBtn)) {
+            ev.preventDefault();
+            closePop(true);
+            return;
+        }
+        // Up and down move between the two buttons, only while on one of them.
+        if (inside && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
+            const items = Array.from(infoPop.querySelectorAll(".ip-item"));
+            const i = items.indexOf(document.activeElement);
+            ev.preventDefault();
+            items[(i + (ev.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+        }
+    });
+    window.addEventListener("resize", () => closePop());
+    window.addEventListener("scroll", () => closePop(), true);
     // ── Tabs ─────────────────────────────────────────────────────────────
     // ภาพรวม shows all six months; ตามส่ง shows only the months not yet
     // complete. Both come from the one overview response; the URL hash
@@ -215,13 +327,16 @@
     };
     const isComplete = (m) => m.exists && m.total > 0 && m.sent === m.total;
     let months = null;
-    // The owner's overview also carries each month's budget (the งบ button).
+    // The owner's and the ผู้จัดทำ's overview also carries each month's
+    // budget and เอกสารจัดสรร (the ข้อมูล button).
     let canBudget = false;
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false;
     let sessionKnown = false;
-    // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
+    // Another dashboard user may get ตรวจสอบ on one side: ผู้จัดทำ
+    // (review.auditee) or ผู้ตรวจสอบ (review.auditor, 2026-11-18).
     let reviewAuditee = false;
+    let reviewAuditor = false;
     // The rights from the session (main.ts dashPerms): which tabs show, and
     // whether ตามส่ง can add or delete notes. Only what is drawn: the server
     // answers 404 to anything outside them.
@@ -243,7 +358,7 @@
     // A tab the user does not have falls back to ภาพรวม.
     const currentView = () => location.hash === "#followup" && (can("followup.view") || !sessionKnown) ? "followup"
         : location.hash === "#roster" && (can("roster.view") || !sessionKnown) ? "roster"
-            : location.hash === "#review" && (isOwner || reviewAuditee || !sessionKnown) ? "review"
+            : location.hash === "#review" && (isOwner || reviewAuditee || reviewAuditor || !sessionKnown) ? "review"
                 : location.hash === "#staffing" && (can("staffing.view") || !sessionKnown) ? "staffing"
                     : (location.hash === "#history" || location.hash === "#audit") && (isOwner || !sessionKnown) ? "audit" : "overview";
     // The nav's current tile, alone: it paints before the tab is drawn.
@@ -260,6 +375,7 @@
     // ตรวจสอบ is drawn by review.js, which listens for this.
     const showReview = () => { window.dispatchEvent(new CustomEvent("dashboard:review")); };
     const render = () => {
+        closePop();
         const view = currentView();
         const audit = view === "audit" || view === "roster" || view === "review" || view === "staffing";
         auditView.classList.toggle("hidden", view !== "audit");
@@ -652,6 +768,7 @@
             const data = await r.json();
             months = data.months;
             canBudget = data.canBudget === true;
+            allocInstalled = data.allocInstalled !== false;
             errorEl.classList.add("hidden");
             render();
         }
@@ -935,6 +1052,289 @@
             render();
         void loadOverview();
     });
+    const ALLOC_MAX = 4 * 1024 * 1024;
+    const allocDlg = document.getElementById("alloc-dialog");
+    const allocTitle = document.getElementById("alloc-title");
+    const allocCount = document.getElementById("alloc-count");
+    const allocMeta = document.getElementById("alloc-meta");
+    const allocDrop = document.getElementById("alloc-drop");
+    const allocFile = document.getElementById("alloc-file");
+    const allocDropT = document.getElementById("alloc-drop-title");
+    const allocDropH = document.getElementById("alloc-drop-hint");
+    const allocOk = document.getElementById("alloc-ok");
+    const allocError = document.getElementById("alloc-error");
+    const allocMissing = document.getElementById("alloc-missing");
+    const allocClose = document.getElementById("alloc-close");
+    document.getElementById("alloc-drop-ico").appendChild(iconEl("upload"));
+    allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg)
+        allocDlg.close(); });
+    // The card's ⚠ follows what was done in the box.
+    allocDlg.addEventListener("close", () => { if (allocChanged)
+        void loadOverview(); });
+    let allocMonth = null;
+    let allocBusy = false;
+    let allocChanged = false;
+    let allocLoad = 0;
+    // A save or an upload done: the card's ⚠ must follow. True when its
+    // answer is too old to paint (the box closed, or opened again since):
+    // a closed box refreshes ภาพรวม now, a box open again on the same
+    // month reads the month again.
+    const allocSaved = (m, load) => {
+        allocChanged = true;
+        if (!allocDlg.open) {
+            void loadOverview();
+            return true;
+        }
+        if (load === allocLoad && allocMonth === m)
+            return false;
+        if (allocMonth === m)
+            void loadAlloc(m);
+        return true;
+    };
+    const allocSay = (kind, text = "") => {
+        allocOk.classList.toggle("hidden", kind !== "ok");
+        allocError.classList.toggle("hidden", kind !== "error");
+        if (kind === "ok")
+            allocOk.replaceChildren(iconEl("check"), " " + text);
+        if (kind === "error")
+            allocError.textContent = text;
+    };
+    const idPrefix = (key) => "ID-" + key.slice(2, 4) + "-" + key.slice(5, 7) + "-";
+    // One person: name and group, what the file had for them, and 4 boxes
+    // of digits with a save button.
+    // hints: numbers the file had for them (one suggestion, or the
+    // ambiguous rows' numbers), each a link that fills the box.
+    function allocRow(m, index, name, dept, detail, value, hints) {
+        const li = el("li", "al-row");
+        const who = el("div", "al-who");
+        who.appendChild(el("b", undefined, name));
+        if (dept)
+            who.appendChild(el("small", undefined, dept));
+        if (detail)
+            who.appendChild(detail);
+        const set = el("form", "al-set");
+        set.noValidate = true;
+        set.appendChild(el("span", "al-id", idPrefix(m.key)));
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.inputMode = "numeric";
+        inp.maxLength = 4;
+        inp.autocomplete = "off";
+        inp.value = value;
+        inp.setAttribute("aria-label", "เลข 4 หลักท้ายของ " + name);
+        const save = el("button", "btn-primary", "บันทึก");
+        save.type = "submit";
+        const paint = () => { save.disabled = !/^[0-9]{4}$/.test(inp.value) || inp.value === value; };
+        inp.addEventListener("input", () => {
+            const v = inp.value.replace(/[^0-9]/g, "").slice(0, 4);
+            if (v !== inp.value)
+                inp.value = v;
+            paint();
+        });
+        paint();
+        set.append(inp, save);
+        const err = el("p", "error-text hidden");
+        err.setAttribute("role", "alert");
+        set.addEventListener("submit", async (ev) => {
+            ev.preventDefault();
+            if (save.disabled || allocBusy)
+                return;
+            const load = allocLoad;
+            allocBusy = true;
+            save.disabled = true;
+            save.setAttribute("aria-busy", "true");
+            save.replaceChildren(el("span", "spinner"));
+            err.classList.add("hidden");
+            try {
+                const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key) + "/" + encodeURIComponent(index), {
+                    method: "PUT", credentials: "same-origin",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ no4: inp.value }),
+                });
+                const out = await r.json().catch(() => null);
+                if (r.status === 401) {
+                    location.href = "/dashboard/login";
+                    return;
+                }
+                if (!r.ok || !out || !out.ok)
+                    throw new Error((out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่");
+                if (allocSaved(m, load))
+                    return;
+                paintAlloc(m, out);
+                allocSay("ok", "บันทึกเลขของ " + name + " แล้ว (" + idPrefix(m.key) + inp.value + ")");
+            }
+            catch (e) {
+                if (load !== allocLoad)
+                    return;
+                err.textContent = e && e.message ? e.message : "บันทึกไม่สำเร็จ กรุณาลองใหม่";
+                err.classList.remove("hidden");
+                save.textContent = "บันทึก";
+                save.removeAttribute("aria-busy");
+                paint();
+            }
+            finally {
+                allocBusy = false;
+            }
+        });
+        if (hints.length) {
+            const uses = el("span", "al-uses");
+            for (const h of hints) {
+                const use = el("button", "al-use", "ใช้ " + h);
+                use.type = "button";
+                use.addEventListener("click", () => { inp.value = h; paint(); inp.focus(); });
+                uses.appendChild(use);
+            }
+            who.appendChild(uses);
+        }
+        li.append(who, set, err);
+        return li;
+    }
+    function paintAlloc(m, st) {
+        const off = !st.installed;
+        allocDrop.classList.toggle("off", off);
+        if (off) {
+            allocCount.textContent = "–";
+            allocMeta.classList.add("hidden");
+            allocMissing.classList.add("hidden");
+            allocClose.classList.add("hidden");
+            allocSay("error", st.error || "ยังไม่ได้ติดตั้งการเก็บเลขจากเอกสารจัดสรร");
+            return;
+        }
+        const roster = st.roster || 0;
+        allocCount.replaceChildren(document.createTextNode(fmtNum(st.withDigits || 0) + " "), el("small", undefined, "จาก " + fmtNum(roster) + " คน"));
+        const u = st.upload || null;
+        const bits = u ? ["อัปโหลดล่าสุด " + fmtWhen(u.uploadedAt), staffName(u.uploadedBy), u.fileName + " (" + fmtNum(u.sheetRows) + " แถว)"].filter(Boolean) : [];
+        if (st.manual)
+            bits.push("ใส่เอง " + fmtNum(st.manual) + " คน");
+        allocMeta.textContent = bits.join(" · ");
+        allocMeta.classList.toggle("hidden", !bits.length);
+        allocDropT.textContent = u ? "อัปโหลดไฟล์ใหม่แทนไฟล์เดิม (.xlsx)" : "เลือกไฟล์เอกสารจัดสรร (.xlsx)";
+        // Without: everyone on the roster still without digits (also
+        // anyone added to the roster after the upload).
+        const without = u ? (st.without || []) : [];
+        const ml = allocMissing.querySelector(".al-list");
+        ml.replaceChildren(...without.map((p) => {
+            let detail = null;
+            if (p.nos && p.nos.length)
+                detail = el("small", "al-sheet", "พบหลายแถว: " + p.nos.join(", "));
+            else if (p.suggest)
+                detail = el("small", "al-sheet", "ในไฟล์อาจเป็น: " + p.suggest.sheetName);
+            else
+                detail = el("small", undefined, "ไม่พบชื่อในไฟล์");
+            return allocRow(m, p.index, p.name, p.department, detail, "", p.nos && p.nos.length ? p.nos : p.suggest ? [p.suggest.no4] : []);
+        }));
+        allocMissing.querySelector("h3").replaceChildren(document.createTextNode("ยังไม่มีเลข"), el("span", "n", fmtNum(without.length) + " คน"));
+        allocMissing.classList.toggle("hidden", !without.length);
+        const close = u ? u.close : [];
+        const cl = allocClose.querySelector(".al-list");
+        cl.replaceChildren(...close.map((c) => allocRow(m, c.index, c.name, "", el("small", "al-sheet", "ในไฟล์: " + c.sheetName), c.no4, [])));
+        allocClose.querySelector("h3").replaceChildren(document.createTextNode("ชื่อสะกดต่างกันเล็กน้อย"), el("span", "n", fmtNum(close.length) + " คน"));
+        allocClose.classList.toggle("hidden", !close.length);
+    }
+    async function openAlloc(m) {
+        allocMonth = m;
+        allocChanged = false;
+        allocDlg.style.setProperty("--month", m.color);
+        allocTitle.textContent = "เอกสารจัดสรร " + m.name;
+        allocCount.textContent = "–";
+        allocMeta.textContent = "กำลังโหลด…";
+        allocMeta.classList.remove("hidden");
+        allocMissing.classList.add("hidden");
+        allocClose.classList.add("hidden");
+        allocDrop.classList.remove("off");
+        allocDropT.textContent = "เลือกไฟล์เอกสารจัดสรร (.xlsx)";
+        allocSay(null);
+        allocDlg.showModal();
+        await loadAlloc(m);
+    }
+    // The month's status into the open box. A newer open or read wins.
+    async function loadAlloc(m) {
+        const load = ++allocLoad;
+        try {
+            const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key), { credentials: "same-origin" });
+            if (r.status === 401) {
+                location.href = "/dashboard/login";
+                return;
+            }
+            const st = await r.json().catch(() => null);
+            if (load !== allocLoad)
+                return;
+            if (!r.ok || !st)
+                throw new Error((st && st.error) || "HTTP " + r.status);
+            paintAlloc(m, st);
+        }
+        catch (e) {
+            console.error("alloc status failed:", e);
+            if (load !== allocLoad)
+                return;
+            allocMeta.classList.add("hidden");
+            allocSay("error", "โหลดข้อมูลไม่สำเร็จ กรุณาปิดแล้วเปิดใหม่");
+        }
+    }
+    async function uploadAlloc(file) {
+        const m = allocMonth;
+        if (!m || allocBusy)
+            return;
+        if (!/\.xlsx$/i.test(file.name)) {
+            allocSay("error", "ไฟล์ต้องเป็น Excel (.xlsx) ถ้าเป็น .xls ให้เปิดใน Excel แล้วบันทึกเป็น .xlsx ก่อน");
+            return;
+        }
+        if (file.size > ALLOC_MAX) {
+            allocSay("error", "ไฟล์ใหญ่เกิน 4 MB");
+            return;
+        }
+        const load = allocLoad;
+        allocBusy = true;
+        allocSay(null);
+        allocDrop.setAttribute("aria-busy", "true");
+        const title = allocDropT.textContent;
+        allocDropT.replaceChildren(el("span", "spinner al-spin"), document.createTextNode(" กำลังอ่านไฟล์…"));
+        allocFile.disabled = true;
+        try {
+            const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key), {
+                method: "POST", credentials: "same-origin",
+                headers: { "content-type": "application/octet-stream", "x-file-name": encodeURIComponent(file.name) },
+                body: file,
+            });
+            if (r.status === 401) {
+                location.href = "/dashboard/login";
+                return;
+            }
+            const out = await r.json().catch(() => null);
+            if (!r.ok || !out || !out.ok)
+                throw new Error((out && out.error) || (r.status === 413 ? "ไฟล์ใหญ่เกิน 4 MB" : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่"));
+            if (allocSaved(m, load))
+                return;
+            paintAlloc(m, out);
+            const left = (out.without || []).length, close = out.upload ? out.upload.close.length : 0;
+            allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
+                + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
+                + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"));
+        }
+        catch (e) {
+            if (load !== allocLoad || !allocDlg.open)
+                return;
+            allocSay("error", e && e.message ? e.message : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่");
+            allocDropT.textContent = title;
+        }
+        finally {
+            allocBusy = false;
+            allocDrop.removeAttribute("aria-busy");
+            allocFile.disabled = false;
+            allocFile.value = "";
+        }
+    }
+    allocFile.addEventListener("change", () => { const f = allocFile.files && allocFile.files[0]; if (f)
+        void uploadAlloc(f); });
+    allocDrop.addEventListener("dragover", (ev) => { ev.preventDefault(); allocDrop.classList.add("over"); });
+    allocDrop.addEventListener("dragleave", () => allocDrop.classList.remove("over"));
+    allocDrop.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        allocDrop.classList.remove("over");
+        const f = ev.dataTransfer && ev.dataTransfer.files[0];
+        if (f)
+            void uploadAlloc(f);
+    });
     const auditRows = document.getElementById("audit-rows");
     const auditWrap = auditRows.closest(".audit-table-wrap");
     const auditActor = document.getElementById("audit-actor");
@@ -968,6 +1368,8 @@
         "access.reject": "ปฏิเสธคำขอเข้าใช้งาน",
         "view.review": "เปิดแท็บตรวจสอบ",
         "budget.save": "บันทึกงบประมาณจัดสรร",
+        "alloc.upload": "อัปโหลดเอกสารจัดสรร",
+        "alloc.set": "ใส่เลขเอกสารจัดสรร",
         "review.inputs": "บันทึกงบประมาณและจำนวนแพทย์",
         "review.rebuild": "ขอสร้าง SK03 ใหม่",
         "review.download": "ดาวน์โหลดไฟล์ตรวจสอบ",
@@ -1018,6 +1420,8 @@
             out.push("อัตรากำลัง (ดู)");
         if (list.includes("review.auditee"))
             out.push("ตรวจสอบ (ผู้จัดทำ)");
+        if (list.includes("review.auditor"))
+            out.push("ตรวจสอบ (ผู้ตรวจสอบ)");
         return out.length ? out.join(" · ") : "ภาพรวมเท่านั้น";
     };
     const CLAIM_REASON = {
@@ -1127,6 +1531,20 @@
                 // budget.save: from the overview's งบ button; build = 2.2 started.
                 if (t.build === true)
                     add("เริ่มสร้าง SK03");
+                break;
+            case "alloc.upload":
+                add(monthLabel(t.month));
+                add(t.file);
+                add("พบเลข " + fmtNum(Number(t.matched) || 0) + " จาก " + fmtNum(Number(t.roster) || 0) + " คน");
+                if (Number(t.close))
+                    add("สะกดต่างเล็กน้อย " + fmtNum(Number(t.close)) + " คน");
+                if (Number(t.missing) + Number(t.ambiguous))
+                    add("ยังไม่มีเลข " + fmtNum(Number(t.missing) + Number(t.ambiguous)) + " คน");
+                break;
+            case "alloc.set":
+                add(monthLabel(t.month));
+                add(t.physician);
+                add("เลข " + String(t.no4 || ""));
                 break;
             case "review.download":
                 add(monthLabel(t.month));
@@ -2322,12 +2740,28 @@
                 userName.textContent = name;
                 userName.parentElement.title = name;
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : "";
+                // The LINE picture over the initial (Pong, 2026-11-18); the
+                // initial stays if the picture does not load.
+                const pic = typeof session.picture === "string" && session.picture.startsWith("https://profile.line-scdn.net/") ? session.picture : "";
+                if (pic) {
+                    const img = document.createElement("img");
+                    img.alt = "";
+                    img.decoding = "async";
+                    img.referrerPolicy = "no-referrer";
+                    img.addEventListener("load", () => userAvatar.classList.add("has-pic"));
+                    img.addEventListener("error", () => { img.remove(); userAvatar.classList.remove("has-pic"); });
+                    img.src = pic;
+                    userAvatar.appendChild(img);
+                }
                 isOwner = session.isOwner === true;
                 reviewAuditee = !isOwner && session.reviewAuditee === true;
+                reviewAuditor = !isOwner && !reviewAuditee && session.reviewAuditor === true;
                 perms = Array.isArray(session.perms) ? session.perms : [];
-                // review.js reads this before drawing: ผู้จัดทำ only, no switch.
+                // review.js reads this before drawing: one side only, no switch.
                 if (reviewAuditee)
                     document.body.dataset.reviewSide = "auditee";
+                else if (reviewAuditor)
+                    document.body.dataset.reviewSide = "auditor";
                 sessionOk = true;
                 // users.js: the owner's menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งานและสิทธิ์).
                 window.dispatchEvent(new CustomEvent("dashboard:session", { detail: session }));
@@ -2342,7 +2776,7 @@
         showTab(followupNav, sessionOk ? can("followup.view") : true);
         showTab(rosterNav, sessionOk ? can("roster.view") : true);
         showTab(staffingNav, sessionOk ? can("staffing.view") : true);
-        showTab(reviewNav, isOwner || reviewAuditee);
+        showTab(reviewNav, isOwner || reviewAuditee || reviewAuditor);
         showTab(auditNav, isOwner);
         // ตามส่ง without บันทึก: the history only (index.html hides the form
         // and the delete buttons).

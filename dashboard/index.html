@@ -9,11 +9,6 @@
     <link rel="icon" href="/dashboard/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png">
     <link rel="preload" href="/dashboard/fonts/THSarabunPSK-Regular.ttf" as="font" type="font/ttf" crossorigin>
-    <!-- ภาพรวม and ตามส่ง keep 17 Nov's fonts (Inter + Noto Sans Thai) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap"
-        rel="stylesheet">
     <style>
         /* Design tokens and the app shell (2026-11-18 redesign): TH SarabunPSK
            on every tab, a flat 64px header, and one token set (type, space,
@@ -169,6 +164,10 @@
            the size Noto Sans Thai had at 16px, so the root is 137.5%: every
            rem on every tab grows with it (layout widths are in px). */
         html { font-size: 137.5%; font-synthesis: none; }
+        /* TH SarabunPSK Regular reads thin on a Windows desktop (Pong,
+           2026-11-18): a 0.4px outline in the text colour thickens every
+           letter a little, on every tab. */
+        html { -webkit-text-stroke-width: 0.4px; }
         html, body, button, input, select, textarea, dialog { font-family: var(--font-sans); }
         body {
             background: var(--background);
@@ -405,6 +404,11 @@
             font-size: var(--fs-sm);
         }
         #user-avatar:empty { display: none; }
+        /* The LINE picture (2026-11-18) covers the initial once it loads. */
+        #user-avatar { position: relative; overflow: hidden; }
+        #user-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; opacity: 0; }
+        #user-avatar.has-pic img { opacity: 1; }
+        #user-avatar.has-pic { color: transparent; }
         .sep { width: 1px; height: 24px; background: var(--c-border); }
         #header .sep { background: rgba(255, 255, 255, .22); }
         /* ออกจากระบบ on the brown bar: white words and outline. */
@@ -433,19 +437,22 @@
         .btn-secondary:active { background: var(--c-selected); }
 
         /* ════ ภาพรวม and ตามส่ง, and their dialogs (who has not sent, the
-           call/LINE log, งบประมาณจัดสรร): exactly the look of 17 Nov
-           (824e543), in its own font, Inter + Noto Sans Thai at a 16px base
-           (Pong, 2026-11-18: "format and color should be exact same as
-           yesterday"). Sizes are px (824e543's rem x 16), since the root
-           here is 22px. The cards keep 824e543's height (the window under
-           its 77px header). Rules for shared parts carry the ภาพรวม/ตามส่ง
-           scope (see the top). ════ */
-        :where(body.cards-view) :is(main, #pending-sheet, #log-dialog, #budget-dialog) {
-            --font-sans: "Inter", "Noto Sans Thai", system-ui, sans-serif;
+           call/LINE log, งบประมาณจัดสรร): the layout and colours of 17 Nov
+           (824e543) at its 16px base (Pong, 2026-11-18: "format and color
+           should be exact same as yesterday"), in TH SarabunPSK like every
+           other tab (Pong, 22:50 the same day: "change font also to
+           sarabun"). Sizes are px (824e543's rem x 16), since the root here
+           is 22px. font-size-adjust draws the font 1.375x every size given
+           (its x-height 0.344 x 1.375): its Thai then matches Noto Sans
+           Thai's at the same size, as 22px does on the other tabs, and no
+           box or line height moves. The cards keep 824e543's height (the
+           window under its 77px header). Rules for shared parts carry the
+           ภาพรวม/ตามส่ง scope (see the top). ════ */
+        :where(body.cards-view) :is(main, #pending-sheet, #log-dialog, #budget-dialog, #alloc-dialog, #info-pop) {
             font-family: var(--font-sans);
             font-size: 16px;
             line-height: 1.6;
-            font-synthesis: auto;
+            font-size-adjust: 0.473;
         }
 
         /* ── Content: the six cards fill the space 824e543 gave them (the
@@ -605,8 +612,9 @@
             border: 1px solid var(--border);
         }
         .split dt { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
-        /* TH SarabunPSK's digits are about 0.65x Inter's: these vh sizes grow by about 1.5x. */
         .split dd { font-size: clamp(28px, 5.4vh, 52px); font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+        /* TH SarabunPSK Bold digits are light next to the old Inter 700, so the big numbers get a stronger outline than the 0.4px on all text. */
+        .split dd { -webkit-text-stroke-width: 1.1px; }
         .split .pending dd { color: var(--warning); }
         .split .pending.zero dd { color: var(--muted-foreground); }
 
@@ -838,6 +846,82 @@
         :where(body.cards-view) .bd-rate .v { font-size: 25.6px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .bd-ok { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border-left: 4px solid var(--success); border-radius: 6px; background: #E7F4EC; color: #0B5E2B; font-weight: 600; }
         :where(body.cards-view) .bd-meta { grid-column: 1 / -1; font-size: 14px; color: var(--muted-foreground); }
+
+        /* ภาพรวม: the ข้อมูล button's floating card (งบรายเดือน, เอกสารจัดสรร) */
+        .info-pop {
+            position: fixed; z-index: 50; width: 300px; box-sizing: border-box;
+            padding: 10px; border: 1px solid var(--border); border-radius: 14px;
+            background: #FDFAF5; box-shadow: 0 18px 44px rgba(41, 29, 20, .24);
+            display: flex; flex-direction: column; gap: 6px; color: var(--foreground);
+        }
+        .info-pop.hidden { display: none; }
+        .info-pop .ip-title {
+            margin: 0 0 2px; padding: 2px 6px 6px; border-bottom: 1px solid var(--border);
+            font-size: 14px; font-weight: 700; color: var(--muted-foreground);
+        }
+        .info-pop .ip-item {
+            display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+            width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px;
+            background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+        }
+        .info-pop .ip-item:hover { background: var(--accent); }
+        .info-pop .ip-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 0; }
+        .info-pop .ip-ico {
+            width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+            background: color-mix(in srgb, var(--month, #F6EFE6) 55%, #fff); color: var(--primary);
+        }
+        .info-pop .ip-ico .ic { width: 20px; height: 20px; }
+        .info-pop .ip-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+        .info-pop .ip-text b { font-size: 16px; font-weight: 700; }
+        .info-pop .ip-text small { font-size: 14px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .info-pop .ip-item.warn .ip-text small { color: #8A4B00; }
+        .info-pop .ip-mark { display: grid; place-items: center; width: 18px; }
+        .info-pop .ip-mark .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
+        .info-pop .ip-mark .bud-ico { width: 16px; height: 16px; color: #C2410C; }
+
+        /* ภาพรวม: เอกสารจัดสรร, one month's upload and the names without digits */
+        .alloc-dialog { width: min(640px, 92vw); }
+        :where(body.cards-view) .al-body { box-sizing: border-box; padding: 18px 22px 8px; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+        :where(body.cards-view) .al-actions { margin: 0; padding: 12px 22px 18px; border-top: 1px solid var(--border); }
+        :where(body.cards-view) .al-sum .v small { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
+        :where(body.cards-view) .al-drop {
+            display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+            border: 2px dashed rgba(63, 47, 36, .28); border-radius: 12px; background: #fff; cursor: pointer;
+        }
+        :where(body.cards-view) .al-drop:hover, :where(body.cards-view) .al-drop.over { background: var(--accent); border-color: var(--primary); }
+        :where(body.cards-view) .al-drop:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+        :where(body.cards-view) .al-drop[aria-busy="true"] { cursor: progress; background: #F6EFE6; }
+        :where(body.cards-view) .al-drop.off { display: none; }
+        :where(body.cards-view) .al-drop .spinner { display: inline-block; vertical-align: -2px; border-color: rgba(63, 47, 36, .22); border-top-color: var(--primary); }
+        :where(body.cards-view) .al-drop-ico { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--primary); color: #fff; }
+        :where(body.cards-view) .al-drop-ico .ic { width: 22px; height: 22px; }
+        :where(body.cards-view) .al-drop-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+        :where(body.cards-view) .al-drop-text b { font-size: 17px; }
+        :where(body.cards-view) .al-drop-text small { font-size: 14px; color: var(--muted-foreground); }
+        :where(body.cards-view) .al-error { margin: 0; padding: 8px 12px; border-left: 4px solid #B42318; border-radius: 6px; background: #FEF3F2; font-weight: 600; }
+        :where(body.cards-view) .al-sec h3 { margin: 4px 0 0; font-size: 17px; font-weight: 700; }
+        :where(body.cards-view) .al-sec h3 .n { margin-left: 6px; padding: 1px 9px; border-radius: 999px; font-size: 14px; background: var(--warning-bg); color: #8A4B00; }
+        :where(body.cards-view) #alloc-close h3 .n { background: var(--accent); color: var(--foreground); }
+        :where(body.cards-view) .al-hint { margin: 2px 0 6px; font-size: 14px; color: var(--muted-foreground); }
+        :where(body.cards-view) .al-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+        :where(body.cards-view) .al-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 10px 12px; border-top: 1px solid var(--border); }
+        :where(body.cards-view) .al-row:first-child { border-top: 0; }
+        :where(body.cards-view) .al-who { min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+        :where(body.cards-view) .al-who b { font-weight: 700; }
+        :where(body.cards-view) .al-who small { font-size: 14px; color: var(--muted-foreground); }
+        :where(body.cards-view) .al-who .al-sheet { color: var(--foreground); }
+        :where(body.cards-view) .al-set { display: flex; align-items: center; gap: 8px; }
+        :where(body.cards-view) .al-set .al-id { font-size: 14px; color: var(--muted-foreground); white-space: nowrap; }
+        :where(body.cards-view) .al-set input {
+            box-sizing: border-box; width: 76px; height: 40px; padding: 0 8px; text-align: center;
+            border: 1px solid rgba(63, 47, 36, .22); border-radius: 10px; background: #fff;
+            font: inherit; font-size: 18px; font-weight: 700; letter-spacing: .08em; font-variant-numeric: tabular-nums; color: var(--foreground);
+        }
+        :where(body.cards-view) .al-set input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        :where(body.cards-view) .al-set .btn-primary { height: 40px; padding: 0 14px; }
+        :where(body.cards-view) .al-uses { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+        :where(body.cards-view) .al-use { padding: 0; border: 0; background: none; font: inherit; font-size: 14px; color: var(--primary); text-decoration: underline; cursor: pointer; }
+        :where(body.cards-view) .al-row .error-text { grid-column: 1 / -1; margin: 0; font-size: 14px; }
 
         /* ════ รายชื่อ, อัตรากำลัง, ประวัติการใช้งาน (tables and forms), their
            dialogs, and the parts ตรวจสอบ shares: design ข (2026-11-18).
@@ -2414,6 +2498,51 @@
                 <button type="submit" id="budget-save" class="btn-primary" disabled>บันทึก</button>
             </div>
         </form>
+    </dialog>
+
+    <!-- ภาพรวม: เอกสารจัดสรร, from the month card's ข้อมูล button (the owner and the ผู้จัดทำ) -->
+    <dialog id="alloc-dialog" class="log-dialog budget-dialog alloc-dialog" aria-labelledby="alloc-title" aria-describedby="alloc-sub">
+        <div class="log-header">
+            <div>
+                <h2 id="alloc-title">เอกสารจัดสรร</h2>
+                <p id="alloc-sub">เก็บเลข 4 หลักท้ายของช่อง No ของแพทย์แต่ละคน ไว้เติมช่อง No ในไฟล์รายละเอียดการจัดสรรเงินรายบุคคล</p>
+            </div>
+            <button type="button" class="icon-btn" data-close aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <div class="al-body" id="alloc-body">
+            <div class="bd-rate al-sum">
+                <span class="k">มีเลขแล้ว</span>
+                <output id="alloc-count" class="v">–</output>
+            </div>
+            <p id="alloc-meta" class="bd-meta hidden"></p>
+            <label id="alloc-drop" class="al-drop">
+                <input id="alloc-file" type="file" class="sr-only"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                <span class="al-drop-ico" id="alloc-drop-ico"></span>
+                <span class="al-drop-text">
+                    <b id="alloc-drop-title">เลือกไฟล์เอกสารจัดสรร (.xlsx)</b>
+                    <small id="alloc-drop-hint">หรือลากไฟล์มาวางที่นี่ · ไม่เกิน 4 MB · ระบบไม่เก็บไฟล์ เก็บเฉพาะเลข 4 หลัก</small>
+                </span>
+            </label>
+            <p id="alloc-ok" class="bd-ok hidden" role="status"></p>
+            <p id="alloc-error" class="error-text al-error hidden" role="alert"></p>
+            <section id="alloc-missing" class="al-sec hidden" aria-labelledby="alloc-missing-h">
+                <h3 id="alloc-missing-h">ยังไม่มีเลข</h3>
+                <p class="al-hint">ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง</p>
+                <ul class="al-list"></ul>
+            </section>
+            <section id="alloc-close" class="al-sec hidden" aria-labelledby="alloc-close-h">
+                <h3 id="alloc-close-h">ชื่อสะกดต่างกันเล็กน้อย</h3>
+                <p class="al-hint">จับคู่ให้แล้ว ตรวจว่าเป็นคนเดียวกัน ถ้าไม่ใช่ ใส่เลขที่ถูกแล้วกดบันทึก</p>
+                <ul class="al-list"></ul>
+            </section>
+        </div>
+        <div class="log-actions al-actions">
+            <button type="button" class="btn-ghost" data-close>ปิด</button>
+        </div>
     </dialog>
 
     <!-- รายชื่อ: add or edit one row (fields follow the month table's columns) -->

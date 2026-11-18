@@ -28,9 +28,12 @@
     }
 
     const NOT_INSTALLED = "ยังไม่ได้ติดตั้ง — วาง scripts/dashboard-users-2026-11.sql ใน Supabase SQL editor"
+    // ผู้ตรวจสอบ needs step 28 in the database (2026-11-18).
+    const AUDITOR_NOT_INSTALLED = "ยังไม่ได้ติดตั้งสิทธิ์ผู้ตรวจสอบ — วาง scripts/dashboard-users-auditor-2026-11.sql ใน Supabase SQL editor"
     // The dialog's title already says ยังไม่ได้ติดตั้ง, so its body only says what to do.
     const PRESETS: { key: string; label: string; title?: string; perms: string[] }[] = [
         { key: "author", label: "ผู้จัดทำ", title: "เหมือนกานดา", perms: ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"] },
+        { key: "auditor", label: "ผู้ตรวจสอบ", title: "ตรวจและอนุมัติในแท็บตรวจสอบ ดูแท็บอื่นได้", perms: ["followup.view", "review.auditor", "roster.view", "staffing.view"] },
         { key: "view", label: "ดูอย่างเดียว", perms: ["followup.view", "roster.view", "staffing.view"] },
         { key: "clear", label: "ล้าง", perms: [] },
     ]
@@ -69,6 +72,7 @@
         if (perms.includes("roster.view")) out.push("รายชื่อ (ดู)")
         if (perms.includes("staffing.view")) out.push("อัตรากำลัง (ดู)")
         if (perms.includes("review.auditee")) out.push("ตรวจสอบ (ผู้จัดทำ)")
+        if (perms.includes("review.auditor")) out.push("ตรวจสอบ (ผู้ตรวจสอบ)")
         return out.length ? out.join(" · ") : "ภาพรวมเท่านั้น"
     }
     const bkkTime = (iso: string | null): string => iso
@@ -125,7 +129,9 @@
             note: "บันทึก = เพิ่ม/ลบบันทึกการติดตาม", hint: true },
         { name: "รายชื่อ", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ดู", perms: ["roster.view"] }], note: "แก้ไข: เฉพาะผู้ดูแล" },
         { name: "อัตรากำลัง", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ดู", perms: ["staffing.view"] }], note: "แก้ไข: เฉพาะผู้ดูแล" },
-        { name: "ตรวจสอบ", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ผู้จัดทำ", perms: ["review.auditee"] }], note: "ผู้ตรวจสอบ: เฉพาะผู้ดูแล" },
+        // One side or none (2026-11-18): the one who prepares a month does not approve it.
+        { name: "ตรวจสอบ", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ผู้จัดทำ", perms: ["review.auditee"] }, { label: "ผู้ตรวจสอบ", perms: ["review.auditor"] }],
+            note: "เลือกได้ฝั่งเดียว" },
         { name: "ประวัติการใช้งาน", locked: "เฉพาะผู้ดูแล", lockIcon: true, note: "" },
     ]
     function buildMatrix(start: string[], onChange: () => void): Matrix {
@@ -208,7 +214,7 @@
             chips.appendChild(b)
         }
         root.append(chips, matrix.root, summary,
-            el("p", "um-foot-note", "เฉพาะผู้ดูแล: งบ · แก้ไขรายชื่อ/อัตรากำลัง · คำขอเข้าใช้งาน · ฝั่งผู้ตรวจสอบ · ประวัติการใช้งาน · จัดการผู้ใช้"))
+            el("p", "um-foot-note", "เฉพาะผู้ดูแล: งบ · แก้ไขรายชื่อ/อัตรากำลัง · คำขอเข้าใช้งาน · ประวัติการใช้งาน · จัดการผู้ใช้"))
         sync()
         return { root, matrix }
     }
@@ -693,8 +699,8 @@
                 } else if (what === "not_pending" || x.status === 404) {
                     if (inv) inv.status = "gone"
                     showMessage("คำขอนี้หมดอายุหรือถูกจัดการแล้ว", "")
-                } else if (what === "too_many") {
-                    showErr("มีผู้ใช้ครบ 20 คนแล้ว ระงับผู้ใช้ที่ไม่ใช้แล้วก่อน")
+                } else if (what === "too_many" || what === "auditor_not_installed") {
+                    showErr(what === "too_many" ? "มีผู้ใช้ครบ 20 คนแล้ว ระงับผู้ใช้ที่ไม่ใช้แล้วก่อน" : AUDITOR_NOT_INSTALLED)
                     syncApprove()
                     approveBtn.focus()
                 } else {
@@ -798,7 +804,9 @@
                 const txt = el("span", "um-grow")
                 txt.append(el("b", undefined, (w.claim && w.claim.name) || "(ไม่มีชื่อ LINE)"), " ",
                     el("small", undefined, "· สแกนเมื่อ " + bkkTime(w.claim && w.claim.at)))
-                li.append(txt, btn("ub sm primary", "ตรวจและอนุมัติ", () => { usersDlg.close(); void openRequest(w.id) }))
+                const delBtn = btn("ub sm danger", "ลบ", () => confirmDropRequest(li, w, delBtn))
+                delBtn.setAttribute("aria-label", "ลบคำขอของ " + ((w.claim && w.claim.name) || "ผู้ใช้ใหม่"))
+                li.append(txt, delBtn, btn("ub sm primary", "ตรวจและอนุมัติ", () => { usersDlg.close(); void openRequest(w.id) }))
                 ul.appendChild(li)
             }
             sec.appendChild(ul)
@@ -829,6 +837,40 @@
         sec.appendChild(table)
         parts.push(sec)
         usersBody.replaceChildren(...parts)
+    }
+
+    // ลบ on a รออนุมัติ row (Pong, 2026-11-18): asks once, then rejects the
+    // request (the phone shows ปฏิเสธคำขอแล้ว; History logs user.reject).
+    function confirmDropRequest(li: HTMLElement, w: Invite, from: HTMLButtonElement): void {
+        const who = (w.claim && w.claim.name) || "ผู้ใช้ใหม่"
+        const keep = Array.from(li.childNodes)
+        const box = el("div", "um-confirm")
+        const t = el("div", "um-grow")
+        t.append(el("b", undefined, "ลบคำขอของ " + who + "?"), " ", el("small", undefined, "QR นี้จะใช้ไม่ได้อีก ต้องสแกน QR ใหม่ถ้าจะขออีกครั้ง"))
+        const err = el("span", "error-text hidden")
+        err.setAttribute("role", "alert")
+        const back = (): void => { li.replaceChildren(...keep); from.focus() }
+        const yes = btn("ub sm danger solid", "ลบคำขอ", () => { void drop() })
+        const drop = async (): Promise<void> => {
+            yes.disabled = true
+            yes.setAttribute("aria-busy", "true")
+            try {
+                await api("/dashboard/api/users/invites/" + encodeURIComponent(w.id) + "/reject", "POST", {})
+                toast("ลบคำขอของ " + who + " แล้ว")
+                await loadUsers()
+                const add = document.getElementById("users-add")
+                if (add) add.focus()
+            } catch (e) {
+                yes.disabled = false
+                yes.removeAttribute("aria-busy")
+                err.textContent = "ลบไม่สำเร็จ กรุณาลองใหม่"
+                err.classList.remove("hidden")
+                yes.focus()
+            }
+        }
+        box.append(t, err, btn("ub sm", "ยกเลิก", back), yes)
+        li.replaceChildren(box)
+        yes.focus()
     }
 
     function userRow(u: User): HTMLElement {
@@ -929,7 +971,8 @@
         } catch (e) {
             if (busy) { busy.disabled = false; busy.removeAttribute("aria-busy"); busy.focus() }
             const x = e as HttpError
-            const msg = x.body && x.body.error === "too_many" ? "มีผู้ใช้ครบ 20 คนแล้ว" : "บันทึกไม่สำเร็จ กรุณาลองใหม่"
+            const what = x.body && x.body.error
+            const msg = what === "too_many" ? "มีผู้ใช้ครบ 20 คนแล้ว" : what === "auditor_not_installed" ? AUDITOR_NOT_INSTALLED : "บันทึกไม่สำเร็จ กรุณาลองใหม่"
             if (err) { err.textContent = msg; err.classList.remove("hidden") } else toast(msg)
         }
     }
