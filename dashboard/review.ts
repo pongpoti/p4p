@@ -759,11 +759,13 @@
         }
     }
 
-    // A dashboard user who is not the owner is the ผู้จัดทำ only (Pong,
-    // 2026-11-12): no switch, and never the auditor's side (its routes
-    // answer 404 for them). app.js sets this from the session before the
-    // tab is first drawn.
+    // A dashboard user who is not the owner has one side only, with no
+    // switch: ผู้จัดทำ (Pong, 2026-11-12) or ผู้ตรวจสอบ (2026-11-18); the
+    // other side's routes answer 404 for them. app.js sets this from the
+    // session before the tab is first drawn.
     const auditeeOnly = (): boolean => document.body.dataset.reviewSide === "auditee"
+    const auditorOnly = (): boolean => document.body.dataset.reviewSide === "auditor"
+    const oneSide = (): boolean => auditeeOnly() || auditorOnly()
     function syncRole(): void {
         for (const b of roleBtns) {
             const on = b.dataset.role === role
@@ -776,8 +778,8 @@
     // fromButton: a ลองอีกครั้ง / ดูอีกครั้ง button is spinning, so the
     // screen stays until the answer comes.
     async function open(fromButton = false): Promise<void> {
-        if (auditeeOnly()) {
-            role = "auditee"
+        if (oneSide()) {
+            role = auditorOnly() ? "auditor" : "auditee"
             const sw = document.getElementById("review-role")
             if (sw) sw.classList.add("hidden")
         }
@@ -815,7 +817,7 @@
     window.addEventListener("dashboard:review", () => { void open() })
     for (const b of roleBtns) {
         b.addEventListener("click", () => {
-            if (auditeeOnly() || b.getAttribute("aria-busy") === "true") return
+            if (oneSide() || b.getAttribute("aria-busy") === "true") return
             role = b.dataset.role === "auditor" ? "auditor" : "auditee"
             try { localStorage.setItem(ROLE_KEY, role) } catch (e) { /* ignore */ }
             for (const x of roleBtns) { const on = x.dataset.role === role; x.setAttribute("aria-selected", String(on)); x.tabIndex = on ? 0 : -1 }
@@ -2693,7 +2695,7 @@
         }
         // The per-person allocation list (Pong, 2026-11-17): made on request
         // from the approved round, so it does not wait for the PDF. The
-        // auditor side only (the server lets only the owner have it).
+        // auditor side only (the server lets only the owner and a ผู้ตรวจสอบ have it).
         if (side === "auditor") {
             const xl = el("div", "rv-actions")
             const xa = el("a", "rv-link")

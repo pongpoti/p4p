@@ -220,8 +220,10 @@
     // Set from /dashboard/api/session; only the owner gets the audit tab.
     let isOwner = false;
     let sessionKnown = false;
-    // The other dashboard users get ตรวจสอบ too, on the ผู้จัดทำ side only.
+    // Another dashboard user may get ตรวจสอบ on one side: ผู้จัดทำ
+    // (review.auditee) or ผู้ตรวจสอบ (review.auditor, 2026-11-18).
     let reviewAuditee = false;
+    let reviewAuditor = false;
     // The rights from the session (main.ts dashPerms): which tabs show, and
     // whether ตามส่ง can add or delete notes. Only what is drawn: the server
     // answers 404 to anything outside them.
@@ -243,7 +245,7 @@
     // A tab the user does not have falls back to ภาพรวม.
     const currentView = () => location.hash === "#followup" && (can("followup.view") || !sessionKnown) ? "followup"
         : location.hash === "#roster" && (can("roster.view") || !sessionKnown) ? "roster"
-            : location.hash === "#review" && (isOwner || reviewAuditee || !sessionKnown) ? "review"
+            : location.hash === "#review" && (isOwner || reviewAuditee || reviewAuditor || !sessionKnown) ? "review"
                 : location.hash === "#staffing" && (can("staffing.view") || !sessionKnown) ? "staffing"
                     : (location.hash === "#history" || location.hash === "#audit") && (isOwner || !sessionKnown) ? "audit" : "overview";
     // The nav's current tile, alone: it paints before the tab is drawn.
@@ -1018,6 +1020,8 @@
             out.push("อัตรากำลัง (ดู)");
         if (list.includes("review.auditee"))
             out.push("ตรวจสอบ (ผู้จัดทำ)");
+        if (list.includes("review.auditor"))
+            out.push("ตรวจสอบ (ผู้ตรวจสอบ)");
         return out.length ? out.join(" · ") : "ภาพรวมเท่านั้น";
     };
     const CLAIM_REASON = {
@@ -2322,12 +2326,28 @@
                 userName.textContent = name;
                 userName.parentElement.title = name;
                 userAvatar.textContent = name ? Array.from(name)[0].toUpperCase() : "";
+                // The LINE picture over the initial (Pong, 2026-11-18); the
+                // initial stays if the picture does not load.
+                const pic = typeof session.picture === "string" && session.picture.startsWith("https://profile.line-scdn.net/") ? session.picture : "";
+                if (pic) {
+                    const img = document.createElement("img");
+                    img.alt = "";
+                    img.decoding = "async";
+                    img.referrerPolicy = "no-referrer";
+                    img.addEventListener("load", () => userAvatar.classList.add("has-pic"));
+                    img.addEventListener("error", () => { img.remove(); userAvatar.classList.remove("has-pic"); });
+                    img.src = pic;
+                    userAvatar.appendChild(img);
+                }
                 isOwner = session.isOwner === true;
                 reviewAuditee = !isOwner && session.reviewAuditee === true;
+                reviewAuditor = !isOwner && !reviewAuditee && session.reviewAuditor === true;
                 perms = Array.isArray(session.perms) ? session.perms : [];
-                // review.js reads this before drawing: ผู้จัดทำ only, no switch.
+                // review.js reads this before drawing: one side only, no switch.
                 if (reviewAuditee)
                     document.body.dataset.reviewSide = "auditee";
+                else if (reviewAuditor)
+                    document.body.dataset.reviewSide = "auditor";
                 sessionOk = true;
                 // users.js: the owner's menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งานและสิทธิ์).
                 window.dispatchEvent(new CustomEvent("dashboard:session", { detail: session }));
@@ -2342,7 +2362,7 @@
         showTab(followupNav, sessionOk ? can("followup.view") : true);
         showTab(rosterNav, sessionOk ? can("roster.view") : true);
         showTab(staffingNav, sessionOk ? can("staffing.view") : true);
-        showTab(reviewNav, isOwner || reviewAuditee);
+        showTab(reviewNav, isOwner || reviewAuditee || reviewAuditor);
         showTab(auditNav, isOwner);
         // ตามส่ง without บันทึก: the history only (index.html hides the form
         // and the delete buttons).

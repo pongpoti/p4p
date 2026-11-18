@@ -271,7 +271,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     `lib/dept-staffing.ts` with a warning. The queueing needs step 23 and
     the review-tab auditee file and is skipped without them. Each PART can be
     pasted on its own, PART 1 first; safe to re-run.
-27. `scripts/dashboard-users-2026-11.sql` — **not applied yet; paste it.**
+27. `scripts/dashboard-users-2026-11.sql` — applied 2026-11-18.
     The QR invite for new dashboard users (Pong, 2026-11-18: "Go QR").
     PART 1 makes `dashboard_users` (who may use `/dashboard/` and which tabs
     each one sees), PART 2 `dashboard_invites` (one row per QR: only the
@@ -292,6 +292,17 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     anon_0 = 0, delete_0 = 0). Each PART can be pasted on its own, in order; safe to
     re-run; no backslashes, so it pastes through chat. Emergency stop for a
     user: `update public.dashboard_users set active = false where ...`.
+28. `scripts/dashboard-users-auditor-2026-11.sql` — **not applied yet; paste it.**
+    The ผู้ตรวจสอบ right (Pong, 2026-11-18: "for audit access role : allow
+    select ผู้ตรวจสอบ"). `dashboard_users.perms` and `dashboard_perms_clean`
+    now take `review.auditor` (the ตรวจสอบ tab's auditor side: check each
+    person, approve or return, approve all, reopen, the allocation sheet
+    (post)), and refuse a user who holds both `review.auditee` and
+    `review.auditor`. Writes no row; the function stays service_role only.
+    Needs step 27. Until it runs, giving someone ผู้ตรวจสอบ on the page says
+    this file is not installed, and nothing is saved. End with the check
+    query (auditor_ok = true, check_ok = true, anon_0 = 0). Safe to re-run;
+    no backslashes.
 
 ## Superseded — do NOT run
 

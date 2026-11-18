@@ -300,7 +300,9 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   `^U[0-9a-f]{32}$`), `line_name` (the LINE profile name at the scan),
   `display_name` (the name the dashboard shows, 1 to 60 characters),
   `perms` (text[] of `followup.view`, `followup.edit`, `roster.view`,
-  `staffing.view`, `review.auditee`; nothing else is accepted), `active`
+  `staffing.view`, `review.auditee` (ตรวจสอบ, ผู้จัดทำ side),
+  `review.auditor` (ตรวจสอบ, ผู้ตรวจสอบ side, from step 28); nothing else is
+  accepted, and never both ตรวจสอบ sides), `active`
   (false = suspended), `source` (`qr`, or `env` for a user moved in from
   `DASHBOARD_LINE_USER_IDS`), `added_by`, `added_at`, `updated_by`,
   `updated_at`, `suspended_by`, `suspended_at`.
@@ -312,7 +314,8 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
   first sign-in). At most 20 active users.
 - **Access:** RLS on with no policies; `service_role` only (select, insert,
   update; delete and truncate revoked).
-- Migration: `scripts/dashboard-users-2026-11.sql` PART 1.
+- Migration: `scripts/dashboard-users-2026-11.sql` PART 1. The perms check is replaced by
+  `scripts/dashboard-users-auditor-2026-11.sql` (step 28).
 
 ## `dashboard_invites`
 

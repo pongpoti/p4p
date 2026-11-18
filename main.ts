@@ -650,13 +650,17 @@ if (!LINE_LOGIN_CHANNEL_SECRET) {
 // Until the SQL is pasted the table answers "not installed" and only 1, 3
 // and 4 apply, which is the dashboard as it was. Rights are never put in the
 // cookie: dashSession re-reads them on every request.
-const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
+// review.auditor (Pong, 2026-11-18: "allow select ผู้ตรวจสอบ") is the
+// ตรวจสอบ tab's auditor side; a user has it or review.auditee, never both
+// (the one who prepares a month does not approve it). The owner has both.
+const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "review.auditor", "roster.view", "staffing.view"]
 // The ผู้จัดทำ set: every right a non-owner could have before (followup,
 // read-only รายชื่อ and อัตรากำลัง, the ตรวจสอบ ผู้จัดทำ side).
-const LEGACY_PERMS = DASH_PERM_KEYS.slice()
+const LEGACY_PERMS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
 const OWNER_PERMS = DASH_PERM_KEYS.slice()
 // Known keys only, followup.edit brings followup.view, sorted, no repeats;
-// null when any key is unknown (or the value is not a list).
+// null when any key is unknown, when both ตรวจสอบ sides are asked for, or
+// when the value is not a list.
 function normalizePerms(v: unknown): string[] | null {
   if (!Array.isArray(v)) return null
   const out = new Set<string>()
@@ -664,6 +668,7 @@ function normalizePerms(v: unknown): string[] | null {
     if (typeof k !== "string" || !DASH_PERM_KEYS.includes(k)) return null
     out.add(k)
   }
+  if (out.has("review.auditee") && out.has("review.auditor")) return null
   if (out.has("followup.edit")) out.add("followup.view")
   return Array.from(out).sort()
 }
@@ -759,7 +764,11 @@ function readDash(token: string | undefined): Record<string, any> | null {
     return o && typeof o.exp === "number" && o.exp > Date.now() / 1000 ? o : null
   } catch (e) { return null }
 }
-function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[] } | null {
+// The LINE profile picture shown on the header's avatar (Pong, 2026-11-18):
+// only LINE's own picture host, as the CSP's img-src allows.
+const linePicture = (v: unknown): string =>
+  typeof v === "string" && v.startsWith("https://profile.line-scdn.net/") && v.length <= 500 ? v : ""
+function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[]; pic: string } | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   // A payload with a typ (the phone's p4p_join) is never a session.
   if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000 || o.typ !== undefined) return null
@@ -769,16 +778,18 @@ function dashSession(req: Request): { sub: string; name: string; exp: number; pe
   const perms = dashPerms(String(o.sub || ""))
   if (!perms) return null
   const row = dashUserRow(o.sub)
-  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms }
+  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms, pic: linePicture(o.pic) }
 }
 // The owner can do everything; anyone else needs the right.
 const can = (s: { sub: string; perms: string[] }, perm: string): boolean => isDashOwner(s.sub) || s.perms.includes(perm)
 // (Re)issues the session cookie with a fresh idle deadline, keeping the
-// absolute 12h expiry from sign-in.
-function setDashCookie(res: Response, sub: string, name: string, exp: number): void {
+// absolute 12h expiry from sign-in. pic: the LINE picture from sign-in.
+function setDashCookie(res: Response, sub: string, name: string, exp: number, pic = ""): void {
   const now = Math.floor(Date.now() / 1000)
   const idle = Math.min(exp, now + DASH_IDLE_SECONDS)
-  res.append("Set-Cookie", DASH_COOKIE + "=" + signDash({ sub, name, exp, idle }) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
+  const o: Record<string, unknown> = { sub, name, exp, idle }
+  if (linePicture(pic)) o.pic = pic
+  res.append("Set-Cookie", DASH_COOKIE + "=" + signDash(o) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
 }
 // The callback URL must be registered on the LINE Login channel exactly, so
 // it is built from ADMIN_BASE_URL (the production origin), not the Host header.
@@ -823,6 +834,8 @@ const shownActor = (sub: string, name: string): string => {
 // owner and has review.auditee (Pong, 2026-11-12: "Add Dada as auditee";
 // every env user has it). The owner has both sides.
 const isReviewAuditee = (sub: string): boolean => !isDashOwner(sub) && (dashPerms(sub) || []).includes("review.auditee")
+// Its ผู้ตรวจสอบ (auditor) side: a user given review.auditor on the page.
+const isReviewAuditor = (sub: string): boolean => !isDashOwner(sub) && (dashPerms(sub) || []).includes("review.auditor")
 
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
@@ -1006,7 +1019,7 @@ app.get("/dashboard/auth/callback", async (req: Request, res: Response) => {
     }
     const row = dashUserRow(sub)
     const name = (row && row.display_name) || staffName(v.data.name)
-    setDashCookie(res, sub, name, Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS)
+    setDashCookie(res, sub, name, Math.floor(Date.now() / 1000) + DASH_SESSION_SECONDS, linePicture(v.data.picture))
     await Promise.all([audit(req, { sub, name }, "login.success"), importEnvUser(req, sub, v.data)])
     res.redirect(302, "/dashboard/")
   } catch (e: any) {
@@ -1060,10 +1073,11 @@ app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  setDashCookie(res, s.sub, s.name, s.exp)
+  setDashCookie(res, s.sub, s.name, s.exp, s.pic)
   const owner = isDashOwner(s.sub)
   const body: Record<string, unknown> = {
-    ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), perms: s.perms,
+    ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), reviewAuditor: isReviewAuditor(s.sub),
+    perms: s.perms, picture: s.pic || null,
   }
   if (owner) {
     body.usersInstalled = dashUsers.installed !== false
@@ -1103,6 +1117,7 @@ function permsSummary(perms: unknown, sep = " · "): string {
   if (p.includes("roster.view")) out.push("รายชื่อ (ดู)")
   if (p.includes("staffing.view")) out.push("อัตรากำลัง (ดู)")
   if (p.includes("review.auditee")) out.push("ตรวจสอบ (ผู้จัดทำ)")
+  if (p.includes("review.auditor")) out.push("ตรวจสอบ (ผู้ตรวจสอบ)")
   return out.length ? out.join(sep) : "ภาพรวมเท่านั้น"
 }
 
@@ -1402,6 +1417,9 @@ app.post("/dashboard/api/users/invites/:id/approve", express.json({ limit: "2kb"
     res.json({ ok: true, user: { displayName: after.display_name, perms: after.perms } })
   } catch (e: any) {
     if (isNotInstalledError(e)) return usersNotInstalled(res)
+    // Only scripts/dashboard-users-auditor-2026-11.sql (step 28) lets the
+    // database take review.auditor; normalizePerms already checked the rest.
+    if (/bad perms/.test(pgMessage(e))) return res.status(409).json({ error: "auditor_not_installed" })
     console.error("[dashboard] invite approve failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed" })
   }
@@ -1512,6 +1530,7 @@ app.patch("/dashboard/api/users/:sub", express.json({ limit: "2kb" }), async (re
     if (isNotInstalledError(e)) return usersNotInstalled(res)
     if (/not_found/.test(pgMessage(e))) return res.status(404).json({ error: "not found" })
     if (/too_many/.test(pgMessage(e))) return res.status(409).json({ error: "too_many" })
+    if (/bad perms/.test(pgMessage(e))) return res.status(409).json({ error: "auditor_not_installed" })
     console.error("[dashboard] user save failed:", e.response ? JSON.stringify(e.response.data) : e.message)
     res.status(500).json({ error: "failed" })
   }
@@ -1934,6 +1953,7 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
   dashSession,
   isDashOwner,
   isReviewAuditee,
+  isReviewAuditor,
   audit,
 })
 
