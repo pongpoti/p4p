@@ -852,9 +852,9 @@
             return
         }
         m.budget = out.budget
-        budgetOk.textContent = out.request
-            ? "✓ บันทึกแล้ว · เริ่มสร้าง SK03 ของเดือนนี้ (ประมาณ 10–15 นาที) เสร็จแล้วจะแจ้งทาง Telegram"
-            : "✓ บันทึกแล้ว · จะสร้าง SK03 เมื่อแพทย์ส่งครบ เสร็จแล้วจะแจ้งทาง Telegram"
+        budgetOk.replaceChildren(iconEl("check"), " " + (out.request
+            ? "บันทึกแล้ว · เริ่มสร้าง SK03 ของเดือนนี้ (ประมาณ 10–15 นาที) เสร็จแล้วจะแจ้งทาง Telegram"
+            : "บันทึกแล้ว · จะสร้าง SK03 เมื่อแพทย์ส่งครบ เสร็จแล้วจะแจ้งทาง Telegram"))
         budgetOk.classList.remove("hidden")
         showBudgetMeta(out.budget)
         setBudgetDone(true)
@@ -953,6 +953,14 @@
     }
 
     // One readable line of what the action touched; the note is quoted.
+    // Text with " → " in it, each arrow drawn as an icon (TH SarabunPSK has
+    // no arrows, 2026-11-18); a screen reader still reads the arrow.
+    function withArrows(parent: HTMLElement, text: string): void {
+        text.split(" → ").forEach((bit, i) => {
+            if (i) parent.append(" ", iconEl("arrow-right"), el("span", "sr-only", "→"), " ")
+            parent.append(bit)
+        })
+    }
     const auditDetail = (a: AuditEntry): HTMLElement => {
         const t = a.target || {}
         const td = el("td", "detail")
@@ -1080,7 +1088,7 @@
                 break
             }
         }
-        td.textContent = parts.join(" · ")
+        withArrows(td, parts.join(" · "))
         if ((a.action === "followup.add" || a.action === "followup.delete") && t.note) {
             td.appendChild(document.createTextNode(parts.length ? " · " : ""))
             td.appendChild(el("q", undefined, String(t.note)))
@@ -1954,7 +1962,11 @@
         sfLack.textContent = fmtLack(v)
         const was = fmtMult(d, sfK())
         sfMult.replaceChildren()
-        if (was !== next) sfMult.append(el("span", "was", was + " → "))
+        if (was !== next) {
+            const w = el("span", "was", was + " ")
+            w.append(iconEl("arrow-right"), el("span", "sr-only", "→"), " ")
+            sfMult.append(w)
+        }
         sfMult.append(document.createTextNode(next))
         if (!sfBusy) sfSave.disabled = sfSame(v, d)
     }
@@ -2034,8 +2046,9 @@
         }
         if (inBox) sfDlg.close()
         const rebuild = sfMonths(out.rebuild)
-        staffingOk.textContent = "✓ บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
-            (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้")
+        staffingOk.replaceChildren(iconEl("check"), " ")
+        withArrows(staffingOk, "บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
+            (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้"))
         staffingOk.classList.remove("hidden")
         const tr = staffingRows.querySelector('tr[data-code="' + saved.code + '"]') as HTMLElement | null
         if (tr) {

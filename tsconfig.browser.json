@@ -16,6 +16,7 @@
     "list/app.ts",
     "ranking/app.ts",
     "admin/app.ts",
+    "dashboard/icons.ts",
     "dashboard/app.ts",
     "dashboard/login.ts",
     "dashboard/review.ts",

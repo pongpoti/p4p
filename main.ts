@@ -504,6 +504,12 @@ const CSP = [
   "img-src 'self' data:",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.line.me https://access.line.me",
 ].join("; ")
+// The dashboard's own pages self-host their font (TH SarabunPSK under
+// /dashboard/fonts/, 2026-11-18), so the dashboard drops the Google Fonts
+// hosts. The LIFF pages and /dashboard/login still load Google Fonts.
+const DASHBOARD_CSP = CSP
+  .replace("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "style-src 'self' 'unsafe-inline'")
+  .replace("font-src 'self' https://fonts.gstatic.com", "font-src 'self'")
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Content-Security-Policy", CSP)
   res.setHeader("X-Content-Type-Options", "nosniff")
@@ -736,7 +742,7 @@ async function audit(req: Request, actor: { sub: string; name: string }, action:
 // Unlike the LIFF pages, the dashboard never runs inside a frame, so it
 // refuses to be framed by anyone (clickjacking on the delete buttons).
 app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("Content-Security-Policy", CSP + "; frame-ancestors 'none'")
+  res.setHeader("Content-Security-Policy", (req.path === "/login" ? CSP : DASHBOARD_CSP) + "; frame-ancestors 'none'")
   next()
 })
 
