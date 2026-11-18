@@ -5,6 +5,15 @@
 ;(function () {
     "use strict"
 
+    // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
+    // a copy of lib/staff-names.ts). New saves already carry the Thai name;
+    // this covers rows saved before.
+    const STAFF_NAMES = new Map<string, string>([["pongsit", "ปองสิทธิ์"], ["dada", "กานดา"]])
+    const staffName = (name: unknown): string => {
+        const s = String(name == null ? "" : name).trim()
+        return STAFF_NAMES.get(s.toLowerCase()) || s
+    }
+
     // ── Desktop-only gate — the inverse of the LIFF pages' mobile gate ───
     const mobileBlock = document.getElementById("mobile-block") as HTMLElement
     if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
@@ -235,7 +244,7 @@
     // for bookmarks. (The code and API still say "audit".)
     if (location.hash === "#audit") history.replaceState(null, "", "#history")
     const currentView = (): string =>
-        location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
+        location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
             : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : location.hash === "#staffing" ? "staffing"
             : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview"
@@ -254,7 +263,7 @@
             if (on) a.setAttribute("aria-current", "page")
             else a.removeAttribute("aria-current")
         }
-        titleEl.textContent = TITLES[view]
+        titleEl.textContent = view === "roster" && !isOwner ? "รายชื่อ — รายชื่อแพทย์รายเดือน (ดูอย่างเดียว)" : TITLES[view]
         if (audit) {
             monthsEl.classList.add("hidden")
             emptyEl.classList.add("hidden")
@@ -429,7 +438,7 @@
                 const li = el("li", "log-entry")
                 li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)))
                 const body = el("div", "log-body")
-                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + e.logged_by + ")" : "")))
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + staffName(e.logged_by) + ")" : "")))
                 if (e.note) body.appendChild(el("p", "note", e.note))
                 li.appendChild(body)
                 const del = el("button", "icon-btn log-delete") as HTMLButtonElement
@@ -777,7 +786,7 @@
     budgetN.addEventListener("input", paintBudget)
 
     const showBudgetMeta = (b: MonthBudget | null | undefined): void => {
-        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), b.updated_by || ""].filter(Boolean) : []
+        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), staffName(b.updated_by)].filter(Boolean) : []
         budgetMeta.textContent = bits.join(" · ")
         budgetMeta.classList.toggle("hidden", !bits.length)
     }
@@ -959,7 +968,7 @@
             case "followup.add":
             case "followup.delete":
                 add(monthLabel(t.month)); add(t.physician); add(CHANNEL_LABEL[t.channel as Channel])
-                if (a.action === "followup.delete" && t.logged_by) add("บันทึกโดย " + t.logged_by + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""))
+                if (a.action === "followup.delete" && t.logged_by) add("บันทึกโดย " + staffName(t.logged_by) + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""))
                 break
             case "login.refused":
                 add("LINE " + a.actor_line_id)
@@ -1185,7 +1194,10 @@
         void loadAudit()
     })
 
-    // ── รายชื่อ: the LINE /admin/ roster editor (owner only) ─────────────
+    // ── รายชื่อ: the LINE /admin/ roster editor ──────────────────────────
+    // Every dashboard user sees the list; only the owner gets add, edit,
+    // delete and the access requests (Pong, 2026-11-18: กานดา "access, but
+    // disable edit / delete"). The server refuses those to anyone else too.
     // Same data and rules as admin/app.ts: one month table at a time
     // (newest first, this month by default), search by name or department,
     // a department filter, add / edit / delete a row, and the access
@@ -1302,7 +1314,7 @@
 
     const rosterEmpty = (text: string, cls?: string): HTMLElement => {
         const tr = emptyRow(text, cls)
-        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", "7")
+        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", isOwner ? "7" : "6")
         return tr
     }
     const rosterRow = (r: RowRecord, no: number): HTMLElement => {
@@ -1322,6 +1334,7 @@
         tr.appendChild(kindTd)
         tr.appendChild(el("td", "score", fmtScore(r.score)))
         tr.appendChild(el("td", "sent" + (r.submitted_at ? "" : " none"), r.submitted_at ? fmtWhen(r.submitted_at) : "ยังไม่ส่ง"))
+        if (!isOwner) return tr
         const acts = el("td", "acts")
         const edit = el("button", "icon-btn") as HTMLButtonElement
         edit.type = "button"
@@ -1405,7 +1418,7 @@
         const seq = ++rosterSeq
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"))
         rosterWrap.scrollTop = 0
-        void loadRequests()
+        if (isOwner) void loadRequests()
         try {
             if (!rosterTables) {
                 const t: { tables: string[] } = await rosterApi("/dashboard/api/roster")
@@ -1510,7 +1523,7 @@
         const first = rosterFields.querySelector<HTMLInputElement>(row ? '[data-col="firstname"]' : '[data-col="prefix"]')
         if (first) first.focus()
     }
-    rosterAdd.addEventListener("click", () => openRosterForm(null))
+    rosterAdd.addEventListener("click", () => { if (isOwner) openRosterForm(null) })
 
     const collectRoster = (): RowRecord => {
         const out: RowRecord = {}
@@ -1957,7 +1970,7 @@
         sfDaily.value = String(d.daily)
         sfError.classList.add("hidden")
         sfMeta.textContent = d.updated_at
-            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), d.updated_by || ""].filter(Boolean).join(" · ")
+            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), staffName(d.updated_by)].filter(Boolean).join(" · ")
             : "ค่าตั้งต้นจากแผ่น" + (staffing ? staffing.source : "")
         sfMeta.classList.remove("hidden")
         paintStaffing()
@@ -2053,11 +2066,24 @@
                 // review.js reads this before drawing: ผู้จัดทำ only, no switch.
                 if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
                 auditNav.classList.toggle("hidden", !isOwner)
-                rosterNav.classList.toggle("hidden", !isOwner)
+                rosterNav.classList.remove("hidden")
                 reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee)
             }
         } catch (e) {
             // Name stays blank; the page itself is already authorised.
+        }
+        // รายชื่อ: เพิ่มรายชื่อ and คำขอเข้าใช้งาน start hidden (index.html) and
+        // appear for the owner only; anyone else, or a failed session call,
+        // gets the read-only table without its edit/delete column.
+        if (isOwner) {
+            rosterAdd.classList.remove("hidden")
+            reqBtn.classList.remove("hidden")
+        } else {
+            rosterAdd.remove()
+            reqBtn.remove()
+            const rt = rosterRows.closest("table") as HTMLTableElement
+            rt.querySelector("col.c-act")?.remove()
+            rt.tHead!.rows[0].lastElementChild?.remove()
         }
 
         render()

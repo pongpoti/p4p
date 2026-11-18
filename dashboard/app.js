@@ -6,6 +6,14 @@
 ;
 (function () {
     "use strict";
+    // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18;
+    // a copy of lib/staff-names.ts). New saves already carry the Thai name;
+    // this covers rows saved before.
+    const STAFF_NAMES = new Map([["pongsit", "ปองสิทธิ์"], ["dada", "กานดา"]]);
+    const staffName = (name) => {
+        const s = String(name == null ? "" : name).trim();
+        return STAFF_NAMES.get(s.toLowerCase()) || s;
+    };
     // ── Desktop-only gate — the inverse of the LIFF pages' mobile gate ───
     const mobileBlock = document.getElementById("mobile-block");
     if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
@@ -210,7 +218,7 @@
     // for bookmarks. (The code and API still say "audit".)
     if (location.hash === "#audit")
         history.replaceState(null, "", "#history");
-    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" && isOwner ? "roster"
+    const currentView = () => location.hash === "#followup" ? "followup" : location.hash === "#roster" ? "roster"
         : location.hash === "#review" && (isOwner || reviewAuditee) ? "review"
             : location.hash === "#staffing" ? "staffing"
                 : (location.hash === "#history" || location.hash === "#audit") && isOwner ? "audit" : "overview";
@@ -231,7 +239,7 @@
             else
                 a.removeAttribute("aria-current");
         }
-        titleEl.textContent = TITLES[view];
+        titleEl.textContent = view === "roster" && !isOwner ? "รายชื่อ — รายชื่อแพทย์รายเดือน (ดูอย่างเดียว)" : TITLES[view];
         if (audit) {
             monthsEl.classList.add("hidden");
             emptyEl.classList.add("hidden");
@@ -409,7 +417,7 @@
                 const li = el("li", "log-entry");
                 li.appendChild(el("span", "time-no", "ครั้งที่ " + (i + 1)));
                 const body = el("div", "log-body");
-                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + e.logged_by + ")" : "")));
+                body.appendChild(el("span", "when", fmtWhen(e.created_at) + (e.logged_by ? "\u2003(บันทึกโดย " + staffName(e.logged_by) + ")" : "")));
                 if (e.note)
                     body.appendChild(el("p", "note", e.note));
                 li.appendChild(body);
@@ -802,7 +810,7 @@
     budgetAmount.addEventListener("input", paintBudget);
     budgetN.addEventListener("input", paintBudget);
     const showBudgetMeta = (b) => {
-        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), b.updated_by || ""].filter(Boolean) : [];
+        const bits = b && b.updated_at ? ["บันทึกล่าสุด " + fmtWhen(b.updated_at), staffName(b.updated_by)].filter(Boolean) : [];
         budgetMeta.textContent = bits.join(" · ");
         budgetMeta.classList.toggle("hidden", !bits.length);
     };
@@ -986,7 +994,7 @@
                 add(t.physician);
                 add(CHANNEL_LABEL[t.channel]);
                 if (a.action === "followup.delete" && t.logged_by)
-                    add("บันทึกโดย " + t.logged_by + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""));
+                    add("บันทึกโดย " + staffName(t.logged_by) + (t.logged_at ? " " + fmtWhen(t.logged_at) : ""));
                 break;
             case "login.refused":
                 add("LINE " + a.actor_line_id);
@@ -1376,7 +1384,7 @@
     const fromLocalInput = (v) => new Date(v + ":00+07:00").toISOString();
     const rosterEmpty = (text, cls) => {
         const tr = emptyRow(text, cls);
-        tr.firstElementChild.setAttribute("colspan", "7");
+        tr.firstElementChild.setAttribute("colspan", isOwner ? "7" : "6");
         return tr;
     };
     const rosterRow = (r, no) => {
@@ -1396,6 +1404,8 @@
         tr.appendChild(kindTd);
         tr.appendChild(el("td", "score", fmtScore(r.score)));
         tr.appendChild(el("td", "sent" + (r.submitted_at ? "" : " none"), r.submitted_at ? fmtWhen(r.submitted_at) : "ยังไม่ส่ง"));
+        if (!isOwner)
+            return tr;
         const acts = el("td", "acts");
         const edit = el("button", "icon-btn");
         edit.type = "button";
@@ -1475,7 +1485,8 @@
         const seq = ++rosterSeq;
         rosterRows.replaceChildren(rosterEmpty("กำลังโหลด…"));
         rosterWrap.scrollTop = 0;
-        void loadRequests();
+        if (isOwner)
+            void loadRequests();
         try {
             if (!rosterTables) {
                 const t = await rosterApi("/dashboard/api/roster");
@@ -1593,7 +1604,8 @@
         if (first)
             first.focus();
     };
-    rosterAdd.addEventListener("click", () => openRosterForm(null));
+    rosterAdd.addEventListener("click", () => { if (isOwner)
+        openRosterForm(null); });
     const collectRoster = () => {
         const out = {};
         for (const input of Array.from(rosterFields.querySelectorAll("[data-col]"))) {
@@ -2042,7 +2054,7 @@
         sfDaily.value = String(d.daily);
         sfError.classList.add("hidden");
         sfMeta.textContent = d.updated_at
-            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), d.updated_by || ""].filter(Boolean).join(" · ")
+            ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), staffName(d.updated_by)].filter(Boolean).join(" · ")
             : "ค่าตั้งต้นจากแผ่น" + (staffing ? staffing.source : "");
         sfMeta.classList.remove("hidden");
         paintStaffing();
@@ -2129,6 +2141,7 @@
         }
     });
     (async function main() {
+        var _a, _b;
         try {
             const r = await fetch("/dashboard/api/session", { credentials: "same-origin" });
             if (r.status === 401) {
@@ -2147,12 +2160,26 @@
                 if (reviewAuditee)
                     document.body.dataset.reviewSide = "auditee";
                 auditNav.classList.toggle("hidden", !isOwner);
-                rosterNav.classList.toggle("hidden", !isOwner);
+                rosterNav.classList.remove("hidden");
                 reviewNav.classList.toggle("hidden", !isOwner && !reviewAuditee);
             }
         }
         catch (e) {
             // Name stays blank; the page itself is already authorised.
+        }
+        // รายชื่อ: เพิ่มรายชื่อ and คำขอเข้าใช้งาน start hidden (index.html) and
+        // appear for the owner only; anyone else, or a failed session call,
+        // gets the read-only table without its edit/delete column.
+        if (isOwner) {
+            rosterAdd.classList.remove("hidden");
+            reqBtn.classList.remove("hidden");
+        }
+        else {
+            rosterAdd.remove();
+            reqBtn.remove();
+            const rt = rosterRows.closest("table");
+            (_a = rt.querySelector("col.c-act")) === null || _a === void 0 ? void 0 : _a.remove();
+            (_b = rt.tHead.rows[0].lastElementChild) === null || _b === void 0 ? void 0 : _b.remove();
         }
         render();
         const view = currentView();

@@ -365,9 +365,10 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { fail(res, "withdraw", e) }
   })
 
-  // The ส่งอีเมล button: the live round's email again (a month sent before
-  // the email SQL, a failed email, or a test). The SQL refuses while one is
-  // on its way or once a real one went out.
+  // The email box's button (ส่งอีเมลอีกครั้ง / ส่งอีเมลจริง / ส่งอีเมล): the live
+  // round's email again, shown only while one is owed (a failed email, a
+  // test send once test mode is off, a round with no email). The SQL refuses
+  // while one is on its way or once a real one went out.
   app.post("/dashboard/api/review/:month/email", async (req: Request, res: Response) => {
     const g = await gate(req, res, "auditee")
     if (!g) return
@@ -438,12 +439,19 @@ export function mountReview(d: ReviewDeps): void {
     if (!g) return
     const round = /^[1-9][0-9]{0,3}$/.test(String(req.query.round || "")) ? Number(req.query.round) : null
     try {
-      res.json(await d.callServiceRpc("review_people", { p_month: g.month, p_round: round }))
+      const out = await d.callServiceRpc("review_people", { p_month: g.month, p_round: round })
+      // The ผู้จัดทำ (กานดา) reads a round's decisions and remarks only once the
+      // auditor has handed it back or approved it, never while the auditor is
+      // still deciding (Pong, 2026-11-18: "ตรวจสอบ : access only in auditee part").
+      const st = out && out.round ? String(out.round.status || "") : ""
+      if (!g.owner && out && out.round && st !== "returned" && st !== "approved") return res.status(404).json({ error: "ไม่พบในรอบนี้" })
+      res.json(out)
     } catch (e: any) { fail(res, "people", e) }
   })
 
+  // One doctor's sheet for the auditor's per-person panel: the auditor's only.
   app.get("/dashboard/api/review/:month/person/:round/:index", async (req: Request, res: Response) => {
-    const g = await gate(req, res, "auditee")
+    const g = await gate(req, res)
     if (!g) return
     const round = String(req.params.round), index = String(req.params.index)
     if (!/^[1-9][0-9]{0,3}$/.test(round) || !UUID_RE.test(index)) return res.status(404).json({ error: "ไม่พบในรอบนี้" })
