@@ -165,9 +165,10 @@
            rem on every tab grows with it (layout widths are in px). */
         html { font-size: 137.5%; font-synthesis: none; }
         /* TH SarabunPSK Regular reads thin on a Windows desktop (Pong,
-           2026-11-18): a 0.4px outline in the text colour thickens every
-           letter a little, on every tab. */
-        html { -webkit-text-stroke-width: 0.4px; }
+           2026-11-18): an outline in the text colour thickens every letter a
+           little, on every tab. 0.4px was too thick (Pong, 2026-11-19: one
+           step down), so 0.25px. */
+        html { -webkit-text-stroke-width: 0.25px; }
         html, body, button, input, select, textarea, dialog { font-family: var(--font-sans); }
         body {
             background: var(--background);
@@ -613,8 +614,8 @@
         }
         .split dt { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
         .split dd { font-size: clamp(28px, 5.4vh, 52px); font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-        /* TH SarabunPSK Bold digits are light next to the old Inter 700, so the big numbers get a stronger outline than the 0.4px on all text. */
-        .split dd { -webkit-text-stroke-width: 1.1px; }
+        /* TH SarabunPSK Bold digits are light next to the old Inter 700, so the big numbers get a stronger outline than the 0.25px on all text (one step, 0.15px, down from 1.1px with it on 2026-11-19). */
+        .split dd { -webkit-text-stroke-width: 0.95px; }
         .split .pending dd { color: var(--warning); }
         .split .pending.zero dd { color: var(--muted-foreground); }
 
