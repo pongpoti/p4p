@@ -2216,8 +2216,8 @@
             position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100; padding: var(--sp-3) var(--sp-5); border-radius: var(--r-pill);
             background: var(--c-brand); color: #fff; font-weight: 700; box-shadow: var(--elev-3);
         }
-        /* ── ดูแบบผู้จัดทำ (2026-11-19): a 36px amber bar above the brown
-           header while the owner looks as the ผู้จัดทำ. The full-height tabs
+        /* ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (2026-11-19): a 36px amber bar
+           above the brown header while the owner looks as that role. The full-height tabs
            give up the same 36px (they scroll inside their own boxes); the
            ภาพรวม cards keep their size, so the page scrolls by 36px there
            instead of cutting the cards' last line. ── */
@@ -2256,11 +2256,11 @@
     </div>
 
     <header id="header">
-        <!-- ดูแบบผู้จัดทำ: shown by app.js while the owner looks as the ผู้จัดทำ -->
+        <!-- ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ: shown by app.js while the owner looks as that role -->
         <div id="viewas-bar" class="viewas-bar" role="status" hidden>
             <div class="container">
                 <span class="va-ico" data-icon="eye"></span>
-                <span class="va-text"><b>กำลังดูแบบผู้จัดทำ</b><span id="viewas-note">เห็นแบบเดียวกับผู้จัดทำ ดูได้อย่างเดียว บันทึกหรือส่งไม่ได้</span></span>
+                <span class="va-text"><b id="viewas-title">กำลังดูแบบผู้จัดทำ</b><span id="viewas-note">เห็นแบบเดียวกับผู้จัดทำ ดูได้อย่างเดียว บันทึกหรือส่งไม่ได้</span></span>
                 <button type="button" id="viewas-back" class="va-back"><span data-icon="undo"></span>กลับเป็นผู้ดูแลระบบ</button>
             </div>
         </div>
@@ -2333,9 +2333,13 @@
                         <span><b>ผู้ใช้งานและสิทธิ์</b><small id="um-users-sub" class="hidden"></small></span>
                         <span id="um-pending" class="um-pill warn hidden"></span>
                     </button>
-                    <button type="button" class="um-item" role="menuitem" id="um-viewas" tabindex="-1">
+                    <button type="button" class="um-item" role="menuitem" id="um-viewas" data-view="author" tabindex="-1">
                         <span class="um-ico" data-icon="eye"></span>
                         <span><b>ดูแบบผู้จัดทำ</b><small>เห็นหน้าจอแบบเดียวกับผู้จัดทำ ดูได้อย่างเดียว</small></span>
+                    </button>
+                    <button type="button" class="um-item" role="menuitem" id="um-viewas-auditor" data-view="auditor" tabindex="-1">
+                        <span class="um-ico" data-icon="eye"></span>
+                        <span><b>ดูแบบผู้ตรวจสอบ</b><small>เห็นหน้าจอแบบเดียวกับผู้ตรวจสอบ ดูได้อย่างเดียว</small></span>
                     </button>
                 </div>
                 <span class="sep" aria-hidden="true"></span>

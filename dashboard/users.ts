@@ -256,14 +256,17 @@
     })
     ;(document.getElementById("um-invite") as HTMLElement).addEventListener("click", () => { closeMenu(false); void openInvite() })
     ;(document.getElementById("um-users") as HTMLElement).addEventListener("click", () => { closeMenu(false); void openUsers() })
-    // ดูแบบผู้จัดทำ (Pong, 2026-11-19): the whole page as the ผู้จัดทำ sees it,
-    // read-only, until กลับเป็นผู้ดูแลระบบ on the bar above the header (app.ts).
-    ;(document.getElementById("um-viewas") as HTMLElement).addEventListener("click", () => {
-        closeMenu(false)
-        void api("/dashboard/api/view-as", "POST", { view: "author" })
-            .then(() => location.reload())
-            .catch((e) => { if (!(e instanceof HttpError && e.status === 401)) toast("เปลี่ยนเป็นดูแบบผู้จัดทำไม่สำเร็จ กรุณาลองใหม่") })
-    })
+    // ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19): the whole page as
+    // that role sees it, read-only, until กลับเป็นผู้ดูแลระบบ on the bar
+    // above the header (app.ts).
+    for (const b of Array.from(menu.querySelectorAll<HTMLButtonElement>(".um-item[data-view]"))) {
+        b.addEventListener("click", () => {
+            closeMenu(false)
+            void api("/dashboard/api/view-as", "POST", { view: b.dataset.view })
+                .then(() => location.reload())
+                .catch((e) => { if (!(e instanceof HttpError && e.status === 401)) toast("เปลี่ยนมุมมองไม่สำเร็จ กรุณาลองใหม่") })
+        })
+    }
 
     window.addEventListener("dashboard:session", (ev) => {
         const s = (ev as CustomEvent).detail as Session

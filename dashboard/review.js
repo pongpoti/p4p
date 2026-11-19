@@ -1108,6 +1108,10 @@
     // Opening a round on your side stops the other side taking it back.
     const opened = new Set();
     function markOpened(s) {
+        // Not while the owner only looks as a role (ดูแบบ…): read-only, and
+        // the other side must still be able to take the round back.
+        if (document.body.classList.contains("view-as"))
+            return;
         const r = liveRound(s);
         if (!r)
             return;

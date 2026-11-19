@@ -112,30 +112,35 @@
         perms?: string[]; pendingUsers?: number; usersInstalled?: boolean
         // The LINE profile picture from sign-in, for the avatar.
         picture?: string | null
-        // "ผู้จัดทำ" while the owner looks as the ผู้จัดทำ (ดูแบบผู้จัดทำ).
+        // "ผู้จัดทำ" or "ผู้ตรวจสอบ" while the owner looks as that role (ดูแบบ…).
         viewAs?: string | null
     }
-    // ── ดูแบบผู้จัดทำ (Pong, 2026-11-19) ─────────────────────────────────
-    // The owner sees the page with the ผู้จัดทำ's tabs and rights; the server
-    // answers every call as for the ผู้จัดทำ and refuses every write. The bar
+    // ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19) ─────────────────
+    // The owner sees the page with that role's tabs and rights; the server
+    // answers every call as for that role and refuses every write. The bar
     // above the header says so, flashes when a write is refused, and takes
     // the owner back.
     const viewAsBar = document.getElementById("viewas-bar") as HTMLElement
+    const viewAsTitle = document.getElementById("viewas-title") as HTMLElement
     const viewAsNote = document.getElementById("viewas-note") as HTMLElement
     const viewAsBack = document.getElementById("viewas-back") as HTMLButtonElement
     // When a write was just refused for the view, the box that tried it
     // says why instead of "ลองใหม่".
     let viewOnlyAt = 0
-    const VIEW_ONLY_MSG = "ดูแบบผู้จัดทำอยู่ บันทึกไม่ได้ กด กลับเป็นผู้ดูแลระบบ ก่อน"
-    const failText = (fallback: string): string => (Date.now() - viewOnlyAt < 5000 ? VIEW_ONLY_MSG : fallback)
+    let viewAsLabel = ""
+    const failText = (fallback: string): string =>
+        (Date.now() - viewOnlyAt < 5000 ? "ดูแบบ" + viewAsLabel + "อยู่ บันทึกไม่ได้ กด กลับเป็นผู้ดูแลระบบ ก่อน" : fallback)
     const flashViewAs = (): void => {
         viewOnlyAt = Date.now()
-        viewAsNote.textContent = "บันทึกหรือส่งไม่ได้ขณะดูแบบผู้จัดทำ กด กลับเป็นผู้ดูแลระบบ ก่อน"
+        viewAsNote.textContent = "บันทึกหรือส่งไม่ได้ขณะดูแบบ" + viewAsLabel + " กด กลับเป็นผู้ดูแลระบบ ก่อน"
         viewAsBar.classList.remove("va-flash")
         void viewAsBar.offsetWidth
         viewAsBar.classList.add("va-flash")
     }
-    const startViewAs = (): void => {
+    const startViewAs = (label: string): void => {
+        viewAsLabel = label
+        viewAsTitle.textContent = "กำลังดูแบบ" + label
+        viewAsNote.textContent = "เห็นแบบเดียวกับ" + label + " ดูได้อย่างเดียว บันทึกหรือส่งไม่ได้"
         document.body.classList.add("view-as")
         viewAsBar.hidden = false
         const realFetch = window.fetch.bind(window)
@@ -2823,7 +2828,7 @@
                 // review.js reads this before drawing: one side only, no switch.
                 if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
                 else if (reviewAuditor) document.body.dataset.reviewSide = "auditor"
-                if (typeof session.viewAs === "string" && session.viewAs) startViewAs()
+                if (typeof session.viewAs === "string" && session.viewAs) startViewAs(session.viewAs)
                 sessionOk = true
                 // users.js: the owner's menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งานและสิทธิ์).
                 window.dispatchEvent(new CustomEvent("dashboard:session", { detail: session }))

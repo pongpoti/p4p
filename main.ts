@@ -738,7 +738,8 @@ const dashUserRow = (sub: string): DashUserRow | null => (dashUsersFresh() && da
 function dashPerms(sub: string): string[] | null {
   if (!sub) return null
   if (isOwnerLineUserId(sub)) return OWNER_PERMS
-  if (sub === VIEW_AS_AUTHOR) return LEGACY_PERMS
+  const stand = viewAsOf(sub)
+  if (stand) return stand.perms
   const row = dashUsers.rows.get(sub)
   if (row) {
     if (!row.active) return null
@@ -780,24 +781,31 @@ function readDash(token: string | undefined): Record<string, any> | null {
 // only LINE's own picture host, as the CSP's img-src allows.
 const linePicture = (v: unknown): string =>
   typeof v === "string" && v.startsWith("https://profile.line-scdn.net/") && v.length <= 500 ? v : ""
-// ── ดูแบบผู้จัดทำ (Pong, 2026-11-19: "how กานดา view look like while i log
-// in my account") ──────────────────────────────────────────────────────────
-// The owner's cookie may carry view: "author". Every request then runs as a
-// stand-in user with the ผู้จัดทำ rights (LEGACY_PERMS, the set กานดา has),
-// so each page and API answers exactly as it would for her, and it is
+// ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19: "how กานดา view look
+// like while i log in my account", then "add option for me as ดูแบบผู้ตรวจสอบ")
+// The owner's cookie may carry view: "author" or "auditor". Every request
+// then runs as a stand-in user with that role's bundle, so each page and API
+// answers exactly as it would for a ผู้จัดทำ or a ผู้ตรวจสอบ, and it is
 // read-only: the gate below refuses every write until the owner switches
-// back. VIEW_AS_AUTHOR is never a LINE ID (those are U + 32 hex), never put
-// in a cookie as the user, and the History log still names the owner.
-const VIEW_AS_AUTHOR = "~view-as-author"
-const VIEW_AS_LABEL = "ผู้จัดทำ"
-type DashSession = { sub: string; name: string; exp: number; perms: string[]; pic: string; viewer?: { sub: string; name: string } }
-// The owner behind a ดูแบบผู้จัดทำ request, for audit(): set by dashSession.
-const dashViewers = new WeakMap<Request, { sub: string; name: string }>()
+// back. A stand-in is never a LINE ID (those are U + 32 hex), never put in a
+// cookie as the user, and the History log still names the owner.
+const VIEW_AS = new Map<string, { sub: string; label: string; perms: string[] }>([
+  ["author", { sub: "~view-as-author", label: "ผู้จัดทำ", perms: AUTHOR_PERMS }],
+  ["auditor", { sub: "~view-as-auditor", label: "ผู้ตรวจสอบ", perms: AUDITOR_PERMS }],
+])
+function viewAsOf(sub: string): { sub: string; label: string; perms: string[] } | null {
+  for (const v of VIEW_AS.values()) if (v.sub === sub) return v
+  return null
+}
+type DashViewer = { sub: string; name: string; view: string }
+type DashSession = { sub: string; name: string; exp: number; perms: string[]; pic: string; viewer?: DashViewer }
+// The owner behind a ดูแบบ… request, for audit(): set by dashSession.
+const dashViewers = new WeakMap<Request, DashViewer>()
 function dashSession(req: Request): DashSession | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   // A payload with a typ (the phone's p4p_join) is never a session.
   if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000 || o.typ !== undefined) return null
-  if (o.sub === VIEW_AS_AUTHOR) return null
+  if (viewAsOf(String(o.sub || ""))) return null
   // Re-checked on every request, so a suspension or a removed right (or an
   // id taken out of the env var) applies to the next call, not when the
   // cookie expires.
@@ -805,10 +813,11 @@ function dashSession(req: Request): DashSession | null {
   if (!perms) return null
   const row = dashUserRow(o.sub)
   const name = (row && row.display_name) || staffName(o.name)
-  if (o.view === "author" && isDashOwner(o.sub)) {
-    const viewer = { sub: o.sub, name }
+  const stand = typeof o.view === "string" ? VIEW_AS.get(o.view) : undefined
+  if (stand && isDashOwner(o.sub)) {
+    const viewer = { sub: o.sub, name, view: o.view as string }
     dashViewers.set(req, viewer)
-    return { sub: VIEW_AS_AUTHOR, name, exp: o.exp, perms: LEGACY_PERMS, pic: linePicture(o.pic), viewer }
+    return { sub: stand.sub, name, exp: o.exp, perms: stand.perms, pic: linePicture(o.pic), viewer }
   }
   return { sub: o.sub, name, exp: o.exp, perms, pic: linePicture(o.pic) }
 }
@@ -821,7 +830,7 @@ function setDashCookie(res: Response, sub: string, name: string, exp: number, pi
   const idle = Math.min(exp, now + DASH_IDLE_SECONDS)
   const o: Record<string, unknown> = { sub, name, exp, idle }
   if (linePicture(pic)) o.pic = pic
-  if (view === "author" && isDashOwner(sub)) o.view = "author"
+  if (VIEW_AS.has(view) && isDashOwner(sub)) o.view = view
   res.append("Set-Cookie", DASH_COOKIE + "=" + signDash(o) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
 }
 // The callback URL must be registered on the LINE Login channel exactly, so
@@ -873,11 +882,11 @@ const isReviewAuditor = (sub: string): boolean => !isDashOwner(sub) && (dashPerm
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
 async function audit(req: Request, actor: { sub: string; name: string }, action: string, target: Record<string, unknown> = {}): Promise<void> {
-  // ดูแบบผู้จัดทำ: the owner did it, while looking as the ผู้จัดทำ.
+  // ดูแบบ…: the owner did it, while looking as the ผู้จัดทำ or ผู้ตรวจสอบ.
   const viewer = dashViewers.get(req)
-  if (viewer && actor.sub === VIEW_AS_AUTHOR) {
-    actor = viewer
-    target = { ...target, viewAs: VIEW_AS_LABEL }
+  if (viewer && viewAsOf(actor.sub)) {
+    target = { ...target, viewAs: (VIEW_AS.get(viewer.view) || { label: "" }).label }
+    actor = { sub: viewer.sub, name: viewer.name }
   }
   const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
   try {
@@ -940,18 +949,18 @@ app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Cache-Control", "no-store")
   res.status(404).json({ error: "not found" })
 })
-// ดูแบบผู้จัดทำ is read-only: every write under /dashboard is refused until
-// the owner switches back (the switch itself and ออกจากระบบ still work).
+// ดูแบบ… is read-only: every write under /dashboard is refused until the
+// owner switches back (the switch itself and ออกจากระบบ still work).
 const VIEW_AS_OPEN = new Set(["/dashboard/api/view-as", "/dashboard/logout"])
 // In error, as every tab shows a refusal's error to the user.
-const VIEW_ONLY_TEXT = "กำลังดูแบบผู้จัดทำ ดูได้อย่างเดียว กด กลับเป็นผู้ดูแลระบบ ก่อนแก้ไข"
+const viewOnlyText = (label: string): string => "กำลังดูแบบ" + label + " ดูได้อย่างเดียว กด กลับเป็นผู้ดูแลระบบ ก่อนแก้ไข"
 app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next()
   if (VIEW_AS_OPEN.has(dashGatePath(req.baseUrl + req.path))) return next()
   const s = dashSession(req)
   if (!s || !s.viewer) return next()
   res.setHeader("Cache-Control", "no-store")
-  res.status(403).json({ error: VIEW_ONLY_TEXT, viewOnly: true })
+  res.status(403).json({ error: viewOnlyText((VIEW_AS.get(s.viewer.view) || { label: "" }).label), viewOnly: true })
 })
 // The same check inside a handler: true when the request may go on, and
 // otherwise the 404 has been sent.
@@ -1125,15 +1134,15 @@ app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  // ดูแบบผู้จัดทำ keeps the owner in the cookie, and the view with it.
-  if (s.viewer) setDashCookie(res, s.viewer.sub, s.name, s.exp, s.pic, "author")
+  // ดูแบบ… keeps the owner in the cookie, and the view with it.
+  if (s.viewer) setDashCookie(res, s.viewer.sub, s.name, s.exp, s.pic, s.viewer.view)
   else setDashCookie(res, s.sub, s.name, s.exp, s.pic)
   const owner = isDashOwner(s.sub)
   const body: Record<string, unknown> = {
     ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), reviewAuditor: isReviewAuditor(s.sub),
     perms: s.perms, picture: s.pic || null,
   }
-  if (s.viewer) body.viewAs = VIEW_AS_LABEL
+  if (s.viewer) body.viewAs = (VIEW_AS.get(s.viewer.view) || { label: "" }).label
   if (owner) {
     body.usersInstalled = dashUsers.installed !== false
     body.pendingUsers = dashUsers.installed === false ? 0 : await pendingInviteCount(s.sub)
@@ -1141,24 +1150,27 @@ app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.json(body)
 })
 
-// ดูแบบผู้จัดทำ on ({view: "author"}) or off ({view: null}), owner only,
-// from this site only (a JSON write under a Lax cookie, as the users routes).
+// ดูแบบผู้จัดทำ ({view: "author"}), ดูแบบผู้ตรวจสอบ ({view: "auditor"}) or
+// back ({view: null}), owner only, from this site only (a JSON write under a
+// Lax cookie, as the users routes).
 app.post("/dashboard/api/view-as", express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  const owner = s.viewer || { sub: s.sub, name: s.name }
+  const owner = s.viewer ? { sub: s.viewer.sub, name: s.viewer.name } : { sub: s.sub, name: s.name }
   if (!isDashOwner(owner.sub)) return res.status(404).json({ error: "not found" })
   const origin = String(req.headers.origin || "")
   let sameHost = false
   try { sameHost = !!origin && new URL(origin).host === String(req.headers.host || "") } catch (e) { sameHost = false }
   if (!(origin && (origin === ADMIN_ORIGIN || sameHost))) return res.status(403).json({ error: "bad origin" })
   const v = req.body ? req.body.view : undefined
-  if (v !== "author" && v !== null) return res.status(400).json({ error: "bad request" })
-  setDashCookie(res, owner.sub, s.name, s.exp, s.pic, v === "author" ? "author" : "")
+  const stand = typeof v === "string" ? VIEW_AS.get(v) : undefined
+  if (!stand && v !== null) return res.status(400).json({ error: "bad request" })
+  const was = s.viewer ? VIEW_AS.get(s.viewer.view) : undefined
+  setDashCookie(res, owner.sub, s.name, s.exp, s.pic, stand ? v : "")
   dashViewers.delete(req)
-  await audit(req, owner, v === "author" ? "view_as.start" : "view_as.stop", { view: VIEW_AS_LABEL })
-  res.json({ ok: true, viewAs: v === "author" ? VIEW_AS_LABEL : null })
+  await audit(req, owner, stand ? "view_as.start" : "view_as.stop", { view: stand ? stand.label : was ? was.label : null })
+  res.json({ ok: true, viewAs: stand ? stand.label : null })
 })
 
 // ── QR invite: a new dashboard user (Pong, 2026-11-18: "Go QR") ────────────
