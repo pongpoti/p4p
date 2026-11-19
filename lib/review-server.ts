@@ -523,6 +523,37 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { allocFail(res, "set", e) }
   })
 
+  // บันทึกทั้งหมด (Pong, 2026-11-19): every number typed in the box saved at
+  // once. Body {rows: [{index, no4}]}. All are checked before any is saved;
+  // then one by one as above, each logged as its own alloc.set. A failure
+  // part way says how many were saved, and the box reads the month again.
+  app.put("/dashboard/api/alloc-ids/:month", d.express.json({ limit: "64kb" }), async (req: Request, res: Response) => {
+    const g = await allocGate(req, res)
+    if (!g) return
+    const raw = req.body && Array.isArray(req.body.rows) ? req.body.rows : null
+    if (!raw || !raw.length || raw.length > 300) return res.status(400).json({ error: "ไม่มีเลขที่จะบันทึก" })
+    const rows = raw.map((x: any) => ({ index: String((x && x.index) ?? ""), no4: String((x && x.no4) ?? "").trim() }))
+    if (rows.some((x: { index: string }) => !UUID_RE.test(x.index))) return res.status(404).json({ error: "ไม่พบบางชื่อในรายชื่อเดือนนี้ ปิดแล้วเปิดใหม่" })
+    if (rows.some((x: { no4: string }) => !/^[0-9]{4}$/.test(x.no4))) return res.status(400).json({ error: "ใส่ตัวเลข 4 หลักให้ครบทุกช่อง" })
+    if (new Set(rows.map((x: { index: string }) => x.index)).size !== rows.length) return res.status(400).json({ error: "มีชื่อซ้ำในรายการที่จะบันทึก" })
+    let saved = 0
+    try {
+      const roster = new Map((await allocRoster(g.month)).map((p) => [p.index, p]))
+      if (rows.some((x: { index: string }) => !roster.has(x.index))) return res.status(404).json({ error: "ไม่พบบางชื่อในรายชื่อเดือนนี้ ปิดแล้วเปิดใหม่" })
+      for (const x of rows) {
+        await d.callServiceRpc("alloc_id_set", { p_month: g.month, p_index: x.index, p_no4: x.no4, p_actor: g.s.name })
+        saved++
+        const p = roster.get(x.index) as NonNullable<ReturnType<typeof roster.get>>
+        await d.audit(req, g.s, "alloc.set", { month: g.month, index: x.index, physician: allocIds.rosterName(p), no4: x.no4 })
+      }
+      res.json({ ok: true, saved, ...(await allocStatus(g.month)) })
+    } catch (e: any) {
+      if (!saved) { allocFail(res, "set all", e); return }
+      console.error("[dashboard] alloc set all: stopped after " + saved + " of " + rows.length + ":", e.response ? JSON.stringify(e.response.data) : e.message)
+      res.status(500).json({ error: "บันทึกได้ " + saved + " จาก " + rows.length + " คน ที่เหลือบันทึกไม่สำเร็จ ลองใหม่อีกครั้ง", saved })
+    }
+  })
+
   // One person's score: written to the month's roster table, logged as a
   // roster edit (so History shows it with the รายชื่อ tab's edits), and a
   // fresh build is queued. Only on the auditee's turn (the SQL checks).
