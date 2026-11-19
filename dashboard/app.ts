@@ -1053,6 +1053,7 @@
     const allocError   = document.getElementById("alloc-error") as HTMLElement
     const allocMissing = document.getElementById("alloc-missing") as HTMLElement
     const allocClose   = document.getElementById("alloc-close") as HTMLElement
+    const allocSaveAll = document.getElementById("alloc-save-all") as HTMLButtonElement
     ;(document.getElementById("alloc-drop-ico") as HTMLElement).appendChild(iconEl("upload"))
     allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg) allocDlg.close() })
     // The card's ⚠ follows what was done in the box.
@@ -1061,6 +1062,18 @@
     let allocBusy = false
     let allocChanged = false
     let allocLoad = 0
+    // Every box of digits now in the dialog, for บันทึกทั้งหมด (Pong,
+    // 2026-11-19). value: what the box started with.
+    interface AllocEdit { month: string; index: string; name: string; inp: HTMLInputElement; value: string; paint: () => void }
+    let allocEdits: AllocEdit[] = []
+    const allocPending = (): AllocEdit[] => allocEdits.filter((x) => /^[0-9]{4}$/.test(x.inp.value) && x.inp.value !== x.value)
+    const paintSaveAll = (): void => {
+        if (allocSaveAll.getAttribute("aria-busy") === "true") return
+        const n = allocPending().length
+        allocSaveAll.classList.toggle("hidden", !allocEdits.length)
+        allocSaveAll.disabled = !n
+        allocSaveAll.textContent = "บันทึกทั้งหมด" + (n ? " (" + fmtNum(n) + ")" : "")
+    }
     // A save or an upload done: the card's ⚠ must follow. True when its
     // answer is too old to paint (the box closed, or opened again since):
     // a closed box refreshes ภาพรวม now, a box open again on the same
@@ -1103,12 +1116,13 @@
         inp.setAttribute("aria-label", "เลข 4 หลักท้ายของ " + name)
         const save = el("button", "btn-primary", "บันทึก") as HTMLButtonElement
         save.type = "submit"
-        const paint = (): void => { save.disabled = !/^[0-9]{4}$/.test(inp.value) || inp.value === value }
+        const paint = (): void => { save.disabled = !/^[0-9]{4}$/.test(inp.value) || inp.value === value; paintSaveAll() }
         inp.addEventListener("input", () => {
             const v = inp.value.replace(/[^0-9]/g, "").slice(0, 4)
             if (v !== inp.value) inp.value = v
             paint()
         })
+        allocEdits.push({ month: m.key, index, name, inp, value, paint })
         paint()
         set.append(inp, save)
         const err = el("p", "error-text hidden")
@@ -1160,6 +1174,11 @@
     }
 
     function paintAlloc(m: MonthStatus, st: AllocStatus): void {
+        // Numbers typed but not saved stay typed when the lists are drawn
+        // again (after one person's save, say).
+        const typed = new Map(allocEdits.filter((x) => x.month === m.key && x.inp.value !== x.value).map((x) => [x.index, x.inp.value]))
+        allocEdits = []
+        paintSaveAll()
         const off = !st.installed
         allocDrop.classList.toggle("off", off)
         if (off) {
@@ -1197,11 +1216,18 @@
             allocRow(m, c.index, c.name, "", el("small", "al-sheet", "ในไฟล์: " + c.sheetName), c.no4, [])))
         ;(allocClose.querySelector("h3") as HTMLElement).replaceChildren(document.createTextNode("ชื่อสะกดต่างกันเล็กน้อย"), el("span", "n", fmtNum(close.length) + " คน"))
         allocClose.classList.toggle("hidden", !close.length)
+        for (const x of allocEdits) {
+            const v = typed.get(x.index)
+            if (v !== undefined) { x.inp.value = v; x.paint() }
+        }
+        paintSaveAll()
     }
 
     async function openAlloc(m: MonthStatus): Promise<void> {
         allocMonth = m
         allocChanged = false
+        allocEdits = []
+        paintSaveAll()
         allocDlg.style.setProperty("--month", m.color)
         allocTitle.textContent = "เอกสารจัดสรร " + m.name
         allocCount.textContent = "–"
@@ -1273,6 +1299,49 @@
         }
     }
     allocFile.addEventListener("change", () => { const f = allocFile.files && allocFile.files[0]; if (f) void uploadAlloc(f) })
+    // บันทึกทั้งหมด: every box with 4 new digits, in one request.
+    allocSaveAll.addEventListener("click", async () => {
+        const m = allocMonth
+        const rows = allocPending()
+        if (!m || !rows.length || allocBusy) return
+        const load = allocLoad
+        allocBusy = true
+        allocSay(null)
+        allocSaveAll.disabled = true
+        allocSaveAll.setAttribute("aria-busy", "true")
+        allocSaveAll.replaceChildren(el("span", "spinner"), document.createTextNode(" กำลังบันทึก…"))
+        try {
+            const r = await fetch("/dashboard/api/alloc-ids/" + encodeURIComponent(m.key), {
+                method: "PUT", credentials: "same-origin",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ rows: rows.map((x) => ({ index: x.index, no4: x.inp.value })) }),
+            })
+            if (r.status === 401) { location.href = "/dashboard/login"; return }
+            const out = await r.json().catch(() => null) as (AllocStatus & { ok?: boolean; saved?: number }) | null
+            if (!r.ok || !out || !out.ok) {
+                const msg = (out && out.error) || "บันทึกไม่สำเร็จ กรุณาลองใหม่"
+                // Some saved before it stopped: they leave the lists, the rest stay typed.
+                if (out && out.saved) {
+                    if (allocSaved(m, load)) return
+                    allocSay("error", msg)
+                    void loadAlloc(m)
+                    return
+                }
+                throw new Error(msg)
+            }
+            if (allocSaved(m, load)) return
+            allocSaveAll.removeAttribute("aria-busy")
+            paintAlloc(m, out)
+            allocSay("ok", "บันทึกเลข " + fmtNum(out.saved || rows.length) + " คนแล้ว")
+        } catch (e: any) {
+            if (load !== allocLoad || !allocDlg.open) return
+            allocSay("error", e && e.message ? e.message : "บันทึกไม่สำเร็จ กรุณาลองใหม่")
+        } finally {
+            allocBusy = false
+            allocSaveAll.removeAttribute("aria-busy")
+            paintSaveAll()
+        }
+    })
     allocDrop.addEventListener("dragover", (ev) => { ev.preventDefault(); allocDrop.classList.add("over") })
     allocDrop.addEventListener("dragleave", () => allocDrop.classList.remove("over"))
     allocDrop.addEventListener("drop", (ev) => {
