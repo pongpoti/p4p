@@ -504,10 +504,8 @@ const CSP = [
   "img-src 'self' data:",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.line.me https://access.line.me",
 ].join("; ")
-// The dashboard self-hosts TH SarabunPSK (/dashboard/fonts/) for its header
-// and table tabs; ภาพรวม and ตามส่ง keep 17 Nov's Inter + Noto Sans Thai from
-// Google Fonts (Pong, 2026-11-18), so the dashboard keeps the Google Fonts
-// hosts, as the LIFF pages and /dashboard/login do.
+// The dashboard self-hosts its font (Sarabun, /dashboard/fonts/) on every tab;
+// the Google Fonts hosts stay for the LIFF pages and /dashboard/login.
 const DASHBOARD_CSP = CSP
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Content-Security-Policy", CSP)

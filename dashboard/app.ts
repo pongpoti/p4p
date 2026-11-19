@@ -1469,8 +1469,8 @@
     }
 
     // One readable line of what the action touched; the note is quoted.
-    // Text with " → " in it, each arrow drawn as an icon (TH SarabunPSK has
-    // no arrows, 2026-11-18); a screen reader still reads the arrow.
+    // Text with " → " in it, each arrow drawn as an icon (the dashboard font
+    // has no arrows, 2026-11-18); a screen reader still reads the arrow.
     function withArrows(parent: HTMLElement, text: string): void {
         text.split(" → ").forEach((bit, i) => {
             if (i) parent.append(" ", iconEl("arrow-right"), el("span", "sr-only", "→"), " ")
