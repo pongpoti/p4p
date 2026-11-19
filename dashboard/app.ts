@@ -112,13 +112,109 @@
         perms?: string[]; pendingUsers?: number; usersInstalled?: boolean
         // The LINE profile picture from sign-in, for the avatar.
         picture?: string | null
+        // "ผู้จัดทำ" or "ผู้ตรวจสอบ" while the owner looks as that role (ดูแบบ…).
+        viewAs?: string | null
     }
+    // ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19) ─────────────────
+    // The owner sees the page with that role's tabs and rights; the server
+    // answers every call as for that role and refuses every write. The bar
+    // above the header says so, flashes when a write is refused, and takes
+    // the owner back.
+    const viewAsBar = document.getElementById("viewas-bar") as HTMLElement
+    const viewAsTitle = document.getElementById("viewas-title") as HTMLElement
+    const viewAsNote = document.getElementById("viewas-note") as HTMLElement
+    const viewAsBack = document.getElementById("viewas-back") as HTMLButtonElement
+    // When a write was just refused for the view, the box that tried it
+    // says why instead of "ลองใหม่".
+    let viewOnlyAt = 0
+    let viewAsLabel = ""
+    const failText = (fallback: string): string =>
+        (Date.now() - viewOnlyAt < 5000 ? "ดูแบบ" + viewAsLabel + "อยู่ บันทึกไม่ได้ กด กลับเป็นผู้ดูแลระบบ ก่อน" : fallback)
+    const flashViewAs = (): void => {
+        viewOnlyAt = Date.now()
+        viewAsNote.textContent = "บันทึกหรือส่งไม่ได้ขณะดูแบบ" + viewAsLabel + " กด กลับเป็นผู้ดูแลระบบ ก่อน"
+        viewAsBar.classList.remove("va-flash")
+        void viewAsBar.offsetWidth
+        viewAsBar.classList.add("va-flash")
+    }
+    const startViewAs = (label: string): void => {
+        viewAsLabel = label
+        viewAsTitle.textContent = "กำลังดูแบบ" + label
+        viewAsNote.textContent = "เห็นแบบเดียวกับ" + label + " ดูได้อย่างเดียว บันทึกหรือส่งไม่ได้"
+        document.body.classList.add("view-as")
+        viewAsBar.hidden = false
+        const realFetch = window.fetch.bind(window)
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const r = await realFetch(input, init)
+            if (r.status === 403) {
+                // Known before the caller reads the answer, so its message can say so.
+                viewOnlyAt = Date.now()
+                await r.clone().json().then((b) => { if (b && b.viewOnly === true) flashViewAs(); else viewOnlyAt = 0 }).catch(() => { viewOnlyAt = 0 })
+            }
+            return r
+        }
+    }
+    viewAsBack.addEventListener("click", async () => {
+        if (viewAsBack.getAttribute("aria-busy") === "true") return
+        viewAsBack.setAttribute("aria-busy", "true")
+        try {
+            const r = await fetch("/dashboard/api/view-as", {
+                method: "POST", credentials: "same-origin",
+                headers: { "Content-Type": "application/json" }, body: JSON.stringify({ view: null }),
+            })
+            if (r.status === 401) { location.href = "/dashboard/login?error=idle"; return }
+            if (!r.ok) throw new Error("HTTP " + r.status)
+            location.reload()
+        } catch (e) {
+            console.error("view-as off failed:", e)
+            viewAsBack.removeAttribute("aria-busy")
+            viewAsNote.textContent = "กลับเป็นผู้ดูแลระบบไม่สำเร็จ กรุณาลองใหม่"
+        }
+    })
     const permsKey = (p: unknown): string => Array.isArray(p) ? p.slice().sort().join() : ""
     const el = (tag: string, cls?: string, text?: string): HTMLElement => {
         const e = document.createElement(tag)
         if (cls) e.className = cls
         if (text !== undefined) e.textContent = text
         return e
+    }
+
+    // ── Sortable headers (Pong, 2026-11-19: อัตรากำลัง every column, รายชื่อ
+    // กลุ่มงาน only) ─────────────────────────────────────────────────────
+    // Each header becomes a button: a click sorts by it from low to high, a
+    // second click high to low, a third puts the table's own order back.
+    // aria-sort on the header says which, for screen readers.
+    type SortDir = "asc" | "desc" | null
+    const SORT_TIP: Record<string, string> = { asc: "เรียงจากน้อยไปมาก คลิกอีกครั้งเพื่อเรียงจากมากไปน้อย", desc: "เรียงจากมากไปน้อย คลิกอีกครั้งเพื่อกลับเป็นลำดับเดิม", "": "คลิกเพื่อเรียงลำดับ" }
+    function sortHeaders(ths: HTMLTableCellElement[], onSort: (col: number, dir: SortDir) => void): void {
+        let col = -1
+        let dir: SortDir = null
+        const btns = ths.map((th, i) => {
+            const b = el("button", "th-sort") as HTMLButtonElement
+            b.type = "button"
+            const label = el("span")
+            label.append(...Array.from(th.childNodes))
+            b.append(label, iconEl("sort", "th-sort-ic"))
+            th.replaceChildren(b)
+            b.addEventListener("click", () => {
+                if (col !== i) { col = i; dir = "asc" } else dir = dir === "asc" ? "desc" : dir === "desc" ? null : "asc"
+                if (!dir) col = -1
+                draw()
+                onSort(col, dir)
+            })
+            return b
+        })
+        const draw = (): void => ths.forEach((th, i) => {
+            const d = i === col ? dir : null
+            if (d) th.setAttribute("aria-sort", d === "asc" ? "ascending" : "descending")
+            else th.removeAttribute("aria-sort")
+            const b = btns[i]
+            b.classList.toggle("on", !!d)
+            b.title = (th.title ? th.title + " · " : "") + SORT_TIP[d || ""]
+            const ic = b.querySelector("svg")
+            if (ic) ic.replaceWith(iconEl(d === "asc" ? "sort-asc" : d === "desc" ? "sort-desc" : "sort", "th-sort-ic"))
+        })
+        draw()
     }
 
     const fmtNum = (n: number): string => n.toLocaleString("th-TH")
@@ -205,7 +301,7 @@
         return card
     }
 
-    // ── ข้อมูล (the owner and the ผู้จัดทำ) ────────────────────────────────
+    // ── ข้อมูล (the owner only since 2026-11-19; the ผู้จัดทำ too 18 to 19 Nov) ─
     // Pong, 2026-11-18: the month card's งบ button became ข้อมูล, a small
     // menu of what is added to a month before it goes to the auditor:
     // งบรายเดือน (the budget and N, typed: the budget box below) and
@@ -711,7 +807,7 @@
             // 404: someone else already deleted it, so just refresh below.
             if (!(err instanceof Error && err.message === "HTTP 404")) {
                 console.error("delete follow-up failed:", err)
-                showLogError("ลบไม่สำเร็จ กรุณาลองใหม่")
+                showLogError(failText("ลบไม่สำเร็จ กรุณาลองใหม่"))
                 del.disabled = false
                 return
             }
@@ -742,7 +838,7 @@
             })
         } catch (e) {
             console.error("save follow-up failed:", e)
-            showLogError("บันทึกไม่สำเร็จ กรุณาลองใหม่")
+            showLogError(failText("บันทึกไม่สำเร็จ กรุณาลองใหม่"))
             logSubmit.textContent = label
             logSubmit.removeAttribute("aria-busy")
             logSubmit.disabled = false
@@ -1923,12 +2019,27 @@
     // กลุ่มงาน filter only hides rows and renumbers the ones shown, so a
     // key or a pick does not build 230 rows again (2026-11-18).
     let rosterDrawn: RowRecord[] | null = null
+    let rosterDrawnSort: SortDir = null
     let rosterTrs = new Map<RowRecord, HTMLElement>()
     let rosterNone: HTMLElement | null = null
+    // กลุ่มงาน, when its header is clicked (Pong, 2026-11-19); names within
+    // a กลุ่มงาน, and the whole list otherwise, in name order. No กลุ่มงาน
+    // goes last either way.
+    let rosterSort: SortDir = null
+    const rosterCmp = (a: RowRecord, b: RowRecord): number => {
+        if (rosterSort) {
+            const da = a.department || "", db = b.department || ""
+            if (!da !== !db) return da ? -1 : 1
+            const c = thCmp(da, db)
+            if (c) return rosterSort === "asc" ? c : -c
+        }
+        return thCmp(sortName(a), sortName(b))
+    }
     const showRoster = (): void => {
         if (!rosterAll.length) { rosterDrawn = null; rosterRows.replaceChildren(rosterEmpty("ยังไม่มีรายชื่อในเดือนนี้")); return }
-        if (rosterDrawn !== rosterAll || !rosterNone || rosterNone.parentNode !== rosterRows) {
-            const order = [...rosterAll].sort((a, b) => thCmp(sortName(a), sortName(b)))
+        if (rosterDrawn !== rosterAll || rosterDrawnSort !== rosterSort || !rosterNone || rosterNone.parentNode !== rosterRows) {
+            rosterDrawnSort = rosterSort
+            const order = [...rosterAll].sort(rosterCmp)
             const trs = new Map<RowRecord, HTMLElement>()
             for (const r of order) trs.set(r, rosterTrs.get(r) || rosterRow(r, 0))
             rosterTrs = trs
@@ -1969,10 +2080,15 @@
         rosterShown = rosterAll.filter((r) => {
             if (dept && r.department !== dept) return false
             return !q || (fullName(r) + " " + (r.department || "")).toLowerCase().includes(q)
-        }).sort((a, b) => thCmp(sortName(a), sortName(b)))
+        }).sort(rosterCmp)
         rosterCount.textContent = fmtNum(rosterShown.length) + " จาก " + fmtNum(rosterAll.length) + " คน"
         showRoster()
     }
+
+    sortHeaders([(rosterRows.closest("table") as HTMLTableElement).tHead!.rows[0].cells[2]], (_c, dir) => {
+        rosterSort = dir
+        applyRosterFilter()
+    })
 
     // Reload the month; the list stays where it was scrolled, or scrolls to `focus`.
     const reloadRoster = async (focus?: string): Promise<void> => {
@@ -2339,6 +2455,29 @@
     let sfBusy = false
     // The edit column is dropped once for anyone who cannot edit.
     let staffingEditCol = true
+    // Any column but the pencil sorts (Pong, 2026-11-19); ties, and no
+    // sort, in the sheet's own order (ที่).
+    let staffingSort: { col: number; dir: SortDir } = { col: -1, dir: null }
+    const STAFFING_KEYS: ((d: StaffingDept) => number | string)[] = [
+        (d) => d.no, (d) => d.name, (d) => d.code, (d) => d.fte, (d) => d.staff, (d) => d.monthly, (d) => d.daily,
+        (d) => d.staff + d.monthly + d.daily, (d) => d.lack, (d) => d.multiplier,
+    ]
+    const staffingOrder = (ds: StaffingDept[]): StaffingDept[] => {
+        const key = STAFFING_KEYS[staffingSort.col]
+        const sign = staffingSort.dir === "desc" ? -1 : 1
+        return [...ds].sort((a, b) => {
+            if (key && staffingSort.dir) {
+                const x = key(a), y = key(b)
+                const c = typeof x === "string" ? thCmp(x, String(y)) : x - (y as number)
+                if (c) return sign * c
+            }
+            return a.no - b.no
+        })
+    }
+    sortHeaders(Array.from(staffingTable.tHead!.rows[0].cells).slice(0, STAFFING_KEYS.length), (col, dir) => {
+        staffingSort = { col, dir }
+        renderStaffing()
+    })
 
     // The same rule as lib/dept-staffing.ts, shown from the counts in whole
     // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
@@ -2486,7 +2625,7 @@
             stat("ตัวคูณสูงสุด", topDept ? fmtMult(topDept, data.k) : "1.00", ds.filter((d) => d.multiplier === top).map((d) => d.code).join(" ")),
             stat("แพทย์รวม", fmtNum(sum(sfHave)), "FTE " + fmtNum(sum((d) => d.fte))),
         )
-        staffingRows.replaceChildren(...ds.map((d) => staffingRow(d, edit)))
+        staffingRows.replaceChildren(...staffingOrder(ds).map((d) => staffingRow(d, edit)))
         const foot = el("tr")
         foot.appendChild(el("td"))
         const label = el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน")
@@ -2689,6 +2828,7 @@
                 // review.js reads this before drawing: one side only, no switch.
                 if (reviewAuditee) document.body.dataset.reviewSide = "auditee"
                 else if (reviewAuditor) document.body.dataset.reviewSide = "auditor"
+                if (typeof session.viewAs === "string" && session.viewAs) startViewAs(session.viewAs)
                 sessionOk = true
                 // users.js: the owner's menu (เพิ่มผู้ใช้ด้วย QR, ผู้ใช้งานและสิทธิ์).
                 window.dispatchEvent(new CustomEvent("dashboard:session", { detail: session }))

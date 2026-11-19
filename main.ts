@@ -652,10 +652,23 @@ if (!LINE_LOGIN_CHANNEL_SECRET) {
 // ตรวจสอบ tab's auditor side; a user has it or review.auditee, never both
 // (the one who prepares a month does not approve it). The owner has both.
 const DASH_PERM_KEYS = ["followup.edit", "followup.view", "review.auditee", "review.auditor", "roster.view", "staffing.view"]
-// The ผู้จัดทำ set: every right a non-owner could have before (followup,
-// read-only รายชื่อ and อัตรากำลัง, the ตรวจสอบ ผู้จัดทำ side).
-const LEGACY_PERMS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
+// The two access bundles (Pong, 2026-11-19: "access scope"). A dashboard
+// user is one or the other; the ข้อมูล button on ภาพรวม is the owner's.
+//   ผู้จัดทำ: ตามส่ง (บันทึก), รายชื่อ (ดู), อัตรากำลัง (ดู), ตรวจสอบ (ผู้จัดทำ)
+//   ผู้ตรวจสอบ: รายชื่อ (ดู), อัตรากำลัง (ดู), ตรวจสอบ (ผู้ตรวจสอบ)
+const AUTHOR_PERMS = ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"]
+const AUDITOR_PERMS = ["review.auditor", "roster.view", "staffing.view"]
+// The env-var users (กานดา) are ผู้จัดทำ, exactly what they had before.
+const LEGACY_PERMS = AUTHOR_PERMS
 const OWNER_PERMS = DASH_PERM_KEYS.slice()
+// A row's rights are its side's bundle, so a row saved before 19 Nov (a
+// ผู้ตรวจสอบ with ตามส่ง (ดู)) gets today's bundle without any SQL; a row
+// with no ตรวจสอบ side keeps what it has.
+const roleBundle = (perms: string[]): string[] =>
+  perms.includes("review.auditee") ? AUTHOR_PERMS : perms.includes("review.auditor") ? AUDITOR_PERMS : perms
+// What the owner may give: one of the two bundles, exactly.
+const isBundle = (perms: string[] | null): boolean =>
+  !!perms && [AUTHOR_PERMS, AUDITOR_PERMS].some((b) => b.join() === perms.join())
 // Known keys only, followup.edit brings followup.view, sorted, no repeats;
 // null when any key is unknown, when both ตรวจสอบ sides are asked for, or
 // when the value is not a list.
@@ -699,7 +712,7 @@ function loadDashUsers(force = false): Promise<void> {
       const rows = new Map<string, DashUserRow>()
       for (const u of (Array.isArray(r.data) ? r.data : []) as DashUserRow[]) {
         if (u && typeof u.line_user_id === "string") {
-          rows.set(u.line_user_id, { ...u, perms: normalizePerms(u.perms) || [], active: u.active === true })
+          rows.set(u.line_user_id, { ...u, perms: roleBundle(normalizePerms(u.perms) || []), active: u.active === true })
         }
       }
       dashUsers.rows = rows
@@ -725,6 +738,8 @@ const dashUserRow = (sub: string): DashUserRow | null => (dashUsersFresh() && da
 function dashPerms(sub: string): string[] | null {
   if (!sub) return null
   if (isOwnerLineUserId(sub)) return OWNER_PERMS
+  const stand = viewAsOf(sub)
+  if (stand) return stand.perms
   const row = dashUsers.rows.get(sub)
   if (row) {
     if (!row.active) return null
@@ -766,27 +781,56 @@ function readDash(token: string | undefined): Record<string, any> | null {
 // only LINE's own picture host, as the CSP's img-src allows.
 const linePicture = (v: unknown): string =>
   typeof v === "string" && v.startsWith("https://profile.line-scdn.net/") && v.length <= 500 ? v : ""
-function dashSession(req: Request): { sub: string; name: string; exp: number; perms: string[]; pic: string } | null {
+// ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19: "how กานดา view look
+// like while i log in my account", then "add option for me as ดูแบบผู้ตรวจสอบ")
+// The owner's cookie may carry view: "author" or "auditor". Every request
+// then runs as a stand-in user with that role's bundle, so each page and API
+// answers exactly as it would for a ผู้จัดทำ or a ผู้ตรวจสอบ, and it is
+// read-only: the gate below refuses every write until the owner switches
+// back. A stand-in is never a LINE ID (those are U + 32 hex), never put in a
+// cookie as the user, and the History log still names the owner.
+const VIEW_AS = new Map<string, { sub: string; label: string; perms: string[] }>([
+  ["author", { sub: "~view-as-author", label: "ผู้จัดทำ", perms: AUTHOR_PERMS }],
+  ["auditor", { sub: "~view-as-auditor", label: "ผู้ตรวจสอบ", perms: AUDITOR_PERMS }],
+])
+function viewAsOf(sub: string): { sub: string; label: string; perms: string[] } | null {
+  for (const v of VIEW_AS.values()) if (v.sub === sub) return v
+  return null
+}
+type DashViewer = { sub: string; name: string; view: string }
+type DashSession = { sub: string; name: string; exp: number; perms: string[]; pic: string; viewer?: DashViewer }
+// The owner behind a ดูแบบ… request, for audit(): set by dashSession.
+const dashViewers = new WeakMap<Request, DashViewer>()
+function dashSession(req: Request): DashSession | null {
   const o = readDash(parseCookies(req)[DASH_COOKIE])
   // A payload with a typ (the phone's p4p_join) is never a session.
   if (!o || typeof o.idle !== "number" || o.idle <= Date.now() / 1000 || o.typ !== undefined) return null
+  if (viewAsOf(String(o.sub || ""))) return null
   // Re-checked on every request, so a suspension or a removed right (or an
   // id taken out of the env var) applies to the next call, not when the
   // cookie expires.
   const perms = dashPerms(String(o.sub || ""))
   if (!perms) return null
   const row = dashUserRow(o.sub)
-  return { sub: o.sub, name: (row && row.display_name) || staffName(o.name), exp: o.exp, perms, pic: linePicture(o.pic) }
+  const name = (row && row.display_name) || staffName(o.name)
+  const stand = typeof o.view === "string" ? VIEW_AS.get(o.view) : undefined
+  if (stand && isDashOwner(o.sub)) {
+    const viewer = { sub: o.sub, name, view: o.view as string }
+    dashViewers.set(req, viewer)
+    return { sub: stand.sub, name, exp: o.exp, perms: stand.perms, pic: linePicture(o.pic), viewer }
+  }
+  return { sub: o.sub, name, exp: o.exp, perms, pic: linePicture(o.pic) }
 }
 // The owner can do everything; anyone else needs the right.
 const can = (s: { sub: string; perms: string[] }, perm: string): boolean => isDashOwner(s.sub) || s.perms.includes(perm)
 // (Re)issues the session cookie with a fresh idle deadline, keeping the
 // absolute 12h expiry from sign-in. pic: the LINE picture from sign-in.
-function setDashCookie(res: Response, sub: string, name: string, exp: number, pic = ""): void {
+function setDashCookie(res: Response, sub: string, name: string, exp: number, pic = "", view = ""): void {
   const now = Math.floor(Date.now() / 1000)
   const idle = Math.min(exp, now + DASH_IDLE_SECONDS)
   const o: Record<string, unknown> = { sub, name, exp, idle }
   if (linePicture(pic)) o.pic = pic
+  if (VIEW_AS.has(view) && isDashOwner(sub)) o.view = view
   res.append("Set-Cookie", DASH_COOKIE + "=" + signDash(o) + "; " + COOKIE_BASE + "; Max-Age=" + Math.max(0, exp - now))
 }
 // The callback URL must be registered on the LINE Login channel exactly, so
@@ -838,6 +882,12 @@ const isReviewAuditor = (sub: string): boolean => !isDashOwner(sub) && (dashPerm
 // Never throws: a failed log write is reported in the server log, and the
 // action it describes still goes ahead.
 async function audit(req: Request, actor: { sub: string; name: string }, action: string, target: Record<string, unknown> = {}): Promise<void> {
+  // ดูแบบ…: the owner did it, while looking as the ผู้จัดทำ or ผู้ตรวจสอบ.
+  const viewer = dashViewers.get(req)
+  if (viewer && viewAsOf(actor.sub)) {
+    target = { ...target, viewAs: (VIEW_AS.get(viewer.view) || { label: "" }).label }
+    actor = { sub: viewer.sub, name: viewer.name }
+  }
   const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
   try {
     await axios.post(SUPABASE_URL + "/rest/v1/dashboard_audit_log", {
@@ -898,6 +948,19 @@ app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
   if (!s || can(s, need)) return next()
   res.setHeader("Cache-Control", "no-store")
   res.status(404).json({ error: "not found" })
+})
+// ดูแบบ… is read-only: every write under /dashboard is refused until the
+// owner switches back (the switch itself and ออกจากระบบ still work).
+const VIEW_AS_OPEN = new Set(["/dashboard/api/view-as", "/dashboard/logout"])
+// In error, as every tab shows a refusal's error to the user.
+const viewOnlyText = (label: string): string => "กำลังดูแบบ" + label + " ดูได้อย่างเดียว กด กลับเป็นผู้ดูแลระบบ ก่อนแก้ไข"
+app.use("/dashboard", (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next()
+  if (VIEW_AS_OPEN.has(dashGatePath(req.baseUrl + req.path))) return next()
+  const s = dashSession(req)
+  if (!s || !s.viewer) return next()
+  res.setHeader("Cache-Control", "no-store")
+  res.status(403).json({ error: viewOnlyText((VIEW_AS.get(s.viewer.view) || { label: "" }).label), viewOnly: true })
 })
 // The same check inside a handler: true when the request may go on, and
 // otherwise the 404 has been sent.
@@ -1071,17 +1134,43 @@ app.get("/dashboard/api/session", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store")
   const s = dashSession(req)
   if (!s) return res.status(401).json({ error: "not authenticated" })
-  setDashCookie(res, s.sub, s.name, s.exp, s.pic)
+  // ดูแบบ… keeps the owner in the cookie, and the view with it.
+  if (s.viewer) setDashCookie(res, s.viewer.sub, s.name, s.exp, s.pic, s.viewer.view)
+  else setDashCookie(res, s.sub, s.name, s.exp, s.pic)
   const owner = isDashOwner(s.sub)
   const body: Record<string, unknown> = {
     ok: true, name: s.name, idleSeconds: DASH_IDLE_SECONDS, isOwner: owner, reviewAuditee: isReviewAuditee(s.sub), reviewAuditor: isReviewAuditor(s.sub),
     perms: s.perms, picture: s.pic || null,
   }
+  if (s.viewer) body.viewAs = (VIEW_AS.get(s.viewer.view) || { label: "" }).label
   if (owner) {
     body.usersInstalled = dashUsers.installed !== false
     body.pendingUsers = dashUsers.installed === false ? 0 : await pendingInviteCount(s.sub)
   }
   res.json(body)
+})
+
+// ดูแบบผู้จัดทำ ({view: "author"}), ดูแบบผู้ตรวจสอบ ({view: "auditor"}) or
+// back ({view: null}), owner only, from this site only (a JSON write under a
+// Lax cookie, as the users routes).
+app.post("/dashboard/api/view-as", express.json({ limit: "1kb" }), async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store")
+  const s = dashSession(req)
+  if (!s) return res.status(401).json({ error: "not authenticated" })
+  const owner = s.viewer ? { sub: s.viewer.sub, name: s.viewer.name } : { sub: s.sub, name: s.name }
+  if (!isDashOwner(owner.sub)) return res.status(404).json({ error: "not found" })
+  const origin = String(req.headers.origin || "")
+  let sameHost = false
+  try { sameHost = !!origin && new URL(origin).host === String(req.headers.host || "") } catch (e) { sameHost = false }
+  if (!(origin && (origin === ADMIN_ORIGIN || sameHost))) return res.status(403).json({ error: "bad origin" })
+  const v = req.body ? req.body.view : undefined
+  const stand = typeof v === "string" ? VIEW_AS.get(v) : undefined
+  if (!stand && v !== null) return res.status(400).json({ error: "bad request" })
+  const was = s.viewer ? VIEW_AS.get(s.viewer.view) : undefined
+  setDashCookie(res, owner.sub, s.name, s.exp, s.pic, stand ? v : "")
+  dashViewers.delete(req)
+  await audit(req, owner, stand ? "view_as.start" : "view_as.stop", { view: stand ? stand.label : was ? was.label : null })
+  res.json({ ok: true, viewAs: stand ? stand.label : null })
 })
 
 // ── QR invite: a new dashboard user (Pong, 2026-11-18: "Go QR") ────────────
@@ -1386,9 +1475,10 @@ app.post("/dashboard/api/users/invites/:id/approve", express.json({ limit: "2kb"
   const id = String(req.params.id)
   if (!UUID_RE.test(id)) return res.status(404).json({ error: "not found" })
   const code = String(req.body?.code ?? "")
+  // ผู้จัดทำ or ผู้ตรวจสอบ, as a bundle (Pong, 2026-11-19).
   const perms = normalizePerms(req.body?.perms)
   const displayName = typeof req.body?.displayName === "string" ? cleanDisplayName(req.body.displayName) : ""
-  if (!/^[0-9]{4}$/.test(code) || !perms || displayName.length < 1 || displayName.length > 60) {
+  if (!/^[0-9]{4}$/.test(code) || !isBundle(perms) || displayName.length < 1 || displayName.length > 60) {
     return res.status(400).json({ error: "bad request" })
   }
   try {
@@ -1478,7 +1568,7 @@ app.get("/dashboard/api/users", async (req: Request, res: Response) => {
       installed: true,
       owner: { name: s.name },
       users: (users.data as Record<string, any>[]).map((u) => ({
-        id: u.line_user_id, lineName: u.line_name || "", displayName: u.display_name, perms: normalizePerms(u.perms) || [],
+        id: u.line_user_id, lineName: u.line_name || "", displayName: u.display_name, perms: roleBundle(normalizePerms(u.perms) || []),
         active: u.active === true, source: u.source, addedAt: u.added_at, suspendedAt: u.suspended_at || null,
       })),
       pending: (pending.data as InviteRow[]).map(inviteView),
@@ -1497,10 +1587,13 @@ app.patch("/dashboard/api/users/:sub", express.json({ limit: "2kb" }), async (re
   if (!s) return
   const sub = String(req.params.sub)
   if (!/^U[0-9a-f]{32}$/.test(sub) || isDashOwner(sub)) return res.status(404).json({ error: "not found" })
+  // A bundle, or the rights the user already has (a name change or a
+  // suspension of a user who has neither bundle).
   const perms = normalizePerms(req.body?.perms)
+  const have = dashUsers.rows.get(sub)
   const displayName = typeof req.body?.displayName === "string" ? cleanDisplayName(req.body.displayName) : ""
   const active = req.body?.active
-  if (!perms || displayName.length < 1 || displayName.length > 60 || typeof active !== "boolean") {
+  if (!(isBundle(perms) || (perms && have && have.perms.join() === perms.join())) || displayName.length < 1 || displayName.length > 60 || typeof active !== "boolean") {
     return res.status(400).json({ error: "bad request" })
   }
   try {
@@ -1573,11 +1666,11 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
       }
     }))
     await logged
-    // The owner (admin) and the ผู้จัดทำ also get each month's budget and N
-    // (review_inputs), for the ข้อมูล button on the month cards (Pong,
-    // 2026-11-18; the owner alone 17 to 18 Nov). Others get none, and no
-    // button.
-    const canBudget = isDashOwner(s.sub) || isReviewAuditee(s.sub)
+    // The owner also gets each month's budget and N (review_inputs), for
+    // the ข้อมูล button on the month cards. The owner's alone again since
+    // 2026-11-19 (Pong: "ผู้จัดทำ = hide ข้อมูล btn on overview"; the
+    // ผู้จัดทำ had it 18 to 19 Nov). Others get none, and no button.
+    const canBudget = isDashOwner(s.sub)
     const budgets: Record<string, unknown> = {}
     // And, for the same button (ข้อมูล since 2026-11-18), whether each
     // month's เอกสารจัดสรร is in (alloc_uploads, scripts/alloc-ids-2026-11.sql):

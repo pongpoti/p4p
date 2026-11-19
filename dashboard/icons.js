@@ -45,6 +45,12 @@ const ICON_PATHS = {
     // The owner's user menu (QR invite, 2026-11-18).
     "qr": '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4h-4"/>',
     "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+    // ดูแบบผู้จัดทำ (2026-11-19): the owner's menu item and the bar above the header.
+    // Sortable table headers (2026-11-19): no sort, low to high, high to low.
+    "sort": '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
+    "sort-asc": '<path d="m6 15 6-6 6 6"/>',
+    "sort-desc": '<path d="m6 9 6 6 6-6"/>',
+    "eye": '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 // icon() and iconEl() are globals for app.ts and review.ts (plain scripts,
 // no modules), so nothing in this file calls them.

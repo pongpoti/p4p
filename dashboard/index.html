@@ -1097,6 +1097,22 @@
             font-size: var(--fs-sm); font-weight: 700; line-height: 1.25; color: var(--c-text-2);
             background: var(--c-surface-3); border-bottom: 0; box-shadow: inset 0 -2px 0 var(--c-border-strong);
         }
+        /* Sortable headers (2026-11-19): the header's words are the button;
+           a faint double chevron until it sorts, then one, in the brand
+           colour. The chevron sits beside the words without taking width
+           (after them; before them on the right-aligned number columns),
+           so no header wraps more than it did. */
+        .th-sort {
+            position: relative; display: inline-block; max-width: 100%; margin: 0; padding: 2px 0; border: 0; border-radius: var(--r-sm);
+            background: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; cursor: pointer;
+        }
+        .th-sort .th-sort-ic { position: absolute; top: 50%; left: calc(100% + 2px); width: 14px; height: 14px; margin-top: -7px; color: var(--c-text-3); opacity: .55; }
+        th.num .th-sort .th-sort-ic { left: auto; right: calc(100% + 2px); }
+        .th-sort:hover { color: var(--c-text); }
+        .th-sort:hover .th-sort-ic { opacity: 1; }
+        .th-sort.on { color: var(--c-brand); }
+        .th-sort.on .th-sort-ic { color: var(--c-brand); opacity: 1; }
+        .th-sort:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
         /* One line per row; the full text is in the tooltip. */
         .audit-table td {
             height: 44px; padding: 0 var(--sp-3); border-bottom: 1px solid var(--c-border); vertical-align: middle;
@@ -2144,6 +2160,21 @@
         }
         .um-locked .ic { width: 16px; height: 16px; }
         .um-summary { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--c-text-2); line-height: var(--lh-text); }
+        /* ผู้จัดทำ or ผู้ตรวจสอบ (2026-11-19): two cards, one picked. */
+        .um-roles { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+        .um-role {
+            display: grid; grid-template-columns: auto 1fr; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-3) var(--sp-4);
+            border: 1px solid var(--c-border-strong); border-radius: var(--r-lg); background: #fff; color: var(--c-text); font: inherit; text-align: left; cursor: pointer;
+        }
+        .um-role:hover { background: var(--c-brand-soft); }
+        .um-role:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        .um-role[aria-checked="true"] { border-color: var(--c-brand); box-shadow: inset 0 0 0 1px var(--c-brand); background: var(--c-brand-soft); }
+        .um-role[aria-checked="true"]:focus-visible { box-shadow: inset 0 0 0 1px var(--c-brand), var(--focus-ring); }
+        .um-role b { font-size: var(--fs-md); font-weight: 700; }
+        .um-role-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--c-border-strong); background: #fff; }
+        .um-role[aria-checked="true"] .um-role-dot { border-color: var(--c-brand); background: radial-gradient(circle, var(--c-brand) 0 4px, #fff 5px); }
+        .um-role-tabs { grid-column: 1 / -1; display: flex; flex-wrap: wrap; }
+        .um-table .um-role-name { display: inline-block; margin-right: var(--sp-2); font-weight: 700; color: var(--c-text); }
         .um-summary b { color: var(--c-text); }
         .um-foot-note { margin-top: var(--sp-2); font-size: var(--fs-xs); color: var(--c-text-3); line-height: var(--lh-text); }
         .um-confirm { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
@@ -2185,6 +2216,28 @@
             position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100; padding: var(--sp-3) var(--sp-5); border-radius: var(--r-pill);
             background: var(--c-brand); color: #fff; font-weight: 700; box-shadow: var(--elev-3);
         }
+        /* ── ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (2026-11-19): a 36px amber bar
+           above the brown header while the owner looks as that role. The full-height tabs
+           give up the same 36px (they scroll inside their own boxes); the
+           ภาพรวม cards keep their size, so the page scrolls by 36px there
+           instead of cutting the cards' last line. ── */
+        .viewas-bar { background: var(--st-warn-bg); color: var(--st-warn-fg); border-bottom: 1px solid var(--st-warn-line); }
+        .viewas-bar[hidden] { display: none; }
+        #header .viewas-bar .container { display: flex; align-items: center; gap: var(--sp-3); max-width: var(--content-w); height: 35px; padding: 0 36px; font-size: var(--fs-sm); }
+        .viewas-bar .va-ico { display: inline-flex; font-size: 20px; }
+        .viewas-bar .va-text { display: flex; align-items: baseline; gap: var(--sp-3); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .viewas-bar .va-text b { font-weight: 700; color: var(--c-text); }
+        .viewas-bar .va-back {
+            margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 var(--sp-3); border-radius: var(--r-pill);
+            border: 1px solid var(--c-brand); background: var(--c-brand); color: #fff; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap;
+        }
+        .viewas-bar .va-back:hover { background: var(--c-brand-hover); }
+        .viewas-bar .va-back:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+        .viewas-bar .va-back[aria-busy="true"] { cursor: progress; opacity: .8; }
+        .viewas-bar.va-flash { animation: va-flash 1.2s ease-out; }
+        @keyframes va-flash { 0%, 40% { background: var(--st-attn-bg); box-shadow: inset 0 -3px 0 var(--st-attn-solid); } 100% { background: var(--st-warn-bg); box-shadow: none; } }
+        @media (prefers-reduced-motion: reduce) { .viewas-bar.va-flash { animation: none; } }
+        body.view-as:not(.cards-view) main { height: calc(100vh - 101px); height: calc(100dvh - 101px); }
         /* ตามส่ง without บันทึก: the history only, no form or delete. */
         body.followup-readonly #log-form, body.followup-readonly .log-delete { display: none !important; }
         @media (forced-colors: active) {
@@ -2203,6 +2256,14 @@
     </div>
 
     <header id="header">
+        <!-- ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ: shown by app.js while the owner looks as that role -->
+        <div id="viewas-bar" class="viewas-bar" role="status" hidden>
+            <div class="container">
+                <span class="va-ico" data-icon="eye"></span>
+                <span class="va-text"><b id="viewas-title">กำลังดูแบบผู้จัดทำ</b><span id="viewas-note">เห็นแบบเดียวกับผู้จัดทำ ดูได้อย่างเดียว บันทึกหรือส่งไม่ได้</span></span>
+                <button type="button" id="viewas-back" class="va-back"><span data-icon="undo"></span>กลับเป็นผู้ดูแลระบบ</button>
+            </div>
+        </div>
         <div class="container">
             <a id="brand" href="/dashboard/#overview" data-view="overview" aria-label="SAKHONMSO P4P — ภาพรวม" title="ภาพรวม">
                 <span class="logo-mark" aria-hidden="true">P<b>4</b>P</span>
@@ -2271,6 +2332,14 @@
                         <span class="um-ico" data-icon="users"></span>
                         <span><b>ผู้ใช้งานและสิทธิ์</b><small id="um-users-sub" class="hidden"></small></span>
                         <span id="um-pending" class="um-pill warn hidden"></span>
+                    </button>
+                    <button type="button" class="um-item" role="menuitem" id="um-viewas" data-view="author" tabindex="-1">
+                        <span class="um-ico" data-icon="eye"></span>
+                        <span><b>ดูแบบผู้จัดทำ</b><small>เห็นหน้าจอแบบเดียวกับผู้จัดทำ ดูได้อย่างเดียว</small></span>
+                    </button>
+                    <button type="button" class="um-item" role="menuitem" id="um-viewas-auditor" data-view="auditor" tabindex="-1">
+                        <span class="um-ico" data-icon="eye"></span>
+                        <span><b>ดูแบบผู้ตรวจสอบ</b><small>เห็นหน้าจอแบบเดียวกับผู้ตรวจสอบ ดูได้อย่างเดียว</small></span>
                     </button>
                 </div>
                 <span class="sep" aria-hidden="true"></span>

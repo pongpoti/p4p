@@ -25,11 +25,13 @@
     // ผู้ตรวจสอบ needs step 28 in the database (2026-11-18).
     const AUDITOR_NOT_INSTALLED = "ยังไม่ได้ติดตั้งสิทธิ์ผู้ตรวจสอบ — วาง scripts/dashboard-users-auditor-2026-11.sql ใน Supabase SQL editor";
     // The dialog's title already says ยังไม่ได้ติดตั้ง, so its body only says what to do.
-    const PRESETS = [
-        { key: "author", label: "ผู้จัดทำ", title: "เหมือนกานดา", perms: ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"] },
-        { key: "auditor", label: "ผู้ตรวจสอบ", title: "ตรวจและอนุมัติในแท็บตรวจสอบ ดูแท็บอื่นได้", perms: ["followup.view", "review.auditor", "roster.view", "staffing.view"] },
-        { key: "view", label: "ดูอย่างเดียว", perms: ["followup.view", "roster.view", "staffing.view"] },
-        { key: "clear", label: "ล้าง", perms: [] },
+    // The two access bundles (Pong, 2026-11-19: "access scope"): a user is
+    // one or the other. The ข้อมูล button on ภาพรวม is the owner's alone.
+    // The server gives and checks the same two sets (main.ts AUTHOR_PERMS,
+    // AUDITOR_PERMS).
+    const ROLES = [
+        { label: "ผู้จัดทำ", perms: ["followup.edit", "followup.view", "review.auditee", "roster.view", "staffing.view"] },
+        { label: "ผู้ตรวจสอบ", perms: ["review.auditor", "roster.view", "staffing.view"] },
     ];
     // ── Helpers ──────────────────────────────────────────────────────────
     const el = (tag, cls, text) => {
@@ -121,107 +123,50 @@
         clearTimeout(toastTimer);
         toastTimer = window.setTimeout(() => t.classList.add("hidden"), 3500);
     };
-    const ROWS = [
-        { name: "ภาพรวม", locked: "ดู (ทุกคน)", note: "งบ: เฉพาะผู้ดูแล" },
-        { name: "ตามส่ง", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ดู", perms: ["followup.view"] }, { label: "บันทึก", perms: ["followup.view", "followup.edit"] }],
-            note: "บันทึก = เพิ่ม/ลบบันทึกการติดตาม", hint: true },
-        { name: "รายชื่อ", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ดู", perms: ["roster.view"] }], note: "แก้ไข: เฉพาะผู้ดูแล" },
-        { name: "อัตรากำลัง", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ดู", perms: ["staffing.view"] }], note: "แก้ไข: เฉพาะผู้ดูแล" },
-        // One side or none (2026-11-18): the one who prepares a month does not approve it.
-        { name: "ตรวจสอบ", choices: [{ label: "ไม่เห็น", perms: [] }, { label: "ผู้จัดทำ", perms: ["review.auditee"] }, { label: "ผู้ตรวจสอบ", perms: ["review.auditor"] }],
-            note: "เลือกได้ฝั่งเดียว" },
-        { name: "ประวัติการใช้งาน", locked: "เฉพาะผู้ดูแล", lockIcon: true, note: "" },
-    ];
-    function buildMatrix(start, onChange) {
-        const root = el("div", "um-matrix");
-        const picks = [];
-        const setters = [];
-        for (const r of ROWS) {
-            const row = el("div", "um-r");
-            row.appendChild(el("b", undefined, r.name));
-            if (r.locked) {
-                const l = el("span", "um-locked");
-                if (r.lockIcon)
-                    l.appendChild(iconEl("lock"));
-                l.appendChild(document.createTextNode(r.locked));
-                row.appendChild(l);
-            }
-            else if (r.choices) {
-                const choices = r.choices;
-                const seg = el("div", "um-seg");
-                seg.setAttribute("role", "radiogroup");
-                seg.setAttribute("aria-label", r.name);
-                let cur = 0;
-                const buttons = choices.map((c, i) => {
-                    const b = el("button", undefined, c.label);
-                    b.type = "button";
-                    b.setAttribute("role", "radio");
-                    b.addEventListener("click", () => { pick(i); onChange(); });
-                    b.addEventListener("keydown", (ev) => {
-                        const d = ev.key === "ArrowRight" || ev.key === "ArrowDown" ? 1 : ev.key === "ArrowLeft" || ev.key === "ArrowUp" ? -1 : 0;
-                        if (!d)
-                            return;
-                        ev.preventDefault();
-                        const n = (cur + d + choices.length) % choices.length;
-                        pick(n);
-                        buttons[n].focus();
-                        onChange();
-                    });
-                    seg.appendChild(b);
-                    return b;
-                });
-                const pick = (i) => {
-                    cur = i;
-                    buttons.forEach((b, j) => { b.setAttribute("aria-checked", String(j === i)); b.tabIndex = j === i ? 0 : -1; });
-                };
-                picks.push(() => choices[cur].perms);
-                setters.push((p) => {
-                    // The widest choice the rights hold.
-                    let best = 0;
-                    choices.forEach((c, i) => { if (c.perms.every((k) => p.includes(k)))
-                        best = i; });
-                    pick(best);
-                });
-                row.appendChild(seg);
-            }
-            row.appendChild(el("small", undefined, r.note));
-            root.appendChild(row);
-        }
-        const m = {
-            root,
-            get: () => sortPerms(picks.flatMap((f) => f())),
-            set: (p) => setters.forEach((f) => f(p)),
-        };
-        m.set(start);
-        return m;
-    }
-    // The preset chips above a matrix, and the summary line under it.
-    function rightsBlock(start, onChange) {
+    // "ผู้จัดทำ", "ผู้ตรวจสอบ", or "" for a set that is neither.
+    const roleOf = (perms) => {
+        const r = ROLES.find((x) => samePerms(x.perms, perms));
+        return r ? r.label : "";
+    };
+    function rolePicker(start, onChange) {
         const root = el("div");
-        const chips = el("div", "um-chips");
-        chips.setAttribute("role", "group");
-        chips.setAttribute("aria-label", "ชุดสิทธิ์สำเร็จรูป");
-        const summary = el("p", "um-summary");
-        summary.setAttribute("aria-live", "polite");
-        const chipBtns = [];
-        const sync = () => {
-            const p = matrix.get();
-            for (const [b, perms] of chipBtns)
-                b.setAttribute("aria-pressed", String(samePerms(p, perms)));
-            summary.replaceChildren(el("b", undefined, "สิทธิ์:"), document.createTextNode(" " + permsSummary(p)));
-            onChange();
+        const group = el("div", "um-roles");
+        group.setAttribute("role", "radiogroup");
+        group.setAttribute("aria-label", "บทบาท");
+        let cur = ROLES.findIndex((r) => samePerms(r.perms, start));
+        const cards = ROLES.map((r, i) => {
+            const b = el("button", "um-role");
+            b.type = "button";
+            b.setAttribute("role", "radio");
+            const tabs = el("span", "um-role-tabs");
+            for (const bit of permsSummary(r.perms).split(" · "))
+                tabs.appendChild(el("span", "um-perm", bit));
+            b.append(el("span", "um-role-dot"), el("b", undefined, r.label), tabs);
+            b.addEventListener("click", () => { pick(i); onChange(); });
+            b.addEventListener("keydown", (ev) => {
+                const d = ev.key === "ArrowRight" || ev.key === "ArrowDown" ? 1 : ev.key === "ArrowLeft" || ev.key === "ArrowUp" ? -1 : 0;
+                if (!d)
+                    return;
+                ev.preventDefault();
+                const n = (Math.max(cur, 0) + d + ROLES.length) % ROLES.length;
+                pick(n);
+                cards[n].focus();
+                onChange();
+            });
+            group.appendChild(b);
+            return b;
+        });
+        const pick = (i) => {
+            cur = i;
+            cards.forEach((b, j) => { b.setAttribute("aria-checked", String(j === i)); b.tabIndex = j === i || (i < 0 && j === 0) ? 0 : -1; });
         };
-        const matrix = buildMatrix(start, sync);
-        for (const pr of PRESETS) {
-            const b = btn("um-chip", pr.label, () => { matrix.set(pr.perms); sync(); });
-            if (pr.title)
-                b.title = pr.title;
-            chipBtns.push([b, pr.perms]);
-            chips.appendChild(b);
+        pick(cur);
+        root.appendChild(group);
+        if (cur < 0 && start.length) {
+            root.appendChild(el("p", "um-summary", "สิทธิ์ตอนนี้: " + permsSummary(start) + " (ไม่ตรงกับบทบาทใด เลือกบทบาทเพื่อเปลี่ยน)"));
         }
-        root.append(chips, matrix.root, summary, el("p", "um-foot-note", "เฉพาะผู้ดูแล: งบ · แก้ไขรายชื่อ/อัตรากำลัง · คำขอเข้าใช้งาน · ประวัติการใช้งาน · จัดการผู้ใช้"));
-        sync();
-        return { root, matrix };
+        root.appendChild(el("p", "um-foot-note", "ทุกคนดูภาพรวมได้ · เฉพาะผู้ดูแล: ปุ่มข้อมูล (งบรายเดือน เอกสารจัดสรร) · แก้ไขรายชื่อ/อัตรากำลัง · คำขอเข้าใช้งาน · ประวัติการใช้งาน · จัดการผู้ใช้"));
+        return { root, get: () => (cur >= 0 ? ROLES[cur].perms.slice() : start.length ? start.slice() : null) };
     }
     // ── Session, chip and menu ───────────────────────────────────────────
     let session = {};
@@ -339,6 +284,18 @@
     });
     document.getElementById("um-invite").addEventListener("click", () => { closeMenu(false); void openInvite(); });
     document.getElementById("um-users").addEventListener("click", () => { closeMenu(false); void openUsers(); });
+    // ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19): the whole page as
+    // that role sees it, read-only, until กลับเป็นผู้ดูแลระบบ on the bar
+    // above the header (app.ts).
+    for (const b of Array.from(menu.querySelectorAll(".um-item[data-view]"))) {
+        b.addEventListener("click", () => {
+            closeMenu(false);
+            void api("/dashboard/api/view-as", "POST", { view: b.dataset.view })
+                .then(() => location.reload())
+                .catch((e) => { if (!(e instanceof HttpError && e.status === 401))
+                toast("เปลี่ยนมุมมองไม่สำเร็จ กรุณาลองใหม่"); });
+        });
+    }
     window.addEventListener("dashboard:session", (ev) => {
         const s = ev.detail;
         if (!s || s.isOwner !== true)
@@ -715,16 +672,16 @@
         name.autocomplete = "off";
         name.value = (claim.name || "").trim().slice(0, 60);
         name.addEventListener("input", () => syncApprove());
-        right.append(nameLbl, name, el("span", "um-lbl", "สิทธิ์การใช้งาน"));
-        const rights = rightsBlock([], () => syncApprove());
+        right.append(nameLbl, name, el("span", "um-lbl", "บทบาท"));
+        const rights = rolePicker([], () => syncApprove());
         right.appendChild(rights.root);
         grid.append(left, right);
         invBody.replaceChildren(grid);
         const normalFoot = () => footer(rejectBtn, grow(), approveBtn);
         function syncApprove() {
             const ready = /^[0-9]{4}$/.test(code());
-            approveBtn.disabled = !ready || !name.value.trim();
-            approveBtn.title = !ready ? "กรอกรหัส 4 หลักก่อน" : !name.value.trim() ? "กรอกชื่อที่แสดงก่อน" : "";
+            approveBtn.disabled = !ready || !name.value.trim() || !rights.get();
+            approveBtn.title = !ready ? "กรอกรหัส 4 หลักก่อน" : !name.value.trim() ? "กรอกชื่อที่แสดงก่อน" : !rights.get() ? "เลือกผู้จัดทำหรือผู้ตรวจสอบก่อน" : "";
         }
         function askReject() {
             const box = el("div", "um-confirm");
@@ -741,7 +698,9 @@
             approveBtn.disabled = true;
             approveBtn.setAttribute("aria-busy", "true");
             err.classList.add("hidden");
-            const perms = rights.matrix.get();
+            const perms = rights.get();
+            if (!perms)
+                return;
             const shown = name.value.trim();
             try {
                 await api("/dashboard/api/users/invites/" + r.id + "/approve", "POST", { code: code(), perms, displayName: shown });
@@ -817,7 +776,7 @@
         setHead("เพิ่มผู้ใช้ด้วย QR", "");
         const card = resultCard("ok", "เพิ่ม " + shown + " แล้ว");
         const sum = el("p");
-        sum.append(el("b", undefined, "สิทธิ์:"), " " + permsSummary(perms));
+        sum.append(el("b", undefined, (roleOf(perms) || "สิทธิ์") + ":"), " " + permsSummary(perms));
         card.box.appendChild(sum);
         card.box.appendChild(el("p", undefined, "ให้เข้าสู่ระบบด้วย LINE บนคอมพิวเตอร์ที่ p4p-sakhonmso.vercel.app/dashboard ด้วยบัญชีเดียวกันนี้"));
         footer(grow(), btn("ub", "เพิ่มอีกคน", () => { void makeQr(); }), btn("ub primary", "ปิด", () => invDlg.close()));
@@ -898,7 +857,7 @@
         const table = el("table", "um-table");
         const head = el("thead");
         const hr = el("tr");
-        for (const [t, w] of [["ชื่อ", "28%"], ["สิทธิ์", ""], ["เพิ่มเมื่อ", "110px"], ["", ""]]) {
+        for (const [t, w] of [["ชื่อ", "28%"], ["บทบาทและสิทธิ์", ""], ["เพิ่มเมื่อ", "110px"], ["", ""]]) {
             const th = el("th", undefined, t);
             th.setAttribute("scope", "col");
             if (w)
@@ -965,6 +924,9 @@
         if (u.lineName && u.lineName !== u.displayName)
             n.appendChild(el("small", undefined, "LINE: " + u.lineName));
         const p = el("td");
+        // The role first (กานดา: ผู้จัดทำ), then its tabs.
+        const role = roleOf(u.perms);
+        p.appendChild(el("b", "um-role-name", role || "กำหนดเอง"));
         if (!u.active)
             p.appendChild(el("span", "um-pill danger", "ระงับแล้ว"));
         else {
@@ -1009,8 +971,8 @@
         lbl.htmlFor = name.id;
         left.append(lbl, name);
         const right = el("div");
-        right.appendChild(el("span", "um-lbl first", "สิทธิ์การใช้งาน"));
-        const rights = rightsBlock(u.perms, () => { });
+        right.appendChild(el("span", "um-lbl first", "บทบาท"));
+        const rights = rolePicker(u.perms, () => { });
         right.appendChild(rights.root);
         grid.append(left, right);
         const err = el("span", "error-text hidden");
@@ -1023,7 +985,7 @@
                 err.classList.remove("hidden");
                 return;
             }
-            void save(u, rights.matrix.get(), shown, true, "บันทึกสิทธิ์แล้ว มีผลภายใน 30 วินาที", saveBtn, err);
+            void save(u, rights.get() || u.perms, shown, true, "บันทึกสิทธิ์แล้ว มีผลภายใน 30 วินาที", saveBtn, err);
         });
         btns.append(err, btn("ub", "ยกเลิก", () => { row.remove(); from.focus(); }), saveBtn);
         td.append(grid, btns);

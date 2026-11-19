@@ -319,9 +319,9 @@ export function mountReview(d: ReviewDeps): void {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) return res.status(401).json({ error: "not authenticated" })
-    // The owner and the ผู้จัดทำ, like the ข้อมูล button (Pong, 2026-11-18:
-    // "Allow ผู้จัดทำ access to เมนู button"; owner only 17 to 18 Nov).
-    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) return res.status(404).json({ error: "not found" })
+    // The owner only, like the ข้อมูล button (Pong, 2026-11-19: "ผู้จัดทำ =
+    // hide ข้อมูล btn on overview"; the ผู้จัดทำ had it 18 to 19 Nov).
+    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
     const month = String(req.params.month || "")
     if (!core.parseMonth(month)) return res.status(404).json({ error: "ไม่พบเดือนนี้" })
     const budget = core.parseBudget(req.body && req.body.budget, 1e11)
@@ -356,12 +356,12 @@ export function mountReview(d: ReviewDeps): void {
   // of each roster doctor's No (lib/alloc-ids.ts) for the allocation
   // sheet's No column. Any roster month (not only from ส.ค. 69, unlike the
   // ตรวจสอบ tab). The file is read in memory and never stored. The owner
-  // and the ผู้จัดทำ, like งบรายเดือน (Pong, 2026-11-18).
+  // only, like งบรายเดือน (Pong, 2026-11-19; the ผู้จัดทำ too 18 to 19 Nov).
   const allocGate = async (req: Request, res: Response): Promise<{ s: Actor; month: string } | null> => {
     res.setHeader("Cache-Control", "no-store")
     const s = d.dashSession(req)
     if (!s) { res.status(401).json({ error: "not authenticated" }); return null }
-    if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) { res.status(404).json({ error: "not found" }); return null }
+    if (!d.isDashOwner(s.sub)) { res.status(404).json({ error: "not found" }); return null }
     const month = String(req.params.month || "")
     if (!core.parseMonth(month) || !(await isRosterMonth(month))) { res.status(404).json({ error: "ไม่พบเดือนนี้" }); return null }
     return { s: { sub: s.sub, name: s.name }, month }
@@ -432,8 +432,8 @@ export function mountReview(d: ReviewDeps): void {
   }
   const allocBlock = (a: AllocReady): [number, string] | null =>
     !a.installed ? [503, ALLOC_NOT_INSTALLED_MSG]
-      : !a.uploaded ? [409, "ยังไม่ได้อัปโหลดเอกสารจัดสรรของเดือนนี้ อัปโหลดที่ปุ่มข้อมูล หน้าภาพรวม"]
-      : a.without > 0 ? [409, "ยังไม่มีเลขเอกสารจัดสรร " + a.without + " คน ใส่ให้ครบที่ปุ่มข้อมูล หน้าภาพรวม"]
+      : !a.uploaded ? [409, "ยังไม่ได้อัปโหลดเอกสารจัดสรรของเดือนนี้ (ผู้ดูแลระบบอัปโหลดที่ปุ่มข้อมูล หน้าภาพรวม)"]
+      : a.without > 0 ? [409, "ยังไม่มีเลขเอกสารจัดสรร " + a.without + " คน (ผู้ดูแลระบบใส่ให้ครบที่ปุ่มข้อมูล หน้าภาพรวม)"]
       : null
 
   app.get("/dashboard/api/alloc-ids/:month", async (req: Request, res: Response) => {
@@ -450,7 +450,7 @@ export function mountReview(d: ReviewDeps): void {
     (req: Request, res: Response, next: () => void) => {
       const s = d.dashSession(req)
       if (!s) { res.status(401).json({ error: "not authenticated" }); return }
-      if (!d.isDashOwner(s.sub) && !d.isReviewAuditee(s.sub)) { res.status(404).json({ error: "not found" }); return }
+      if (!d.isDashOwner(s.sub)) { res.status(404).json({ error: "not found" }); return }
       next()
     },
     d.express.raw({ limit: "4mb", type: () => true }),
