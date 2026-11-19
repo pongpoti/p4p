@@ -1527,8 +1527,8 @@
         return m ? THAI_MONTHS[Number(m[2]) - 1] + " " + m[1] : "";
     };
     // One readable line of what the action touched; the note is quoted.
-    // Text with " → " in it, each arrow drawn as an icon (TH SarabunPSK has
-    // no arrows, 2026-11-18); a screen reader still reads the arrow.
+    // Text with " → " in it, each arrow drawn as an icon (the dashboard font
+    // has no arrows, 2026-11-18); a screen reader still reads the arrow.
     function withArrows(parent, text) {
         text.split(" → ").forEach((bit, i) => {
             if (i)

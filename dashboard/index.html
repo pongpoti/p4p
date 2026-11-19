@@ -8,11 +8,12 @@
     <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml">
     <link rel="icon" href="/dashboard/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="/dashboard/apple-touch-icon.png">
-    <link rel="preload" href="/dashboard/fonts/THSarabunPSK-Regular.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="/dashboard/fonts/Sarabun-thai-400.woff2" as="font" type="font/woff2" crossorigin>
     <style>
-        /* Design tokens and the app shell (2026-11-18 redesign): TH SarabunPSK
-           on every tab, a flat 64px header, and one token set (type, space,
-           size, radius, elevation, colour, status roles, icons). A few old
+        /* Design tokens and the app shell (2026-11-18 redesign): one font on
+           every tab (Sarabun since 2026-11-19, TH SarabunPSK before), a flat
+           64px header, and one token set (type, space, size, radius,
+           elevation, colour, status roles, icons). A few old
            names (--primary, --border, ...) point at the new ones. Colours
            keep the app's brown and tan (design.md).
 
@@ -28,24 +29,26 @@
              :where(body:not(.cards-view)) every other tab
            :where() adds no specificity, so each rule weighs what it did. */
 
-        /* TH SarabunPSK (OFL, DIP/SIPA), self-hosted: a copy installed on the
-           computer first, else /dashboard/fonts/. It has Regular and Bold only. */
-        @font-face {
-            font-family: "TH SarabunPSK";
-            src: local("TH SarabunPSK"), local("THSarabunPSK"), url("/dashboard/fonts/THSarabunPSK-Regular.ttf") format("truetype");
-            font-weight: 100 500; font-style: normal; font-display: swap;
-        }
-        @font-face {
-            font-family: "TH SarabunPSK";
-            src: local("TH SarabunPSK Bold"), local("THSarabunPSK-Bold"), url("/dashboard/fonts/THSarabunPSK-Bold.ttf") format("truetype");
-            font-weight: 600 900; font-style: normal; font-display: swap;
-        }
+        /* Sarabun: the screen version of TH Sarabun New, one of the 13 Thai
+           national fonts (SIPA), by Cadson Demak, OFL (fonts/SARABUN-LICENSE.txt).
+           TH SarabunPSK was hard to read on screen; Pong picked Sarabun from
+           five national fonts (2026-11-19). SK03, the SK02 PDF and the
+           allocation sheet stay in TH SarabunPSK. Self-hosted woff2, Thai
+           and Latin cut apart (a page loads only what it draws), in the
+           three weights the dashboard uses: 400 (also 100-500), 600, 700
+           (also 800-900). */
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-thai-400.woff2") format("woff2"); font-weight: 100 500; font-style: normal; font-display: swap; unicode-range: U+02D7, U+0303, U+0331, U+0E01-0E5B, U+200C-200D, U+25CC; }
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-thai-600.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; unicode-range: U+02D7, U+0303, U+0331, U+0E01-0E5B, U+200C-200D, U+25CC; }
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-thai-700.woff2") format("woff2"); font-weight: 700 900; font-style: normal; font-display: swap; unicode-range: U+02D7, U+0303, U+0331, U+0E01-0E5B, U+200C-200D, U+25CC; }
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-latin-400.woff2") format("woff2"); font-weight: 100 500; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-latin-600.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+        @font-face { font-family: "Sarabun"; src: url("/dashboard/fonts/Sarabun-latin-700.woff2") format("woff2"); font-weight: 700 900; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
 
         :root {
             /* Type: 1rem = 22px (html is 137.5%). Six steps, nothing between.
                Text that carries meaning is never under --fs-sm; --fs-xs is for
                where a number comes from, times and file sizes. */
-            --font-sans: "TH SarabunPSK", "TH Sarabun New", Tahoma, sans-serif;
+            --font-sans: "Sarabun", Tahoma, sans-serif;
             --fs-xs: calc(18rem / 22);   /* 18px  sources, update times, meta  */
             --fs-sm: calc(20rem / 22);   /* 20px  secondary text, table head   */
             --fs-md: 1rem;               /* 22px  body, buttons, fields, names */
@@ -160,15 +163,20 @@
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* TH SarabunPSK on every tab (Pong, 2026-11-18). Its Thai at 22px is
-           the size Noto Sans Thai had at 16px, so the root is 137.5%: every
-           rem on every tab grows with it (layout widths are in px). */
-        html { font-size: 137.5%; font-synthesis: none; }
-        /* TH SarabunPSK Regular reads thin on a Windows desktop (Pong,
-           2026-11-18): a 0.4px outline in the text colour thickens every
-           letter a little, on every tab. */
-        html { -webkit-text-stroke-width: 0.4px; }
+        /* The type scale was set for TH SarabunPSK (Pong, 2026-11-18): its Thai
+           at 22px is the size Noto Sans Thai had at 16px, so the root is
+           137.5% and every rem on every tab grows with it (layout widths are
+           in px). Sarabun draws much bigger letters at the same size, so
+           font-size-adjust draws it with TH SarabunPSK's x-height (0.344):
+           letters come out as big as before and no box, column or line
+           height moves. Sarabun has real weights (400, 600, 700 here), so
+           the outline that thickened TH SarabunPSK (0.4px, then 0.25px) is
+           gone. */
+        html { font-size: 137.5%; font-synthesis: none; font-size-adjust: 0.344; }
         html, body, button, input, select, textarea, dialog { font-family: var(--font-sans); }
+        /* The browser's own font for buttons and fields drops font-size-adjust;
+           without this, Sarabun in them would come out half as big again. */
+        button, input, select, textarea { font-size-adjust: inherit; }
         body {
             background: var(--background);
             color: var(--foreground);
@@ -393,6 +401,9 @@
            narrow window only the initial shows. */
         #user-name { max-width: 5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         @media (max-width: 1300px) { #user-name { display: none; } }
+        /* Sarabun runs a little wider than TH SarabunPSK did, so on a narrow
+           window the bar tightens and the menu still fits (2026-11-19). */
+        @media (max-width: 1240px) { #header .container { gap: var(--sp-5); } .nav-btn { padding: 0 var(--sp-3); } }
         #user-avatar {
             width: 32px; height: 32px;
             border-radius: 50%;
@@ -439,13 +450,14 @@
         /* ════ ภาพรวม and ตามส่ง, and their dialogs (who has not sent, the
            call/LINE log, งบประมาณจัดสรร): the layout and colours of 17 Nov
            (824e543) at its 16px base (Pong, 2026-11-18: "format and color
-           should be exact same as yesterday"), in TH SarabunPSK like every
+           should be exact same as yesterday"), in the same font as every
            other tab (Pong, 22:50 the same day: "change font also to
-           sarabun"). Sizes are px (824e543's rem x 16), since the root here
-           is 22px. font-size-adjust draws the font 1.375x every size given
-           (its x-height 0.344 x 1.375): its Thai then matches Noto Sans
-           Thai's at the same size, as 22px does on the other tabs, and no
-           box or line height moves. The cards keep 824e543's height (the
+           sarabun"; Sarabun, its screen version, since 2026-11-19). Sizes
+           are px (824e543's rem x 16), since the root here is 22px.
+           font-size-adjust 0.473 (0.344 x 1.375) draws the letters 1.375x
+           bigger than the other tabs' 0.344 does: Thai then matches Noto
+           Sans Thai's at the same size, as 22px does on the other tabs, and
+           no box or line height moves. The cards keep 824e543's height (the
            window under its 77px header). Rules for shared parts carry the
            ภาพรวม/ตามส่ง scope (see the top). ════ */
         :where(body.cards-view) :is(main, #pending-sheet, #log-dialog, #budget-dialog, #alloc-dialog, #info-pop) {
@@ -613,8 +625,6 @@
         }
         .split dt { font-size: 16px; font-weight: 600; color: var(--muted-foreground); }
         .split dd { font-size: clamp(28px, 5.4vh, 52px); font-weight: 700; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-        /* TH SarabunPSK Bold digits are light next to the old Inter 700, so the big numbers get a stronger outline than the 0.4px on all text. */
-        .split dd { -webkit-text-stroke-width: 1.1px; }
         .split .pending dd { color: var(--warning); }
         .split .pending.zero dd { color: var(--muted-foreground); }
 
@@ -1126,7 +1136,7 @@
         .audit-table col.c-no { width: 56px; }
         .audit-table col.c-dept { width: 16%; }
         .audit-table col.c-type { width: 18%; }
-        .audit-table col.c-score { width: 100px; }
+        .audit-table col.c-score { width: 112px; }
         .audit-table col.c-sent { width: 176px; }
         .audit-table col.c-act { width: 96px; }
         .roster-table .num, .roster-table .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-2); }
@@ -1191,6 +1201,8 @@
         .sf-intro h2 { font-size: var(--fs-lg); font-weight: 700; line-height: var(--lh-ui); }
         .sf-formula { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
         .sf-formula .sf-dot { margin: 0 var(--sp-2); color: var(--c-text-2); }
+        /* Each formula stays on one line; a narrow window breaks between them. */
+        .sf-formula > span { white-space: nowrap; }
         .sf-sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); }
         /* When the numbers were last brought up to date: its own chip, never cut in two */
         .sf-asof {
@@ -1213,7 +1225,7 @@
         .staffing-table col.c-n { width: 68px; }
         .staffing-table col.c-hire { width: 84px; }
         .staffing-table col.c-lack { width: 104px; }
-        .staffing-table col.c-mult { width: 160px; }
+        .staffing-table col.c-mult { width: 152px; }
         .staffing-table col.c-edit { width: 64px; }
         .staffing-table th { height: 52px; }
         .staffing-table td { height: 40px; }
@@ -2336,7 +2348,7 @@
             <div class="sf-head glass">
                 <div class="sf-intro">
                     <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
-                    <p class="sf-formula">ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span>ขาดแคลน = 1 − (มีจริง + จ้างรายเดือน + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</p>
+                    <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − (มีจริง + จ้างรายเดือน + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</span></p>
                     <p id="staffing-sub" class="sf-sub"></p>
                 </div>
                 <dl id="staffing-stats" class="sf-stats"></dl>
@@ -2670,7 +2682,7 @@
         </div>
     </dialog>
 
-    <!-- line icons for app.js and review.js (TH SarabunPSK has no arrows or ticks) -->
+    <!-- line icons for app.js and review.js (the dashboard font has no arrows or ticks) -->
     <script src="icons.js"></script>
     <script src="app.js"></script>
     <script src="users.js"></script>
