@@ -865,8 +865,7 @@
     const auditeeOnly = () => document.body.dataset.reviewSide === "auditee";
     const auditorOnly = () => document.body.dataset.reviewSide === "auditor";
     // Anyone but the owner (the owner has no side set): no ข้อมูล button on
-    // ภาพรวม since 2026-11-19, so the owner types the budget and the
-    // เอกสารจัดสรร for them.
+    // ภาพรวม since 2026-11-19, so the owner types the budget for them.
     const notOwner = () => !!document.body.dataset.reviewSide;
     const oneSide = () => auditeeOnly() || auditorOnly();
     function syncRole() {
@@ -1239,16 +1238,9 @@
         // that the owner has yet to type them.
         if (!set)
             c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (notOwner() ? " (ผู้ดูแลระบบกรอก)" : "")));
-        const a = s.alloc;
-        if (a && a.installed) {
-            c.append(el("p", a.uploaded && !a.without ? "rv-hint" : "rv-none", !a.uploaded
-                ? "ยังไม่ได้อัปโหลดเอกสารจัดสรร"
-                : a.without ? "เอกสารจัดสรร: ยังไม่มีเลข " + int(a.without) + " คน"
-                    : "เอกสารจัดสรร: มีเลขครบ " + int(a.roster) + " คน"));
-        }
         if (!notOwner()) {
             // All in already: a quiet link; not yet: the button to go and add them.
-            const done = set && (!a || !a.installed || (a.uploaded && !a.without));
+            const done = set;
             const go = el("a", done ? "rv-link" : "btn-primary rv-go");
             go.append(el("span", undefined, done ? "แก้ที่ปุ่มข้อมูล หน้าภาพรวม" : "กรอกที่ปุ่มข้อมูล หน้าภาพรวม"), iconEl("arrow-right"));
             go.href = "/dashboard/#overview";
@@ -1923,18 +1915,12 @@
             return ["ส่งให้ผู้ตรวจสอบแล้ว"];
         if (s.roster.sent < s.roster.total)
             why.push("รอแพทย์ส่งครบ");
-        // งบรายเดือน and เอกสารจัดสรร: both from the ข้อมูล button on
-        // ภาพรวม, which only the owner has (Pong, 2026-11-19). The card
-        // above links the owner to them; here the reason only.
+        // งบรายเดือน: from the ข้อมูล button on ภาพรวม, which only the
+        // owner has (Pong, 2026-11-19). The card above links the owner to
+        // it; here the reason only. (The เอกสารจัดสรร upload it also waited
+        // for, 18 to 20 Nov, is gone: Pong, 2026-11-20.)
         if (!s.inputs || !s.inputs.doctors)
             why.push(notOwner() ? "รอผู้ดูแลระบบกรอกงบรายเดือน" : "กรอกงบรายเดือนก่อน");
-        const a = s.alloc;
-        if (a && !a.installed)
-            why.push("ยังไม่ได้ติดตั้งเอกสารจัดสรร (SQL ขั้นที่ 29)");
-        else if (a && !a.uploaded)
-            why.push(notOwner() ? "รอผู้ดูแลระบบอัปโหลดเอกสารจัดสรร" : "อัปโหลดเอกสารจัดสรรก่อน");
-        else if (a && a.without > 0)
-            why.push((notOwner() ? "รอผู้ดูแลระบบใส่เลขเอกสารจัดสรรอีก " : "ใส่เลขเอกสารจัดสรรอีก ") + int(a.without) + " คน");
         if (openRequest(s))
             why.push("รอสร้างไฟล์ใหม่เสร็จ");
         else if (!s.build)

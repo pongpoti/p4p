@@ -303,7 +303,12 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     this file is not installed, and nothing is saved. End with the check
     query (auditor_ok = true, check_ok = true, anon_0 = 0). Safe to re-run;
     no backslashes.
-29. `scripts/alloc-ids-2026-11.sql` — **not applied yet; paste it.**
+29. `scripts/alloc-ids-2026-11.sql` — applied 2026-11-18. **Unused since
+    2026-11-20** (Pong): the upload, its box, its send check and its routes
+    are gone, and the allocation sheet's No runs `ID-<yy>-<MM>-0001`,
+    `0002`, … down the sheet (staff, then interns). Its tables and
+    functions stay in the database unread; nothing to run or undo. As it
+    was:
     เอกสารจัดสรร (Pong, 2026-11-18): the hospital's monthly list of everyone
     paid, uploaded from a month card's ข้อมูล button on ภาพรวม by the owner
     or the ผู้จัดทำ. The app keeps only the last 4 digits of each roster
