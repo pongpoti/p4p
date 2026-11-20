@@ -45,8 +45,11 @@
  *   GET  /dashboard/api/review/:month/rounds/:no/file/:kind
  *        kind sk03 | merged: the round's own copy of SK03 / รวมค่าคะแนน (both sides)
  *        kind pdf: the round's approval PDF, approved or cancelled (both sides)
- *        kind allocation: the allocation list of an approved or cancelled
- *        approval (the auditor side)
+ *        kind allocation: the round's allocation list, any round, so the
+ *        auditor can check it before approving (the auditor side; Pong,
+ *        2026-11-20 "Allow auditor to download allocation sheet"). A round
+ *        not approved is named "(รอบที่ N ยังไม่อนุมัติ)", a cancelled one
+ *        "(ยกเลิก รอบที่ N)".
  *   ?link=1 answers {url} (a signed link, 2 minutes) instead of redirecting;
  *   allocation is made on request and sent as the file itself.
  *
@@ -644,8 +647,9 @@ export function mountReview(d: ReviewDeps): void {
   // person's department from that build, so it always matches what was
   // approved. Nothing is stored. The auditor side only (the owner or a ผู้ตรวจสอบ): the auditee
   // gets a 404 like any other page they cannot see (Pong, 2026-11-17).
-  // cancelled: an approval undone since (ประวัติรอบ), named so.
-  const sendAllocation = async (req: Request, res: Response, g: Gated, round: { round_no: number; build_id: string }, cancelled: boolean): Promise<void> => {
+  // tag: "" for the approved round; else what the name adds, for a round
+  // not approved yet or an approval undone since (ประวัติรอบ).
+  const sendAllocation = async (req: Request, res: Response, g: Gated, round: { round_no: number; build_id: string }, tag: string): Promise<void> => {
     // No runs 0001, 0002, … down the sheet (Pong, 2026-11-20), so
     // nothing else is read for it.
     const [b, people] = await Promise.all([
@@ -654,7 +658,7 @@ export function mountReview(d: ReviewDeps): void {
         { headers: d.serviceHeaders(), timeout: 8000 }),
     ])
     const path = (b.data as any[])[0]?.sk03_path
-    if (!path) { res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบที่อนุมัติ" }); return }
+    if (!path) { res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบนี้" }); return }
     let file: { data: ArrayBuffer }
     try {
       file = await axios.get(storage("object/" + BUCKET + "/" + String(path).split("/").map(encodeURIComponent).join("/")),
@@ -663,7 +667,7 @@ export function mountReview(d: ReviewDeps): void {
       // The body of a failed binary read is bytes: log it as text.
       const body = e.response && e.response.data ? Buffer.from(e.response.data).toString("utf8").slice(0, 300) : ""
       console.error("[dashboard] review allocation: SK03 download failed:", e.response ? e.response.status + " " + body : e.message)
-      res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบที่อนุมัติไม่สำเร็จ ลองใหม่อีกครั้ง" }); return
+      res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบนี้ไม่สำเร็จ ลองใหม่อีกครั้ง" }); return
     }
     const dept = new Map<string, string>()
     for (const p of (people.data as any[]) || []) {
@@ -673,11 +677,11 @@ export function mountReview(d: ReviewDeps): void {
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.load(file.data as ArrayBuffer)
     const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
-    if (!rows.length) { res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบที่อนุมัติ" }); return }
+    if (!rows.length) { res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบนี้" }); return }
     const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
     await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
     const base = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
-    const name = cancelled ? base.replace(/\.xlsx$/, "") + " (ยกเลิก รอบที่ " + round.round_no + ").xlsx" : base
+    const name = tag ? base.replace(/\.xlsx$/, "") + " (" + tag + ").xlsx" : base
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     res.setHeader("Content-Disposition", "attachment; filename=\"allocation_" + g.month + ".xlsx\"; filename*=UTF-8''" + encodeURIComponent(name))
     res.send(buf)
@@ -690,7 +694,7 @@ export function mountReview(d: ReviewDeps): void {
         { headers: d.serviceHeaders(), timeout: 8000 })
       const round = (r.data as any[])[0]
       if (!round || !round.build_id) return res.status(404).json({ error: "เดือนนี้ยังไม่ได้อนุมัติ" })
-      await sendAllocation(req, res, g, round, false)
+      await sendAllocation(req, res, g, round, "")
     } catch (e: any) { fail(res, "allocation", e) }
   })
 
@@ -715,8 +719,9 @@ export function mountReview(d: ReviewDeps): void {
       const tag = cancelled ? " (ยกเลิก รอบที่ " + round.round_no + ")" : " รอบที่ " + round.round_no
       let path = "", name = ""
       if (kind === "allocation") {
-        if (!approval || !round.approved_at || !round.build_id) return res.status(404).json({ error: "รอบนี้ไม่ได้อนุมัติ" })
-        await sendAllocation(req, res, g, round, cancelled)
+        if (!round.build_id) return res.status(404).json({ error: "ไม่พบไฟล์ของรอบนี้" })
+        await sendAllocation(req, res, g, round, round.status === "approved" ? ""
+          : cancelled ? "ยกเลิก รอบที่ " + round.round_no : "รอบที่ " + round.round_no + " ยังไม่อนุมัติ")
         return
       } else if (kind === "pdf") {
         if (!approval || round.pdf_status !== "ready" || !round.pdf_path) return res.status(404).json({ error: "รอบนี้ไม่มีเอกสารเบิกจ่าย" })

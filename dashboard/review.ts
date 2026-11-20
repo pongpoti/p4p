@@ -2478,6 +2478,7 @@
             const out: Node[] = [turn("wait", "รอผู้จัดทำ", "ส่งกลับรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.returned_at),
                 (r.counts.fix ? "ต้องแก้ " + int(r.counts.fix) + " คน · " : "") + "รอผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1))]
             if (r.return_note) out.push(noteBox(r.reopen_of ? "เหตุผลที่ยกเลิกอนุมัติรอบที่ " + r.reopen_of : "หมายเหตุถึงผู้จัดทำ", r.return_note))
+            out.push(roundFiles(s, r))
             if (!r.auditee_opened_at) {
                 const row = el("div", "rv-actions")
                 const b = el("button", "btn-ghost", "ดึงผลตรวจกลับมาแก้")
@@ -2798,7 +2799,7 @@
             const xn = noteEl("xlsx")
             if (xn) c.append(xn)
         }
-        c.append(roundFiles(s, r), kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
+        c.append(roundFiles(s, r, false), kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
         for (const spot of ["pdf", "pdf-dl"]) { const n = noteEl(spot); if (n) c.append(n) }
         const mail = side === "auditee" ? emailBox(s, r) : null
         if (mail) c.append(mail)
@@ -2981,11 +2982,16 @@
         a.addEventListener("click", (ev) => { ev.preventDefault(); void downloadRoundFile(s, kind, a, spot) })
         return a
     }
-    // The round's SK03 and รวมค่าคะแนน, as one line.
-    function roundFiles(s: State, r: Round): HTMLElement {
+    // The round's SK03 and รวมค่าคะแนน, as one line; on the auditor side
+    // also its allocation list, to check before approving (Pong, 2026-11-20:
+    // "Allow auditor to download allocation sheet"). alloc: false where the
+    // approved round already offers it.
+    function roundFiles(s: State, r: Round, alloc = true): HTMLElement {
         const w = el("div", "rv-actions rv-round-files")
-        w.append(el("span", "rv-label", "ไฟล์รอบที่ " + r.round_no), fileLink(s, r, "sk03", "cur"), fileLink(s, r, "merged", "cur"))
-        for (const k of ["sk03", "merged"]) { const n = noteEl("file-" + r.round_no + "-" + k); if (n) w.append(n) }
+        const kinds: FileKind[] = ["sk03", "merged"]
+        if (alloc && role === "auditor") kinds.push("allocation")
+        w.append(el("span", "rv-label", "ไฟล์รอบที่ " + r.round_no), ...kinds.map((k) => fileLink(s, r, k, "cur")))
+        for (const k of kinds) { const n = noteEl("file-" + r.round_no + "-" + k); if (n) w.append(n) }
         return w
     }
     async function downloadRoundFile(s: State, kind: FileKind, a: HTMLAnchorElement, spot: string): Promise<void> {
@@ -3062,8 +3068,8 @@
             if (approval && hasPdf) files.append(fileLink(s, r, "pdf", "hist"))
             else if (r.status === "approved") files.append(el("span", "rv-hint", "PDF กำลังสร้าง"))
             else if (r.status === "cancelled" && r.approved_at) files.append(el("span", "rv-hint", "ไม่มี PDF (ยกเลิกก่อนสร้างเสร็จ)"))
-            // The allocation list: the auditor side only (Pong, 2026-11-17).
-            if (approval && r.approved_at && role === "auditor") files.append(fileLink(s, r, "allocation", "hist"))
+            // The allocation list: the auditor side only (Pong, 2026-11-17), every round (2026-11-20).
+            if (role === "auditor") files.append(fileLink(s, r, "allocation", "hist"))
             const err = el("p", "rv-err")
             err.setAttribute("role", "alert")
             li.append(files, err)
