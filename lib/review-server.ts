@@ -31,12 +31,24 @@
  * recipients}: null until scripts/review-email-test-toggle-2026-11.sql has
  * been run, and then the tab shows no switch).
  *
- * There is no download or upload: the SK03 and รวมค่าคะแนน files stay in
- * Google Drive (the state carries their ids, the tab links them view only),
- * and a round is the newest build as the system checked it. Once a month is
- * approved, both sides can download the approval PDF (:month/pdf), and the
- * auditor side the per-person allocation list (:month/allocation,
+ * There is no upload: the SK03 and รวมค่าคะแนน files stay in Google Drive
+ * (the state carries their ids, the tab links them view only), and a round
+ * is the newest build as the system checked it. Once a month is approved,
+ * both sides can download the approval PDF (:month/pdf), and the auditor
+ * side the per-person allocation list (:month/allocation,
  * lib/allocation-xlsx.ts).
+ *
+ * Every round keeps its files (Pong, 2026-11-20: "the generated excel and
+ * pdf is missing or lost"): scripts/review-rounds-2026-11.sql keeps an
+ * approval that is undone as a 'cancelled' round, PDF and all, and starts
+ * the next round from it. ประวัติรอบ downloads any round's files:
+ *   GET  /dashboard/api/review/:month/rounds/:no/file/:kind
+ *        kind sk03 | merged: the round's own copy of SK03 / รวมค่าคะแนน (both sides)
+ *        kind pdf: the round's approval PDF, approved or cancelled (both sides)
+ *        kind allocation: the allocation list of an approved or cancelled
+ *        approval (the auditor side)
+ *   ?link=1 answers {url} (a signed link, 2 minutes) instead of redirecting;
+ *   allocation is made on request and sent as the file itself.
  *
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
@@ -78,6 +90,8 @@ export interface ReviewDeps {
 }
 
 const BUCKET = "review-files"
+const THAI_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
 // The tab starts at ส.ค. 2569: earlier months were paid before it existed.
 const FIRST_MONTH = "2569_08"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -104,7 +118,8 @@ const REFUSALS: [RegExp, number, string][] = [
   [/not the auditor's turn/, 409, "ยังไม่ใช่คิวผู้ตรวจสอบ (ส่งกลับแล้ว อนุมัติแล้ว หรือยังไม่ได้ส่งมา)"],
   [/a fix needs a remark/, 400, "ต้องแก้ไข ต้องมีหมายเหตุบอกว่าแก้อะไร"],
   [/someone is still to check/, 409, "ยังมีคนที่รอตรวจ ตรวจให้ครบก่อน"],
-  [/nothing to fix/, 409, "ไม่มีคนที่ต้องแก้หรือปัญหาที่เปิดอยู่ ใช้ปุ่มอนุมัติแทน"],
+  [/nothing to fix/, 409, "ไม่มีคนที่ต้องแก้ เขียนหมายเหตุถึงผู้จัดทำ หรือใช้ปุ่มอนุมัติแทน"],
+  [/the message is too long/, 400, "หมายเหตุถึงผู้จัดทำไม่เกิน 1,000 ตัวอักษร"],
   [/not everyone is approved/, 409, "ยังอนุมัติไม่ครบทุกคน"],
   [/a problem is still open/, 409, "ยังมีปัญหาอื่น ๆ ที่เปิดอยู่ ปิดก่อนอนุมัติ"],
   [/the auditee has started/, 409, "ผู้จัดทำเริ่มแก้แล้ว ดึงกลับไม่ได้"],
@@ -148,6 +163,7 @@ const SQL_VERSION = 2
 const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการส่งอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-2026-11.sql ใน Supabase SQL editor"
 const MAIL_MODE_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งสวิตช์โหมดทดสอบอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-test-toggle-2026-11.sql ใน Supabase SQL editor"
 const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
+const ROUNDS_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งประวัติรอบ (ส่งกลับพร้อมหมายเหตุ และยกเลิกอนุมัติแบบเก็บเอกสาร) ผู้ดูแลระบบต้องรันไฟล์ scripts/review-rounds-2026-11.sql ใน Supabase SQL editor"
 const APPROVE_ALL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งปุ่มอนุมัติทุกคนที่รอตรวจ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-approve-all-2026-11.sql ใน Supabase SQL editor"
 
 export function mountReview(d: ReviewDeps): void {
@@ -208,11 +224,11 @@ export function mountReview(d: ReviewDeps): void {
   // { installed: false }: the tab reads that and shows how to set it up.
   // Anything else must fail, since the browser only checks r.ok and would
   // otherwise report a save, a reopen or a list that never happened.
-  const fail = (res: Response, what: string, e: any, load = false): void => {
+  const fail = (res: Response, what: string, e: any, load = false, missing = NOT_INSTALLED_MSG): void => {
     if (notInstalled(e)) {
       if (load) { res.json({ installed: false }); return }
       console.error("[dashboard] review " + what + ": not installed (" + String(pgError(e).code || "") + ")")
-      res.status(503).json({ installed: false, error: NOT_INSTALLED_MSG }); return
+      res.status(503).json({ installed: false, error: missing }); return
     }
     const msg = String(pgError(e).message || "")
     const hit = REFUSALS.find(([re]) => re.test(msg))
@@ -581,7 +597,20 @@ export function mountReview(d: ReviewDeps): void {
     }
   })
 
-  roundAction("return", "review_return_round", "review.return")
+  // ส่งกลับ, with the auditor's note to the ผู้จัดทำ (optional; with
+  // everyone approved, the note is the reason to send back).
+  app.post("/dashboard/api/review/:month/return", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res, "auditor")
+    if (!g) return
+    const raw = req.body && req.body.note
+    const note = typeof raw === "string" ? raw.trim() : ""
+    if (note.length > 1000) return res.status(400).json({ error: "หมายเหตุถึงผู้จัดทำไม่เกิน 1,000 ตัวอักษร" })
+    try {
+      const round = await d.callServiceRpc("review_return_round", { p_month: g.month, p_actor: g.s.name, p_note: note })
+      await d.audit(req, g.s, "review.return", { month: g.month, round: round && round.round_no, ...(note ? { note } : {}) })
+      res.json({ ok: true, round })
+    } catch (e: any) { fail(res, "return", e, false, ROUNDS_NOT_INSTALLED_MSG) }
+  })
   roundAction("unreturn", "review_unreturn_round", "review.unreturn")
   roundAction("approve", "review_approve_round", "review.approve")
 
@@ -615,6 +644,44 @@ export function mountReview(d: ReviewDeps): void {
   // person's department from that build, so it always matches what was
   // approved. Nothing is stored. The auditor side only (the owner or a ผู้ตรวจสอบ): the auditee
   // gets a 404 like any other page they cannot see (Pong, 2026-11-17).
+  // cancelled: an approval undone since (ประวัติรอบ), named so.
+  const sendAllocation = async (req: Request, res: Response, g: Gated, round: { round_no: number; build_id: string }, cancelled: boolean): Promise<void> => {
+    // No runs 0001, 0002, … down the sheet (Pong, 2026-11-20), so
+    // nothing else is read for it.
+    const [b, people] = await Promise.all([
+      axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
+      axios.get(rest("review_build_people?select=is_intern,sk03_row,department&build_id=eq." + round.build_id),
+        { headers: d.serviceHeaders(), timeout: 8000 }),
+    ])
+    const path = (b.data as any[])[0]?.sk03_path
+    if (!path) { res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบที่อนุมัติ" }); return }
+    let file: { data: ArrayBuffer }
+    try {
+      file = await axios.get(storage("object/" + BUCKET + "/" + String(path).split("/").map(encodeURIComponent).join("/")),
+        { headers: d.serviceHeaders(), responseType: "arraybuffer", timeout: 20000 })
+    } catch (e: any) {
+      // The body of a failed binary read is bytes: log it as text.
+      const body = e.response && e.response.data ? Buffer.from(e.response.data).toString("utf8").slice(0, 300) : ""
+      console.error("[dashboard] review allocation: SK03 download failed:", e.response ? e.response.status + " " + body : e.message)
+      res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบที่อนุมัติไม่สำเร็จ ลองใหม่อีกครั้ง" }); return
+    }
+    const dept = new Map<string, string>()
+    for (const p of (people.data as any[]) || []) {
+      if (p.sk03_row != null && p.department) dept.set((p.is_intern ? "i" : "s") + p.sk03_row, String(p.department))
+    }
+    const ExcelJS = require("exceljs") as typeof import("exceljs")
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(file.data as ArrayBuffer)
+    const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
+    if (!rows.length) { res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบที่อนุมัติ" }); return }
+    const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
+    await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
+    const base = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
+    const name = cancelled ? base.replace(/\.xlsx$/, "") + " (ยกเลิก รอบที่ " + round.round_no + ").xlsx" : base
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    res.setHeader("Content-Disposition", "attachment; filename=\"allocation_" + g.month + ".xlsx\"; filename*=UTF-8''" + encodeURIComponent(name))
+    res.send(buf)
+  }
   app.get("/dashboard/api/review/:month/allocation", async (req: Request, res: Response) => {
     const g = await gate(req, res, "auditor")
     if (!g) return
@@ -623,41 +690,55 @@ export function mountReview(d: ReviewDeps): void {
         { headers: d.serviceHeaders(), timeout: 8000 })
       const round = (r.data as any[])[0]
       if (!round || !round.build_id) return res.status(404).json({ error: "เดือนนี้ยังไม่ได้อนุมัติ" })
-      // No runs 0001, 0002, … down the sheet (Pong, 2026-11-20), so
-      // nothing else is read for it.
-      const [b, people] = await Promise.all([
-        axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
-        axios.get(rest("review_build_people?select=is_intern,sk03_row,department&build_id=eq." + round.build_id),
-          { headers: d.serviceHeaders(), timeout: 8000 }),
-      ])
-      const path = (b.data as any[])[0]?.sk03_path
-      if (!path) return res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบที่อนุมัติ" })
-      let file: { data: ArrayBuffer }
-      try {
-        file = await axios.get(storage("object/" + BUCKET + "/" + String(path).split("/").map(encodeURIComponent).join("/")),
-          { headers: d.serviceHeaders(), responseType: "arraybuffer", timeout: 20000 })
-      } catch (e: any) {
-        // The body of a failed binary read is bytes: log it as text.
-        const body = e.response && e.response.data ? Buffer.from(e.response.data).toString("utf8").slice(0, 300) : ""
-        console.error("[dashboard] review allocation: SK03 download failed:", e.response ? e.response.status + " " + body : e.message)
-        return res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบที่อนุมัติไม่สำเร็จ ลองใหม่อีกครั้ง" })
-      }
-      const dept = new Map<string, string>()
-      for (const p of (people.data as any[]) || []) {
-        if (p.sk03_row != null && p.department) dept.set((p.is_intern ? "i" : "s") + p.sk03_row, String(p.department))
-      }
-      const ExcelJS = require("exceljs") as typeof import("exceljs")
-      const wb = new ExcelJS.Workbook()
-      await wb.xlsx.load(file.data as ArrayBuffer)
-      const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
-      if (!rows.length) return res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบที่อนุมัติ" })
-      const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
-      await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
-      const name = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-      res.setHeader("Content-Disposition", "attachment; filename=\"allocation_" + g.month + ".xlsx\"; filename*=UTF-8''" + encodeURIComponent(name))
-      res.send(buf)
+      await sendAllocation(req, res, g, round, false)
     } catch (e: any) { fail(res, "allocation", e) }
+  })
+
+  // ประวัติรอบ: one file of one round (see the top of this file). A signed
+  // link to the round's own copy in the bucket, never the Drive file (that
+  // one is the newest build's).
+  const FILE_KINDS = ["sk03", "merged", "pdf", "allocation"]
+  app.get("/dashboard/api/review/:month/rounds/:no/file/:kind", async (req: Request, res: Response) => {
+    const kind = String(req.params.kind)
+    const no = String(req.params.no)
+    const g = await gate(req, res, kind === "allocation" ? "auditor" : "both")
+    if (!g) return
+    if (!FILE_KINDS.includes(kind) || !/^[1-9][0-9]{0,3}$/.test(no)) return res.status(404).json({ error: "ไม่พบไฟล์นี้" })
+    try {
+      const r = await axios.get(rest("review_rounds?select=round_no,status,build_id,approved_at,pdf_status,pdf_path&month=eq." + g.month + "&round_no=eq." + no),
+        { headers: d.serviceHeaders(), timeout: 8000 })
+      const round = (r.data as any[])[0]
+      if (!round) return res.status(404).json({ error: "ไม่พบรอบนี้" })
+      const cancelled = round.status === "cancelled"
+      const approval = round.status === "approved" || cancelled
+      const p = core.parseMonth(g.month)
+      const tag = cancelled ? " (ยกเลิก รอบที่ " + round.round_no + ")" : " รอบที่ " + round.round_no
+      let path = "", name = ""
+      if (kind === "allocation") {
+        if (!approval || !round.approved_at || !round.build_id) return res.status(404).json({ error: "รอบนี้ไม่ได้อนุมัติ" })
+        await sendAllocation(req, res, g, round, cancelled)
+        return
+      } else if (kind === "pdf") {
+        if (!approval || round.pdf_status !== "ready" || !round.pdf_path) return res.status(404).json({ error: "รอบนี้ไม่มีเอกสารเบิกจ่าย" })
+        path = round.pdf_path
+        const base = core.approvalPdfName(g.month) || "P4P_" + g.month + "_approved.pdf"
+        name = cancelled ? base.replace(/\.pdf$/, "") + tag + ".pdf" : base
+      } else {
+        const b = await axios.get(rest("review_builds?select=sk03_path,merged_path&id=eq." + round.build_id),
+          { headers: d.serviceHeaders(), timeout: 8000 })
+        const row = (b.data as any[])[0]
+        path = row ? String((kind === "sk03" ? row.sk03_path : row.merged_path) || "") : ""
+        if (!path) return res.status(404).json({ error: "ไม่พบไฟล์ของรอบนี้" })
+        const monthText = p ? THAI_MONTHS[p.month - 1] + " " + p.be : g.month
+        name = (kind === "sk03" ? "SK03 " : "รวมค่าคะแนน ") + monthText + tag + ".xlsx"
+      }
+      const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + path), { expiresIn: 120 },
+        { headers: json(), timeout: 8000 })
+      await d.audit(req, g.s, "review.download", { month: g.month, kind, round: round.round_no })
+      const url = d.supabaseUrl + "/storage/v1" + signed.data.signedURL + "&download=" + encodeURIComponent(name)
+      if (req.query.link === "1") { res.json({ url, name }); return }
+      res.redirect(302, url)
+    } catch (e: any) { fail(res, "round file", e) }
   })
 
   app.post("/dashboard/api/review/:month/pdf/retry", async (req: Request, res: Response) => {
@@ -670,25 +751,23 @@ export function mountReview(d: ReviewDeps): void {
     } catch (e: any) { fail(res, "pdf retry", e) }
   })
 
-  // ยกเลิกเอกสารและเปิดตรวจอีกครั้ง: the round goes back to the auditor and
-  // the cancelled PDF is deleted, so no old link can fetch it.
-  app.post("/dashboard/api/review/:month/reopen", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+  // ยกเลิกอนุมัติ (scripts/review-rounds-2026-11.sql): the approved round is
+  // kept as cancelled, with its PDF, and the next round starts with every
+  // approval carried over. back: true sends it straight to the ผู้จัดทำ with
+  // the reason as the note; else it is the auditor's to check again.
+  app.post("/dashboard/api/review/:month/reopen", d.express.json({ limit: "8kb" }), async (req: Request, res: Response) => {
     const g = await gate(req, res, "auditor")
     if (!g) return
     const reason = text(req.body && req.body.reason, 1000)
     if (!reason) return res.status(400).json({ error: "เขียนเหตุผลก่อน (ไม่เกิน 1,000 ตัวอักษร)" })
+    const back = !!(req.body && req.body.back === true)
     try {
-      const out = await d.callServiceRpc("review_reopen_round", { p_month: g.month, p_reason: reason, p_actor: g.s.name })
-      // The cancelled PDF goes and the log line is written together.
-      await Promise.all([
-        out && out.old_pdf
-          ? axios.delete(storage("object/" + BUCKET), { headers: json(), data: { prefixes: [out.old_pdf] }, timeout: 8000 })
-            .catch((e: any) => console.error("[dashboard] review: could not delete the cancelled PDF:", e.message))
-          : Promise.resolve(),
-        d.audit(req, g.s, "review.reopen", { month: g.month, round: out && out.round_no, reason }),
-      ])
-      res.json({ ok: true })
-    } catch (e: any) { fail(res, "reopen", e) }
+      const out = await d.callServiceRpc("review_reopen_round", { p_month: g.month, p_reason: reason, p_actor: g.s.name, p_return: back })
+      await d.audit(req, g.s, "review.reopen", {
+        month: g.month, round: out && out.cancelled, next: out && out.round_no, back, reason,
+      })
+      res.json({ ok: true, round: out && out.round_no, status: out && out.status })
+    } catch (e: any) { fail(res, "reopen", e, false, ROUNDS_NOT_INSTALLED_MSG) }
   })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {

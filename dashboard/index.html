@@ -1321,7 +1321,7 @@
         #review-view :is(.rv-lg, #rv-send, #rv-finish, #rv-approve-all, #rv-approve, #rv-fix, #rv-undo),
         #review-confirm .log-actions :is(.btn-primary, .btn-ghost) { min-height: var(--ctl-lg); }
         #review-view :is(#rv-send, #rv-finish, #rv-approve-all) { width: 100%; }
-        #review-view :is(.rv-alert, .rv-warnbar, .rv-decide-hint, .rv-fail, .rv-issue, .rv-reply, .rv-edit-actions) :is(.btn-primary, .btn-ghost) { min-height: 36px; padding: 0 var(--sp-3); font-size: var(--fs-sm); }
+        #review-view :is(.rv-alert, .rv-warnbar, .rv-decide-hint, .rv-fail, .rv-edit-actions) :is(.btn-primary, .btn-ghost) { min-height: 36px; padding: 0 var(--sp-3); font-size: var(--fs-sm); }
         /* Unavailable: one look everywhere, no fading: a flat fill, a dashed
            outline, full-strength words and a lock. It keeps focus and says why
            (aria-describedby). */
@@ -1518,6 +1518,67 @@
         #review-view .rv-countlist b { text-align: right; font-variant-numeric: tabular-nums; }
         #review-view .rv-approve-all { display: flex; flex-direction: column; gap: var(--sp-1); }
         #review-view .rv-approve-all + #rv-finish { margin-top: var(--sp-1); }
+
+        /* Rounds (Pong, 2026-11-20): each round's files, ประวัติรอบ, notes between the sides */
+        #review-view .rv-round-files { gap: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); }
+        #review-view .rv-round-files .rv-label { flex-basis: 100%; font-size: var(--fs-xs); color: var(--c-text-2); }
+        #review-view .rv-card .rv-round-files .rv-label { flex-basis: auto; }
+        :is(#review-view, #review-confirm) .rv-file { display: inline-flex; align-items: center; gap: 4px; }
+        :is(#review-view, #review-confirm) .rv-file .ic { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
+        #review-view .rv-round-lead { font-size: var(--fs-sm); }
+        #review-view .rv-history-entry { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-3) var(--sp-4); }
+        #review-view #rv-history { min-height: 36px; font-size: var(--fs-sm); justify-content: flex-start; gap: var(--sp-2); }
+        #review-view #rv-history .ic { width: var(--icon-sm); height: var(--icon-sm); }
+        #review-view .rv-history-entry .rv-hint { font-size: var(--fs-xs); }
+        #review-view #rv-return-note-btn { min-height: 36px; margin-top: var(--sp-1); font-size: var(--fs-sm); }
+        :is(#review-view, #review-confirm) .rv-msg {
+            padding: var(--sp-2) var(--sp-3); border-left: 4px solid var(--st-attn-solid); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+            background: var(--st-attn-bg); color: var(--c-text); line-height: var(--lh-text);
+        }
+        :is(#review-view, #review-confirm) .rv-msg-label { display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--st-attn-fg); }
+        :is(#review-view, #review-confirm) .rv-msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+        #review-view .rv-finish .rv-msg { font-size: var(--fs-sm); margin-top: var(--sp-1); }
+        /* ส่งกลับ (ผู้จัดทำ): the steps, then one row per person, ticked once answered */
+        #review-view .rv-steps { display: flex; flex-direction: column; gap: 2px; margin: 0; padding-left: 1.4em; font-size: var(--fs-sm); color: var(--c-text-2); }
+        #review-view .rv-steps li { padding-left: var(--sp-1); }
+        #review-view .rv-steps li > span { color: var(--c-text); }
+        #review-view .rv-steps-n { margin-left: var(--sp-2); color: var(--st-attn-fg); font-variant-numeric: tabular-nums; }
+        #review-view .rv-steps li.done .rv-steps-n { color: var(--st-success-fg); }
+        #review-view .rv-fix h3 { display: flex; align-items: center; gap: var(--sp-2); }
+        #review-view .rv-fix-mark {
+            flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+            border: 2px solid var(--st-attn-solid); color: var(--st-attn-fg); font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+        }
+        #review-view .rv-fix.done .rv-fix-mark { border-color: var(--st-success-solid); background: var(--st-success-solid); color: #fff; }
+        #review-view .rv-fix-mark .ic { width: 14px; height: 14px; }
+        #review-view .rv-fix.done .rv-remark { border-left-color: var(--st-success-line); background: var(--c-surface-2); }
+        /* ยกเลิกอนุมัติ: where the next round goes */
+        #review-confirm .rv-choice { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-2) 0 0; padding: 0; border: 0; }
+        #review-confirm .rv-choice legend { margin-bottom: var(--sp-1); font-size: var(--fs-sm); font-weight: 700; }
+        #review-confirm .rv-choice-opt { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--r-md); cursor: pointer; }
+        #review-confirm .rv-choice-opt:has(input:checked) { border-color: var(--c-brand); background: var(--c-brand-soft); }
+        #review-confirm .rv-choice-opt input { margin-top: 5px; accent-color: var(--c-brand); }
+        #review-confirm .rv-choice-opt > span { display: flex; flex-direction: column; }
+        /* ประวัติรอบ: the confirm dialog with one ปิด button */
+        #review-confirm.rv-info { width: min(720px, 94vw); }
+        #review-confirm.rv-info #review-confirm-send { display: none; }
+        #review-confirm #review-confirm-body .rv-file .ic { width: var(--icon-sm); height: var(--icon-sm); margin-right: 0; color: currentColor; vertical-align: 0; }
+        #review-confirm.rv-info #review-confirm-body { max-height: min(62vh, 620px); overflow-y: auto; overscroll-behavior: contain; }
+        #review-confirm .rv-hist { list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; }
+        #review-confirm .rv-hist-item { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-surface); }
+        #review-confirm .rv-hist-cancelled { background: var(--c-surface-2); }
+        #review-confirm .rv-hist-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+        #review-confirm .rv-hist-head strong { font-size: var(--fs-md); }
+        #review-confirm .rv-hist-chip { padding: 0 var(--sp-2); border: 1px solid; border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 700; line-height: 1.5; }
+        #review-confirm .rv-hist-chip-wait { color: var(--st-neutral-fg); background: var(--st-neutral-bg); border-color: var(--st-neutral-line); }
+        #review-confirm .rv-hist-chip-fix  { color: var(--st-attn-fg); background: var(--st-attn-bg); border-color: var(--st-attn-line); }
+        #review-confirm .rv-hist-chip-done { color: var(--st-neutral-fg); background: var(--c-surface-2); border-color: var(--c-border-strong); }
+        #review-confirm .rv-hist-chip-ok   { color: var(--st-success-fg); background: var(--st-success-bg); border-color: var(--st-success-line); }
+        #review-confirm .rv-hist-chip-bad  { color: var(--st-danger-fg); background: var(--st-danger-bg); border-color: var(--st-danger-line); }
+        #review-confirm .rv-hist-lines { display: flex; flex-direction: column; gap: 2px; margin: 0; padding-left: 1.2em; font-size: var(--fs-sm); color: var(--c-text-2); }
+        #review-confirm .rv-hist-files { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); font-size: var(--fs-sm); }
+        #review-confirm .rv-hist-files .rv-hint { font-size: var(--fs-xs); }
+        #review-confirm .rv-hist-item .rv-err { margin: 0; }
 
         /* Side switch (ผู้จัดทำ | ผู้ตรวจสอบ), a tab list */
         #review-view .rv-role { display: flex; }
@@ -1872,13 +1933,6 @@
             -webkit-mask: var(--i-chevron-down) center / contain no-repeat; mask: var(--i-chevron-down) center / contain no-repeat;
         }
         #review-view #rv-more-toggle[aria-expanded="true"]::after { transform: rotate(180deg); }
-        /* ปัญหาอื่น ๆ */
-        #review-view .rv-issue { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-surface); }
-        #review-view .rv-issue > .btn-ghost { align-self: flex-start; }
-        #review-view .rv-issue h4 { font-size: var(--fs-md); font-weight: 700; }
-        #review-view .rv-replies { padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
-        #review-view .rv-reply { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); }
-        #review-view .rv-reply textarea { flex: 1 1 320px; width: auto; }
 
         /* The confirm dialog: title and ×, the figures, then a footer bar */
         #review-confirm.rv-dialog {
