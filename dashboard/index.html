@@ -911,7 +911,7 @@
         :where(body.cards-view) .al-error { margin: 0; padding: 8px 12px; border-left: 4px solid #B42318; border-radius: 6px; background: #FEF3F2; font-weight: 600; }
         :where(body.cards-view) .al-sec h3 { margin: 4px 0 0; font-size: 17px; font-weight: 700; }
         :where(body.cards-view) .al-sec h3 .n { margin-left: 6px; padding: 1px 9px; border-radius: 999px; font-size: 14px; background: var(--warning-bg); color: #8A4B00; }
-        :where(body.cards-view) :is(#alloc-close, #alloc-runs) h3 .n { background: var(--accent); color: var(--foreground); }
+        :where(body.cards-view) #alloc-close h3 .n { background: var(--accent); color: var(--foreground); }
         :where(body.cards-view) .al-hint { margin: 2px 0 6px; font-size: 14px; color: var(--muted-foreground); }
         :where(body.cards-view) .al-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
         :where(body.cards-view) .al-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 10px 12px; border-top: 1px solid var(--border); }
@@ -2613,11 +2613,6 @@
             <section id="alloc-missing" class="al-sec hidden" aria-labelledby="alloc-missing-h">
                 <h3 id="alloc-missing-h">ยังไม่มีเลข</h3>
                 <p class="al-hint">ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง</p>
-                <ul class="al-list"></ul>
-            </section>
-            <section id="alloc-runs" class="al-sec hidden" aria-labelledby="alloc-runs-h">
-                <h3 id="alloc-runs-h">เลขใหม่ต่อท้ายกลุ่มงาน</h3>
-                <p class="al-hint">ไม่พบชื่อในไฟล์ จึงให้เลขต่อจากแถวสุดท้ายของกลุ่มงานในไฟล์ และเลื่อนเลขของทุกคนที่อยู่ถัดไปขึ้น ถ้าไม่ถูก ใส่เลขที่ถูกแล้วกดบันทึก</p>
                 <ul class="al-list"></ul>
             </section>
             <section id="alloc-close" class="al-sec hidden" aria-labelledby="alloc-close-h">
