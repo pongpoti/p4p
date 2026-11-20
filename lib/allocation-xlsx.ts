@@ -11,8 +11,11 @@
  *   row 3+  one row per doctor: SK03's staff sheet in its order, then its
  *           intern sheet, read from the approved round's own SK03 copy
  *
- *   A No                      "ID-<yy>-<MM>-" + the person's 4 digits from เอกสารจัดสรร
- *                             (lib/alloc-ids.ts), or nothing after it when not known
+ *   A No                      "ID-<yy>-<MM>-" + a running number of 4 digits, 0001 for
+ *                             the first row down to the last intern (Pong, 2026-11-20:
+ *                             "number automatically with 4 digits zero leading start
+ *                             with 0001"; the hospital's เอกสารจัดสรร is not in any
+ *                             name order, so its numbers are no longer used)
  *   B เลขที่บัตรประชาชน         left empty (the app never holds ID numbers)
  *   C ชื่อ - สกุล               SK03 B (the roster's prefix, นพ./พญ.) + C, two spaces, D
  *   D หน่วยงาน P4P             "องค์กรแพทย์ (กลุ่มงาน<department>)", "องค์กรแพทย์ (INTERN)"
@@ -99,8 +102,6 @@ export interface AllocationRow {
   pay: number | null
   department: string
   intern: boolean
-  /** The last 4 digits of the person's No in เอกสารจัดสรร, if known. */
-  no4?: string | null
 }
 
 /** "2569_08" → { be: 2569, m: 8 }, or null. */
@@ -116,6 +117,9 @@ export function allocationFileName(month: string): string | null {
   const k = parseKey(month)
   return k ? "รายละเอียดการจัดสรรเงินรายบุคคล องค์กรแพทย์ เดือน" + TH_MONTHS[k.m - 1] + " " + k.be + ".xlsx" : null
 }
+
+/** The i-th row's running number (from 0): "0001", "0002", … */
+export const runNo = (i: number): string => String(i + 1).padStart(4, "0")
 
 /** "2569_08" → "ID-69-08-": the month's own year, two digits, and month. */
 export function allocationId(month: string): string {
@@ -191,11 +195,9 @@ export function overallSheets(wb: Workbook): { staff: Worksheet; intern: Workshe
 /**
  * The rows of SK03's staff sheet in order, then its intern sheet, from row
  * 8 down to the totals row (A not a number). `deptOf` gives the roster's
- * department for a sheet row (null: not known), `no4Of` the person's 4
- * digits from เอกสารจัดสรร (null: not known).
+ * department for a sheet row (null: not known).
  */
-export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: number) => string | null,
-  no4Of: (intern: boolean, row: number) => string | null = () => null): AllocationRow[] {
+export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: number) => string | null): AllocationRow[] {
   const { staff, intern } = overallSheets(wb)
   const out: AllocationRow[] = []
   for (const [ws, isIntern] of [[staff, false], [intern, true]] as [Worksheet, boolean][]) {
@@ -212,7 +214,6 @@ export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: numb
         pay: num(row.getCell(14).value),
         department: deptOf(isIntern, r) ?? (isIntern ? "INTERN" : ""),
         intern: isIntern,
-        no4: no4Of(isIntern, r),
       })
     }
   }
@@ -293,7 +294,7 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
     const r = FIRST_ROW + i
     const admin = p.admin && p.admin !== 0 ? p.admin : null
     return [
-      id + (p.no4 && /^[0-9]{4}$/.test(p.no4) ? p.no4 : ""), null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
+      id + runNo(i), null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
       admin, p.pay,
       { formula: `G${r}+H${r}`, result: (admin ?? 0) + (p.pay ?? 0) },
       null,

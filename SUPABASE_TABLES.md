@@ -339,7 +339,11 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
 
 ## `alloc_ids`
 
-**Purpose:** The last 4 digits of each roster doctor's No in the month's
+**Unused since 2026-11-20** (Pong: the เอกสารจัดสรร upload is off, and the
+allocation sheet's No runs `0001`, `0002`, … down the sheet by itself). The
+table stays; the app no longer reads or writes it.
+
+**Purpose (18 to 20 Nov 2026):** The last 4 digits of each roster doctor's No in the month's
 เอกสารจัดสรร (Pong, 2026-11-18), for the No column of the allocation sheet
 (รายละเอียดการจัดสรรเงินรายบุคคล, `ID-<yy>-<MM>-<4 digits>`).
 
@@ -356,7 +360,9 @@ stays in the `ADMIN_LINE_USER_ID` env var and has every right.
 
 ## `alloc_uploads`
 
-**Purpose:** One row per month: the last เอกสารจัดสรร upload, for the
+**Unused since 2026-11-20**, as `alloc_ids` above.
+
+**Purpose (18 to 20 Nov 2026):** One row per month: the last เอกสารจัดสรร upload, for the
 ข้อมูล menu and the เอกสารจัดสรร box on ภาพรวม.
 
 - **Columns:** `month` (primary key), `file_name`, `sheet_name`,

@@ -113,11 +113,6 @@
         // The email's test mode. Null or missing: the switch's SQL is not
         // installed (no switch).
         mail?: MailMode | null
-        // The month's เอกสารจัดสรร (ภาพรวม's ข้อมูล button): uploaded, and
-        // how many roster doctors still have no 4 digits. Sending waits for
-        // it (Pong, 2026-11-18). Null or missing: not known (no reason shown;
-        // the server still checks).
-        alloc?: { installed: boolean; uploaded: boolean; roster: number; without: number } | null
     }
     interface MailMode {
         test: boolean       // on: every email to testTo only, subject marked [ทดสอบ]
@@ -771,8 +766,7 @@
     const auditeeOnly = (): boolean => document.body.dataset.reviewSide === "auditee"
     const auditorOnly = (): boolean => document.body.dataset.reviewSide === "auditor"
     // Anyone but the owner (the owner has no side set): no ข้อมูล button on
-    // ภาพรวม since 2026-11-19, so the owner types the budget and the
-    // เอกสารจัดสรร for them.
+    // ภาพรวม since 2026-11-19, so the owner types the budget for them.
     const notOwner = (): boolean => !!document.body.dataset.reviewSide
     const oneSide = (): boolean => auditeeOnly() || auditorOnly()
     function syncRole(): void {
@@ -1077,16 +1071,9 @@
         // hide ข้อมูล btn on overview"): everyone else sees the numbers, or
         // that the owner has yet to type them.
         if (!set) c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (notOwner() ? " (ผู้ดูแลระบบกรอก)" : "")))
-        const a = s.alloc
-        if (a && a.installed) {
-            c.append(el("p", a.uploaded && !a.without ? "rv-hint" : "rv-none", !a.uploaded
-                ? "ยังไม่ได้อัปโหลดเอกสารจัดสรร"
-                : a.without ? "เอกสารจัดสรร: ยังไม่มีเลข " + int(a.without) + " คน"
-                : "เอกสารจัดสรร: มีเลขครบ " + int(a.roster) + " คน"))
-        }
         if (!notOwner()) {
             // All in already: a quiet link; not yet: the button to go and add them.
-            const done = set && (!a || !a.installed || (a.uploaded && !a.without))
+            const done = set
             const go = el("a", done ? "rv-link" : "btn-primary rv-go") as HTMLAnchorElement
             go.append(el("span", undefined, done ? "แก้ที่ปุ่มข้อมูล หน้าภาพรวม" : "กรอกที่ปุ่มข้อมูล หน้าภาพรวม"), iconEl("arrow-right"))
             go.href = "/dashboard/#overview"
@@ -1710,14 +1697,11 @@
         const why: string[] = []
         if (!auditeeTurn(s)) return ["ส่งให้ผู้ตรวจสอบแล้ว"]
         if (s.roster.sent < s.roster.total) why.push("รอแพทย์ส่งครบ")
-        // งบรายเดือน and เอกสารจัดสรร: both from the ข้อมูล button on
-        // ภาพรวม, which only the owner has (Pong, 2026-11-19). The card
-        // above links the owner to them; here the reason only.
+        // งบรายเดือน: from the ข้อมูล button on ภาพรวม, which only the
+        // owner has (Pong, 2026-11-19). The card above links the owner to
+        // it; here the reason only. (The เอกสารจัดสรร upload it also waited
+        // for, 18 to 20 Nov, is gone: Pong, 2026-11-20.)
         if (!s.inputs || !s.inputs.doctors) why.push(notOwner() ? "รอผู้ดูแลระบบกรอกงบรายเดือน" : "กรอกงบรายเดือนก่อน")
-        const a = s.alloc
-        if (a && !a.installed) why.push("ยังไม่ได้ติดตั้งเอกสารจัดสรร (SQL ขั้นที่ 29)")
-        else if (a && !a.uploaded) why.push(notOwner() ? "รอผู้ดูแลระบบอัปโหลดเอกสารจัดสรร" : "อัปโหลดเอกสารจัดสรรก่อน")
-        else if (a && a.without > 0) why.push((notOwner() ? "รอผู้ดูแลระบบใส่เลขเอกสารจัดสรรอีก " : "ใส่เลขเอกสารจัดสรรอีก ") + int(a.without) + " คน")
         if (openRequest(s)) why.push("รอสร้างไฟล์ใหม่เสร็จ")
         else if (!s.build) why.push("รอระบบสร้างไฟล์")
         else {
