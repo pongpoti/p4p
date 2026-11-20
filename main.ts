@@ -1701,19 +1701,13 @@ app.get("/dashboard/api/overview", async (req: Request, res: Response) => {
           // PostgREST's 1,000-row cap; six together would not be).
           await Promise.all((r.data as { month: string; uploaded_at: string; uploaded_by: string }[]).map(async (row) => {
             const ids = await axios.get(
-              SUPABASE_URL + "/rest/v1/alloc_ids?select=roster_index,no4&month=eq." + encodeURIComponent(row.month),
+              SUPABASE_URL + "/rest/v1/alloc_ids?select=roster_index&month=eq." + encodeURIComponent(row.month),
               { headers: SERVICE_HEADERS(), timeout: 8000 },
             )
-            const roster = new Set(rosterIdx.get(row.month) || [])
-            const mine = (ids.data as { roster_index: string; no4: string }[]).filter((x) => roster.has(String(x.roster_index)))
-            const have = new Set(mine.map((x) => String(x.roster_index)))
-            // Two or more roster doctors with the same digits (lib/review-server.ts allocStatus).
-            const perNo = new Map<string, number>()
-            for (const x of mine) perNo.set(x.no4, (perNo.get(x.no4) || 0) + 1)
+            const have = new Set((ids.data as { roster_index: string }[]).map((x) => String(x.roster_index)))
             allocs[row.month] = {
               uploaded_at: row.uploaded_at, uploaded_by: row.uploaded_by,
-              without: [...roster].filter((i) => !have.has(i)).length,
-              dupes: mine.filter((x) => (perNo.get(x.no4) || 0) > 1).length,
+              without: (rosterIdx.get(row.month) || []).filter((i) => !have.has(i)).length,
             }
           }))
         }).catch((e: any) => {

@@ -381,10 +381,9 @@ export function mountReview(d: ReviewDeps): void {
       { headers: d.serviceHeaders(), timeout: 8000 })
     return ((r.data as any[]) || []).map((x) => ({ index: String(x.index), prefix: x.prefix, firstname: x.firstname, lastname: x.lastname, department: x.department }))
   }
-  // Where the month stands now: the last upload, every roster doctor
+  // Where the month stands now: the last upload, and every roster doctor
   // still without digits (people added after the upload too), with the
-  // upload's suggestion for them if it had one, and any two or more with
-  // the same digits (dupes: a number typed that another has, say).
+  // upload's suggestion for them if it had one.
   const allocStatus = async (month: string): Promise<Record<string, unknown>> => {
     const [up, ids, roster] = await Promise.all([
       axios.get(rest("alloc_uploads?select=*&month=eq." + month), { headers: d.serviceHeaders(), timeout: 8000 }),
@@ -402,11 +401,6 @@ export function mountReview(d: ReviewDeps): void {
       suggest: suggest.get(p.index) || null, nos: ambiguous.get(p.index) || null,
     }))
     const inRoster = new Set(roster.map((p) => p.index))
-    const byNo = new Map<string, number>()
-    for (const p of roster) { const x = have.get(p.index); if (x) byNo.set(String(x.no4), (byNo.get(String(x.no4)) || 0) + 1) }
-    const dupes = roster.filter((p) => have.has(p.index) && (byNo.get(String(have.get(p.index).no4)) || 0) > 1)
-      .map((p) => ({ index: p.index, name: allocIds.rosterName(p), department: allocIds.normThai(p.department), no4: String(have.get(p.index).no4) }))
-      .sort((a, b) => a.no4.localeCompare(b.no4) || a.name.localeCompare(b.name, "th"))
     // A close spelling or a new number the owner has since typed over
     // leaves its list.
     const close = (Array.isArray(upload && upload.close) ? upload.close : []).filter((c: any) =>
@@ -416,9 +410,6 @@ export function mountReview(d: ReviewDeps): void {
       upload: upload && {
         fileName: upload.file_name, sheetRows: upload.sheet_rows, uploadedAt: upload.uploaded_at, uploadedBy: upload.uploaded_by,
         close: close.filter((c: any) => !c.run),
-        // The upload gave new numbers: the numbers on the page are not the
-        // file's own after them (still so once a new one is typed over).
-        shifted: (Array.isArray(upload.close) ? upload.close : []).some((c: any) => c && c.run),
         // New numbers after the department's last row (allocIds.runMissing).
         runs: close.filter((c: any) => c.run).map((c: any) => ({
           index: String(c.index), name: c.name, department: c.run.department, no4: c.no4, after: c.run.after,
@@ -428,22 +419,20 @@ export function mountReview(d: ReviewDeps): void {
       withDigits: roster.length - without.length,
       manual: [...have.values()].filter((x: any) => x.how === "manual" && inRoster.has(String(x.roster_index))).length,
       without,
-      dupes,
     }
   }
 
-  // Is the month's เอกสารจัดสรร complete: uploaded, every roster doctor
-  // has 4 digits, and no two the same? The ผู้จัดทำ cannot send the month
-  // to the auditor until it is (Pong, 2026-11-18), nor until the budget
-  // and N are in (review_submit_round checks those). installed false: SQL
-  // step 29 not run.
-  type AllocReady = { installed: boolean; uploaded: boolean; roster: number; without: number; dupes: number }
+  // Is the month's เอกสารจัดสรร complete: uploaded, and every roster
+  // doctor has 4 digits? The ผู้จัดทำ cannot send the month to the auditor
+  // until it is (Pong, 2026-11-18), nor until the budget and N are in
+  // (review_submit_round checks those). installed false: SQL step 29 not run.
+  type AllocReady = { installed: boolean; uploaded: boolean; roster: number; without: number }
   const allocReady = async (month: string): Promise<AllocReady> => {
     try {
       const st = await allocStatus(month)
-      return { installed: true, uploaded: !!st.upload, roster: Number(st.roster), without: (st.without as unknown[]).length, dupes: (st.dupes as unknown[]).length }
+      return { installed: true, uploaded: !!st.upload, roster: Number(st.roster), without: (st.without as unknown[]).length }
     } catch (e: any) {
-      if (notInstalled(e)) return { installed: false, uploaded: false, roster: 0, without: 0, dupes: 0 }
+      if (notInstalled(e)) return { installed: false, uploaded: false, roster: 0, without: 0 }
       throw e
     }
   }
@@ -451,7 +440,6 @@ export function mountReview(d: ReviewDeps): void {
     !a.installed ? [503, ALLOC_NOT_INSTALLED_MSG]
       : !a.uploaded ? [409, "ยังไม่ได้อัปโหลดเอกสารจัดสรรของเดือนนี้ (ผู้ดูแลระบบอัปโหลดที่ปุ่มข้อมูล หน้าภาพรวม)"]
       : a.without > 0 ? [409, "ยังไม่มีเลขเอกสารจัดสรร " + a.without + " คน (ผู้ดูแลระบบใส่ให้ครบที่ปุ่มข้อมูล หน้าภาพรวม)"]
-      : a.dupes > 0 ? [409, "เลขเอกสารจัดสรรซ้ำกัน " + a.dupes + " คน (ผู้ดูแลระบบแก้ที่ปุ่มข้อมูล หน้าภาพรวม)"]
       : null
 
   app.get("/dashboard/api/alloc-ids/:month", async (req: Request, res: Response) => {
@@ -504,11 +492,16 @@ export function mountReview(d: ReviewDeps): void {
               : "ไม่พบเลข No แบบ ID-" + want + "-xxxx ในไฟล์นี้",
           })
         }
-        const roster = await allocRoster(g.month)
+        const [roster, ids] = await Promise.all([
+          allocRoster(g.month),
+          axios.get(rest("alloc_ids?select=roster_index,how&month=eq." + g.month), { headers: d.serviceHeaders(), timeout: 8000 }),
+        ])
         // Someone the file does not have gets a new number after their
         // department's last row, the rows after it one up (Pong, 2026-11-20;
-        // allocIds.runMissing). A number typed for them stays (alloc_ids_save).
-        const m = allocIds.runMissing(read.rows, roster, allocIds.matchRoster(read.rows, roster))
+        // allocIds.runMissing), unless a number was typed for them: typed
+        // numbers stay, as alloc_ids_save keeps them.
+        const typed = new Set(((ids.data as any[]) || []).filter((x) => x && x.how === "manual").map((x) => String(x.roster_index)))
+        const m = allocIds.runMissing(read.rows, roster, allocIds.matchRoster(read.rows, roster), typed)
         const out = await d.callServiceRpc("alloc_ids_save", {
           p_month: g.month,
           // A new number is kept as a close one: the SQL treats both alike

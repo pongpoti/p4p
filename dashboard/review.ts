@@ -117,7 +117,7 @@
         // how many roster doctors still have no 4 digits. Sending waits for
         // it (Pong, 2026-11-18). Null or missing: not known (no reason shown;
         // the server still checks).
-        alloc?: { installed: boolean; uploaded: boolean; roster: number; without: number; dupes?: number } | null
+        alloc?: { installed: boolean; uploaded: boolean; roster: number; without: number } | null
     }
     interface MailMode {
         test: boolean       // on: every email to testTo only, subject marked [ทดสอบ]
@@ -1079,15 +1079,14 @@
         if (!set) c.append(el("p", "rv-none", (inp ? "ยังไม่ได้กรอกจำนวนแพทย์" : "ยังไม่ได้กรอกงบประมาณ") + (notOwner() ? " (ผู้ดูแลระบบกรอก)" : "")))
         const a = s.alloc
         if (a && a.installed) {
-            c.append(el("p", a.uploaded && !a.without && !a.dupes ? "rv-hint" : "rv-none", !a.uploaded
+            c.append(el("p", a.uploaded && !a.without ? "rv-hint" : "rv-none", !a.uploaded
                 ? "ยังไม่ได้อัปโหลดเอกสารจัดสรร"
                 : a.without ? "เอกสารจัดสรร: ยังไม่มีเลข " + int(a.without) + " คน"
-                : a.dupes ? "เอกสารจัดสรร: เลขซ้ำกัน " + int(a.dupes) + " คน"
                 : "เอกสารจัดสรร: มีเลขครบ " + int(a.roster) + " คน"))
         }
         if (!notOwner()) {
             // All in already: a quiet link; not yet: the button to go and add them.
-            const done = set && (!a || !a.installed || (a.uploaded && !a.without && !a.dupes))
+            const done = set && (!a || !a.installed || (a.uploaded && !a.without))
             const go = el("a", done ? "rv-link" : "btn-primary rv-go") as HTMLAnchorElement
             go.append(el("span", undefined, done ? "แก้ที่ปุ่มข้อมูล หน้าภาพรวม" : "กรอกที่ปุ่มข้อมูล หน้าภาพรวม"), iconEl("arrow-right"))
             go.href = "/dashboard/#overview"
@@ -1719,7 +1718,6 @@
         if (a && !a.installed) why.push("ยังไม่ได้ติดตั้งเอกสารจัดสรร (SQL ขั้นที่ 29)")
         else if (a && !a.uploaded) why.push(notOwner() ? "รอผู้ดูแลระบบอัปโหลดเอกสารจัดสรร" : "อัปโหลดเอกสารจัดสรรก่อน")
         else if (a && a.without > 0) why.push((notOwner() ? "รอผู้ดูแลระบบใส่เลขเอกสารจัดสรรอีก " : "ใส่เลขเอกสารจัดสรรอีก ") + int(a.without) + " คน")
-        else if (a && a.dupes) why.push((notOwner() ? "รอผู้ดูแลระบบแก้เลขเอกสารจัดสรรที่ซ้ำกัน " : "แก้เลขเอกสารจัดสรรที่ซ้ำกัน ") + int(a.dupes) + " คน")
         if (openRequest(s)) why.push("รอสร้างไฟล์ใหม่เสร็จ")
         else if (!s.build) why.push("รอระบบสร้างไฟล์")
         else {
