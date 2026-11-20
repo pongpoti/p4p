@@ -62,7 +62,7 @@ type Actor = { sub: string; name: string }
 
 export interface ReviewDeps {
   app: Express
-  express: { json(opts: { limit: string }): any; raw(opts: { limit: string; type: (req: any) => boolean }): any }
+  express: { json(opts: { limit: string }): any }
   axios: AxiosStatic
   supabaseUrl: string
   serviceHeaders(): Record<string, string>
