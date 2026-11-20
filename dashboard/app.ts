@@ -35,7 +35,7 @@
         budget?: MonthBudget | null
         // The same: the month's last เอกสารจัดสรร upload and how many names
         // it left without 4 digits, null when none yet.
-        alloc?: { uploaded_at: string; uploaded_by: string; without: number } | null
+        alloc?: { uploaded_at: string; uploaded_by: string; without: number; dupes?: number } | null
     }
     interface MonthBudget {
         budget: number
@@ -322,7 +322,7 @@
     // False until SQL step 29 (scripts/alloc-ids-2026-11.sql) is run.
     let allocInstalled = true
     const budgetDone = (m: MonthStatus): boolean => !!(m.budget && m.budget.doctors)
-    const allocDone = (m: MonthStatus): boolean => !!(m.alloc && !m.alloc.without)
+    const allocDone = (m: MonthStatus): boolean => !!(m.alloc && !m.alloc.without && !m.alloc.dupes)
     const allocWanted = (m: MonthStatus): boolean => allocInstalled && m.key >= ALLOC_FROM
     const budgetLine = (m: MonthStatus): string => {
         const b = m.budget
@@ -332,7 +332,7 @@
         if (!allocInstalled) return "ยังไม่ได้ติดตั้ง"
         const a = m.alloc
         if (!a) return "ยังไม่ได้อัปโหลด"
-        return a.without ? "ยังไม่มีเลข " + fmtNum(a.without) + " คน" : "มีเลขครบทุกคน"
+        return a.without ? "ยังไม่มีเลข " + fmtNum(a.without) + " คน" : a.dupes ? "เลขซ้ำกัน " + fmtNum(a.dupes) + " คน" : "มีเลขครบทุกคน"
     }
 
     function infoBtn(m: MonthStatus): HTMLElement {
@@ -1135,11 +1135,13 @@
             fileName: string; sheetRows: number; uploadedAt: string; uploadedBy: string
             close: { index: string; name: string; sheetName: string; no4: string }[]
             runs?: { index: string; name: string; department: string; no4: string; after: string }[]
+            shifted?: boolean
         } | null
         roster?: number
         withDigits?: number
         manual?: number
         without?: AllocPerson[]
+        dupes?: { index: string; name: string; department: string; no4: string }[]
     }
     const ALLOC_MAX = 4 * 1024 * 1024
     const allocDlg     = document.getElementById("alloc-dialog") as HTMLDialogElement
@@ -1155,6 +1157,7 @@
     const allocMissing = document.getElementById("alloc-missing") as HTMLElement
     const allocClose   = document.getElementById("alloc-close") as HTMLElement
     const allocRuns    = document.getElementById("alloc-runs") as HTMLElement
+    const allocDupes   = document.getElementById("alloc-dupes") as HTMLElement
     const allocSaveAll = document.getElementById("alloc-save-all") as HTMLButtonElement
     ;(document.getElementById("alloc-drop-ico") as HTMLElement).appendChild(iconEl("upload"))
     allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg) allocDlg.close() })
@@ -1168,7 +1171,9 @@
     // 2026-11-19). value: what the box started with.
     interface AllocEdit { month: string; index: string; name: string; inp: HTMLInputElement; value: string; paint: () => void }
     let allocEdits: AllocEdit[] = []
-    const allocPending = (): AllocEdit[] => allocEdits.filter((x) => /^[0-9]{4}$/.test(x.inp.value) && x.inp.value !== x.value)
+    // One person can be in two lists (เลขซ้ำกัน and a new number, say): their last box counts.
+    const allocPending = (): AllocEdit[] => [...new Map(allocEdits
+        .filter((x) => /^[0-9]{4}$/.test(x.inp.value) && x.inp.value !== x.value).map((x) => [x.index, x] as const)).values()]
     const paintSaveAll = (): void => {
         if (allocSaveAll.getAttribute("aria-busy") === "true") return
         const n = allocPending().length
@@ -1286,6 +1291,7 @@
         if (off) {
             allocCount.textContent = "–"
             allocMeta.classList.add("hidden")
+            allocDupes.classList.add("hidden")
             allocMissing.classList.add("hidden")
             allocRuns.classList.add("hidden")
             allocClose.classList.add("hidden")
@@ -1300,6 +1306,14 @@
         allocMeta.textContent = bits.join(" · ")
         allocMeta.classList.toggle("hidden", !bits.length)
         allocDropT.textContent = u ? "อัปโหลดไฟล์ใหม่แทนไฟล์เดิม (.xlsx)" : "เลือกไฟล์เอกสารจัดสรร (.xlsx)"
+        // Two or more with the same digits (a number typed that someone
+        // else has): each fixed by typing, and the month waits for it.
+        const dupes = st.dupes || []
+        const dl = allocDupes.querySelector(".al-list") as HTMLElement
+        dl.replaceChildren(...dupes.map((x) =>
+            allocRow(m, x.index, x.name, x.department, el("small", "al-sheet", "เลขเดียวกับอีกคน"), x.no4, [])))
+        ;(allocDupes.querySelector("h3") as HTMLElement).replaceChildren(document.createTextNode("เลขซ้ำกัน"), el("span", "n", fmtNum(dupes.length) + " คน"))
+        allocDupes.classList.toggle("hidden", !dupes.length)
         // Without: everyone on the roster still without digits (also
         // anyone added to the roster after the upload).
         const without = u ? (st.without || []) : []
@@ -1322,7 +1336,7 @@
         ;(allocRuns.querySelector("h3") as HTMLElement).replaceChildren(document.createTextNode("เลขใหม่ต่อท้ายกลุ่มงาน"), el("span", "n", fmtNum(runs.length) + " คน"))
         allocRuns.classList.toggle("hidden", !runs.length)
         ;(allocMissing.querySelector(".al-hint") as HTMLElement).textContent = "ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง"
-            + (runs.length ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "")
+            + (u && u.shifted ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "")
         const close = u ? u.close : []
         const cl = allocClose.querySelector(".al-list") as HTMLElement
         cl.replaceChildren(...close.map((c) =>
@@ -1346,6 +1360,7 @@
         allocCount.textContent = "–"
         allocMeta.textContent = "กำลังโหลด…"
         allocMeta.classList.remove("hidden")
+        allocDupes.classList.add("hidden")
         allocMissing.classList.add("hidden")
         allocRuns.classList.add("hidden")
         allocClose.classList.add("hidden")
@@ -1402,7 +1417,8 @@
             allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
                 + (runs ? " · เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(runs) + " คน" : "")
                 + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
-                + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"))
+                + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : (out.dupes || []).length ? "" : " · ครบทุกคน")
+                + ((out.dupes || []).length ? " · เลขซ้ำกัน " + fmtNum((out.dupes || []).length) + " คน" : ""))
         } catch (e: any) {
             if (load !== allocLoad || !allocDlg.open) return
             allocSay("error", e && e.message ? e.message : "อัปโหลดไม่สำเร็จ กรุณาลองใหม่")

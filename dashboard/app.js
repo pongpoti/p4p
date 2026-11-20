@@ -298,7 +298,7 @@
     // False until SQL step 29 (scripts/alloc-ids-2026-11.sql) is run.
     let allocInstalled = true;
     const budgetDone = (m) => !!(m.budget && m.budget.doctors);
-    const allocDone = (m) => !!(m.alloc && !m.alloc.without);
+    const allocDone = (m) => !!(m.alloc && !m.alloc.without && !m.alloc.dupes);
     const allocWanted = (m) => allocInstalled && m.key >= ALLOC_FROM;
     const budgetLine = (m) => {
         const b = m.budget;
@@ -310,7 +310,7 @@
         const a = m.alloc;
         if (!a)
             return "ยังไม่ได้อัปโหลด";
-        return a.without ? "ยังไม่มีเลข " + fmtNum(a.without) + " คน" : "มีเลขครบทุกคน";
+        return a.without ? "ยังไม่มีเลข " + fmtNum(a.without) + " คน" : a.dupes ? "เลขซ้ำกัน " + fmtNum(a.dupes) + " คน" : "มีเลขครบทุกคน";
     };
     function infoBtn(m) {
         const ok = budgetDone(m) && (allocDone(m) || !allocWanted(m));
@@ -1170,6 +1170,7 @@
     const allocMissing = document.getElementById("alloc-missing");
     const allocClose = document.getElementById("alloc-close");
     const allocRuns = document.getElementById("alloc-runs");
+    const allocDupes = document.getElementById("alloc-dupes");
     const allocSaveAll = document.getElementById("alloc-save-all");
     document.getElementById("alloc-drop-ico").appendChild(iconEl("upload"));
     allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg)
@@ -1182,7 +1183,9 @@
     let allocChanged = false;
     let allocLoad = 0;
     let allocEdits = [];
-    const allocPending = () => allocEdits.filter((x) => /^[0-9]{4}$/.test(x.inp.value) && x.inp.value !== x.value);
+    // One person can be in two lists (เลขซ้ำกัน and a new number, say): their last box counts.
+    const allocPending = () => [...new Map(allocEdits
+            .filter((x) => /^[0-9]{4}$/.test(x.inp.value) && x.inp.value !== x.value).map((x) => [x.index, x])).values()];
     const paintSaveAll = () => {
         if (allocSaveAll.getAttribute("aria-busy") === "true")
             return;
@@ -1317,6 +1320,7 @@
         if (off) {
             allocCount.textContent = "–";
             allocMeta.classList.add("hidden");
+            allocDupes.classList.add("hidden");
             allocMissing.classList.add("hidden");
             allocRuns.classList.add("hidden");
             allocClose.classList.add("hidden");
@@ -1332,6 +1336,13 @@
         allocMeta.textContent = bits.join(" · ");
         allocMeta.classList.toggle("hidden", !bits.length);
         allocDropT.textContent = u ? "อัปโหลดไฟล์ใหม่แทนไฟล์เดิม (.xlsx)" : "เลือกไฟล์เอกสารจัดสรร (.xlsx)";
+        // Two or more with the same digits (a number typed that someone
+        // else has): each fixed by typing, and the month waits for it.
+        const dupes = st.dupes || [];
+        const dl = allocDupes.querySelector(".al-list");
+        dl.replaceChildren(...dupes.map((x) => allocRow(m, x.index, x.name, x.department, el("small", "al-sheet", "เลขเดียวกับอีกคน"), x.no4, [])));
+        allocDupes.querySelector("h3").replaceChildren(document.createTextNode("เลขซ้ำกัน"), el("span", "n", fmtNum(dupes.length) + " คน"));
+        allocDupes.classList.toggle("hidden", !dupes.length);
         // Without: everyone on the roster still without digits (also
         // anyone added to the roster after the upload).
         const without = u ? (st.without || []) : [];
@@ -1356,7 +1367,7 @@
         allocRuns.querySelector("h3").replaceChildren(document.createTextNode("เลขใหม่ต่อท้ายกลุ่มงาน"), el("span", "n", fmtNum(runs.length) + " คน"));
         allocRuns.classList.toggle("hidden", !runs.length);
         allocMissing.querySelector(".al-hint").textContent = "ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง"
-            + (runs.length ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "");
+            + (u && u.shifted ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "");
         const close = u ? u.close : [];
         const cl = allocClose.querySelector(".al-list");
         cl.replaceChildren(...close.map((c) => allocRow(m, c.index, c.name, "", el("small", "al-sheet", "ในไฟล์: " + c.sheetName), c.no4, [])));
@@ -1381,6 +1392,7 @@
         allocCount.textContent = "–";
         allocMeta.textContent = "กำลังโหลด…";
         allocMeta.classList.remove("hidden");
+        allocDupes.classList.add("hidden");
         allocMissing.classList.add("hidden");
         allocRuns.classList.add("hidden");
         allocClose.classList.add("hidden");
@@ -1454,7 +1466,8 @@
             allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
                 + (runs ? " · เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(runs) + " คน" : "")
                 + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
-                + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"));
+                + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : (out.dupes || []).length ? "" : " · ครบทุกคน")
+                + ((out.dupes || []).length ? " · เลขซ้ำกัน " + fmtNum((out.dupes || []).length) + " คน" : ""));
         }
         catch (e) {
             if (load !== allocLoad || !allocDlg.open)

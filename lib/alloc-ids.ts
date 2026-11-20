@@ -328,21 +328,26 @@ const pad4 = (n: number): string => String(n).padStart(4, "0")
  * Pong, 2026-11-20: "if ยังไม่มีเลข, try rerun number of that person
  * respective to his dept and new run subsequent persons."
  *
- * Each doctor the file does not have (missing, no row offered for them as
- * a maybe, and no number typed for them: `typed`) gets the number after
- * the last row of their department's unit in the file (วิสัญญีวิทยา:
- * องค์กรแพทย์ (กลุ่มงานวิสัญญีวิทยา)), and every row after it moves up
- * one, as if the hospital had listed them there. Two or more after the
- * same row go in name order. A department with no unit of its name in the
- * file: the unit where most of its matched doctors are; none (or a tie),
- * and the person stays without digits. Someone the file has twice
- * (ambiguous) keeps the choice between the rows.
+ * Each doctor the file does not have (missing, and no row offered for
+ * them as a maybe) gets the number after the last row of their
+ * department's unit in the file (วิสัญญีวิทยา: องค์กรแพทย์ (กลุ่มงาน
+ * วิสัญญีวิทยา)), and every row after it moves up one, as if the hospital
+ * had listed them there. Two or more after the same row go in name order.
+ * A department with no unit of its name in the file: the unit where most
+ * of its matched doctors are; none (or a tie, or no unit written), and the
+ * person stays without digits. Someone the file has twice (ambiguous)
+ * keeps the choice between the rows.
+ *
+ * The file and the roster alone decide it, not numbers typed on the page:
+ * the same file gives the same numbers every time, so a number typed in
+ * this numbering stays right after another upload of it (a typed number
+ * is kept over a new one by alloc_ids_save all the same).
  *
  * Everyone's digits, the close spellings and the numbers offered on the
  * page come back in the new numbering. Nothing changes if the numbers
  * would pass 9999.
  */
-export function runMissing(rows: SheetRow[], roster: RosterPerson[], m: MatchResult, typed: ReadonlySet<string> = new Set()): RunResult {
+export function runMissing(rows: SheetRow[], roster: RosterPerson[], m: MatchResult): RunResult {
   // The highest No of each unit, by the unit as written and by department.
   const unitEnd = new Map<string, number>()
   const deptEnd = new Map<string, number>()
@@ -363,14 +368,15 @@ export function runMissing(rows: SheetRow[], roster: RosterPerson[], m: MatchRes
     const count = new Map<string, number>()
     for (const x of m.matched) {
       const unit = deptOf.get(x.index) === dept ? unitOfNo.get(x.no4) : undefined
-      if (unit !== undefined) count.set(unit, (count.get(unit) || 0) + 1)
+      // No unit written (no หน่วยงาน P4P column): not a department.
+      if (unit) count.set(unit, (count.get(unit) || 0) + 1)
     }
     const most = [...count].sort((a, b) => b[1] - a[1])
     if (!most.length || (most.length > 1 && most[1][1] === most[0][1])) return null
     return unitEnd.get(most[0][0]) ?? null
   }
   const adds = m.missing
-    .filter((x) => !x.suggest && !typed.has(x.index))
+    .filter((x) => !x.suggest)
     .map((x) => ({ x, at: after(deptKey(x.department)) }))
     .filter((y): y is { x: MatchResult["missing"][number]; at: number } => y.at !== null)
     .sort((a, b) => a.at - b.at || a.x.name.localeCompare(b.x.name, "th"))
