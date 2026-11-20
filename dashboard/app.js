@@ -1169,6 +1169,7 @@
     const allocError = document.getElementById("alloc-error");
     const allocMissing = document.getElementById("alloc-missing");
     const allocClose = document.getElementById("alloc-close");
+    const allocRuns = document.getElementById("alloc-runs");
     const allocSaveAll = document.getElementById("alloc-save-all");
     document.getElementById("alloc-drop-ico").appendChild(iconEl("upload"));
     allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg)
@@ -1317,6 +1318,7 @@
             allocCount.textContent = "–";
             allocMeta.classList.add("hidden");
             allocMissing.classList.add("hidden");
+            allocRuns.classList.add("hidden");
             allocClose.classList.add("hidden");
             allocSay("error", st.error || "ยังไม่ได้ติดตั้งการเก็บเลขจากเอกสารจัดสรร");
             return;
@@ -1346,6 +1348,15 @@
         }));
         allocMissing.querySelector("h3").replaceChildren(document.createTextNode("ยังไม่มีเลข"), el("span", "n", fmtNum(without.length) + " คน"));
         allocMissing.classList.toggle("hidden", !without.length);
+        // New numbers: someone the file does not have, after the last row
+        // of their department in it; everyone after moved up one.
+        const runs = u ? (u.runs || []) : [];
+        const rl = allocRuns.querySelector(".al-list");
+        rl.replaceChildren(...runs.map((x) => allocRow(m, x.index, x.name, x.department, el("small", "al-sheet", "ไม่พบชื่อในไฟล์ · ต่อจาก " + idPrefix(m.key) + x.after), x.no4, [])));
+        allocRuns.querySelector("h3").replaceChildren(document.createTextNode("เลขใหม่ต่อท้ายกลุ่มงาน"), el("span", "n", fmtNum(runs.length) + " คน"));
+        allocRuns.classList.toggle("hidden", !runs.length);
+        allocMissing.querySelector(".al-hint").textContent = "ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง"
+            + (runs.length ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "");
         const close = u ? u.close : [];
         const cl = allocClose.querySelector(".al-list");
         cl.replaceChildren(...close.map((c) => allocRow(m, c.index, c.name, "", el("small", "al-sheet", "ในไฟล์: " + c.sheetName), c.no4, [])));
@@ -1371,6 +1382,7 @@
         allocMeta.textContent = "กำลังโหลด…";
         allocMeta.classList.remove("hidden");
         allocMissing.classList.add("hidden");
+        allocRuns.classList.add("hidden");
         allocClose.classList.add("hidden");
         allocDrop.classList.remove("off");
         allocDropT.textContent = "เลือกไฟล์เอกสารจัดสรร (.xlsx)";
@@ -1438,7 +1450,9 @@
                 return;
             paintAlloc(m, out);
             const left = (out.without || []).length, close = out.upload ? out.upload.close.length : 0;
+            const runs = out.upload ? (out.upload.runs || []).length : 0;
             allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
+                + (runs ? " · เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(runs) + " คน" : "")
                 + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
                 + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"));
         }
@@ -1719,6 +1733,8 @@
                 add(monthLabel(t.month));
                 add(t.file);
                 add("พบเลข " + fmtNum(Number(t.matched) || 0) + " จาก " + fmtNum(Number(t.roster) || 0) + " คน");
+                if (Number(t.run))
+                    add("เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(Number(t.run)) + " คน");
                 if (Number(t.close))
                     add("สะกดต่างเล็กน้อย " + fmtNum(Number(t.close)) + " คน");
                 if (Number(t.missing) + Number(t.ambiguous))

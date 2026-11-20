@@ -401,13 +401,19 @@ export function mountReview(d: ReviewDeps): void {
       suggest: suggest.get(p.index) || null, nos: ambiguous.get(p.index) || null,
     }))
     const inRoster = new Set(roster.map((p) => p.index))
+    // A close spelling or a new number the owner has since typed over
+    // leaves its list.
+    const close = (Array.isArray(upload && upload.close) ? upload.close : []).filter((c: any) =>
+      c && inRoster.has(String(c.index)) && (have.get(String(c.index)) || {}).how === "close")
     return {
       installed: true,
       upload: upload && {
         fileName: upload.file_name, sheetRows: upload.sheet_rows, uploadedAt: upload.uploaded_at, uploadedBy: upload.uploaded_by,
-        // A close spelling the owner has since typed over leaves the list.
-        close: (Array.isArray(upload.close) ? upload.close : []).filter((c: any) =>
-          c && inRoster.has(String(c.index)) && (have.get(String(c.index)) || {}).how === "close"),
+        close: close.filter((c: any) => !c.run),
+        // New numbers after the department's last row (allocIds.runMissing).
+        runs: close.filter((c: any) => c.run).map((c: any) => ({
+          index: String(c.index), name: c.name, department: c.run.department, no4: c.no4, after: c.run.after,
+        })),
       },
       roster: roster.length,
       withDigits: roster.length - without.length,
@@ -486,20 +492,35 @@ export function mountReview(d: ReviewDeps): void {
               : "ไม่พบเลข No แบบ ID-" + want + "-xxxx ในไฟล์นี้",
           })
         }
-        const roster = await allocRoster(g.month)
-        const m = allocIds.matchRoster(read.rows, roster)
+        const [roster, ids] = await Promise.all([
+          allocRoster(g.month),
+          axios.get(rest("alloc_ids?select=roster_index,how&month=eq." + g.month), { headers: d.serviceHeaders(), timeout: 8000 }),
+        ])
+        // Someone the file does not have gets a new number after their
+        // department's last row, the rows after it one up (Pong, 2026-11-20;
+        // allocIds.runMissing), unless a number was typed for them: typed
+        // numbers stay, as alloc_ids_save keeps them.
+        const typed = new Set(((ids.data as any[]) || []).filter((x) => x && x.how === "manual").map((x) => String(x.roster_index)))
+        const m = allocIds.runMissing(read.rows, roster, allocIds.matchRoster(read.rows, roster), typed)
         const out = await d.callServiceRpc("alloc_ids_save", {
           p_month: g.month,
-          p_rows: m.matched.map((x) => ({ roster_index: x.index, no4: x.no4, how: x.how })),
+          // A new number is kept as a close one: the SQL treats both alike
+          // (replaced by the next upload, never over a typed number), so no
+          // SQL change; upload.close tells them apart by run.
+          p_rows: m.matched.map((x) => ({ roster_index: x.index, no4: x.no4, how: x.how === "run" ? "close" : x.how })),
           p_upload: {
             file_name: fileName, sheet_name: read.sheet, sheet_rows: read.rows.length, roster_rows: roster.length,
-            close: m.close, missing: m.missing, ambiguous: m.ambiguous,
+            close: [
+              ...m.close,
+              ...m.runs.map((r) => ({ index: r.index, name: r.name, sheetName: "", no4: r.no4, run: { department: r.department, after: r.after } })),
+            ],
+            missing: m.missing, ambiguous: m.ambiguous,
           },
           p_actor: g.s.name,
         })
         await d.audit(req, g.s, "alloc.upload", {
           month: g.month, file: fileName, sheet_rows: read.rows.length, roster: roster.length,
-          matched: m.matched.length, close: m.close.length, missing: m.missing.length, ambiguous: m.ambiguous.length,
+          matched: m.matched.length, close: m.close.length, run: m.runs.length, missing: m.missing.length, ambiguous: m.ambiguous.length,
           count: out && out.count != null ? Number(out.count) : null,
         })
         res.json({ ok: true, ...(await allocStatus(g.month)) })

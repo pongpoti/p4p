@@ -1121,7 +1121,8 @@
     // reads it on the server, finds each doctor on the month's roster in it,
     // and keeps only the last 4 digits of their No (for the allocation
     // sheet's No column). The box then lists anyone it could not place, to
-    // type by hand, and the names it matched by a close spelling.
+    // type by hand, the new numbers after a department's last row (Pong,
+    // 2026-11-20), and the names it matched by a close spelling.
     interface AllocPerson {
         index: string; name: string; department: string
         suggest: { no4: string; sheetName: string } | null
@@ -1130,7 +1131,11 @@
     interface AllocStatus {
         installed: boolean
         error?: string
-        upload?: { fileName: string; sheetRows: number; uploadedAt: string; uploadedBy: string; close: { index: string; name: string; sheetName: string; no4: string }[] } | null
+        upload?: {
+            fileName: string; sheetRows: number; uploadedAt: string; uploadedBy: string
+            close: { index: string; name: string; sheetName: string; no4: string }[]
+            runs?: { index: string; name: string; department: string; no4: string; after: string }[]
+        } | null
         roster?: number
         withDigits?: number
         manual?: number
@@ -1149,6 +1154,7 @@
     const allocError   = document.getElementById("alloc-error") as HTMLElement
     const allocMissing = document.getElementById("alloc-missing") as HTMLElement
     const allocClose   = document.getElementById("alloc-close") as HTMLElement
+    const allocRuns    = document.getElementById("alloc-runs") as HTMLElement
     const allocSaveAll = document.getElementById("alloc-save-all") as HTMLButtonElement
     ;(document.getElementById("alloc-drop-ico") as HTMLElement).appendChild(iconEl("upload"))
     allocDlg.addEventListener("click", (ev) => { if (ev.target === allocDlg) allocDlg.close() })
@@ -1281,6 +1287,7 @@
             allocCount.textContent = "–"
             allocMeta.classList.add("hidden")
             allocMissing.classList.add("hidden")
+            allocRuns.classList.add("hidden")
             allocClose.classList.add("hidden")
             allocSay("error", st.error || "ยังไม่ได้ติดตั้งการเก็บเลขจากเอกสารจัดสรร")
             return
@@ -1306,6 +1313,16 @@
         }))
         ;(allocMissing.querySelector("h3") as HTMLElement).replaceChildren(document.createTextNode("ยังไม่มีเลข"), el("span", "n", fmtNum(without.length) + " คน"))
         allocMissing.classList.toggle("hidden", !without.length)
+        // New numbers: someone the file does not have, after the last row
+        // of their department in it; everyone after moved up one.
+        const runs = u ? (u.runs || []) : []
+        const rl = allocRuns.querySelector(".al-list") as HTMLElement
+        rl.replaceChildren(...runs.map((x) =>
+            allocRow(m, x.index, x.name, x.department, el("small", "al-sheet", "ไม่พบชื่อในไฟล์ · ต่อจาก " + idPrefix(m.key) + x.after), x.no4, [])))
+        ;(allocRuns.querySelector("h3") as HTMLElement).replaceChildren(document.createTextNode("เลขใหม่ต่อท้ายกลุ่มงาน"), el("span", "n", fmtNum(runs.length) + " คน"))
+        allocRuns.classList.toggle("hidden", !runs.length)
+        ;(allocMissing.querySelector(".al-hint") as HTMLElement).textContent = "ไม่พบชื่อในไฟล์ หรือพบชื่อเดียวกันหลายแถว ใส่เลข 4 หลักท้ายของ No เอง"
+            + (runs.length ? " · เลขบนปุ่ม ใช้ เลื่อนตามเลขใหม่ต่อท้ายกลุ่มงานแล้ว" : "")
         const close = u ? u.close : []
         const cl = allocClose.querySelector(".al-list") as HTMLElement
         cl.replaceChildren(...close.map((c) =>
@@ -1330,6 +1347,7 @@
         allocMeta.textContent = "กำลังโหลด…"
         allocMeta.classList.remove("hidden")
         allocMissing.classList.add("hidden")
+        allocRuns.classList.add("hidden")
         allocClose.classList.add("hidden")
         allocDrop.classList.remove("off")
         allocDropT.textContent = "เลือกไฟล์เอกสารจัดสรร (.xlsx)"
@@ -1380,7 +1398,9 @@
             if (allocSaved(m, load)) return
             paintAlloc(m, out)
             const left = (out.without || []).length, close = out.upload ? out.upload.close.length : 0
+            const runs = out.upload ? (out.upload.runs || []).length : 0
             allocSay("ok", "อ่านไฟล์แล้ว · พบเลข " + fmtNum(out.withDigits || 0) + " จาก " + fmtNum(out.roster || 0) + " คน"
+                + (runs ? " · เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(runs) + " คน" : "")
                 + (close ? " · สะกดต่างเล็กน้อย " + fmtNum(close) + " คน" : "")
                 + (left ? " · ยังไม่มีเลข " + fmtNum(left) + " คน" : " · ครบทุกคน"))
         } catch (e: any) {
@@ -1632,6 +1652,7 @@
             case "alloc.upload":
                 add(monthLabel(t.month)); add(t.file)
                 add("พบเลข " + fmtNum(Number(t.matched) || 0) + " จาก " + fmtNum(Number(t.roster) || 0) + " คน")
+                if (Number(t.run)) add("เลขใหม่ต่อท้ายกลุ่มงาน " + fmtNum(Number(t.run)) + " คน")
                 if (Number(t.close)) add("สะกดต่างเล็กน้อย " + fmtNum(Number(t.close)) + " คน")
                 if (Number(t.missing) + Number(t.ambiguous)) add("ยังไม่มีเลข " + fmtNum(Number(t.missing) + Number(t.ambiguous)) + " คน")
                 break

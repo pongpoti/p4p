@@ -26,6 +26,11 @@
  * the digits the person is ambiguous and gets none. Then a close spelling
  * among the doctors' rows nobody took (matchRoster's second pass).
  *
+ * New numbers (Pong, 2026-11-20, runMissing): a doctor the file does not
+ * have gets the number after the last row of their department in the file,
+ * and every row after that moves up one, as if the hospital had listed
+ * them there.
+ *
  * No network here: lib/review-server.ts reads the roster, saves the result
  * and answers the page; lib/__tests__/alloc-ids.test.mjs checks it.
  */
@@ -295,4 +300,99 @@ export function matchRoster(rows: SheetRow[], roster: RosterPerson[]): MatchResu
     out.missing.push({ index: x.p.index, name: x.name, department: x.department, suggest: one ? { no4: one.row.no4, sheetName: one.row.name } : null })
   }
   return out
+}
+
+/**
+ * A sheet unit as a roster department compares: "องค์กรแพทย์ (กลุ่มงานโสต
+ * ศอ นาสิก)" → "โสตศอนาสิก", "องค์กรแพทย์ (INTERN)" → "intern". "" for a
+ * unit that is not องค์กรแพทย์'s.
+ */
+export function unitDept(unit: string): string {
+  const u = squeeze(unit)
+  if (!u.startsWith("องค์กรแพทย์")) return ""
+  return u.slice("องค์กรแพทย์".length).replace(/^\(/, "").replace(/\)$/, "").replace(/^กลุ่มงาน/, "").toLowerCase()
+}
+/** A roster department the same way: "โสต ศอ นาสิก" → "โสตศอนาสิก". */
+export const deptKey = (d: unknown): string => squeeze(normThai(d)).replace(/^กลุ่มงาน/, "").toLowerCase()
+
+export type RunResult = Omit<MatchResult, "matched"> & {
+  /** how run: a new number (runs). */
+  matched: { index: string; no4: string; how: "exact" | "close" | "run" }[]
+  /** after: the file's own No (4 digits) of the row they follow. */
+  runs: { index: string; name: string; department: string; no4: string; after: string }[]
+}
+
+const pad4 = (n: number): string => String(n).padStart(4, "0")
+
+/**
+ * Pong, 2026-11-20: "if ยังไม่มีเลข, try rerun number of that person
+ * respective to his dept and new run subsequent persons."
+ *
+ * Each doctor the file does not have (missing, no row offered for them as
+ * a maybe, and no number typed for them: `typed`) gets the number after
+ * the last row of their department's unit in the file (วิสัญญีวิทยา:
+ * องค์กรแพทย์ (กลุ่มงานวิสัญญีวิทยา)), and every row after it moves up
+ * one, as if the hospital had listed them there. Two or more after the
+ * same row go in name order. A department with no unit of its name in the
+ * file: the unit where most of its matched doctors are; none (or a tie),
+ * and the person stays without digits. Someone the file has twice
+ * (ambiguous) keeps the choice between the rows.
+ *
+ * Everyone's digits, the close spellings and the numbers offered on the
+ * page come back in the new numbering. Nothing changes if the numbers
+ * would pass 9999.
+ */
+export function runMissing(rows: SheetRow[], roster: RosterPerson[], m: MatchResult, typed: ReadonlySet<string> = new Set()): RunResult {
+  // The highest No of each unit, by the unit as written and by department.
+  const unitEnd = new Map<string, number>()
+  const deptEnd = new Map<string, number>()
+  let top = 0
+  for (const r of rows) {
+    const n = Number(r.no4)
+    top = Math.max(top, n)
+    unitEnd.set(r.unit, Math.max(unitEnd.get(r.unit) ?? -1, n))
+    const k = unitDept(r.unit)
+    if (k) deptEnd.set(k, Math.max(deptEnd.get(k) ?? -1, n))
+  }
+  const unitOfNo = new Map(rows.map((r) => [r.no4, r.unit]))
+  const deptOf = new Map(roster.map((p) => [p.index, deptKey(p.department)]))
+  const after = (dept: string): number | null => {
+    if (!dept) return null
+    const end = deptEnd.get(dept)
+    if (end !== undefined) return end
+    const count = new Map<string, number>()
+    for (const x of m.matched) {
+      const unit = deptOf.get(x.index) === dept ? unitOfNo.get(x.no4) : undefined
+      if (unit !== undefined) count.set(unit, (count.get(unit) || 0) + 1)
+    }
+    const most = [...count].sort((a, b) => b[1] - a[1])
+    if (!most.length || (most.length > 1 && most[1][1] === most[0][1])) return null
+    return unitEnd.get(most[0][0]) ?? null
+  }
+  const adds = m.missing
+    .filter((x) => !x.suggest && !typed.has(x.index))
+    .map((x) => ({ x, at: after(deptKey(x.department)) }))
+    .filter((y): y is { x: MatchResult["missing"][number]; at: number } => y.at !== null)
+    .sort((a, b) => a.at - b.at || a.x.name.localeCompare(b.x.name, "th"))
+  const same = (): RunResult => ({ ...m, matched: m.matched.slice(), runs: [] })
+  if (!adds.length || top + adds.length > 9999) return same()
+  // A row of the file moves up one for each new number before it; the k-th
+  // new number (in order) is the row it follows + 1 + k.
+  const shift = (no4: string): string => {
+    const n = Number(no4)
+    return pad4(n + adds.filter((y) => y.at < n).length)
+  }
+  const runs = adds.map((y, k) => ({ index: y.x.index, name: y.x.name, department: y.x.department, no4: pad4(y.at + 1 + k), after: pad4(y.at) }))
+  const ran = new Set(runs.map((r) => r.index))
+  return {
+    matched: [
+      ...m.matched.map((x) => ({ ...x, no4: shift(x.no4) })),
+      ...runs.map((r) => ({ index: r.index, no4: r.no4, how: "run" as const })),
+    ],
+    close: m.close.map((c) => ({ ...c, no4: shift(c.no4) })),
+    missing: m.missing.filter((x) => !ran.has(x.index))
+      .map((x) => x.suggest ? { ...x, suggest: { ...x.suggest, no4: shift(x.suggest.no4) } } : x),
+    ambiguous: m.ambiguous.map((a) => ({ ...a, nos: a.nos.map(shift) })),
+    runs,
+  }
 }
