@@ -66,6 +66,9 @@ export interface PdfData {
   reopenedAt: string | null;
   reopenedBy: string;
   reopenReason: string;
+  /** The approval undone before this one (scripts/review-rounds-2026-11.sql
+   *  keeps it as a cancelled round); null for one undone the old way. */
+  cancelledRound?: number | null;
   budget: number;
   perP4P: number;
   /** N (จำนวนแพทย์): per P4P = budget ÷ N. Null for a round sent before N was asked for. */
@@ -196,7 +199,7 @@ td.c { text-align: center; }
 }
 
 function footer(page: number, pages: number, stamp: string): string {
-  return `<footer><span class="pg">หน้า ${page} / ${pages}</span><span class="ok">อนุมัติเมื่อ ${esc(stamp)}</span></footer>`;
+  return `<footer><span class="pg">หน้า ${page} / ${pages}</span><span class="ok">ตรวจสอบเมื่อ ${esc(stamp)}</span></footer>`;
 }
 
 /** The whole document; `pages` is the number of A4 pages it lays out. */
@@ -230,9 +233,12 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
 
   const left_over = Math.round((d.budget - pay) * 100) / 100 || 0;   // || 0: never "-0"
   const balance = left_over < 0 ? `เกินงบ ${money(-left_over)} บาท` : `คงเหลือ ${money(left_over)} บาท`;
+  // In time order: an approval undone before this round came first (the
+  // round started from it); one undone the old way, after it was sent.
   const timeline = [
+    d.reopenedAt && d.cancelledRound ? `ผู้ตรวจสอบ ${esc(staffName(d.reopenedBy) || '—')} ยกเลิกอนุมัติรอบที่ ${d.cancelledRound}: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
     `ผู้จัดทำ ${esc(staffName(d.submittedBy) || '—')} ส่งรอบที่ ${d.roundNo}: ${esc(thaiDateTime(d.submittedAt, true))}`,
-    d.reopenedAt ? `ผู้ตรวจสอบ ${esc(staffName(d.reopenedBy) || '—')} ยกเลิกเอกสารเดิมและเปิดตรวจอีกครั้ง: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
+    d.reopenedAt && !d.cancelledRound ? `ผู้ตรวจสอบ ${esc(staffName(d.reopenedBy) || '—')} ยกเลิกเอกสารเดิมและเปิดตรวจอีกครั้ง: ${esc(thaiDateTime(d.reopenedAt, true))} (${esc(d.reopenReason)})` : '',
     `ผู้ตรวจสอบ ${esc(staffName(d.approvedBy) || '—')} อนุมัติครบ: ${esc(thaiDateTime(d.approvedAt, true))}`,
   ].filter(Boolean).join(' · ');
 
@@ -431,13 +437,24 @@ export async function loadPdfData(db: SupabaseClient, roundId: number): Promise<
   const decisions = await one(db.from('review_decisions').select('decision').eq('round_id', roundId), 'decisions') as { decision: string | null }[];
   const { count: rounds, error: e5 } = await db.from('review_rounds').select('id', { count: 'exact', head: true }).eq('month', r.month);
   if (e5) throw new Error(`rounds: ${e5.message}`);
+  // An approval undone before this one (ยกเลิกอนุมัติ keeps it as a cancelled
+  // round since scripts/review-rounds-2026-11.sql): the timeline names it.
+  let undone: Record<string, any> | null = null;
+  if (!r.reopened_at) {
+    const { data: c, error: e6 } = await db.from('review_rounds').select('round_no, reopened_at, reopened_by, reopen_reason')
+      .eq('month', r.month).eq('status', 'cancelled').lt('round_no', r.round_no)
+      .order('round_no', { ascending: false }).limit(1);
+    if (e6) throw new Error(`cancelled rounds: ${e6.message}`);
+    undone = (c ?? [])[0] ?? null;
+  }
   const name = (id: string | null, built: string): string => (id && ups.find((u) => u.id === id)?.file_name) || built;
   return {
     month: r.month, roundNo: r.round_no, rounds: rounds ?? r.round_no,
     approvedAt: r.approved_at, approvedBy: r.approved_by,
     approvedPeople: decisions.filter((x) => x.decision === 'approve').length, people: decisions.length,
     submittedAt: r.submitted_at, submittedBy: r.submitted_by,
-    reopenedAt: r.reopened_at ?? null, reopenedBy: r.reopened_by ?? '', reopenReason: r.reopen_reason ?? '',
+    reopenedAt: (undone ?? r).reopened_at ?? null, reopenedBy: (undone ?? r).reopened_by ?? '', reopenReason: (undone ?? r).reopen_reason ?? '',
+    cancelledRound: undone ? undone.round_no : null,
     budget: Number(r.budget), perP4P: Number(r.per_p4p),
     doctors: r.doctors === null || r.doctors === undefined ? null : Number(r.doctors), builtAt: b.built_at,
     sk03File: name(r.sk03_upload, `SK03_${r.month}.xlsx`), mergedFile: name(r.merged_upload, `merged_${r.month}.xlsx`),

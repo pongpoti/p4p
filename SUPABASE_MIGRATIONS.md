@@ -292,7 +292,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     anon_0 = 0, delete_0 = 0). Each PART can be pasted on its own, in order; safe to
     re-run; no backslashes, so it pastes through chat. Emergency stop for a
     user: `update public.dashboard_users set active = false where ...`.
-28. `scripts/dashboard-users-auditor-2026-11.sql` — **not applied yet; paste it.**
+28. `scripts/dashboard-users-auditor-2026-11.sql` — applied 2026-11-18.
     The ผู้ตรวจสอบ right (Pong, 2026-11-18: "for audit access role : allow
     select ผู้ตรวจสอบ"). `dashboard_users.perms` and `dashboard_perms_clean`
     now take `review.auditor` (the ตรวจสอบ tab's auditor side: check each
@@ -325,6 +325,28 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     allocation sheet's No stays `ID-<yy>-<MM>-`. End with the check query
     (tables_2 = 2, functions_2 = 2, anon_0 = 0). Safe to re-run; no
     backslashes.
+30. `scripts/review-rounds-2026-11.sql` — **not applied yet; paste it.**
+    Every ตรวจสอบ round keeps its files (Pong, 2026-11-20: "the generated
+    excel and pdf is missing or lost"). `review_rounds` gets status
+    `cancelled`, `return_note` and `reopen_of`. ยกเลิกอนุมัติ
+    (`review_reopen_round(month, reason, actor, return)`) no longer turns
+    the approved round back or deletes its PDF: the round becomes
+    `cancelled` with its PDF and reason, and the next round starts with the
+    same build and every approval carried over, either the auditor's to
+    check again or sent straight back to the ผู้จัดทำ with the reason as
+    its note. ส่งกลับ (`review_return_round(month, actor, note)`) carries
+    an optional note, and a note alone is enough to send back;
+    `review_unreturn_round` takes the note back too. `review_approve_round`
+    no longer waits on a ปัญหาอื่น; the ones an earlier reopen left open
+    are closed. A round started by ยกเลิกอนุมัติ is not emailed.
+    `review_state` adds each round's `return_note`, `reopen_of` and
+    `has_pdf`. Deletes nothing; every function stays service_role only.
+    Needs the review-tab files, the email file and step 25's
+    review-approve-all file. Run it before the app that needs it is
+    deployed: until it runs, ส่งกลับ and ยกเลิกอนุมัติ in the new app say
+    it is not installed (503) and nothing changes. End with the check query
+    (columns_2 = 2, cancelled_ok = true, reopen_4 = 4, return_3 = 3,
+    anon_0 = 0, open_issues_0 = 0). Safe to re-run; no backslashes.
 
 ## Superseded — do NOT run
 

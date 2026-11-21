@@ -17,6 +17,11 @@
  * 2,200 (the SQL refuses the same).
  * ผู้ตรวจสอบ (auditor): checks each person of the round, then returns it or
  * approves it (the PDF is made after approval).
+ * Every round keeps its files (Pong, 2026-11-20): ประวัติรอบ, in the left
+ * column on both sides, lists each round with what happened to it and its
+ * SK03, รวมค่าคะแนน, PDF and (the auditor side) allocation Excel. ส่งกลับ
+ * can carry a note; ยกเลิกอนุมัติ keeps the approved round as cancelled and
+ * starts the next one, checked again or sent straight back.
  */
 ;(function () {
     "use strict"
@@ -57,7 +62,9 @@
     interface Round {
         id: number
         round_no: number
-        status: "submitted" | "returned" | "superseded" | "approved"
+        // cancelled: an approval undone (ยกเลิกอนุมัติ), kept with its PDF
+        // (scripts/review-rounds-2026-11.sql, Pong 2026-11-20).
+        status: "submitted" | "returned" | "superseded" | "approved" | "cancelled"
         build_id: string
         budget: number
         per_p4p: number
@@ -78,6 +85,13 @@
         reopened_at?: string | null
         reopened_by?: string
         reopen_reason?: string
+        returned_by?: string
+        // The auditor's note to the ผู้จัดทำ when sending back ('' none).
+        return_note?: string
+        // A round started by ยกเลิกอนุมัติ: the round it replaces.
+        reopen_of?: number | null
+        // Its approval PDF is kept and can be downloaded.
+        has_pdf?: boolean
         counts: { approve: number; fix: number; waiting: number; carried: number }
     }
     // An email to the auditor (scripts/review-email-2026-11.sql), newest first.
@@ -289,7 +303,7 @@
     // A failure is announced at once (role=alert); say() is the polite one.
     // Either way the same words are also shown on the page (tell, failBox),
     // without a live role there, so nothing is read out twice.
-    // Failures that come together (people and issues both failing) are read as one.
+    // Failures that come together are read as one.
     const alertBox = document.getElementById("review-alert") as HTMLElement | null
     let shoutQ: string[] = []
     let shoutT: number | undefined
@@ -573,7 +587,7 @@
     let lookingAt = ""
     let roleLoad = false
     let pickSeq = 0
-    // Lists on their way (names, issues), so the side switch that asked for
+    // Lists on their way (names), so the side switch that asked for
     // them can spin.
     let listsLoading = 0
     let roleLists = false
@@ -595,7 +609,7 @@
         }
     }
     // Asked for with the month's state, not after it (2026-11-18): the
-    // names and the issues of the round the months list says is open, when
+    // names of the round the months list says is open, when
     // the side shown lists them (the auditor's round to check, the
     // auditee's round sent back).
     function prefetchLists(): void {
@@ -604,7 +618,6 @@
         if (!rr || !(role === "auditor" ? rr.status === "submitted" : rr.status === "returned")) return
         const s0 = { month } as State
         if (peopleKey !== month + ":" + rr.round_no && !peopleErr) void loadPeople(s0, { round_no: rr.round_no } as Round)
-        if (issuesKey !== month && !issuesErr) void loadIssues(s0)
     }
     function syncBusy(): void {
         for (const m of monthRows) {
@@ -622,13 +635,12 @@
         // The month being left is kept for a switch back.
         if (st && st.month && st.month !== month && !loadError) {
             // A list still on its way is asked for again on the way back.
-            monthKeep.set(st.month, { st, stJson, people, peopleKey: people && !peopleErr ? peopleKey : "", issues, issuesKey: issues && !issuesErr ? issuesKey : "",
+            monthKeep.set(st.month, { st, stJson, people, peopleKey: people && !peopleErr ? peopleKey : "",
                 rows, rowsKey: rows && !rowsErr ? rowsKey : "", details: new Map(details), selected, lastRoundKey, pl, lc, moreBox })
         }
         st = null; stJson = ""; loadError = ""; loadSeq++
         clearTimeout(poll); poll = undefined; pollFails = 0
         people = null; peopleKey = ""; peopleErr = ""; peopleSeq++
-        issues = null; issuesKey = ""; issuesErr = ""; issuesSeq++
         details.clear(); detailErrs.clear(); detailLoading.clear(); detailSeq++
         selected = ""; lastRoundKey = ""
         rows = null; rowsKey = ""; rowsErr = ""; rowsSeq++; editing = ""; moreOpen = false
@@ -646,7 +658,7 @@
         if (k) {
             monthKeep.delete(month)
             st = k.st; stJson = k.stJson
-            people = k.people; peopleKey = k.peopleKey; issues = k.issues; issuesKey = k.issuesKey
+            people = k.people; peopleKey = k.peopleKey
             rows = k.rows; rowsKey = k.rowsKey
             for (const [a, b] of k.details) details.set(a, b)
             selected = k.selected; lastRoundKey = k.lastRoundKey
@@ -658,7 +670,7 @@
     // What a month showed, kept for a switch back to it (2026-11-18).
     interface Kept {
         st: State; stJson: string
-        people: Person[] | null; peopleKey: string; issues: Issue[] | null; issuesKey: string
+        people: Person[] | null; peopleKey: string
         rows: Row[] | null; rowsKey: string; details: Map<string, Detail>; selected: string; lastRoundKey: string
         pl: PList | null; lc: LCard | null; moreBox: { sec: HTMLElement; t: HTMLButtonElement; inner: HTMLElement } | null
     }
@@ -667,7 +679,7 @@
         const r = m.round
         const me = role === "auditee"
         if (r && r.status === "approved") return { kind: "ok", text: "อนุมัติแล้ว" }
-        if (r && r.status === "returned") return me ? { kind: "fix", text: "ต้องแก้ " + int(r.fix || 0) } : { kind: "wait", text: "รอผู้จัดทำ" }
+        if (r && r.status === "returned") return me ? { kind: "fix", text: r.fix ? "ต้องแก้ " + int(r.fix) : "ส่งกลับให้แก้" } : { kind: "wait", text: "รอผู้จัดทำ" }
         // Not "ถึงคิวคุณ": a softer word for the auditor (Pong, 2026-11-12).
         if (r) return me ? { kind: "wait", text: "รอผู้ตรวจสอบ" } : { kind: "you", text: "พร้อมตรวจ" }
         if (m.sent < m.total) return { kind: "wait", text: "ส่ง " + int(m.sent) + "/" + int(m.total), sr: "แพทย์ส่งแล้ว " + int(m.sent) + " จาก " + int(m.total) + " คน" }
@@ -834,7 +846,7 @@
                 else { month = ""; resetMonth(); drawTabs(); show(noMonthCard()) }
             } else {
                 // Same month, other side: it spins while the lists that side
-                // needs (names, issues) load.
+                // needs (its names) load.
                 roleLists = true
                 drawTabs()
                 render()
@@ -919,6 +931,7 @@
         sideOut = []
         chipDrawn = false
         const main = role === "auditee" ? auditee(s) : auditor(s)
+        if (s.rounds.length) sideOut.push(historyEntry(s))
         const docked = (n: Node): boolean => n instanceof HTMLElement && n.classList.contains("rv-dock")
         // The parts kept from the last redraw stay in place; the rest is new.
         patchChildren(side, sideOut.filter((n) => !docked(n)))
@@ -981,8 +994,6 @@
         const out: Node[] = []
         if (r && r.status === "returned") {
             out.push(returnedCard(s, r))
-            ensureIssues(s)
-            if (issuesShown()) out.push(issuesCard(s, "auditee"))
             // Kept like the table in it, so opening it again shows the
             // table built before (2026-11-18).
             if (!moreBox) moreBox = newMoreBox()
@@ -1766,6 +1777,12 @@
             ? "โหมดทดสอบ: ระบบจะส่งอีเมลถึง " + mail.testTo + " เท่านั้น พร้อมไฟล์ SK03 และรวมค่าคะแนน"
             : "ระบบจะส่งอีเมลถึงผู้ตรวจสอบ พร้อมไฟล์ SK03 และรวมค่าคะแนน"))
         if (odd) kids.push(el("p", "rv-hint", "ผลเทียบไม่ตรงหรือไม่พบข้อมูล " + int(odd) + " รายการ · ผู้ตรวจสอบจะพิจารณา"))
+        // Sent back: anyone not answered yet is said, not refused.
+        const lr = liveRound(s)
+        if (lr && lr.status === "returned" && people) {
+            const left = people.filter((p) => p.decision === "fix" && !answered(p, (rows || []).find((x) => x.index === p.index) || null, lr)).length
+            if (left) kids.push(el("p", "rv-hint", "ยังไม่ได้ตอบ " + int(left) + " คน · ส่งได้ แต่ผู้ตรวจสอบจะไม่เห็นคำตอบของคนนั้น"))
+        }
         askConfirm(roundNo > 1 ? "ส่งรอบที่ " + roundNo + " ของ " + shortMonth(s.month) + "?" : "ส่ง " + shortMonth(s.month) + " ให้ผู้ตรวจสอบ?", kids, "ส่ง", () => doSubmit(s))
     }
     // One confirm dialog for every step that hands the month to the other
@@ -1775,7 +1792,11 @@
     let confirmReturn = ""
     let confirmErr: HTMLElement | null = null
     // danger: the step undoes something (ส่งกลับ, reopening): a red button.
+    const confirmCancel = confirmDlg.querySelector<HTMLButtonElement>(".log-actions [data-close]")
     function askConfirm(title: string, kids: Node[], button: string, action: () => Promise<void>, danger = false): void {
+        confirmDlg.classList.remove("rv-info")
+        confirmSend.hidden = false
+        if (confirmCancel) confirmCancel.textContent = "ยกเลิก"
         confirmTitle.textContent = title
         const err = el("p", "rv-err rv-confirm-err")
         err.id = "review-confirm-err"
@@ -1789,6 +1810,20 @@
             confirmSend.removeAttribute("aria-busy")
         }
         confirmAction = action
+        const a = document.activeElement as HTMLElement | null
+        confirmReturn = a && a.id ? a.id : ""
+        confirmDlg.showModal()
+    }
+    // To read only (ประวัติรอบ): the same dialog, one ปิด button.
+    function showInfo(title: string, kids: Node[]): void {
+        if (confirmDlg.open) return
+        confirmDlg.classList.add("rv-info")
+        confirmTitle.textContent = title
+        confirmErr = null
+        confirmBody.replaceChildren(...kids)
+        confirmSend.hidden = true
+        if (confirmCancel) confirmCancel.textContent = "ปิด"
+        confirmAction = null
         const a = document.activeElement as HTMLElement | null
         confirmReturn = a && a.id ? a.id : ""
         confirmDlg.showModal()
@@ -1862,17 +1897,23 @@
         if (h) { h.tabIndex = -1; h.focus() }
     }
 
-    // Sent: the auditor's turn.
+    // Sent: the auditor's turn. A round the auditor started by undoing an
+    // approval (ยกเลิกอนุมัติ) says so, with the reason, and has no email.
     function sentView(s: State, r: Round): HTMLElement {
         const c = el("section", "rv-card glass")
-        const h = el("h2", "rv-card-h", (r.round_no > 1 ? "ส่งรอบที่ " + r.round_no + " ของ " : "ส่ง ") + shortMonth(s.month) + " แล้ว · รอผู้ตรวจสอบ")
+        const from = r.reopen_of ? s.rounds.find((x) => x.round_no === r.reopen_of) || null : null
+        const h = el("h2", "rv-card-h", r.reopen_of
+            ? "ผู้ตรวจสอบยกเลิกอนุมัติรอบที่ " + r.reopen_of + " · ตรวจอีกครั้งในรอบที่ " + r.round_no
+            : (r.round_no > 1 ? "ส่งรอบที่ " + r.round_no + " ของ " : "ส่ง ") + shortMonth(s.month) + " แล้ว · รอผู้ตรวจสอบ")
         h.id = "rv-h-sent"
         c.setAttribute("aria-labelledby", h.id)
         const top = el("div", "rv-actions rv-spread")
         const t = el("div")
-        t.append(h, el("p", "rv-hint", r.reopened_at
-            ? "ผู้ตรวจสอบยกเลิกเอกสารและเปิดตรวจอีกครั้ง " + when(r.reopened_at) + (r.reopen_reason ? " · " + r.reopen_reason : "")
-            : when(r.submitted_at) + " · " + (r.auditor_opened_at ? "ผู้ตรวจสอบเปิดแล้ว " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่เปิด")))
+        t.append(h, el("p", "rv-hint", r.reopen_of
+            ? when(r.submitted_at) + " · ผลอนุมัติเดิมคงไว้ทุกคน · ถ้าต้องแก้ ผู้ตรวจสอบจะส่งกลับมา"
+            : r.reopened_at
+                ? "ผู้ตรวจสอบยกเลิกเอกสารและเปิดตรวจอีกครั้ง " + when(r.reopened_at) + (r.reopen_reason ? " · " + r.reopen_reason : "")
+                : when(r.submitted_at) + " · " + (r.auditor_opened_at ? "ผู้ตรวจสอบเปิดแล้ว " + when(r.auditor_opened_at) : "ผู้ตรวจสอบยังไม่เปิด")))
         top.append(t)
         if (!r.auditor_opened_at) {
             const w = el("button", "btn-ghost", "ดึงกลับ")
@@ -1882,10 +1923,12 @@
             w.addEventListener("click", () => { void doWithdraw(s, w) })
             top.append(w)
         }
-        c.append(top, kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
+        c.append(top)
+        if (from && from.reopen_reason) c.append(noteBox("เหตุผลที่ยกเลิกอนุมัติ", from.reopen_reason))
+        c.append(kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0), roundFiles(s, r))
         const n = noteEl("withdraw")
         if (n) c.append(n)
-        const mail = emailBox(s, r)
+        const mail = r.reopen_of ? null : emailBox(s, r)
         if (mail) c.append(mail)
         return c
     }
@@ -2165,38 +2208,65 @@
         }
     }
 
-    // Returned: what the auditor asked to fix, each with the score (edit it
-    // here) and the auditee's answer.
+    // Returned: one checklist (Pong, 2026-11-20: "When resubmit occurs, UI
+    // is very hard to use"). The auditor's note first, then each person to
+    // fix with the remark, the score (edit it here) and the answer, marked
+    // done once answered or edited, and how many are done. ส่งรอบถัดไป is
+    // in the left column.
+    const answered = (p: Person, row: Row | null, r: Round): boolean =>
+        !!p.reply.trim() || !!(row && row.edit && r.returned_at && row.edit.at >= r.returned_at)
     function returnedCard(s: State, r: Round): HTMLElement {
         ensure(s, r)
         if (s.build) ensureRows(s)
-        const c = el("section", "rv-card glass")
+        const c = el("section", "rv-card glass rv-returned")
         const fixes = (people || []).filter((p) => p.decision === "fix")
-        const h = el("h2", "rv-card-h", "ผู้ตรวจสอบส่งกลับ · ต้องแก้ " + int(r.counts.fix) + " คน")
+        const rowOf = (p: Person): Row | null => (rows || []).find((x) => x.index === p.index) || null
+        const done = fixes.filter((p) => answered(p, rowOf(p), r)).length
+        const h = el("h2", "rv-card-h", r.reopen_of
+            ? "ผู้ตรวจสอบยกเลิกอนุมัติรอบที่ " + r.reopen_of + " และส่งกลับให้แก้"
+            : "ผู้ตรวจสอบส่งกลับรอบที่ " + r.round_no + (r.counts.fix ? " · ต้องแก้ " + int(r.counts.fix) + " คน" : ""))
         h.id = "rv-h-ans"
         c.setAttribute("aria-labelledby", h.id)
         const top = el("div", "rv-actions rv-spread")
-        top.append(headRow(h), el("span", "rv-hint", "รอบที่ " + r.round_no + " · " + when(r.returned_at)))
+        const meta = el("span", "rv-hint", when(r.returned_at) + (r.returned_by ? " · " + staffName(r.returned_by) : ""))
+        top.append(headRow(h), meta)
         c.append(top)
+        if (r.return_note) c.append(noteBox(r.reopen_of ? "เหตุผลที่ยกเลิกอนุมัติ" : "หมายเหตุจากผู้ตรวจสอบ", r.return_note))
+        // What to do, in order, and how far along it is.
+        const steps = el("ol", "rv-steps")
+        if (fixes.length) {
+            const li = el("li", done === fixes.length ? "done" : "")
+            li.append(el("span", undefined, "แก้และตอบทุกคนที่ต้องแก้"), el("b", "rv-steps-n", "ตอบแล้ว " + int(done) + "/" + int(fixes.length)))
+            steps.append(li)
+        } else if (r.return_note) {
+            steps.append(el("li", undefined, "แก้ตามหมายเหตุด้านบน (แก้คะแนนได้ใน รายชื่อทั้งหมด ด้านล่าง)"))
+        }
+        steps.append(el("li", undefined, "กด ส่งรอบที่ " + (r.round_no + 1) + " ทางซ้าย"))
+        c.append(steps)
         if (peopleErr) c.append(failBox("โหลดรายชื่อไม่สำเร็จ: " + peopleErr, "rv-retry-people", retryPeople))
         else if (!people) c.append(el("p", "rv-loading", "กำลังโหลด…"))
-        else if (!fixes.length) c.append(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้ ดูปัญหาอื่น ๆ"))
+        else if (!fixes.length && !r.return_note) c.append(el("p", "rv-hint", "ไม่มีรายชื่อที่ต้องแก้"))
         // The fixes scroll in their own box when the window is short.
         const list = el("div", "rv-fix-list")
         if (fixes.length) c.append(list)
         if (fixes.length > 1) c.classList.add("rv-fill")
         const canEdit = auditeeTurn(s)
-        for (const p of fixes) {
-            const item = el("article", "rv-fix")
+        fixes.forEach((p, i) => {
+            const row = rowOf(p)
+            const ok = answered(p, row, r)
+            const item = el("article", "rv-fix" + (ok ? " done" : ""))
             const hid = "rv-ans-" + p.index
-            const nm = el("h3", undefined, p.name)
+            const nm = el("h3")
             nm.id = hid
+            const mark = el("span", "rv-fix-mark", ok ? "" : String(i + 1))
+            mark.setAttribute("aria-hidden", "true")
+            if (ok) mark.append(iconEl("check"))
+            nm.append(mark, p.name, el("span", "sr-only", ok ? " (ตอบแล้ว)" : " (ยังไม่ได้ตอบ)"))
             item.setAttribute("aria-labelledby", hid)
             const who = el("div")
             who.append(nm, el("span", "rv-old", p.intern ? "INTERN" : p.department))
             const remark = el("p", "rv-remark")
             remark.append(el("span", "rv-remark-label", "หมายเหตุผู้ตรวจสอบ"), p.remark)
-            const row = (rows || []).find((x) => x.index === p.index) || null
             const sc = el("div", "rv-fix-score num")
             const fixEditing = !!row && canEdit && editing === "fix:" + row.index
             if (row && fixEditing) {
@@ -2216,7 +2286,7 @@
             ta.id = "rv-answer-" + p.index
             ta.type = "text"
             ta.maxLength = 1000
-            ta.placeholder = "พิมพ์คำตอบ"
+            ta.placeholder = "พิมพ์ว่าแก้อะไร"
             lab.htmlFor = ta.id
             const save = el("button", "btn-ghost", "บันทึก")
             save.type = "submit"
@@ -2232,10 +2302,16 @@
             const n = noteEl(spot)
             if (n) item.append(n)
             list.append(item)
-        }
+        })
         const n = moreOpen ? null : noteEl("score")
         if (n) c.append(n)
         return c
+    }
+    // A note from one side to the other: a label and the text, kept as typed.
+    function noteBox(label: string, text: string): HTMLElement {
+        const b = el("div", "rv-msg")
+        b.append(el("span", "rv-msg-label", label), el("p", "rv-msg-text", text))
+        return b
     }
 
     // ── People in a round (both sides) ───────────────────────────────────
@@ -2268,17 +2344,6 @@
     }
     interface Grid { sheet: string; rows: number; cols: number; cells: [number, number, string | number][]; merges: string[] }
     interface Detail { grid: Grid | null; deptHeader: string[][] | null; deptRow: (string | number | null)[] | null }
-    interface Issue {
-        id: number
-        round_no: number
-        index: string | null
-        body: string
-        status: "open" | "closed"
-        created_at: string
-        created_by: string
-        replies: { id: number; role: "auditor" | "auditee"; body: string; round_no: number | null; created_at: string; created_by: string }[]
-    }
-
     // The key says what is loaded or on its way; the sequence number lets
     // only the newest request land (a month switch bumps them all). A failed
     // load clears its key and keeps the reason, shown with a retry button,
@@ -2287,10 +2352,6 @@
     let peopleKey = ""
     let peopleErr = ""
     let peopleSeq = 0
-    let issues: Issue[] | null = null
-    let issuesKey = ""
-    let issuesErr = ""
-    let issuesSeq = 0
     let selected = ""
     let filter = "todo"
     let search = ""
@@ -2328,6 +2389,9 @@
             const list = res.people || []
             // A decision still being saved is not undone by a list asked for before it ended.
             reapply(s.month, list, asked)
+            // A round with nobody to check (ยกเลิกอนุมัติ carries every
+            // approval) opens on ทุกคน, not on an empty รอตรวจ.
+            if (people === null && filter === "todo" && !kept.size && list.length && !list.some((p) => p.decision === null)) filter = "all"
             people = list
             if (!selected || !people.some((p) => p.index === selected)) {
                 const first = people.find((p) => p.decision === null) || people[0]
@@ -2341,40 +2405,12 @@
         }
         renderSoon()
     }
-    async function loadIssues(s: State): Promise<void> {
-        listsLoading++
-        try { await loadIssuesNow(s) } finally { listDone() }
-    }
-    async function loadIssuesNow(s: State): Promise<void> {
-        const seq = ++issuesSeq
-        issuesKey = s.month
-        issuesErr = ""
-        try {
-            const res = await api<{ issues: Issue[] }>(monthApi(s) + "/issues")
-            if (seq !== issuesSeq || s.month !== month) return
-            issues = res.issues || []
-        } catch (e) {
-            if (seq !== issuesSeq || s.month !== month || signedOut(e)) return
-            issuesKey = ""
-            issuesErr = errText(e, "โหลดปัญหาอื่น ๆ ไม่สำเร็จ")
-            shout("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr)
-        }
-        renderSoon()
-    }
     const needPeople = (s: State, r: Round): boolean => peopleKey !== s.month + ":" + r.round_no
-    const ensureIssues = (s: State): void => { if (issuesKey !== s.month && !issuesErr) void loadIssues(s) }
-    // ปัญหาอื่น ๆ is no longer a box of its own (Pong, 2026-11-12). It shows
-    // only while one is open, which now happens only when an approved month
-    // is reopened (the reason is added as one), so it can be read, answered
-    // and closed; or when loading them failed, for its retry.
-    const issuesShown = (): boolean => !!issuesErr || !!(issues && issues.some((i) => i.status === "open"))
     const ensure = (s: State, r: Round): void => {
         if (needPeople(s, r) && !peopleErr) void loadPeople(s, r)
-        ensureIssues(s)
     }
     // Retry: forget the failure and draw again, which loads again.
     const retryPeople = (): void => { peopleErr = ""; render() }
-    const retryIssues = (): void => { issuesErr = ""; render() }
     // The counts of a round: from its names once they are here (they show
     // a decision the moment it is made, 2026-11-18), else the state's.
     function countsOf(s: State, r: Round): Round["counts"] {
@@ -2409,7 +2445,7 @@
         // Another round: its people are not the old round's.
         if (lastRoundKey.split(":").slice(0, 2).join(":") !== s.month + ":" + r.round_no) people = null
         lastRoundKey = k
-        peopleKey = ""; issuesKey = ""; peopleErr = ""; issuesErr = ""
+        peopleKey = ""; peopleErr = ""
     }
 
     const CHECK_TEXT: Record<string, string> = { match: "ตรงกัน", mismatch: "ไม่ตรงกัน", missing: "ไม่พบ" }
@@ -2440,7 +2476,9 @@
         if (!r) return [turn("wait", "รอผู้จัดทำ", "ผู้จัดทำยังไม่ได้ส่งข้อมูลเดือน " + monthName(s.month, true), "เมื่อส่งแล้วจะขึ้นที่นี่")]
         if (r.status === "returned") {
             const out: Node[] = [turn("wait", "รอผู้จัดทำ", "ส่งกลับรอบที่ " + r.round_no + " แล้ว เมื่อ " + when(r.returned_at),
-                "ต้องแก้ " + int(r.counts.fix) + " คน · รอผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1))]
+                (r.counts.fix ? "ต้องแก้ " + int(r.counts.fix) + " คน · " : "") + "รอผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1))]
+            if (r.return_note) out.push(noteBox(r.reopen_of ? "เหตุผลที่ยกเลิกอนุมัติรอบที่ " + r.reopen_of : "หมายเหตุถึงผู้จัดทำ", r.return_note))
+            out.push(roundFiles(s, r))
             if (!r.auditee_opened_at) {
                 const row = el("div", "rv-actions")
                 const b = el("button", "btn-ghost", "ดึงผลตรวจกลับมาแก้")
@@ -2467,17 +2505,15 @@
         // The names stay; the person panel is drawn new (it is small).
         patchChildren(reviewWrap, [peopleList(), personPanel(s, r)])
         out.push(reviewWrap)
-        if (issuesShown()) out.push(issuesCard(s, "auditor"))
         return out
     }
 
     // The left column's foot on the auditor's side: the round and its
-    // figures, then the dock (อนุมัติทุกคนที่รอตรวจ, ส่งผลตรวจ, each with the
-    // reason it cannot be pressed yet under it).
+    // figures and files, what this round asks (round 2 on), then the dock
+    // (อนุมัติทุกคนที่รอตรวจ, ส่งผลตรวจ, each with the reason it cannot be
+    // pressed yet under it).
     function finishBar(s: State, r: Round): HTMLElement[] {
         const c = countsOf(s, r)
-        // Not known until the issues load: no "0 open" and no approve-all before that.
-        const openIssues = issues ? issues.filter((i) => i.status === "open").length : null
         const bar = el("div", "rv-finish")
         const dock = el("div", "rv-dock")
         // The month chip above already says พร้อมตรวจ; who sent it and when
@@ -2486,23 +2522,22 @@
         info.append(kv("งบ", baht(r.budget)), kv("จำนวนแพทย์", r.doctors ? int(r.doctors) : "–"), kv(en("per P4P"), baht(r.per_p4p)))
         if (r.edits) info.append(kv("ผู้จัดทำแก้คะแนน", int(r.edits) + " คน"))
         bar.append(el("p", "rv-round-title", "รอบที่ " + r.round_no + " · " + monthName(s.month, true)), info)
-        // The counts of each status are the tiles above the names now (Pong,
-        // 2026-11-12). ปัญหาอื่น ๆ is gone; only a reopened month still has
-        // one open, and then it is counted here.
-        if (openIssues) {
-            const counts = el("ul", "rv-countlist rv-counts")
-            const li = el("li")
-            li.append(el("span", undefined, "ปัญหาอื่นที่เปิดอยู่"), el("b", undefined, int(openIssues)))
-            counts.append(li)
-            bar.append(counts)
+        // Round 2 on: only the names to check again wait; the rest keep
+        // their approval (Pong, 2026-11-20).
+        if (r.reopen_of) {
+            const from = s.rounds.find((x) => x.round_no === r.reopen_of)
+            bar.append(noteBox("ยกเลิกอนุมัติรอบที่ " + r.reopen_of + " · ผลเดิมคงไว้ทุกคน", from && from.reopen_reason ? from.reopen_reason : "–"))
+        } else if (r.round_no > 1) {
+            const total = c.approve + c.fix + c.waiting
+            bar.append(el("p", "rv-hint rv-round-lead", "ตรวจใหม่ " + int(Math.max(0, total - c.carried)) + " คน · คงผลรอบก่อน " + int(c.carried) + " คน"))
         }
+        bar.append(roundFiles(s, r))
         if (c.waiting > 0) dock.append(approveAllBox(s, r))
         const btn = el("button", "btn-primary")
         btn.type = "button"
         btn.id = "rv-finish"
         const why = el("span", "rv-hint")
         why.id = "rv-finish-why"
-        const others = openIssues ? " · ปัญหาอื่น " + int(openIssues) + " เรื่อง" : ""
         if (c.waiting > 0) {
             // Why it waits, under it (2026-11-18: shown again, so the
             // button that cannot be pressed says why without a hover).
@@ -2515,20 +2550,12 @@
             dock.append(btn, why)
             return [bar, dock]
         }
-        if (openIssues === null) {
-            btn.textContent = "ส่งผลตรวจ"
-            btn.setAttribute("aria-disabled", "true")
-            btn.setAttribute("aria-describedby", why.id)
-            why.textContent = issuesErr ? "ส่งได้เมื่อโหลดข้อมูลได้ กดลองอีกครั้งด้านขวา" : "กำลังโหลด…"
-            btn.addEventListener("click", () => say(why.textContent || ""))
-        } else if (c.fix > 0 || openIssues > 0) {
+        let back: HTMLButtonElement | null = null
+        if (c.fix > 0) {
             btn.textContent = "ส่งกลับให้ผู้จัดทำแก้"
             btn.dataset.step = "return"
-            why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน" + others
-            btn.addEventListener("click", () => afterSaves(btn, () => {
-                askConfirm("ส่งกลับให้ผู้จัดทำแก้", [el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ: ต้องแก้ไข " + int(c.fix) + " คน" + others),
-                    el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู")], "ส่งกลับ", () => roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว"), true)
-            }))
+            why.textContent = "ต้องแก้ไข " + int(c.fix) + " คน"
+            btn.addEventListener("click", () => afterSaves(btn, () => askReturn(s, r, c.fix)))
         } else {
             btn.textContent = "อนุมัติทั้งหมด"
             btn.dataset.step = "approve"
@@ -2537,11 +2564,58 @@
                 askConfirm("อนุมัติทั้งหมด", [el("p", undefined, "อนุมัติ " + int(c.approve) + " คน ของเดือน " + monthName(s.month) + " รอบที่ " + r.round_no),
                     el("p", "rv-hint", "หลังอนุมัติ ระบบจะทำเอกสารเบิกจ่าย (PDF) ที่มีเวลาอนุมัติทุกหน้า")], "อนุมัติ", () => roundStep(s, "approve", "อนุมัติแล้ว"))
             }))
+            // Everyone approved and still something to fix (the budget, a
+            // file): sent back with a note alone (Pong, 2026-11-20).
+            const b = el("button", "btn-ghost", "ส่งกลับพร้อมหมายเหตุ…")
+            b.type = "button"
+            b.id = "rv-return-note-btn"
+            b.dataset.step = "return-note"
+            if (savesWait === b.id) markBusy(b)
+            b.addEventListener("click", () => afterSaves(b, () => askReturn(s, r, 0)))
+            back = b
         }
         // Waiting for the saves, or the step's follow-up loading: it spins.
         if (savesWait === btn.id || flying(s, "finish")) markBusy(btn)
         dock.append(btn, why)
+        if (back) dock.append(back)
         return [bar, dock]
+    }
+
+    // ส่งกลับ: the dialog asks for a note to the ผู้จัดทำ, needed when nobody
+    // is ต้องแก้ไข (then the note is the reason), else optional.
+    function askReturn(s: State, r: Round, fixes: number): void {
+        const need = fixes === 0
+        const ta = keep(el("textarea"), "return-note", "")
+        ta.id = "rv-return-note"
+        ta.rows = 3
+        ta.maxLength = 1000
+        if (need) { ta.required = true; ta.setAttribute("aria-required", "true") }
+        const lab = el("label", undefined, "หมายเหตุถึงผู้จัดทำ" + (need ? " (ต้องกรอก)" : " (ไม่บังคับ)"))
+        lab.htmlFor = ta.id
+        const err = el("p", "rv-err")
+        err.id = "rv-return-note-err"
+        ta.setAttribute("aria-describedby", err.id)
+        const field = el("div", "rv-reason")
+        field.append(lab, ta, err)
+        askConfirm("ส่งกลับให้ผู้จัดทำแก้", [
+            el("p", undefined, "ส่งรอบที่ " + r.round_no + " เดือน " + monthName(s.month) + " กลับ · " + (need
+                ? "ทุกคนอนุมัติแล้ว ผู้จัดทำจะเห็นหมายเหตุนี้ แก้แล้วส่งรอบที่ " + (r.round_no + 1)
+                : "ต้องแก้ไข " + int(fixes) + " คน ผู้จัดทำจะเห็นหมายเหตุของแต่ละคน และหมายเหตุนี้ถ้ามี")),
+            field,
+            el("p", "rv-hint", "ดึงกลับได้จนกว่าผู้จัดทำจะเปิดดู"),
+        ], "ส่งกลับ", async () => {
+            const note = ta.value.trim()
+            if (need && !note) {
+                ta.setAttribute("aria-invalid", "true")
+                err.textContent = "เขียนหมายเหตุก่อน จึงจะส่งกลับได้"
+                ta.focus()
+                return
+            }
+            ta.removeAttribute("aria-invalid")
+            err.textContent = ""
+            await roundStep(s, "return", "ส่งกลับให้ผู้จัดทำแล้ว", undefined, { note })
+        }, true)
+        setTimeout(() => ta.focus(), 0)
     }
 
     // A step that hands the round on (ส่งกลับ, อนุมัติทั้งหมด, อนุมัติ N คน)
@@ -2656,7 +2730,7 @@
         say(said)
         holdBusy(s, "approve-all")
         render()
-        await Promise.all([loadMonths().catch(() => false), reload(), loadPeople(s, r), loadIssues(s)])
+        await Promise.all([loadMonths().catch(() => false), reload(), loadPeople(s, r)])
         end(s, "approve-all")
         if (s.month === month) render()
     }
@@ -2668,7 +2742,8 @@
         const h = el("h2", "rv-card-h", "อนุมัติ " + shortMonth(s.month) + " แล้ว")
         h.id = "rv-h-pdf"
         c.setAttribute("aria-labelledby", h.id)
-        c.append(h, el("p", "rv-hint", when(r.approved_at) + " · รอบที่ " + r.round_no + (r.approved_by ? " · " + staffName(r.approved_by) : "")))
+        c.append(h, el("p", "rv-hint", when(r.approved_at) + " · รอบที่ " + r.round_no + (r.approved_by ? " · " + staffName(r.approved_by) : "") +
+            (r.reopen_of ? " · อนุมัติใหม่หลังยกเลิกอนุมัติรอบที่ " + r.reopen_of : "")))
         if (status === "ready") {
             const row = el("div", "rv-actions")
             const a = el("a", "rv-link")
@@ -2724,20 +2799,22 @@
             const xn = noteEl("xlsx")
             if (xn) c.append(xn)
         }
-        c.append(kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
+        c.append(roundFiles(s, r, false), kvGrid(r.budget, r.doctors, r.per_p4p, r.edits || 0))
         for (const spot of ["pdf", "pdf-dl"]) { const n = noteEl(spot); if (n) c.append(n) }
         const mail = side === "auditee" ? emailBox(s, r) : null
         if (mail) c.append(mail)
         const out: Node[] = [c]
         if (side === "auditor") {
             const row = el("div", "rv-actions")
-            const b = el("button", "btn-danger", "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง…")
+            const b = el("button", "btn-danger", "ยกเลิกอนุมัติ…")
             b.type = "button"
             b.id = "rv-reopen"
+            if (flying(s, "reopen")) markBusy(b)
             b.addEventListener("click", () => askReopen(s, r))
             row.append(b)
             out.push(card("ต้องแก้หลังอนุมัติ?", [row,
-                el("p", "rv-hint", "เอกสารที่สร้างแล้วจะใช้ไม่ได้ รอบที่ " + r.round_no + " กลับมาเป็นคิวผู้ตรวจสอบ ผลอนุมัติเดิมยังอยู่")], "rv-h-reopen"))
+                el("p", "rv-hint", "เริ่มรอบที่ " + (r.round_no + 1) + " โดยคงผลอนุมัติทุกคน · เอกสารของรอบที่ " + r.round_no +
+                    " ยังเก็บไว้ในประวัติรอบ (ทำเครื่องหมายว่ายกเลิก)")], "rv-h-reopen"))
         }
         return out
     }
@@ -2817,8 +2894,12 @@
         await reload()
     }
 
+    // ยกเลิกอนุมัติ (scripts/review-rounds-2026-11.sql): the approved round is
+    // kept as cancelled with its PDF, and round N+1 starts with every
+    // approval carried over: checked again by the auditor, or sent straight
+    // back to the ผู้จัดทำ with the reason as the note.
     function askReopen(s: State, r: Round): void {
-        const ta = el("textarea")
+        const ta = keep(el("textarea"), "reopen-reason", "")
         ta.id = "rv-reopen-reason"
         ta.rows = 3
         ta.maxLength = 1000
@@ -2831,14 +2912,32 @@
         ta.setAttribute("aria-describedby", err.id)
         const field = el("div", "rv-reason")
         field.append(lab, ta, err)
-        askConfirm("ยกเลิกเอกสารและเปิดตรวจอีกครั้ง · " + monthName(s.month, true), [
-            el("p", undefined, "เอกสารเบิกจ่าย" + (r.pdf_built_at ? "ที่สร้างเมื่อ " + when(r.pdf_built_at) : "") +
-                " จะใช้ไม่ได้ รวมถึงฉบับที่ดาวน์โหลดหรือพิมพ์ไปแล้ว ผู้จัดทำจะเห็นเหตุผลนี้ และบันทึกในประวัติการใช้งาน"),
-            el("p", undefined, "สิ่งที่จะเกิดขึ้น: ผลอนุมัติ " + int(r.counts.approve) + " คนยังอยู่ · เหตุผลจะเป็นปัญหาอื่น ๆ ที่เปิดอยู่ · " +
-                "เปลี่ยนคนที่ต้องแก้เป็น ต้องแก้ไข แล้วส่งกลับ · ผู้จัดทำแก้ในแอปแล้วส่งรอบที่ " + (r.round_no + 1) +
-                " · ถ้าไม่มีอะไรต้องแก้ ปิดเรื่องแล้วอนุมัติใหม่ได้"),
+        const next = r.round_no + 1
+        const pick = el("fieldset", "rv-choice")
+        pick.append(el("legend", undefined, "รอบที่ " + next))
+        const opt = (value: string, title: string, sub: string, on: boolean): HTMLInputElement => {
+            const l = el("label", "rv-choice-opt")
+            const i = el("input")
+            i.type = "radio"
+            i.name = "rv-reopen-to"
+            i.value = value
+            i.checked = on
+            i.id = "rv-reopen-" + value
+            const t = el("span")
+            t.append(el("strong", undefined, title), el("span", "rv-hint", sub))
+            l.append(i, t)
+            pick.append(l)
+            return i
+        }
+        opt("check", "ตรวจอีกครั้งเอง", "เป็นคิวผู้ตรวจสอบ เปลี่ยนคนที่ต้องแก้แล้วส่งกลับ หรืออนุมัติใหม่", true)
+        const toBack = opt("back", "ส่งกลับให้ผู้จัดทำแก้ทันที", "เหตุผลนี้เป็นหมายเหตุถึงผู้จัดทำ", false)
+        askConfirm("ยกเลิกอนุมัติ " + monthName(s.month, true) + " รอบที่ " + r.round_no + "?", [
+            el("p", undefined, "เอกสารเบิกจ่ายของรอบที่ " + r.round_no + (r.pdf_built_at ? " (สร้างเมื่อ " + when(r.pdf_built_at) + ")" : "") +
+                " ใช้เบิกไม่ได้ แต่ยังเก็บไว้ในประวัติรอบ ทำเครื่องหมายว่ายกเลิก · ผลอนุมัติ " + int(r.counts.approve) + " คนคงไว้ในรอบที่ " + next),
             field,
-        ], "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง", async () => {
+            pick,
+            el("p", "rv-hint", "ผู้จัดทำจะเห็นเหตุผลนี้ และบันทึกในประวัติการใช้งาน"),
+        ], "ยกเลิกอนุมัติ", async () => {
             const reason = ta.value.trim()
             if (!reason) {
                 ta.setAttribute("aria-invalid", "true")
@@ -2848,22 +2947,145 @@
             }
             ta.removeAttribute("aria-invalid")
             err.textContent = ""
+            const back = toBack.checked
             const ok = await confirmRun(s, async () => {
-                await post(monthApi(s) + "/reopen", { reason })
-                return "ยกเลิกเอกสารแล้ว รอบที่ " + r.round_no + " กลับมาให้ตรวจอีกครั้ง"
+                await post(monthApi(s) + "/reopen", { reason, back })
+                return "ยกเลิกอนุมัติรอบที่ " + r.round_no + " แล้ว · " + (back ? "ส่งรอบที่ " + next + " กลับให้ผู้จัดทำแก้" : "รอบที่ " + next + " พร้อมตรวจอีกครั้ง")
             })
             if (!ok) return
-            if (s.month === month) { peopleKey = ""; issuesKey = "" }
+            forget(s, "reopen-reason")
+            if (s.month === month) peopleKey = ""
+            holdBusy(s, "reopen")
+            if (s.month === month) render()
             await Promise.all([loadMonths().catch(() => false), reload()])
+            end(s, "reopen")
+            if (s.month === month) render()
         }, true)
         setTimeout(() => ta.focus(), 0)
     }
 
+    // ── ประวัติรอบ (Pong, 2026-11-20: "the generated excel and pdf is
+    // missing or lost") ─────────────────────────────────────────────────────
+    // Each round's own files, from the server's copy of that round (never
+    // the Drive file, which is the newest build's).
+    type FileKind = "sk03" | "merged" | "pdf" | "allocation"
+    const FILE_TEXT: Record<FileKind, string> = { sk03: "SK03", merged: "รวมค่าคะแนน", pdf: "เอกสารเบิกจ่าย PDF", allocation: "รายละเอียดการจัดสรร Excel" }
+    const fileHref = (s: State, r: Round, kind: FileKind): string => monthApi(s) + "/rounds/" + r.round_no + "/file/" + kind
+    function fileLink(s: State, r: Round, kind: FileKind, where: string): HTMLAnchorElement {
+        const a = el("a", "rv-link rv-file") as HTMLAnchorElement
+        a.href = fileHref(s, r, kind)
+        a.id = "rv-file-" + where + "-" + r.round_no + "-" + kind
+        a.append(iconEl("download"), /^[A-Za-z0-9]+$/.test(FILE_TEXT[kind]) ? en(FILE_TEXT[kind]) : el("span", undefined, FILE_TEXT[kind]),
+            el("span", "sr-only", " รอบที่ " + r.round_no + " " + shortMonth(s.month)))
+        const spot = "file-" + r.round_no + "-" + kind
+        if (flying(s, spot)) markBusy(a)
+        a.addEventListener("click", (ev) => { ev.preventDefault(); void downloadRoundFile(s, kind, a, spot) })
+        return a
+    }
+    // The round's SK03 and รวมค่าคะแนน, as one line; on the auditor side
+    // also its allocation list, to check before approving (Pong, 2026-11-20:
+    // "Allow auditor to download allocation sheet"). alloc: false where the
+    // approved round already offers it.
+    function roundFiles(s: State, r: Round, alloc = true): HTMLElement {
+        const w = el("div", "rv-actions rv-round-files")
+        const kinds: FileKind[] = ["sk03", "merged"]
+        if (alloc && role === "auditor") kinds.push("allocation")
+        w.append(el("span", "rv-label", "ไฟล์รอบที่ " + r.round_no), ...kinds.map((k) => fileLink(s, r, k, "cur")))
+        for (const k of kinds) { const n = noteEl("file-" + r.round_no + "-" + k); if (n) w.append(n) }
+        return w
+    }
+    async function downloadRoundFile(s: State, kind: FileKind, a: HTMLAnchorElement, spot: string): Promise<void> {
+        if (!begin(s, spot, a)) return
+        try {
+            if (kind === "allocation") {
+                // Made on request: the file itself comes back.
+                const r = await fetchOk(a.href)
+                const url = URL.createObjectURL(await r.blob())
+                saveFrom(url, savedName(r.headers.get("Content-Disposition")) || "allocation_" + s.month + ".xlsx")
+                setTimeout(() => URL.revokeObjectURL(url), 60000)
+            } else {
+                const r = await fetchOk(a.href + "?link=1")
+                const data = await r.json() as { url?: string }
+                if (!data || typeof data.url !== "string") throw new Error("ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง")
+                saveFrom(data.url)
+            }
+        } catch (e) {
+            if (!signedOut(e)) {
+                const msg = errText(e, "ดาวน์โหลดไม่สำเร็จ")
+                // In ประวัติรอบ (a dialog): said there, under its round.
+                const box = a.closest(".rv-hist-item")
+                const err = box ? box.querySelector<HTMLElement>(".rv-err") : null
+                if (err) { err.textContent = msg; shout(msg) } else tell(s, spot, "err", msg)
+            }
+        } finally {
+            end(s, spot)
+            a.removeAttribute("aria-busy")
+            a.removeAttribute("aria-disabled")
+        }
+        if (s.month === month && !confirmDlg.open) render()
+    }
+
+    const ROUND_STATUS: Record<Round["status"], [string, string]> = {
+        submitted: ["wait", "รอผู้ตรวจสอบ"], returned: ["fix", "ส่งกลับให้แก้"], superseded: ["done", "แก้แล้ว ส่งรอบถัดไป"],
+        approved: ["ok", "อนุมัติ"], cancelled: ["bad", "ยกเลิกอนุมัติ"],
+    }
+    // The left column: one button that opens the month's rounds.
+    function historyEntry(s: State): HTMLElement {
+        const w = el("div", "rv-history-entry")
+        const b = el("button", "btn-ghost", "ประวัติรอบ · " + int(s.rounds.length) + " รอบ")
+        b.type = "button"
+        b.id = "rv-history"
+        b.prepend(iconEl("clock"))
+        b.addEventListener("click", () => showHistory(s))
+        const cancelled = s.rounds.filter((x) => x.status === "cancelled").length
+        w.append(b, el("span", "rv-hint", "ไฟล์ทุกรอบ" + (cancelled ? " รวมเอกสารที่ยกเลิก " + int(cancelled) + " ฉบับ" : "")))
+        return w
+    }
+    function showHistory(s: State): void {
+        const list = el("ol", "rv-hist")
+        for (const r of s.rounds.slice().sort((a, b) => b.round_no - a.round_no)) {
+            const li = el("li", "rv-hist-item rv-hist-" + r.status)
+            const [tone, label] = ROUND_STATUS[r.status] || ["wait", r.status]
+            const head = el("div", "rv-hist-head")
+            head.append(el("strong", undefined, "รอบที่ " + r.round_no), el("span", "rv-hist-chip rv-hist-chip-" + tone, label))
+            if (r.round_no === s.live) head.append(el("span", "rv-hint", "รอบปัจจุบัน"))
+            const lines = el("ul", "rv-hist-lines")
+            const line = (text: string): void => { lines.append(el("li", undefined, text)) }
+            line(r.reopen_of ? "เริ่มจากการยกเลิกอนุมัติรอบที่ " + r.reopen_of + " · " + when(r.submitted_at)
+                : "ผู้จัดทำส่ง · " + when(r.submitted_at) + (r.submitted_by ? " · " + staffName(r.submitted_by) : ""))
+            if (r.returned_at) line("ส่งกลับ · " + when(r.returned_at) + (r.counts.fix ? " · ต้องแก้ " + int(r.counts.fix) + " คน" : ""))
+            if (r.approved_at) line("อนุมัติ " + int(r.counts.approve) + " คน · " + when(r.approved_at) + (r.approved_by ? " · " + staffName(r.approved_by) : ""))
+            if (r.status === "cancelled" && r.reopened_at) line("ยกเลิกอนุมัติ · " + when(r.reopened_at) + (r.reopened_by ? " · " + staffName(r.reopened_by) : ""))
+            li.append(head, lines)
+            if (r.status === "cancelled" && r.reopen_reason) li.append(noteBox("เหตุผลที่ยกเลิก", r.reopen_reason))
+            if (r.return_note && !(r.reopen_of && s.rounds.some((x) => x.round_no === r.reopen_of && x.reopen_reason === r.return_note))) {
+                li.append(noteBox("หมายเหตุถึงผู้จัดทำ", r.return_note))
+            }
+            const files = el("div", "rv-actions rv-hist-files")
+            files.append(fileLink(s, r, "sk03", "hist"), fileLink(s, r, "merged", "hist"))
+            const approval = r.status === "approved" || r.status === "cancelled"
+            const hasPdf = r.has_pdf !== undefined ? r.has_pdf : r.pdf_status === "ready"
+            if (approval && hasPdf) files.append(fileLink(s, r, "pdf", "hist"))
+            else if (r.status === "approved") files.append(el("span", "rv-hint", "PDF กำลังสร้าง"))
+            else if (r.status === "cancelled" && r.approved_at) files.append(el("span", "rv-hint", "ไม่มี PDF (ยกเลิกก่อนสร้างเสร็จ)"))
+            // The allocation list: the auditor side only (Pong, 2026-11-17), every round (2026-11-20).
+            if (role === "auditor") files.append(fileLink(s, r, "allocation", "hist"))
+            const err = el("p", "rv-err")
+            err.setAttribute("role", "alert")
+            li.append(files, err)
+            list.append(li)
+        }
+        showInfo("ประวัติรอบ · " + monthName(s.month, true), [
+            el("p", "rv-hint", "ทุกรอบเก็บไฟล์ของรอบนั้นไว้ ดาวน์โหลดได้ตลอด · เอกสารของรอบที่ยกเลิกอนุมัติใช้เบิกไม่ได้"),
+            list,
+        ])
+    }
+
     // approve / return come from the confirm dialog (which stays open with
     // the reason when refused); unreturn is a plain button (btn).
-    async function roundStep(s: State, step: "return" | "unreturn" | "approve", done: string, btn?: HTMLButtonElement): Promise<void> {
+    async function roundStep(s: State, step: "return" | "unreturn" | "approve", done: string, btn?: HTMLButtonElement, body?: unknown): Promise<void> {
         // Never with a decision still being saved.
-        const call = async (): Promise<string> => { await settled(); await post(monthApi(s) + "/" + step); return done }
+        const call = async (): Promise<string> => { await settled(); await post(monthApi(s) + "/" + step, body); return done }
         let ok = false
         if (btn) {
             if (!begin(s, step, btn)) return
@@ -2881,7 +3103,7 @@
         if (!ok) { await reload(); return }
         // Done: the note shows and the button spins while the month, its
         // lists and the months load together (2026-11-18: one after another).
-        if (s.month === month) { peopleKey = ""; issuesKey = "" }
+        if (s.month === month) peopleKey = ""
         holdBusy(s, "finish")
         if (s.month === month) render()
         await Promise.all([loadMonths().catch(() => false), reload()])
@@ -3704,82 +3926,6 @@
         })
         saving.set(key, tail)
         flights.add(tail)
-    }
-
-    // ปัญหาอื่น ๆ (both sides), the open ones only; nothing new is added here.
-    function issuesCard(s: State, side: "auditor" | "auditee"): HTMLElement {
-        const kids: Node[] = []
-        const r = liveRound(s)
-        const canAct = side === "auditor" ? !!r && r.status === "submitted" : !!r && r.status === "returned"
-        ensureIssues(s)
-        if (issuesErr) kids.push(failBox("โหลดปัญหาอื่น ๆ ไม่สำเร็จ: " + issuesErr, "rv-retry-issues", retryIssues))
-        else if (!issues) kids.push(el("p", "rv-loading", "กำลังโหลด…"))
-        const list = (issues || []).filter((i) => i.status === "open")
-        for (const i of list) {
-            const item = el("article", "rv-issue" + (i.status === "closed" ? " closed" : ""))
-            const hid = "rv-issue-" + i.id
-            const h = el("h4", undefined, "เรื่องที่ " + i.id + (i.status === "closed" ? " (ปิดแล้ว)" : ""))
-            h.id = hid
-            item.setAttribute("aria-labelledby", hid)
-            item.append(h, el("p", undefined, i.body), el("p", "rv-hint", "แจ้งรอบที่ " + i.round_no + " · " + when(i.created_at)))
-            const ul = el("ul", "rv-replies")
-            for (const x of i.replies) {
-                ul.append(el("li", undefined, (x.role === "auditor" ? "ผู้ตรวจสอบ" : "ผู้จัดทำ") + (x.round_no === null ? " (ร่าง ส่งไปกับรอบถัดไป)" : "") + ": " + x.body))
-            }
-            if (i.replies.length) item.append(ul)
-            if (canAct) {
-                const form = el("form", "rv-reply")
-                const lab = el("label", "sr-only", "ตอบเรื่องที่ " + i.id)
-                const ta = keep(el("textarea"), "reply:" + i.id, "")
-                ta.id = "rv-reply-" + i.id
-                ta.rows = 1
-                ta.maxLength = 2000
-                lab.htmlFor = ta.id
-                const send = el("button", "btn-ghost", "ตอบ")
-                send.type = "submit"
-                send.id = "rv-reply-send-" + i.id
-                const spot = "reply-" + i.id
-                if (flying(s, spot)) markBusy(send)
-                form.append(lab, ta, send)
-                form.addEventListener("submit", (ev) => {
-                    ev.preventDefault()
-                    if (flying(s, spot)) return
-                    if (!ta.value.trim()) { ta.focus(); return }
-                    void issueCall(s, spot, "/issues/" + i.id + "/replies", { role: side, body: ta.value }, "ส่งคำตอบแล้ว", send, "reply:" + i.id)
-                })
-                item.append(form)
-                if (side === "auditor") {
-                    const t = el("button", "btn-ghost", i.status === "open" ? "ปิดเรื่องนี้" : "เปิดอีกครั้ง")
-                    t.type = "button"
-                    t.id = "rv-issue-toggle-" + i.id
-                    const tspot = "status-" + i.id
-                    if (flying(s, tspot)) markBusy(t)
-                    t.addEventListener("click", () => { void issueCall(s, tspot, "/issues/" + i.id + "/status", { open: i.status !== "open" }, i.status === "open" ? "ปิดแล้ว" : "เปิดอีกครั้งแล้ว", t) })
-                    item.append(t)
-                }
-            }
-            for (const k of ["reply-" + i.id, "status-" + i.id]) { const n = noteEl(k); if (n) item.append(n) }
-            kids.push(item)
-        }
-        return card("ปัญหาอื่น ๆ", kids, "rv-h-issues")
-    }
-
-    // One request per form at a time; the typed text (draft) is cleared
-    // only once the server has it.
-    async function issueCall(s: State, spot: string, path: string, json: unknown, done: string, btn: HTMLElement, draft?: string): Promise<void> {
-        if (!begin(s, spot, btn)) return
-        try {
-            await post(monthApi(s) + path, json)
-            if (draft) forget(s, draft)
-            tell(s, spot, "ok", done)
-        } catch (e) {
-            tell(s, spot, "err", errText(e, "ทำรายการไม่สำเร็จ"))
-        } finally {
-            end(s, spot)
-        }
-        // The issues load with the month, not after it.
-        if (s.month !== month) return
-        await Promise.all([reload(), loadIssues(s)])
     }
 
     // ผู้จัดทำ: the answer to one person sent back, sent with the next round.
