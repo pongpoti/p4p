@@ -16,7 +16,8 @@
  *                             "number automatically with 4 digits zero leading start
  *                             with 0001"; the hospital's เอกสารจัดสรร is not in any
  *                             name order, so its numbers are no longer used)
- *   B เลขที่บัตรประชาชน         left empty (the app never holds ID numbers)
+ *   B เลขที่บัตรประชาชน         the roster's national_id (Pong, 2026-11-22), as text; blank
+ *                             when the month's roster has none for the person
  *   C ชื่อ - สกุล               SK03 B (the roster's prefix, นพ./พญ.) + C, two spaces, D
  *   D หน่วยงาน P4P             "องค์กรแพทย์ (กลุ่มงาน<department>)", "องค์กรแพทย์ (INTERN)"
  *   E ตำแหน่ง                  SK03 E
@@ -102,6 +103,8 @@ export interface AllocationRow {
   pay: number | null
   department: string
   intern: boolean
+  // The roster's national_id, 13 digits ("" when not known).
+  nationalId?: string
 }
 
 /** "2569_08" → { be: 2569, m: 8 }, or null. */
@@ -195,9 +198,10 @@ export function overallSheets(wb: Workbook): { staff: Worksheet; intern: Workshe
 /**
  * The rows of SK03's staff sheet in order, then its intern sheet, from row
  * 8 down to the totals row (A not a number). `deptOf` gives the roster's
- * department for a sheet row (null: not known).
+ * department for a sheet row and `idOf` its national ID (null: not known).
  */
-export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: number) => string | null): AllocationRow[] {
+export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: number) => string | null,
+  idOf: (intern: boolean, row: number) => string | null = () => null): AllocationRow[] {
   const { staff, intern } = overallSheets(wb)
   const out: AllocationRow[] = []
   for (const [ws, isIntern] of [[staff, false], [intern, true]] as [Worksheet, boolean][]) {
@@ -214,6 +218,7 @@ export function allocationRows(wb: Workbook, deptOf: (intern: boolean, row: numb
         pay: num(row.getCell(14).value),
         department: deptOf(isIntern, r) ?? (isIntern ? "INTERN" : ""),
         intern: isIntern,
+        nationalId: squash(idOf(isIntern, r)),
       })
     }
   }
@@ -294,7 +299,7 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
     const r = FIRST_ROW + i
     const admin = p.admin && p.admin !== 0 ? p.admin : null
     return [
-      id + runNo(i), null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
+      id + runNo(i), p.nationalId || null, personName(p), unitName(p.department, p.intern), p.position || null, p.type || null,
       admin, p.pay,
       { formula: `G${r}+H${r}`, result: (admin ?? 0) + (p.pay ?? 0) },
       null,
@@ -355,6 +360,8 @@ export async function buildAllocationXlsx(month: string, rows: AllocationRow[], 
       c.alignment = isMoney(j) ? { horizontal: "right", vertical: "middle" } : { horizontal: ALIGN[j], vertical: "middle", wrapText: true }
       c.border = GRID
       if (isMoney(j)) c.numFmt = MONEY
+      // The national ID stays text: 13 digits, never 1.23E+12.
+      if (j === 1) c.numFmt = "@"
     })
   })
 
