@@ -324,13 +324,22 @@ const THAI_MONTH_NAMES = ["มกราคม", "กุมภาพันธ์"
   "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
 
 /**
- * The approval PDF's saved name (Pong, 2026-11-17): "2569_08" →
- * "แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf" (full Thai month, BE year).
+ * The approval PDF's saved name, worded like the SK03 the auditor gets by
+ * email ("แบบฟอร์ม SK03 องค์กรแพทย์ เดือนสิงหาคม 2569.xlsx",
+ * automation/review-email.ts attachmentNames; Pong, 2026-11-24: "rename
+ * app-generated SK02 PDF file to be understandable just like SK03 file
+ * name that sent to auditor email"): "2569_08" →
+ * "แบบฟอร์ม SK02 องค์กรแพทย์ เดือนสิงหาคม 2569.pdf" (full Thai month, BE
+ * year). Was "แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf" (2026-11-17).
  */
-function approvalPdfName(key: unknown): string | null {
+function approvalPdfTitle(key: unknown): string | null {
   const p = parseMonth(key)
   if (!p) return null
-  return "แบบฟอร์ม P4P_SK02 เดือน" + THAI_MONTH_NAMES[p.month - 1] + " " + p.be + ".pdf"
+  return "แบบฟอร์ม SK02 องค์กรแพทย์ เดือน" + THAI_MONTH_NAMES[p.month - 1] + " " + p.be
+}
+function approvalPdfName(key: unknown): string | null {
+  const t = approvalPdfTitle(key)
+  return t ? t + ".pdf" : null
 }
 
 /**
@@ -392,6 +401,7 @@ function scoreFlag(score: number | null | undefined): "high" | "low" | null {
   w9Rate,
   parseMonth,
   approvalPdfName,
+  approvalPdfTitle,
   parseBudget,
   parseCount,
   parseScore,

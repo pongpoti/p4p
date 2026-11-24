@@ -1849,7 +1849,7 @@ const AUDIT_GROUPS: Record<string, string> = {
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
-    "review.pdf_retry,review.reopen,review.email,review.email_mode,review.approve_all,staffing.save," +
+    "review.pdf_retry,review.reopen,review.reset,review.email,review.email_mode,review.approve_all,staffing.save," +
     "user.approve,user.reject,user.edit,user.suspend,user.import,alloc.upload,alloc.set)",
   refused: "action=in.(login.refused,user.claim_refused,user.bad_code)",
   users: "action=like.user.*",

@@ -1195,6 +1195,7 @@
         "review.issue_close": "ปิดปัญหา",
         "review.pdf_retry": "สร้างเอกสารเบิกจ่ายอีกครั้ง",
         "review.reopen": "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง",
+        "review.reset": "รีเซ็ตเดือนในแท็บตรวจสอบ",
         "view.staffing": "เปิดแท็บอัตรากำลัง",
         "staffing.save": "แก้ไขอัตรากำลัง",
         "user.invite": "สร้าง QR เพิ่มผู้ใช้",
@@ -1380,6 +1381,15 @@
                 if (t.round)
                     add("รอบที่ " + t.round);
                 add("เหตุผล: " + (t.reason || ""));
+                break;
+            case "review.reset":
+                add(monthLabel(t.month));
+                if (t.rounds)
+                    add("ลบ " + Number(t.rounds).toLocaleString("th-TH") + " รอบ");
+                if (t.decisions)
+                    add("ผลตรวจ " + Number(t.decisions).toLocaleString("th-TH") + " รายการ");
+                if (t.reason)
+                    add("เหตุผล: " + t.reason);
                 break;
             case "review.approve_all":
                 add(monthLabel(t.month));
