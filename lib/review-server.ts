@@ -651,11 +651,18 @@ export function mountReview(d: ReviewDeps): void {
   // not approved yet or an approval undone since (ประวัติรอบ).
   const sendAllocation = async (req: Request, res: Response, g: Gated, round: { round_no: number; build_id: string }, tag: string): Promise<void> => {
     // No runs 0001, 0002, … down the sheet (Pong, 2026-11-20), so
-    // nothing else is read for it.
-    const [b, people] = await Promise.all([
+    // nothing else is read for it. เลขที่บัตรประชาชน is the month's roster
+    // national_id (Pong, 2026-11-22), found by each SK03 row's roster index
+    // in the build; a month whose roster has no such column leaves it blank.
+    const [b, people, ids] = await Promise.all([
       axios.get(rest("review_builds?select=sk03_path&id=eq." + round.build_id), { headers: d.serviceHeaders(), timeout: 8000 }),
-      axios.get(rest("review_build_people?select=is_intern,sk03_row,department&build_id=eq." + round.build_id),
+      axios.get(rest("review_build_people?select=roster_index,is_intern,sk03_row,department&build_id=eq." + round.build_id),
         { headers: d.serviceHeaders(), timeout: 8000 }),
+      axios.get(rest(encodeURIComponent(g.month) + "?select=index,national_id"), { headers: d.serviceHeaders(), timeout: 8000 })
+        .catch((e: any) => {
+          if (pgError(e).code === "42703") return { data: [] }   // no national_id column on this month's roster
+          throw e
+        }),
     ])
     const path = (b.data as any[])[0]?.sk03_path
     if (!path) { res.status(404).json({ error: "ไม่พบไฟล์ SK03 ของรอบนี้" }); return }
@@ -669,17 +676,28 @@ export function mountReview(d: ReviewDeps): void {
       console.error("[dashboard] review allocation: SK03 download failed:", e.response ? e.response.status + " " + body : e.message)
       res.status(502).json({ error: "ดาวน์โหลดไฟล์ SK03 ของรอบนี้ไม่สำเร็จ ลองใหม่อีกครั้ง" }); return
     }
+    const idByIndex = new Map<string, string>()
+    for (const x of (ids.data as any[]) || []) {
+      if (x && x.index != null && x.national_id != null && String(x.national_id).trim()) idByIndex.set(String(x.index), String(x.national_id).trim())
+    }
     const dept = new Map<string, string>()
+    const nid = new Map<string, string>()
     for (const p of (people.data as any[]) || []) {
-      if (p.sk03_row != null && p.department) dept.set((p.is_intern ? "i" : "s") + p.sk03_row, String(p.department))
+      if (p.sk03_row == null) continue
+      const key = (p.is_intern ? "i" : "s") + p.sk03_row
+      if (p.department) dept.set(key, String(p.department))
+      const n = idByIndex.get(String(p.roster_index))
+      if (n) nid.set(key, n)
     }
     const ExcelJS = require("exceljs") as typeof import("exceljs")
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.load(file.data as ArrayBuffer)
-    const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null)
+    const rows = allocation.allocationRows(wb, (intern, row) => dept.get((intern ? "i" : "s") + row) ?? null,
+      (intern, row) => nid.get((intern ? "i" : "s") + row) ?? null)
     if (!rows.length) { res.status(404).json({ error: "ไม่พบรายชื่อใน SK03 ของรอบนี้" }); return }
     const buf = await allocation.buildAllocationXlsx(g.month, rows, ExcelJS)
-    await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length })
+    await d.audit(req, g.s, "review.download", { month: g.month, kind: "allocation", round: round.round_no, rows: rows.length,
+      ids: rows.filter((x) => x.nationalId).length })
     const base = allocation.allocationFileName(g.month) || "allocation_" + g.month + ".xlsx"
     const name = tag ? base.replace(/\.xlsx$/, "") + " (" + tag + ").xlsx" : base
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
