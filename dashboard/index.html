@@ -2074,6 +2074,7 @@
         .ub.danger { color: var(--st-danger-fg); border-color: var(--st-danger-solid); }
         .ub.danger:hover { background: var(--st-danger-bg); }
         .ub.danger.solid { background: var(--st-danger-solid); color: #fff; }
+        .ub.danger:disabled { background: var(--c-disabled-bg); border-color: var(--c-disabled-bg); color: var(--c-text-3); cursor: not-allowed; }
         .ub.sm { min-height: var(--ctl-sm); padding: 0 var(--sp-3); font-size: var(--fs-sm); }
         .ub.link { border: 0; background: transparent; color: var(--c-link); padding: 0; min-height: 32px; text-decoration: underline; font-weight: 400; }
         .ub .ic { width: 20px; height: 20px; }
@@ -2187,6 +2188,27 @@
         .um-table .um-role-name { display: inline-block; margin-right: var(--sp-2); font-weight: 700; color: var(--c-text); }
         .um-summary b { color: var(--c-text); }
         .um-foot-note { margin-top: var(--sp-2); font-size: var(--fs-xs); color: var(--c-text-3); line-height: var(--lh-text); }
+        .user-menu .um-sep { height: 1px; margin: var(--sp-1) 0; background: var(--c-border); }
+        /* รีเซ็ตเดือนในแท็บตรวจสอบ (2026-11-24) */
+        dialog.um-dialog#reset-dialog { width: min(880px, calc(100vw - 32px)); }
+        .um-table .um-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .um-table td.um-quiet { color: var(--c-text-3); }
+        .um-two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+        .um-box { padding: var(--sp-3) var(--sp-4); border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface-2); }
+        .um-box.del { border-color: var(--st-danger-line); background: var(--st-danger-bg); }
+        .um-box.keep { border-color: var(--st-success-line); background: var(--st-success-bg); }
+        .um-box h3 { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); font-size: var(--fs-md); font-weight: 700; }
+        .um-box.del h3 { color: var(--st-danger-fg); }
+        .um-box.keep h3 { color: var(--st-success-fg); }
+        .um-box h3 .ic { width: 20px; height: 20px; flex: none; }
+        .um-box ul { padding-left: 1.2em; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text); }
+        .um-box ul b { font-variant-numeric: tabular-nums; }
+        .um-note.danger { background: var(--st-danger-bg); border-color: var(--st-danger-line); color: var(--st-danger-fg); font-weight: 700; }
+        .um-note.first { margin-top: 0; margin-bottom: var(--sp-4); }
+        .um-reset-now { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+        .um-area { height: auto; min-height: 56px; padding: var(--sp-2) var(--sp-3); resize: vertical; line-height: var(--lh-text); }
+        .um-check { display: flex; align-items: flex-start; gap: var(--sp-3); margin-top: var(--sp-3); font-weight: 700; line-height: var(--lh-text); cursor: pointer; }
+        .um-check input { width: 20px; height: 20px; margin-top: 2px; flex: none; accent-color: var(--st-danger-solid); }
         .um-confirm { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
         .um-confirm b { flex: 1; min-width: 0; }
         .um-confirm .um-grow { flex: 1; min-width: 0; }
@@ -2350,6 +2372,11 @@
                     <button type="button" class="um-item" role="menuitem" id="um-viewas-auditor" data-view="auditor" tabindex="-1">
                         <span class="um-ico" data-icon="eye"></span>
                         <span><b>ดูแบบผู้ตรวจสอบ</b><small>เห็นหน้าจอแบบเดียวกับผู้ตรวจสอบ ดูได้อย่างเดียว</small></span>
+                    </button>
+                    <div class="um-sep" role="separator"></div>
+                    <button type="button" class="um-item" role="menuitem" id="um-reset" tabindex="-1">
+                        <span class="um-ico" data-icon="rotate-ccw"></span>
+                        <span><b>รีเซ็ตเดือนในแท็บตรวจสอบ</b><small>ลบทุกรอบของเดือนที่เลือก ให้ผู้จัดทำส่งรอบที่ 1 ใหม่</small></span>
                     </button>
                 </div>
                 <span class="sep" aria-hidden="true"></span>
@@ -2713,6 +2740,19 @@
             <p class="um-grow um-foot-note">ผู้ใช้ที่ตั้งไว้ใน Vercel (DASHBOARD_LINE_USER_IDS) จะย้ายเข้ารายการนี้เองเมื่อเข้าสู่ระบบครั้งถัดไป</p>
             <button type="button" class="ub" data-um-close>ปิด</button>
         </div>
+    </dialog>
+
+    <!-- รีเซ็ตเดือนในแท็บตรวจสอบ (owner only, 2026-11-24): the months, then one month's confirm, then the result; drawn by users.js -->
+    <dialog id="reset-dialog" class="um-dialog" aria-labelledby="reset-title" aria-describedby="reset-sub">
+        <div class="um-h">
+            <div class="um-grow">
+                <h2 id="reset-title">รีเซ็ตเดือนในแท็บตรวจสอบ</h2>
+                <p id="reset-sub"></p>
+            </div>
+            <button type="button" class="um-x" data-um-close aria-label="ปิด"><span data-icon="x"></span></button>
+        </div>
+        <div id="reset-body" class="um-b"></div>
+        <div id="reset-foot" class="um-f"></div>
     </dialog>
 
     <!-- line icons for app.js and review.js (the dashboard font has no arrows or ticks) -->

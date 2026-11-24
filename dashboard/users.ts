@@ -9,7 +9,10 @@
  *                       the 4-digit code from their phone, the name to show
  *                       and the tabs they may see;
  *   ผู้ใช้งานและสิทธิ์    the requests waiting, and every user, with edit and
- *                       suspend.
+ *                       suspend;
+ *   รีเซ็ตเดือนในแท็บตรวจสอบ  (Pong, 2026-11-24) every ตรวจสอบ month and what a
+ *                       reset would clear; one month's confirm (what goes,
+ *                       what stays, a reason, a tick); then the result.
  * Only the owner gets any of it: app.js sends the session here
  * ("dashboard:session") and this file does nothing for anyone else. The
  * server checks every call again (main.ts, /dashboard/api/users*). Names are
@@ -256,6 +259,7 @@
     })
     ;(document.getElementById("um-invite") as HTMLElement).addEventListener("click", () => { closeMenu(false); void openInvite() })
     ;(document.getElementById("um-users") as HTMLElement).addEventListener("click", () => { closeMenu(false); void openUsers() })
+    ;(document.getElementById("um-reset") as HTMLElement).addEventListener("click", () => { closeMenu(false); void openReset() })
     // ดูแบบผู้จัดทำ / ดูแบบผู้ตรวจสอบ (Pong, 2026-11-19): the whole page as
     // that role sees it, read-only, until กลับเป็นผู้ดูแลระบบ on the bar
     // above the header (app.ts).
@@ -293,7 +297,8 @@
     const invBody = document.getElementById("invite-body") as HTMLElement
     const invFoot = document.getElementById("invite-foot") as HTMLElement
     const usersDlgEl = document.getElementById("users-dialog") as HTMLDialogElement
-    for (const d of [invDlg, usersDlgEl]) {
+    const resetDlg = document.getElementById("reset-dialog") as HTMLDialogElement
+    for (const d of [invDlg, usersDlgEl, resetDlg]) {
         for (const b of Array.from(d.querySelectorAll<HTMLElement>("[data-um-close]"))) b.addEventListener("click", () => d.close())
     }
 
@@ -488,11 +493,11 @@
     // Each dialog opens from a menu item (or a dialog) that is hidden by then,
     // so the browser has nowhere to send focus back to: the chip takes it.
     const focusChip = (): void => {
-        if (invDlg.open || usersDlgEl.open || !chip) return
+        if (invDlg.open || usersDlgEl.open || resetDlg.open || !chip) return
         // At the close event focus may still sit on a button of the closed
         // dialog (blurred a moment later), or already be on <body>.
         const a = document.activeElement
-        if (!a || a === document.body || invDlg.contains(a) || usersDlgEl.contains(a) || menu.contains(a)) chip.focus()
+        if (!a || a === document.body || [invDlg, usersDlgEl, resetDlg, menu].some((d) => d.contains(a))) chip.focus()
     }
     invDlg.addEventListener("close", () => {
         focusChip()
@@ -938,5 +943,249 @@
             const msg = what === "too_many" ? "มีผู้ใช้ครบ 20 คนแล้ว" : what === "auditor_not_installed" ? AUDITOR_NOT_INSTALLED : "บันทึกไม่สำเร็จ กรุณาลองใหม่"
             if (err) { err.textContent = msg; err.classList.remove("hidden") } else toast(msg)
         }
+    }
+
+    // ── รีเซ็ตเดือนในแท็บตรวจสอบ ────────────────────────────────────────────
+    // Pong, 2026-11-24: "I want you to create month session reset function on
+    // admin setting. try design". The server checks the owner again, and the
+    // database refuses a month whose rounds changed since the list was drawn
+    // (rounds: how many it showed). scripts/review-reset-2026-11.sql keeps a
+    // copy of everything it clears.
+    interface ResetMonth {
+        month: string; rounds: number; decisions: number; pdfs: number; cancelled: number; resets: number
+        live: { round_no: number; status: string } | null
+        last: { at: string; by: string; rounds: number; reason: string } | null
+    }
+    const RESET_NOT_INSTALLED = "ยังไม่ได้ติดตั้งการรีเซ็ตเดือน — วาง scripts/review-reset-2026-11.sql ใน Supabase SQL editor"
+    const TH_MONTH_NAMES = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+        "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+    // "2569_08" → "สิงหาคม 2569"
+    const monthName = (key: string): string => {
+        const m = /^(\d{4})_(\d{2})$/.exec(key)
+        return m && Number(m[2]) >= 1 && Number(m[2]) <= 12 ? TH_MONTH_NAMES[Number(m[2]) - 1] + " " + m[1] : key
+    }
+    const n0 = (v: unknown): number => Number(v) || 0
+    const fmt = (v: number): string => v.toLocaleString("en-US")
+    const resetSub = document.getElementById("reset-sub") as HTMLElement
+    const resetBody = document.getElementById("reset-body") as HTMLElement
+    const resetFoot = document.getElementById("reset-foot") as HTMLElement
+    resetDlg.addEventListener("close", () => { resetSeq++; focusChip() })
+    let resetSeq = 0
+    let resetMonths: ResetMonth[] = []
+    const resetClose = (): HTMLButtonElement => btn("ub", "ปิด", () => resetDlg.close())
+
+    // The month's state now, as the ตรวจสอบ tab names it.
+    const livePill = (m: ResetMonth): HTMLElement => {
+        const lv = m.live
+        if (!m.rounds) return el("span", "um-pill muted", "ยังไม่ได้ส่ง")
+        if (!lv) return el("span", "um-pill muted", "ไม่มีรอบที่เปิดอยู่")
+        const r = " · รอบที่ " + lv.round_no
+        if (lv.status === "approved") return el("span", "um-pill ok", "อนุมัติแล้ว" + r)
+        if (lv.status === "returned") return el("span", "um-pill warn", "ส่งกลับให้ผู้จัดทำแก้" + r)
+        return el("span", "um-pill info", "รอผู้ตรวจสอบตรวจ" + r)
+    }
+
+    async function openReset(focusMonth?: string, notice?: { kind: "ok" | "warn"; text: string }): Promise<void> {
+        if (!resetDlg.open) resetDlg.showModal()
+        const my = ++resetSeq
+        resetSub.textContent = "ลบทุกรอบที่ส่งของเดือนที่เลือก ให้ผู้จัดทำส่งรอบที่ 1 ใหม่"
+        resetBody.replaceChildren(el("p", undefined, "กำลังโหลด…"))
+        resetFoot.replaceChildren(grow(), resetClose())
+        try {
+            const r: { installed: boolean; error?: string; months: ResetMonth[] } = await api("/dashboard/api/review-reset")
+            if (my !== resetSeq) return
+            if (!r.installed) {
+                resetBody.replaceChildren(el("div", "um-note warn first", RESET_NOT_INSTALLED))
+                return
+            }
+            resetMonths = (r.months || []).slice().sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0))
+            drawResetList(focusMonth, notice)
+        } catch (e) {
+            if (my !== resetSeq || (e instanceof HttpError && e.status === 401)) return
+            resetBody.replaceChildren(el("p", "error-text", "โหลดรายการเดือนไม่สำเร็จ กรุณาลองใหม่"))
+            resetFoot.replaceChildren(grow(), btn("ub", "ลองใหม่", () => { void openReset(focusMonth) }), resetClose())
+        }
+    }
+
+    function drawResetList(focusMonth?: string, notice?: { kind: "ok" | "warn"; text: string }): void {
+        resetSub.textContent = "ลบทุกรอบที่ส่งของเดือนที่เลือก ให้ผู้จัดทำส่งรอบที่ 1 ใหม่"
+        const parts: HTMLElement[] = []
+        if (notice) {
+            const n = el("div", "um-note first" + (notice.kind === "warn" ? " warn" : ""), notice.text)
+            n.setAttribute("role", "status")
+            parts.push(n)
+        }
+        if (!resetMonths.length) {
+            parts.push(el("p", undefined, "ยังไม่มีเดือนในแท็บตรวจสอบ"))
+            resetBody.replaceChildren(...parts)
+            resetFoot.replaceChildren(grow(), resetClose())
+            return
+        }
+        const table = el("table", "um-table")
+        const head = el("tr")
+        for (const h of ["เดือน", "ตอนนี้", "ที่จะลบ", "รีเซ็ตล่าสุด", ""]) head.appendChild(el("th", undefined, h))
+        const thead = el("thead")
+        thead.appendChild(head)
+        const tbody = el("tbody")
+        let toFocus: HTMLButtonElement | null = null
+        for (const m of resetMonths) {
+            const tr = el("tr")
+            tr.dataset.month = m.month
+            const name = el("td")
+            name.appendChild(el("b", undefined, monthName(m.month)))
+            const now = el("td")
+            now.appendChild(livePill(m))
+            const what = el("td", "um-num" + (m.rounds ? "" : " um-quiet"))
+            if (m.rounds) {
+                what.appendChild(document.createTextNode(fmt(m.rounds) + " รอบ · ผลตรวจ " + fmt(n0(m.decisions)) + " รายการ"))
+                if (n0(m.pdfs)) what.appendChild(el("small", undefined, "มีเอกสาร SK02 " + fmt(n0(m.pdfs)) + " ไฟล์"))
+            } else what.textContent = "–"
+            const last = el("td", m.last ? "" : "um-quiet")
+            if (m.last) {
+                last.appendChild(document.createTextNode(bkkDate(m.last.at) + " " + bkkTime(m.last.at)))
+                last.appendChild(el("small", undefined, "โดย " + m.last.by + " · ลบ " + fmt(n0(m.last.rounds)) + " รอบ"
+                    + (n0(m.resets) > 1 ? " · รวม " + fmt(n0(m.resets)) + " ครั้ง" : "")))
+            } else last.textContent = "–"
+            const act = el("td", "um-acts-cell")
+            const b = btn("ub danger sm", "รีเซ็ต…", () => drawResetConfirm(m), "rotate-ccw")
+            b.setAttribute("aria-label", "รีเซ็ต " + monthName(m.month))
+            if (!m.rounds) { b.disabled = true; b.title = "เดือนนี้ยังไม่มีรอบที่ส่ง" }
+            act.appendChild(b)
+            if (m.month === focusMonth) toFocus = m.rounds ? b : null
+            tr.append(name, now, what, last, act)
+            tbody.appendChild(tr)
+        }
+        table.append(thead, tbody)
+        parts.push(table)
+        parts.push(el("p", "um-foot-note", "ระบบเก็บสำเนาทุกอย่างที่ลบไว้ก่อนเสมอ งบประมาณ, N, ไฟล์ที่ระบบสร้าง และคะแนนที่แก้ไว้ ไม่ถูกลบ"))
+        resetBody.replaceChildren(...parts)
+        resetFoot.replaceChildren(grow(), resetClose())
+        const h = resetBody.querySelector<HTMLElement>(".um-note")
+        if (toFocus) toFocus.focus()
+        else if (h) { h.tabIndex = -1; h.focus() }
+    }
+
+    function drawResetConfirm(m: ResetMonth): void {
+        const name = monthName(m.month)
+        resetSub.textContent = "ตรวจดูก่อนรีเซ็ต " + name
+        const parts: HTMLElement[] = []
+        const lv = m.live
+        if (lv && lv.status === "approved") {
+            parts.push(el("div", "um-note danger first", name + " อนุมัติแล้ว (รอบที่ " + lv.round_no + ") การรีเซ็ตจะยกเลิกการอนุมัตินี้ด้วย ผู้จัดทำต้องส่งใหม่ และผู้ตรวจสอบต้องตรวจใหม่ตั้งแต่ต้น"))
+        } else {
+            const now = el("p", "um-reset-now")
+            now.append(el("b", undefined, "ตอนนี้"), livePill(m))
+            parts.push(now)
+        }
+
+        const two = el("div", "um-two")
+        const box = (cls: string, icon: string, title: string, items: string[]): HTMLElement => {
+            const b = el("section", "um-box " + cls)
+            const h = el("h3")
+            h.append(iconEl(icon), document.createTextNode(title))
+            const ul = el("ul")
+            for (const t of items) ul.appendChild(el("li", undefined, t))
+            b.append(h, ul)
+            return b
+        }
+        const del = [
+            "ทุกรอบที่ส่งแล้ว " + fmt(m.rounds) + " รอบ" + (n0(m.cancelled) ? " (รวมรอบที่ยกเลิก " + fmt(n0(m.cancelled)) + " รอบ)" : ""),
+            "ผลตรวจรายคน " + fmt(n0(m.decisions)) + " รายการ และหมายเหตุของผู้ตรวจสอบ",
+            "หมายเหตุถึงผู้จัดทำ และปัญหาอื่น ๆ ของเดือนนี้",
+            "อีเมลถึงผู้ตรวจสอบที่ยังไม่ได้ส่ง (ถ้ามี)",
+        ]
+        if (n0(m.pdfs)) del.push("เอกสาร SK02 " + fmt(n0(m.pdfs)) + " ไฟล์ จะไม่แสดงในแท็บตรวจสอบแล้ว (ไฟล์ยังเก็บไว้ในระบบ)")
+        two.append(
+            box("del", "x", "จะถูกลบ", del),
+            box("keep", "check", "เก็บไว้เหมือนเดิม", [
+                "งบประมาณ และ N ของเดือนนี้",
+                "ไฟล์ SK03 และไฟล์รวมคะแนนที่ระบบสร้าง",
+                "คะแนนที่แก้ไว้ และรายชื่อแพทย์",
+                "อีเมลที่ส่งไปแล้ว และประวัติการใช้งาน",
+                "สำเนาทุกอย่างที่ลบ (ระบบเก็บไว้ก่อนลบ)",
+            ]),
+        )
+        parts.push(two)
+        parts.push(el("div", "um-note", "หลังรีเซ็ต แท็บตรวจสอบของ " + name + " จะกลับเป็น “ยังไม่ได้ส่ง” ผู้จัดทำกดส่งรอบที่ 1 ใหม่ได้ทันที"))
+
+        const lbl = el("label", "um-lbl", "เหตุผล (ไม่บังคับ)") as HTMLLabelElement
+        lbl.htmlFor = "reset-reason"
+        const reason = el("textarea", "um-inp um-area") as HTMLTextAreaElement
+        reason.id = "reset-reason"
+        reason.maxLength = 1000
+        reason.rows = 2
+        reason.placeholder = "เช่น ทดสอบระบบ หรือ ส่งผิดเดือน"
+        const check = el("label", "um-check")
+        const tick = el("input") as HTMLInputElement
+        tick.type = "checkbox"
+        check.append(tick, el("span", undefined, "เข้าใจแล้ว ลบทุกรอบของ " + name))
+        parts.push(lbl, reason, check)
+        resetBody.replaceChildren(...parts)
+        resetBody.scrollTop = 0
+
+        const err = el("span", "error-text um-grow")
+        err.setAttribute("role", "alert")
+        const back = btn("ub", "ย้อนกลับ", () => drawResetList(m.month))
+        const go = btn("ub danger solid", "รีเซ็ต " + name, () => { void doReset(m, reason.value, go, back, err) }, "rotate-ccw")
+        go.disabled = true
+        tick.addEventListener("change", () => { go.disabled = !tick.checked; err.textContent = "" })
+        resetFoot.replaceChildren(err, back, go)
+        // The top of the confirm stays in view: it says what goes.
+        tick.focus({ preventScroll: true })
+    }
+
+    async function doReset(m: ResetMonth, reason: string, go: HTMLButtonElement, back: HTMLButtonElement, err: HTMLElement): Promise<void> {
+        const name = monthName(m.month)
+        const my = resetSeq
+        go.disabled = true
+        back.disabled = true
+        go.setAttribute("aria-busy", "true")
+        err.textContent = ""
+        try {
+            const r: { rounds: number; decisions: number; issues: number } = await api(
+                "/dashboard/api/review-reset/" + encodeURIComponent(m.month), "POST", { rounds: m.rounds, reason: reason.trim() })
+            if (my !== resetSeq) return
+            // The ตรวจสอบ tab, if open, loads the month again.
+            if (location.hash === "#review") window.dispatchEvent(new CustomEvent("dashboard:review"))
+            showResetDone(m, r)
+        } catch (e) {
+            if (my !== resetSeq) return
+            go.removeAttribute("aria-busy")
+            back.disabled = false
+            if (e instanceof HttpError && e.status === 401) return
+            const x = e as HttpError
+            const msg = typeof (x.body && x.body.error) === "string" ? String(x.body.error) : "รีเซ็ตไม่สำเร็จ กรุณาลองใหม่"
+            if (x instanceof HttpError && x.status === 409) {
+                // A round was sent, checked or reset meanwhile: the list again,
+                // with the month as it is now.
+                void openReset(m.month, { kind: "warn", text: name + " เปลี่ยนไประหว่างนี้ (" + msg + ") ตรวจรายการอีกครั้งก่อนรีเซ็ต" })
+                return
+            }
+            go.disabled = false
+            err.textContent = msg
+            go.focus()
+        }
+    }
+
+    function showResetDone(m: ResetMonth, r: { rounds: number; decisions: number; issues: number }): void {
+        const name = monthName(m.month)
+        resetSub.textContent = ""
+        const box = el("div", "um-result")
+        box.setAttribute("role", "status")
+        const mark = el("div", "um-mark")
+        mark.appendChild(iconEl("check"))
+        const h = el("h3", undefined, "รีเซ็ต " + name + " แล้ว")
+        h.tabIndex = -1
+        const what = "ลบ " + fmt(n0(r.rounds)) + " รอบ ผลตรวจ " + fmt(n0(r.decisions)) + " รายการ"
+            + (n0(r.issues) ? " และปัญหาอื่น ๆ " + fmt(n0(r.issues)) + " เรื่อง" : "")
+        box.append(mark, h, el("p", undefined, what), el("p", undefined, "ผู้จัดทำส่งรอบที่ 1 ใหม่ได้ทันที ระบบเก็บสำเนาของทุกอย่างที่ลบไว้แล้ว"))
+        resetBody.replaceChildren(box)
+        const goTab = btn("ub primary", "ไปแท็บตรวจสอบ", () => {
+            resetDlg.close()
+            if (location.hash === "#review") window.dispatchEvent(new CustomEvent("dashboard:review"))
+            else location.hash = "#review"
+        })
+        resetFoot.replaceChildren(btn("ub", "ดูรายการเดือน", () => { void openReset(m.month) }), grow(), resetClose(), goTab)
+        h.focus()
     }
 })()

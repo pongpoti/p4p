@@ -325,7 +325,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     allocation sheet's No stays `ID-<yy>-<MM>-`. End with the check query
     (tables_2 = 2, functions_2 = 2, anon_0 = 0). Safe to re-run; no
     backslashes.
-30. `scripts/review-rounds-2026-11.sql` — **not applied yet; paste it.**
+30. `scripts/review-rounds-2026-11.sql` — applied 2026-11-21.
     Every ตรวจสอบ round keeps its files (Pong, 2026-11-20: "the generated
     excel and pdf is missing or lost"). `review_rounds` gets status
     `cancelled`, `return_note` and `reopen_of`. ยกเลิกอนุมัติ
@@ -347,6 +347,24 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     it is not installed (503) and nothing changes. End with the check query
     (columns_2 = 2, cancelled_ok = true, reopen_4 = 4, return_3 = 3,
     anon_0 = 0, open_issues_0 = 0). Safe to re-run; no backslashes.
+31. `scripts/review-reset-2026-11.sql` — **not applied yet; paste it.**
+    รีเซ็ตเดือนในแท็บตรวจสอบ (Pong, 2026-11-24): the owner starts a
+    month's ตรวจสอบ again from round 1, from the user menu, instead of a
+    delete pasted here. Adds the table `review_resets` (one row per reset:
+    who, when, why, and a copy of every round it cleared with its
+    decisions and PDF path, and of the month's ปัญหาอื่น with their
+    replies; the service role can only add rows), `review_reset_months`
+    (the dialog's list) and `review_reset_month(month, actor, reason,
+    rounds)`. The reset takes the month's lock, is refused when the month
+    has no round or its round count is not the one the dialog showed, or
+    while an email to the auditor is going out; it cancels the month's
+    unsent emails and deletes the month's rounds (their decisions go with
+    them) and ปัญหาอื่น. The budget, builds, score edits, roster, History
+    and sent emails stay; PDFs stay in Storage. Everything stays
+    service_role only. Needs step 30. Until it runs, the dialog says it is
+    not installed and nothing changes (the reset answers 503). End with
+    the check query (table_1 = 1, functions_2 = 2, anon_0 = 0,
+    append_only = true). Safe to re-run; no backslashes.
 
 ## Superseded — do NOT run
 

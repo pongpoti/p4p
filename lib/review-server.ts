@@ -56,6 +56,16 @@
  * The auditor (ผู้ตรวจสอบ) side and the auditee's answers are listed above
  * their routes further down.
  *
+ * รีเซ็ตเดือน (Pong, 2026-11-24: "create month session reset function on
+ * admin setting"), the owner's alone, from the user menu (dashboard/users.ts):
+ *   GET  /dashboard/api/review-reset          each ตรวจสอบ month: rounds, decisions,
+ *                                             live round, PDFs, last reset
+ *   POST /dashboard/api/review-reset/:month   {rounds, reason}: clears the month's
+ *        rounds, decisions and ปัญหาอื่น so the ผู้จัดทำ sends round 1 again;
+ *        rounds is how many the dialog showed (refused if that changed).
+ *        scripts/review-reset-2026-11.sql keeps a copy of all of it in
+ *        review_resets first; the budget, builds and files stay.
+ *
  * Also here, though not part of the review: PUT /dashboard/api/budget/:month
  * {budget, doctors}, the overview page's budget box (any month; saves, then
  * starts workflow 2.2 for the month when its roster is complete).
@@ -140,6 +150,8 @@ const REFUSALS: [RegExp, number, string][] = [
   [/no test address/, 409, "ยังไม่มีที่อยู่ทดสอบ (ตั้งใน review_email_settings ก่อน)"],
   [/no email settings/, 409, "ยังไม่ได้ตั้งค่าอีเมล (review_email_settings ว่าง)"],
   [/bad switch/, 400, "ส่งค่าเปิดหรือปิดโหมดทดสอบมาไม่ถูก"],
+  [/nothing to reset/, 409, "เดือนนี้ไม่มีรอบให้รีเซ็ตแล้ว"],
+  [/an email is being sent/, 409, "อีเมลถึงผู้ตรวจสอบกำลังส่งอยู่ รอประมาณ 1 นาทีแล้วลองใหม่"],
   [/a check is not a match/, 409, "ยังมีคนที่รอตรวจที่ผลเทียบไม่ตรงกันหรือไม่พบ ตรวจรายคนก่อน"],
   [/nobody to approve/, 409, "ไม่มีคนที่รอตรวจแล้ว"],
 ]
@@ -167,6 +179,7 @@ const EMAIL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้�
 const MAIL_MODE_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งสวิตช์โหมดทดสอบอีเมล ผู้ดูแลระบบต้องรันไฟล์ scripts/review-email-test-toggle-2026-11.sql ใน Supabase SQL editor"
 const EMAIL_COLS = "id,round_id,round_no,status,test,attempts,fix_no,sent_at,error,created_at"
 const ROUNDS_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งประวัติรอบ (ส่งกลับพร้อมหมายเหตุ และยกเลิกอนุมัติแบบเก็บเอกสาร) ผู้ดูแลระบบต้องรันไฟล์ scripts/review-rounds-2026-11.sql ใน Supabase SQL editor"
+const RESET_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการรีเซ็ตเดือน ผู้ดูแลระบบต้องรันไฟล์ scripts/review-reset-2026-11.sql ใน Supabase SQL editor"
 const APPROVE_ALL_NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งปุ่มอนุมัติทุกคนที่รอตรวจ ผู้ดูแลระบบต้องรันไฟล์ scripts/review-approve-all-2026-11.sql ใน Supabase SQL editor"
 
 export function mountReview(d: ReviewDeps): void {
@@ -629,16 +642,28 @@ export function mountReview(d: ReviewDeps): void {
       const signed = await axios.post(storage("object/sign/" + BUCKET + "/" + row.pdf_path), { expiresIn: 120 },
         { headers: json(), timeout: 8000 })
       await d.audit(req, g.s, "review.download", { month: g.month, kind: "pdf", round: row.round_no })
-      // Opens in the browser's PDF viewer (the tab links it in a new tab);
-      // ?download=1 saves it under the form's name instead
-      // ("แบบฟอร์ม P4P_SK02 เดือนสิงหาคม 2569.pdf", Pong 2026-11-17).
-      // ?link=1 answers {url} instead of redirecting, so the tab's
-      // ดาวน์โหลด link can spin until the link is signed.
+      // ?download=1 saves it under the form's name ("แบบฟอร์ม SK02
+      // องค์กรแพทย์ เดือนสิงหาคม 2569.pdf", worded like the SK03 emailed to
+      // the auditor; Pong 2026-11-24). ?link=1 answers {url} instead of
+      // redirecting, so the tab's ดาวน์โหลด link can spin until the link
+      // is signed.
       const name = core.approvalPdfName(g.month) || "P4P_" + g.month + "_approved.pdf"
-      const url = d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
-        (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : "")
-      if (req.query.link === "1") { res.json({ url }); return }
-      res.redirect(302, url)
+      if (req.query.download === "1" || req.query.link === "1") {
+        const url = d.supabaseUrl + "/storage/v1" + signed.data.signedURL +
+          (req.query.download === "1" ? "&download=" + encodeURIComponent(name) : "")
+        if (req.query.link === "1") { res.json({ url }); return }
+        res.redirect(302, url); return
+      }
+      // Else it opens in the browser's PDF viewer (the tab links it in a new
+      // tab). Sent from here, not by a redirect to Storage, so the viewer
+      // saves it under the same name: Storage's own link would save it as
+      // "round-1-1763612345678.pdf". (Chrome's viewer shows it under the
+      // dashboard's Content-Security-Policy too, checked 2026-11-24.)
+      const file = await axios.get(storage("object/" + BUCKET + "/" + row.pdf_path),
+        { headers: d.serviceHeaders(), responseType: "arraybuffer", timeout: 20000 })
+      res.setHeader("Content-Type", "application/pdf")
+      res.setHeader("Content-Disposition", "inline; filename=\"SK02_" + g.month + ".pdf\"; filename*=UTF-8''" + encodeURIComponent(name))
+      res.send(Buffer.from(file.data))
     } catch (e: any) { fail(res, "pdf download", e) }
   })
 
@@ -791,6 +816,40 @@ export function mountReview(d: ReviewDeps): void {
       })
       res.json({ ok: true, round: out && out.round_no, status: out && out.status })
     } catch (e: any) { fail(res, "reopen", e, false, ROUNDS_NOT_INSTALLED_MSG) }
+  })
+
+  // รีเซ็ตเดือน (scripts/review-reset-2026-11.sql), the owner's alone. The
+  // list: every ตรวจสอบ month, newest first, with what a reset would clear.
+  app.get("/dashboard/api/review-reset", async (req: Request, res: Response) => {
+    const g = await gate(req, res, "owner")
+    if (!g) return
+    try {
+      const tables = (await rosterTables(true)).filter((t) => core.parseMonth(t) && t >= FIRST_MONTH).sort().reverse()
+      const months = await d.callServiceRpc("review_reset_months", { p_months: tables })
+      res.json({ installed: true, months: months || [] })
+    } catch (e: any) {
+      if (notInstalled(e)) return res.json({ installed: false, error: RESET_NOT_INSTALLED_MSG })
+      fail(res, "reset list", e)
+    }
+  })
+
+  // The reset: rounds is the number of rounds the dialog showed, so a round
+  // sent or changed meanwhile is never cleared unseen.
+  app.post("/dashboard/api/review-reset/:month", d.express.json({ limit: "4kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res, "owner")
+    if (!g) return
+    const rounds = req.body && req.body.rounds
+    const raw = req.body && req.body.reason
+    const reason = typeof raw === "string" ? raw.trim() : ""
+    if (!Number.isInteger(rounds) || rounds < 1 || rounds > 9999) return res.status(400).json({ error: "โหลดรายการเดือนใหม่ก่อน" })
+    if (reason.length > 1000) return res.status(400).json({ error: "เหตุผลไม่เกิน 1,000 ตัวอักษร" })
+    try {
+      const out = await d.callServiceRpc("review_reset_month", { p_month: g.month, p_actor: g.s.name, p_reason: reason, p_rounds: rounds })
+      await d.audit(req, g.s, "review.reset", {
+        month: g.month, rounds: out && out.rounds, decisions: out && out.decisions, reset: out && out.reset, ...(reason ? { reason } : {}),
+      })
+      res.json({ ok: true, rounds: out && out.rounds, decisions: out && out.decisions, issues: out && out.issues })
+    } catch (e: any) { fail(res, "reset", e, false, RESET_NOT_INSTALLED_MSG) }
   })
 
   app.get("/dashboard/api/review/:month/issues", async (req: Request, res: Response) => {

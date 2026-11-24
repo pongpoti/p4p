@@ -30,6 +30,9 @@ const fs   = require('fs') as typeof import('fs');
 const path = require('path') as typeof import('path');
 // Users' LINE names shown as the Thai names Pong set (Pong, 2026-11-18).
 const { staffName } = require('../lib/staff-names') as typeof import('../lib/staff-names');
+// The PDF's own title, the name a viewer shows and saves it under (Pong,
+// 2026-11-24): "แบบฟอร์ม SK02 องค์กรแพทย์ เดือนตุลาคม 2569".
+const { approvalPdfTitle } = require('../lib/review-core') as { approvalPdfTitle(key: unknown): string | null };
 
 const BUCKET = 'review-files';
 const FONT_DIR = path.join(__dirname, '..', 'src', 'fonts');
@@ -289,7 +292,7 @@ export function buildHtml(d: PdfData, fonts: { regular: string; bold: string }):
       }).join('');
       at += size;
       const sum = last
-        ? `<tr class="sum"><td></td><td>รวม ${dept.rows.length.toLocaleString('en-US')} คน</td><td></td><td></td>` +
+        ? `<tr class="sum"><td></td><td>รวม ${dept.rows.length.toLocaleString('en-US')} ราย</td><td></td><td></td>` +
           `<td class="n">${money(dept.admin)}</td><td class="n">${money(dept.pay)}</td><td class="n">${money(dept.total)}</td><td></td><td></td></tr>`
         : '';
       return `<section class="page"><p class="form">${esc(SK02_FORM)}</p><div class="body">
@@ -300,7 +303,7 @@ ${last ? `<div class="signs">${signs}</div>` : ''}
     }).join('\n');
   }).join('\n');
 
-  const html = `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>P4P ${esc(d.month)}</title>` +
+  const html = `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${esc(approvalPdfTitle(d.month) || 'P4P ' + d.month)}</title>` +
     `<style>${css(fonts)}</style></head><body>${cover}\n${deptPages}</body></html>`;
   return { html, pages };
 }
