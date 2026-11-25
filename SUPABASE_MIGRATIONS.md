@@ -369,8 +369,8 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     the check query (table_1 = 1, functions_2 = 2, anon_0 = 0,
     append_only = true). Safe to re-run; no backslashes.
 
-32. `scripts/dept-staffing-update-2026-11-25.sql` — **not applied yet;
-    paste it.** The อัตรากำลัง tab's on staff, monthly and daily hires
+32. `scripts/dept-staffing-update-2026-11-25.sql` — applied 2026-11-25.
+    The อัตรากำลัง tab's on staff, monthly and daily hires
     from the staffing report of 25 Nov 2026 (Pong, 2026-11-25: "update this
     data to dashboard and SK03 formula"); FTE stays. Each department whose
     numbers differ (PED, EYE, OPD, RAD, ANS, SOC, SUR, MED on a table still
