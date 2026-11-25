@@ -1237,6 +1237,8 @@
     const FIELD_LABEL = {
         prefix: "คำนำหน้า", firstname: "ชื่อ", lastname: "นามสกุล", department: "กลุ่มงาน", position: "ตำแหน่ง",
         type: "ประเภทบุคลากร", rank: "ระดับ", score: "คะแนน", submitted_at: "ส่งไฟล์เมื่อ",
+        // Pong, 2026-11-26: the national_id column (2026-11-22) by its Thai name.
+        national_id: "รหัสประจำตัวประชาชน",
     };
     const auditValue = (k, v) => {
         if (v === null || v === undefined || v === "")
