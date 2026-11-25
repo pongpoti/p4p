@@ -387,6 +387,23 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     the tab's date would label them 25-11-69. The SQL does not need the app
     update.
 
+33. `scripts/dept-staffing-absent-2026-11.sql` — not yet applied.
+    ไม่ได้ปฏิบัติงาน on the อัตรากำลัง tab (Pong, 2026-11-26: the table shows
+    ปฏิบัติงานจริง with ข้าราชการ and อัตราจ้าง under it, and a new column
+    ไม่ได้ปฏิบัติงาน). Adds `dept_staffing.absent` (0 to 999, default 0),
+    filled from the staffing report of 25 Nov 2026 while every department
+    still has 0 (PED 3, EYE 1, RAD 1, ANS 2, SUR 1, ORT 1, MED 4; OPD 0, as
+    the report leaves it out), and replaces `staffing_save` with one that
+    takes a last argument `p_absent` (null keeps the saved number), so the
+    6-argument calls (the app before this change, step 32) still work.
+    ไม่ได้ปฏิบัติงาน is shown only: it is not in ขาดแคลน or the multiplier,
+    and a save that changes only it queues no SK03 build. service_role
+    only. Needs step 26 (both PARTs). Until it runs, the tab shows the
+    25-11-69 numbers for the column and locks its edit buttons with a note
+    to run this file; nothing else changes. Safe to run before the app
+    update. End with the check query (departments_18 = 18, absent_13 = 13,
+    functions_1 = 1, anon_0 = 0). Safe to re-run; no backslashes.
+
 ## Superseded — do NOT run
 
 - **`scripts/security-rls.sql`** — the original anon-open RLS model,

@@ -250,7 +250,7 @@ async function loadDeptStaffing(supabase: SupabaseClient): Promise<void> {
     return;
   }
   const merged = staffingLib.mergeStaffing(data);
-  DEPT_STAFFING = merged.list.map(({ no, name, code, fte, staff, monthly, daily }) => ({ no, name, code, fte, staff, monthly, daily }));
+  DEPT_STAFFING = merged.list.map(({ no, name, code, fte, staff, monthly, daily, absent }) => ({ no, name, code, fte, staff, monthly, daily, absent }));
   const edited = merged.list.map((d) => d.updated_at).filter((t): t is string => !!t).sort();
   STAFFING_NOTE = edited.length
     ? `${staffingLib.STAFFING_SOURCE} แก้ไขในแดชบอร์ดล่าสุด ${thaiDate(edited[edited.length - 1])}`

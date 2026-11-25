@@ -32,6 +32,8 @@ const ICON_PATHS: Record<string, string> = {
     // รีเซ็ตเดือน (the user menu, 2026-11-24): a turn back to the start.
     "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    // รหัสประจำตัวประชาชน (the ตรวจสอบ tab, 2026-11-26): an ID card.
+    "id-card": '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.2 1.7-2 3-2s2.4.8 3 2M14 10h5M14 14h4"/>',
     "bang": '<path d="M12 5v9M12 19v.5"/>',
     "list": '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
     "comment": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',

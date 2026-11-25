@@ -1193,21 +1193,25 @@
         .sf-alert, .sf-ok { margin: 0; }
         .sf-ok { font-weight: 700; }
         .staffing-table col.c-sno { width: 52px; }
-        .staffing-table col.c-code { width: 64px; }
         .staffing-table col.c-n { width: 68px; }
-        .staffing-table col.c-hire { width: 84px; }
+        .staffing-table col.c-work { width: 96px; }
+        .staffing-table col.c-absent { width: 112px; }
         .staffing-table col.c-lack { width: 104px; }
         .staffing-table col.c-mult { width: 152px; }
         .staffing-table col.c-edit { width: 64px; }
-        .staffing-table th { height: 52px; }
+        /* Two header rows (2026-11-26): ปฏิบัติงานจริง over ข้าราชการ and
+           อัตราจ้าง. The second row sticks under the first (app.ts sets
+           --sf-head1 to the first row's height). */
+        .staffing-table thead tr:first-child th { height: 34px; }
+        .staffing-table thead th[rowspan] { height: 66px; }
+        .staffing-table thead .sf-subhead th { top: var(--sf-head1, 34px); height: 32px; }
+        .staffing-table th.sf-group { text-align: center; color: var(--c-text); box-shadow: inset 0 -1px 0 var(--c-border-strong); }
         .staffing-table td { height: 40px; }
         .staffing-table td.mult { text-overflow: clip; }
         .staffing-table .num { text-align: right; font-variant-numeric: tabular-nums; }
         .staffing-table th.num { text-align: right; }
         .staffing-table .muted { color: var(--c-text-2); }
         .staffing-table .name { font-weight: 700; }
-        .staffing-table .code { font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-2); }
-        .staffing-table .total { font-weight: 700; }
         .staffing-table tr.short .lack { color: var(--st-attn-fg); font-weight: 700; }
         .staffing-table .mult { white-space: nowrap; }
         .staffing-table .mv { display: inline-block; min-width: 44px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -1225,8 +1229,8 @@
         .staffing-table td.audit-empty { height: 88px; }
         /* keep a focused row clear of the sticky head and the totals row (WCAG 2.4.11) */
         #staffing-view .audit-table-wrap { scroll-padding: 60px 0 52px; }
-        .log-dialog.sf-dialog { width: min(720px, 94vw); }
-        .sf-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .log-dialog.sf-dialog { width: min(820px, 94vw); }
+        .sf-form { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .sf-form .bd-field label small { font-size: inherit; font-weight: 400; }
         .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
         .sf-preview { align-items: center; flex-wrap: wrap; }
@@ -1234,6 +1238,7 @@
         .sf-preview .k .v { font-size: var(--fs-2xl); }
         .sf-preview .was { font-size: var(--fs-md); font-weight: 400; color: var(--c-text-2); }
         .sf-preview .was .ic { width: var(--icon-sm); height: var(--icon-sm); vertical-align: -2px; }
+        @media (max-width: 760px) { .sf-form { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         @media (max-width: 640px) { .sf-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 400px) { .sf-form { grid-template-columns: 1fr; } }
 
@@ -1510,6 +1515,51 @@
         #review-view .rv-dock .rv-hint { line-height: var(--lh-ui); }
         #review-view .rv-dock .rv-hint:empty { display: none; }
         #review-view .rv-dock .rv-note { font-size: var(--fs-sm); }
+        /* ผู้จัดทำ: รหัสประจำตัวประชาชน not all filled in (2026-11-26) */
+        #review-view .rv-ids { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); background: var(--st-warn-bg); border-left: 4px solid var(--st-warn-solid); }
+        #review-view .rv-ids-h { display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-md); font-weight: 700; line-height: var(--lh-ui); color: var(--st-warn-fg); }
+        #review-view .rv-ids-h .ic { flex: none; width: var(--icon-md); height: var(--icon-md); margin-top: 1px; color: var(--st-warn-solid); }
+        #review-view .rv-ids p { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-ui); color: var(--c-text); }
+        #review-view .rv-ids .rv-ids-n { font-weight: 700; font-variant-numeric: tabular-nums; }
+        #review-view .rv-ids .btn-primary { align-self: stretch; min-height: 40px; }
+        #review-view .rv-ids .btn-primary .ic { width: var(--icon-sm); height: var(--icon-sm); }
+        #review-view .rv-ids.rv-ids-done { background: var(--st-success-bg); border-left-color: var(--st-success-solid); }
+        #review-view .rv-ids.rv-ids-done .rv-ids-h { color: var(--st-success-fg); }
+        #review-view .rv-ids.rv-ids-done .rv-ids-h .ic { color: var(--st-success-solid); }
+        .log-dialog.ids-dialog { width: min(720px, 94vw); }
+        .ids-form { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; padding: var(--sp-3) var(--sp-6) 0; gap: var(--sp-3); }
+        .ids-tools { display: flex; flex-direction: column; gap: var(--sp-2); }
+        .ids-tools:empty { display: none; }
+        .ids-copy { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--st-info-line); border-radius: var(--r-sm); background: var(--st-info-bg); color: var(--st-info-fg); font-size: var(--fs-sm); }
+        .ids-copy .btn-ghost { min-height: 36px; }
+        .ids-list { list-style: none; margin: 0 calc(-1 * var(--sp-6)); padding: 0 var(--sp-6); overflow-y: auto; flex: 1 1 auto; min-height: 120px; }
+        .ids-row { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--sp-1) var(--sp-3); align-items: center; padding: var(--sp-2) 0; border-bottom: 1px solid var(--c-border); }
+        .ids-row:last-child { border-bottom: 0; }
+        .ids-row[hidden] { display: none; }
+        .ids-who { min-width: 0; display: flex; flex-direction: column; }
+        .ids-who label { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ids-who small { font-size: var(--fs-sm); color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ids-who .ids-bad { color: var(--st-danger-fg); }
+        .ids-field { position: relative; display: flex; flex-direction: column; gap: 2px; }
+        .ids-field input {
+            box-sizing: border-box; width: 100%; height: var(--ctl-md); padding: 0 34px 0 var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--r-sm);
+            background: var(--c-surface); font: inherit; font-size: var(--fs-md); font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; color: var(--c-text);
+        }
+        .ids-field input:hover { border-color: var(--c-text-2); }
+        .ids-field input:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 0; border-color: var(--c-focus); }
+        .ids-field input[aria-invalid="true"] { border-color: var(--st-danger-solid); background: var(--st-danger-bg); }
+        .ids-field .ids-ok { position: absolute; right: 10px; top: 10px; width: var(--icon-sm); height: var(--icon-sm); color: var(--st-success-solid); }
+        .ids-field .ids-msg { font-size: var(--fs-xs); line-height: 1.3; color: var(--st-danger-fg); }
+        .ids-field .ids-msg:empty { display: none; }
+        .ids-field .ids-prev { align-self: flex-start; padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-xs); color: var(--c-link, var(--c-brand)); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+        .ids-chip { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); height: var(--ctl-md); padding: 0 var(--sp-1) 0 var(--sp-3); border: 1px solid var(--st-success-line); border-radius: var(--r-sm); background: var(--st-success-bg); color: var(--st-success-fg); font-size: var(--fs-sm); font-weight: 700; }
+        .ids-chip span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .ids-chip button { width: 30px; height: 30px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; cursor: pointer; }
+        .ids-chip button:hover { background: rgba(0, 0, 0, .06); }
+        .ids-chip button svg { width: var(--icon-sm); height: var(--icon-sm); }
+        .ids-empty { padding: var(--sp-4) 0; color: var(--c-text-2); }
+        @media (max-width: 560px) { .ids-row { grid-template-columns: 1fr; } }
+
         /* ผู้ตรวจสอบ: the round and its figures */
         #review-view .rv-finish { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); }
         #review-view .rv-round-title { font-size: var(--fs-lg); font-weight: 700; }
@@ -2454,7 +2504,7 @@
             <div class="sf-head glass">
                 <div class="sf-intro">
                     <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
-                    <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − (มีจริง + จ้างรายเดือน + จ้างรายวัน) ÷ FTE ไม่ต่ำกว่า 0</span></p>
+                    <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − ปฏิบัติงานจริง (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0</span></p>
                     <p id="staffing-sub" class="sf-sub"></p>
                 </div>
                 <dl id="staffing-stats" class="sf-stats"></dl>
@@ -2463,9 +2513,12 @@
             <p id="staffing-ok" class="sf-ok hidden" role="status"></p>
             <div class="audit-table-wrap glass">
                 <table class="audit-table staffing-table">
-                    <colgroup><col class="c-sno"><col><col class="c-code"><col class="c-n"><col class="c-n"><col class="c-hire"><col class="c-hire"><col class="c-n"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
+                    <!-- Pong, 2026-11-26: ปฏิบัติงานจริง over ข้าราชการ and อัตราจ้าง
+                         (จ้างรายเดือน + จ้างรายวัน), then ไม่ได้ปฏิบัติงาน; no รหัส, มีจริง or รวม. -->
+                    <colgroup><col class="c-sno"><col><col class="c-n"><col class="c-work"><col class="c-work"><col class="c-absent"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
                     <thead>
-                        <tr><th scope="col" class="num">ที่</th><th scope="col">กลุ่มงาน</th><th scope="col">รหัส</th><th scope="col" class="num" title="จำนวนที่ควรมี">FTE</th><th scope="col" class="num" title="อัตราตามจริง ไม่รวมลูกจ้างชั่วคราว รายเดือน">มีจริง</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายเดือน">จ้าง<br>รายเดือน</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว รายวัน">จ้าง<br>รายวัน</th><th scope="col" class="num" title="มีจริง + จ้างรายเดือน + จ้างรายวัน">รวม</th><th scope="col" class="num" title="1 − รวม ÷ FTE ไม่ต่ำกว่า 0">ขาดแคลน</th><th scope="col">ตัวคูณสาขา</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
+                        <tr><th scope="col" rowspan="2" class="num" data-sort="no">ที่</th><th scope="col" rowspan="2" data-sort="name">กลุ่มงาน</th><th scope="col" rowspan="2" class="num" title="จำนวนที่ควรมี" data-sort="fte">FTE</th><th scope="colgroup" colspan="2" class="sf-group">ปฏิบัติงานจริง</th><th scope="col" rowspan="2" class="num" title="เช่น ลาศึกษาต่อ ไม่นับในขาดแคลน" data-sort="absent">ไม่ได้<br>ปฏิบัติงาน</th><th scope="col" rowspan="2" class="num" title="1 − (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0" data-sort="lack">ขาดแคลน</th><th scope="col" rowspan="2" data-sort="mult">ตัวคูณสาขา</th><th scope="col" rowspan="2"><span class="sr-only">แก้ไข</span></th></tr>
+                        <tr class="sf-subhead"><th scope="col" class="num" title="ข้าราชการที่ปฏิบัติงานจริง" data-sort="staff">ข้าราชการ</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว จ้างรายเดือน + จ้างรายวัน" data-sort="hire">อัตราจ้าง</th></tr>
                     </thead>
                     <tbody id="staffing-rows"></tbody>
                     <tfoot id="staffing-foot"></tfoot>
@@ -2658,18 +2711,22 @@
                 <input id="staffing-fte" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint" disabled>
             </div>
             <div class="bd-field">
-                <label for="staffing-staff">มีจริง <small>ไม่รวมรายเดือน</small></label>
+                <label for="staffing-staff">ข้าราชการ <small>ปฏิบัติงานจริง</small></label>
                 <input id="staffing-staff" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
-                <label for="staffing-monthly">จ้างรายเดือน</label>
+                <label for="staffing-monthly">จ้างรายเดือน <small>อัตราจ้าง</small></label>
                 <input id="staffing-monthly" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
-                <label for="staffing-daily">จ้างรายวัน</label>
+                <label for="staffing-daily">จ้างรายวัน <small>อัตราจ้าง</small></label>
                 <input id="staffing-daily" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
-            <p id="staffing-hint" class="bd-meta">มีจริง จ้างรายเดือน และจ้างรายวัน: จำนวนเต็ม 0–999 (มีจริงคืออัตราตามจริงที่ไม่รวมลูกจ้างรายเดือน)</p>
+            <div class="bd-field">
+                <label for="staffing-absent">ไม่ได้ปฏิบัติงาน</label>
+                <input id="staffing-absent" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+            </div>
+            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม 0–999 · อัตราจ้าง = จ้างรายเดือน + จ้างรายวัน · ไม่ได้ปฏิบัติงาน (เช่น ลาศึกษาต่อ) ไม่นับในขาดแคลนและไม่เปลี่ยนตัวคูณสาขา</p>
             <div class="bd-rate sf-preview" aria-live="polite">
                 <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
                 <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
@@ -2711,6 +2768,30 @@
                 <button type="button" class="btn-primary" id="review-confirm-send">ส่ง</button>
             </div>
         </div>
+    </dialog>
+
+    <!-- ตรวจสอบ, ผู้จัดทำ (Pong, 2026-11-26): fill in the รหัสประจำตัวประชาชน
+         of whoever on the month's roster has none; drawn by review.js -->
+    <dialog id="review-ids" class="log-dialog ids-dialog" aria-labelledby="review-ids-title" aria-describedby="review-ids-sub">
+        <div class="log-header">
+            <div>
+                <h2 id="review-ids-title">กรอกรหัสประจำตัวประชาชน</h2>
+                <p id="review-ids-sub"></p>
+            </div>
+            <button type="button" class="icon-btn" id="review-ids-x" aria-label="ปิด">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+            </button>
+        </div>
+        <form id="review-ids-form" class="ids-form" novalidate>
+            <div id="review-ids-tools" class="ids-tools"></div>
+            <ul id="review-ids-list" class="ids-list" aria-label="รายชื่อที่ยังไม่มีรหัส"></ul>
+            <div class="log-actions">
+                <p id="review-ids-error" class="error-text hidden" role="alert"></p>
+                <button type="button" class="btn-ghost" id="review-ids-cancel">ยกเลิก</button>
+                <button type="submit" id="review-ids-save" class="btn-primary" disabled>บันทึก</button>
+            </div>
+        </form>
     </dialog>
 
     <!-- เพิ่มผู้ใช้ด้วย QR (owner only): the QR, then the approval panel, then the result; drawn by users.js -->

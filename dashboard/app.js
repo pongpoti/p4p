@@ -162,9 +162,10 @@
         return e;
     };
     const SORT_TIP = { asc: "เรียงจากน้อยไปมาก คลิกอีกครั้งเพื่อเรียงจากมากไปน้อย", desc: "เรียงจากมากไปน้อย คลิกอีกครั้งเพื่อกลับเป็นลำดับเดิม", "": "คลิกเพื่อเรียงลำดับ" };
-    function sortHeaders(ths, onSort) {
-        let col = -1;
-        let dir = null;
+    // init: the sort shown before any click (the caller draws its rows that way).
+    function sortHeaders(ths, onSort, init) {
+        let col = init && init.dir ? init.col : -1;
+        let dir = init && init.dir ? init.dir : null;
         const btns = ths.map((th, i) => {
             const b = el("button", "th-sort");
             b.type = "button";
@@ -1195,6 +1196,7 @@
         "review.issue_close": "ปิดปัญหา",
         "review.pdf_retry": "สร้างเอกสารเบิกจ่ายอีกครั้ง",
         "review.reopen": "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง",
+        "review.ids": "กรอกรหัสประจำตัวประชาชน",
         "review.reset": "รีเซ็ตเดือนในแท็บตรวจสอบ",
         "view.staffing": "เปิดแท็บอัตรากำลัง",
         "staffing.save": "แก้ไขอัตรากำลัง",
@@ -1384,6 +1386,18 @@
                     add("รอบที่ " + t.round);
                 add("เหตุผล: " + (t.reason || ""));
                 break;
+            case "review.ids": {
+                // Names and counts only: the numbers are never logged.
+                add(monthLabel(t.month));
+                if (t.typed)
+                    add("กรอก " + Number(t.typed).toLocaleString("th-TH") + " คน");
+                if (t.copied)
+                    add("ใช้เลขเดือนก่อน " + Number(t.copied).toLocaleString("th-TH") + " คน");
+                const ppl = Array.isArray(t.people) ? t.people.filter((x) => typeof x === "string") : [];
+                if (ppl.length)
+                    add(ppl.join(", ") + (t.more ? " และอีก " + Number(t.more).toLocaleString("th-TH") + " คน" : ""));
+                break;
+            }
             case "review.reset":
                 add(monthLabel(t.month));
                 if (t.rounds)
@@ -1479,7 +1493,11 @@
                 };
                 const was = withMonthly(t.before), now = withMonthly(t.after);
                 let changed = 0;
-                for (const [k, label] of [["fte", "FTE"], ["staff", "มีจริง"], ["monthly", "จ้างรายเดือน"], ["daily", "จ้างรายวัน"]]) {
+                // staff was มีจริง until 2026-11-26 (the same number); absent
+                // is in saves since then only.
+                for (const [k, label] of [["fte", "FTE"], ["staff", "ข้าราชการ"], ["monthly", "จ้างรายเดือน"], ["daily", "จ้างรายวัน"], ["absent", "ไม่ได้ปฏิบัติงาน"]]) {
+                    if (k === "absent" && (was[k] === undefined || now[k] === undefined))
+                        continue;
                     if (was[k] !== now[k]) {
                         add(label + " " + auditValue("", was[k]) + " → " + auditValue("", now[k]));
                         changed++;
@@ -2204,6 +2222,7 @@
     const sfStaff = document.getElementById("staffing-staff");
     const sfMonthly = document.getElementById("staffing-monthly");
     const sfDaily = document.getElementById("staffing-daily");
+    const sfAbsent = document.getElementById("staffing-absent");
     const sfLack = document.getElementById("staffing-lack");
     const sfMult = document.getElementById("staffing-mult");
     const sfMeta = document.getElementById("staffing-meta");
@@ -2213,7 +2232,7 @@
     // FTE is shown but locked (Pong, 2026-11-16): only on staff, monthly and
     // daily hires are edited; the save sends the department's FTE unchanged.
     sfFte.disabled = true;
-    const sfInputs = [sfStaff, sfMonthly, sfDaily];
+    const sfInputs = [sfStaff, sfMonthly, sfDaily, sfAbsent];
     for (const i of sfInputs)
         numberField(i, false, 3, 0);
     // The box stays open while a save is on its way (no Esc, backdrop or close).
@@ -2227,13 +2246,15 @@
     let sfBusy = false;
     // The edit column is dropped once for anyone who cannot edit.
     let staffingEditCol = true;
-    // Any column but the pencil sorts (Pong, 2026-11-19); ties, and no
-    // sort, in the sheet's own order (ที่).
-    let staffingSort = { col: -1, dir: null };
-    const STAFFING_KEYS = [
-        (d) => d.no, (d) => d.name, (d) => d.code, (d) => d.fte, (d) => d.staff, (d) => d.monthly, (d) => d.daily,
-        (d) => d.staff + d.monthly + d.daily, (d) => d.lack, (d) => d.multiplier,
+    // Any column but the pencil and the ปฏิบัติงานจริง group sorts (Pong,
+    // 2026-11-19); ties, and no sort, in the sheet's own order (ที่). Opens
+    // on ตัวคูณสาขา, highest first (Pong, 2026-11-26).
+    const STAFFING_SORTS = [
+        ["no", (d) => d.no], ["name", (d) => d.name], ["fte", (d) => d.fte], ["staff", (d) => d.staff],
+        ["hire", (d) => d.monthly + d.daily], ["absent", (d) => d.absent], ["lack", (d) => d.lack], ["mult", (d) => d.multiplier],
     ];
+    const STAFFING_KEYS = STAFFING_SORTS.map(([, f]) => f);
+    let staffingSort = { col: STAFFING_SORTS.findIndex(([k]) => k === "mult"), dir: "desc" };
     const staffingOrder = (ds) => {
         const key = STAFFING_KEYS[staffingSort.col];
         const sign = staffingSort.dir === "desc" ? -1 : 1;
@@ -2247,10 +2268,19 @@
             return a.no - b.no;
         });
     };
-    sortHeaders(Array.from(staffingTable.tHead.rows[0].cells).slice(0, STAFFING_KEYS.length), (col, dir) => {
+    sortHeaders(STAFFING_SORTS.map(([k]) => staffingTable.tHead.querySelector('th[data-sort="' + k + '"]')), (col, dir) => {
         staffingSort = { col, dir };
         renderStaffing();
-    });
+    }, staffingSort);
+    // The second header row sticks right under the first, whatever its height.
+    const sfGroupTh = staffingTable.tHead.querySelector("th.sf-group");
+    const sfHead1 = () => {
+        const h = sfGroupTh.getBoundingClientRect().height;
+        if (h > 0)
+            staffingTable.style.setProperty("--sf-head1", h + "px");
+    };
+    if (typeof ResizeObserver === "function")
+        new ResizeObserver(sfHead1).observe(sfGroupTh);
     // The same rule as lib/dept-staffing.ts, shown from the counts in whole
     // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
     // to 0.1%, multiplier to 0.01. The SK03 build uses the unrounded value.
@@ -2298,7 +2328,7 @@
     };
     const sfEmpty = (text, cls) => {
         const tr = emptyRow(text, cls);
-        tr.firstElementChild.setAttribute("colspan", String(staffingTable.tHead.rows[0].cells.length));
+        tr.firstElementChild.setAttribute("colspan", String(staffingTable.querySelectorAll("colgroup col").length));
         return tr;
     };
     // edit: the owner's pencil; locked: the owner's pencil, off until the
@@ -2308,14 +2338,16 @@
         tr.dataset.code = d.code;
         tr.appendChild(el("td", "num muted", String(d.no)));
         const name = el("td", "name", d.name);
-        name.title = d.name;
         tr.appendChild(name);
-        tr.appendChild(el("td", "code", d.code));
+        name.title = d.name + " (" + d.code + ")";
         tr.appendChild(el("td", "num", fmtNum(d.fte)));
         tr.appendChild(el("td", "num", fmtNum(d.staff)));
-        tr.appendChild(el("td", "num" + (d.monthly ? "" : " muted"), fmtNum(d.monthly)));
-        tr.appendChild(el("td", "num" + (d.daily ? "" : " muted"), fmtNum(d.daily)));
-        tr.appendChild(el("td", "num total", fmtNum(sfHave(d))));
+        // อัตราจ้าง: monthly and daily hires together; each in the tooltip.
+        const hire = d.monthly + d.daily;
+        const hires = el("td", "num" + (hire ? "" : " muted"), fmtNum(hire));
+        hires.title = "จ้างรายเดือน " + fmtNum(d.monthly) + " · จ้างรายวัน " + fmtNum(d.daily);
+        tr.appendChild(hires);
+        tr.appendChild(el("td", "num" + (d.absent ? "" : " muted"), fmtNum(d.absent)));
         tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)));
         const mult = el("td", "mult");
         mult.appendChild(el("span", "mv", fmtMult(d, sfK())));
@@ -2351,7 +2383,7 @@
         const data = staffing;
         if (!data)
             return;
-        const edit = !data.canEdit ? "none" : data.installed && !data.needsUpdate ? "edit" : "locked";
+        const edit = !data.canEdit ? "none" : data.installed && !data.needsUpdate && !data.needsAbsent ? "edit" : "locked";
         if (staffingEditCol && !data.canEdit) {
             // Read-only: no edit column at all.
             (_a = staffingTable.querySelector("col.c-edit")) === null || _a === void 0 ? void 0 : _a.remove();
@@ -2383,6 +2415,11 @@
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor อีกครั้ง";
             staffingAlert.className = "sf-alert";
         }
+        else if (data.needsAbsent && data.canEdit) {
+            staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องไม่ได้ปฏิบัติงาน จึงแสดงตัวเลขจากรายงาน " + sfSource() +
+                " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-absent-2026-11.sql ใน Supabase SQL editor";
+            staffingAlert.className = "sf-alert";
+        }
         else {
             staffingAlert.className = "sf-alert hidden";
         }
@@ -2404,14 +2441,13 @@
         staffingRows.replaceChildren(...staffingOrder(ds).map((d) => staffingRow(d, edit)));
         const foot = el("tr");
         foot.appendChild(el("td"));
-        const label = el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน");
-        label.setAttribute("colspan", "2");
-        foot.appendChild(label);
+        foot.appendChild(el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน"));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.fte))));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.staff))));
-        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly))));
-        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.daily))));
-        foot.appendChild(el("td", "num total", fmtNum(sum(sfHave))));
+        const hires = el("td", "num", fmtNum(sum((d) => d.monthly + d.daily)));
+        hires.title = "จ้างรายเดือน " + fmtNum(sum((d) => d.monthly)) + " · จ้างรายวัน " + fmtNum(sum((d) => d.daily));
+        foot.appendChild(hires);
+        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.absent))));
         // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
         const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน");
         shortCell.setAttribute("colspan", "2");
@@ -2461,10 +2497,13 @@
     };
     const sfValues = () => {
         const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0);
-        const monthly = sfCount(sfMonthly.value, 0), daily = sfCount(sfDaily.value, 0);
-        return fte === null || staff === null || monthly === null || daily === null ? null : { fte, staff, monthly, daily };
+        const monthly = sfCount(sfMonthly.value, 0), daily = sfCount(sfDaily.value, 0), absent = sfCount(sfAbsent.value, 0);
+        return fte === null || staff === null || monthly === null || daily === null || absent === null
+            ? null : { fte, staff, monthly, daily, absent };
     };
-    const sfSame = (a, b) => a.fte === b.fte && a.staff === b.staff && a.monthly === b.monthly && a.daily === b.daily;
+    // The multiplier's numbers only (ไม่ได้ปฏิบัติงาน is not one).
+    const sfSameCounts = (a, b) => a.fte === b.fte && a.staff === b.staff && a.monthly === b.monthly && a.daily === b.daily;
+    const sfSame = (a, b) => sfSameCounts(a, b) && a.absent === b.absent;
     // The lack and multiplier as typed, beside the saved multiplier when it changes.
     const paintStaffing = () => {
         const d = sfEditing, v = sfValues();
@@ -2499,6 +2538,7 @@
         sfStaff.value = String(d.staff);
         sfMonthly.value = String(d.monthly);
         sfDaily.value = String(d.daily);
+        sfAbsent.value = String(d.absent);
         sfError.classList.add("hidden");
         sfMeta.textContent = d.updated_at
             ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), staffName(d.updated_by)].filter(Boolean).join(" · ")
@@ -2575,8 +2615,11 @@
             sfDlg.close();
         const rebuild = sfMonths(out.rebuild);
         staffingOk.replaceChildren(iconEl("check"), " ");
-        withArrows(staffingOk, "บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
-            (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้"));
+        // Only ไม่ได้ปฏิบัติงาน changed: the multiplier and SK03 stay as they were.
+        withArrows(staffingOk, sfSameCounts(d, saved)
+            ? "บันทึก" + saved.name + "แล้ว ไม่ได้ปฏิบัติงาน " + fmtNum(d.absent) + " → " + fmtNum(saved.absent) + " · ตัวคูณสาขาเท่าเดิม " + fmtMult(saved, sfK())
+            : "บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
+                (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้"));
         staffingOk.classList.remove("hidden");
         const tr = staffingRows.querySelector('tr[data-code="' + saved.code + '"]');
         if (tr) {

@@ -10,9 +10,9 @@
  *   GET /dashboard/api/staffing         every department, in the SK03 order
  *                                       (?view=1 logs the visit); any
  *                                       dashboard user. canEdit: the owner.
- *   PUT /dashboard/api/staffing/:code   {fte, staff, monthly, daily}: one
- *                                       department, owner only (404 for
- *                                       anyone else)
+ *   PUT /dashboard/api/staffing/:code   {fte, staff, monthly, daily,
+ *                                       absent}: one department, owner only
+ *                                       (404 for anyone else)
  *
  * The numbers live in the Supabase table dept_staffing, saved through
  * staffing_save (scripts/dept-staffing-2026-11.sql). Until that file has
@@ -20,7 +20,11 @@
  * installed: false, and a save answers 503 saying what to run. A table made
  * before the monthly-hires column (2026-11-17) is read as it is, with
  * monthly 0 and needsUpdate: true, and a save answers 503 the same way
- * until the file has been run again. Every save is
+ * until the file has been run again. ไม่ได้ปฏิบัติงาน (absent, 2026-11-26)
+ * is read the same way: before scripts/dept-staffing-absent-2026-11.sql
+ * (step 33) the list has the starting numbers with needsAbsent: true, and a
+ * save answers 503 naming that file. absent is shown only: it is not in the
+ * multiplier and a change to it alone queues no build. Every save is
  * in ประวัติการใช้งาน as staffing.save, with the numbers and multiplier
  * before and after. When a number changed, staffing_save also queues a new
  * build of every ตรวจสอบ month still on the auditee's side (rebuild: those
@@ -58,15 +62,18 @@ const notInstalled = (e: any): boolean => {
     .test(String(d.message || ""))
 }
 const NOT_INSTALLED_MSG = "ยังไม่ได้ติดตั้งการบันทึกอัตรากำลัง ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor"
-const FIELD_ERROR: Record<"fte" | "staff" | "monthly" | "daily", string> = {
+// The table is there but staffing_save does not take p_absent yet (step 33 not run).
+const NO_ABSENT_MSG = "ยังไม่ได้ติดตั้งช่องไม่ได้ปฏิบัติงาน ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-absent-2026-11.sql ใน Supabase SQL editor"
+const FIELD_ERROR: Record<"fte" | "staff" | "monthly" | "daily" | "absent", string> = {
   fte: "FTE: ใส่จำนวนเต็ม 1 ถึง 999",
-  staff: "มีจริง: ใส่จำนวนเต็ม 0 ถึง 999",
+  staff: "ข้าราชการ: ใส่จำนวนเต็ม 0 ถึง 999",
   monthly: "จ้างรายเดือน: ใส่จำนวนเต็ม 0 ถึง 999",
   daily: "จ้างรายวัน: ใส่จำนวนเต็ม 0 ถึง 999",
+  absent: "ไม่ได้ปฏิบัติงาน: ใส่จำนวนเต็ม 0 ถึง 999",
 }
-const FIELDS = ["fte", "staff", "monthly", "daily"] as const
+const FIELDS = ["fte", "staff", "monthly", "daily", "absent"] as const
 
-type Counts = { fte: number; staff: number; monthly: number; daily: number }
+type Counts = { fte: number; staff: number; monthly: number; daily: number; absent: number }
 const round4 = (n: number): number => Math.round(n * 10000) / 10000
 /** One department as the tab shows it: the numbers, lack and multiplier (4 decimals). */
 const withMultiplier = (d: import("./dept-staffing").DeptStaffingRow) => ({
@@ -75,8 +82,10 @@ const withMultiplier = (d: import("./dept-staffing").DeptStaffingRow) => ({
   multiplier: round4(staffing.deptMultiplier(d)),
 })
 // A row from before the monthly column has none: 0 (its staff still counts them).
-const countsOf = (r: any): Counts | null =>
-  r ? { fte: Number(r.fte), staff: Number(r.staff), monthly: Number(r.monthly ?? 0), daily: Number(r.daily) } : null
+// One from before the absent column (step 33) has none either: the number sent.
+const countsOf = (r: any, absent: number): Counts | null =>
+  r ? { fte: Number(r.fte), staff: Number(r.staff), monthly: Number(r.monthly ?? 0), daily: Number(r.daily),
+        absent: Number(r.absent ?? absent) } : null
 /** The months staffing_save queued a build of (YYYY_MM, oldest first). */
 const monthsOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((m): m is string => typeof m === "string" && /^\d{4}_\d{2}$/.test(m)) : []
@@ -110,6 +119,7 @@ export function mountStaffing(d: StaffingDeps): void {
     res.json({
       installed,
       needsUpdate: installed && merged.noMonthly.length > 0,
+      needsAbsent: installed && merged.noAbsent.length > 0,
       canEdit: d.isDashOwner(s.sub),
       k: staffing.LACK_K,
       source: staffing.STAFFING_SOURCE,
@@ -128,20 +138,26 @@ export function mountStaffing(d: StaffingDeps): void {
     const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>
     const next: Partial<Counts> = {}
     for (const f of FIELDS) {
+      // absent may be left out (a page from before it): the saved number stays.
+      if (f === "absent" && body[f] === undefined) continue
       const v = staffing.parseStaffCount(body[f], f)
       if (v === null) return res.status(400).json({ error: FIELD_ERROR[f], field: f })
       next[f] = v
     }
-    const counts = next as Counts
+    const absent = next.absent
     try {
-      const out = await d.callServiceRpc("staffing_save", {
-        p_code: dept.code, p_fte: counts.fte, p_staff: counts.staff, p_monthly: counts.monthly, p_daily: counts.daily,
+      const args: Record<string, unknown> = {
+        p_code: dept.code, p_fte: next.fte, p_staff: next.staff, p_monthly: next.monthly, p_daily: next.daily,
         p_actor: s.name,
-      })
-      const before = countsOf(out && out.before)
-      const after = countsOf(out && out.after) || counts
+      }
+      // Sent only when given, so a save without it also works before step 33.
+      if (absent !== undefined) args.p_absent = absent
+      const out = await d.callServiceRpc("staffing_save", args)
+      const before = countsOf(out && out.before, dept.absent)
+      const after = countsOf(out && out.after, absent ?? (before ? before.absent : dept.absent)) ||
+        { ...(next as Counts), absent: absent ?? dept.absent }
       // A department never saved before had the starting numbers.
-      const was = before || { fte: dept.fte, staff: dept.staff, monthly: dept.monthly, daily: dept.daily }
+      const was = before || { fte: dept.fte, staff: dept.staff, monthly: dept.monthly, daily: dept.daily, absent: dept.absent }
       const rebuild = monthsOf(out && out.rebuild)
       await d.audit(req, { sub: s.sub, name: s.name }, "staffing.save", {
         code: dept.code, name: dept.name, before: was, after, k: staffing.LACK_K,
@@ -156,8 +172,11 @@ export function mountStaffing(d: StaffingDeps): void {
       res.json({ ok: true, dept: withMultiplier(row), rebuild })
     } catch (e: any) {
       if (notInstalled(e)) {
-        console.error("[dashboard] staffing save: not installed (" + String(pgError(e).code || "") + ")")
-        return res.status(503).json({ installed: false, error: NOT_INSTALLED_MSG })
+        const code = String(pgError(e).code || "")
+        console.error("[dashboard] staffing save: not installed (" + code + ")")
+        // No such function with p_absent: the table is there, step 33 is not.
+        const fn = code === "PGRST202" || code === "42883" || /function/i.test(String(pgError(e).message || ""))
+        return res.status(503).json({ installed: false, error: fn ? NO_ABSENT_MSG : NOT_INSTALLED_MSG })
       }
       console.error("[dashboard] staffing save failed:", e.response ? JSON.stringify(e.response.data) : e.message)
       res.status(500).json({ error: "บันทึกไม่สำเร็จ กรุณาลองใหม่" })
