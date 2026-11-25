@@ -252,13 +252,16 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     (`scripts/review-tab-2026-11-auditee.sql`, for the `doctors` column and
     `review_request_build`). Each PART can be pasted on its own; safe to
     re-run.
-26. `scripts/dept-staffing-2026-11.sql` — **not applied yet; paste it.**
+26. `scripts/dept-staffing-2026-11.sql` — applied 2026-11-17 (both PARTs).
     PART 1 makes `dept_staffing` (service_role only), one row per STAFF
     department code with FTE, on staff, monthly hires and daily hires,
-    filled with the physician staffing sheet of 13-11-69, and ends with a
-    check query (18 departments, 234 FTE, 202 on staff, 2 monthly, 52
-    daily, 0 edited); re-running it never overwrites a number saved on the
-    dashboard. Already ran the 2026-11-16 version? Run both PARTs again
+    filled with the starting numbers of `lib/dept-staffing.ts` (the
+    physician staffing sheet of 13-11-69 until 2026-11-25; since then FTE
+    from that sheet and the rest from the staffing report 25-11-69), and
+    ends with a check query (18 departments, 234 FTE, 182 on staff, 1
+    monthly, 37 daily); re-running it never overwrites a number saved on
+    the dashboard. A table filled before 2026-11-25 gets the 25-11-69
+    numbers from step 32. Already ran the 2026-11-16 version? Run both PARTs again
     after the จ้างรายเดือน update is live (2026-11-17): PART 1 adds the
     `monthly` column and moves MED's and EYE's monthly hire out of on staff
     where the row is unedited (same totals), and PART 2 replaces
@@ -347,7 +350,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     it is not installed (503) and nothing changes. End with the check query
     (columns_2 = 2, cancelled_ok = true, reopen_4 = 4, return_3 = 3,
     anon_0 = 0, open_issues_0 = 0). Safe to re-run; no backslashes.
-31. `scripts/review-reset-2026-11.sql` — **not applied yet; paste it.**
+31. `scripts/review-reset-2026-11.sql` — applied 2026-11-24.
     รีเซ็ตเดือนในแท็บตรวจสอบ (Pong, 2026-11-24): the owner starts a
     month's ตรวจสอบ again from round 1, from the user menu, instead of a
     delete pasted here. Adds the table `review_resets` (one row per reset:
@@ -365,6 +368,24 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     not installed and nothing changes (the reset answers 503). End with
     the check query (table_1 = 1, functions_2 = 2, anon_0 = 0,
     append_only = true). Safe to re-run; no backslashes.
+
+32. `scripts/dept-staffing-update-2026-11-25.sql` — **not applied yet;
+    paste it.** The อัตรากำลัง tab's on staff, monthly and daily hires
+    from the staffing report of 25 Nov 2026 (Pong, 2026-11-25: "update this
+    data to dashboard and SK03 formula"); FTE stays. Each department whose
+    numbers differ (PED, EYE, OPD, RAD, ANS, SOC, SUR, MED on a table still
+    as on the 13-11-69 sheet) goes through `staffing_save` as the owner,
+    the same as a save on the tab: every ตรวจสอบ month still on the
+    auditee's side gets a new SK03 build, and each save is in ประวัติการใช้งาน
+    (`staffing.save`). Multipliers EYE 1.56 to 2.11, ANS 3.00 to 3.67, SUR
+    1.51 to 1.64, MED 1.64 to 2.06. Needs step 26 (both PARTs) and step 22.
+    One statement, then the check query (18 departments, 234 FTE, 182 on
+    staff, 1 monthly, 37 daily, 220 at work, edited_8 = 8). A second run
+    changes nothing; no backslashes. Run it before (or right when) the app
+    update of 2026-11-25 goes live: that update names the starting numbers
+    25-11-69, so with the old numbers still in the table the SK03 note and
+    the tab's date would label them 25-11-69. The SQL does not need the app
+    update.
 
 ## Superseded — do NOT run
 

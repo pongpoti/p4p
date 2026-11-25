@@ -67,10 +67,12 @@ export type DeptCapacity = import('../lib/dept-staffing').DeptStaffing;
 
 /**
  * FORMULA.md "Departments and Multipliers", in that table's order, with the
- * starting numbers: the physician staffing sheet of 13 Nov 2026 (13-11-69:
- * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
- * ขนาด a, 691 เตียง; Pong, 2026-11-13). Daily hires (รายวัน) count as staff
- * since 2026-11-16 (Pong). A build uses the numbers in the Supabase table
+ * starting numbers: FTE from the physician staffing sheet of 13 Nov 2026
+ * (13-11-69: ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม
+ * Service Plan ขนาด a, 691 เตียง; Pong, 2026-11-13), on staff, monthly and
+ * daily hires from the staffing report of 25 Nov 2026 (Pong, 2026-11-25).
+ * Daily hires (รายวัน) count as staff since 2026-11-16 (Pong). A build uses
+ * the numbers in the Supabase table
  * dept_staffing, edited on the dashboard (process.ts loadDeptStaffing); these
  * only for a department with no row there, or before the table exists.
  */
@@ -82,9 +84,9 @@ export const DEPT_CAPACITY: DeptCapacity[] = staffing.DEPT_STAFFING_DEFAULTS;
  * (Pong, 2026-11-13: the effect grows in proportion to how short the
  * department is; no groups. Pong, 2026-11-16: daily hires count too;
  * 2026-11-17: monthly hires in their own column, already counted before).
- * Every 10 points short adds 0.5: ANS (40% short) 3.00, MED (36 + 1 + 4 of
- * 47, 12.8%) 1.64, a fully staffed department 1.00. Over-staffed departments
- * count as 0% short, so no multiplier is below 1 (SOC: 4 + 15 of 10).
+ * Every 10 points short adds 0.5: OCM (40% short) 3.00, MED (33 + 4 of 47,
+ * 21.3%) 2.06, a fully staffed department 1.00. Over-staffed departments
+ * count as 0% short, so no multiplier is below 1 (SOC: 5 + 15 of 10).
  */
 export const LACK_K = staffing.LACK_K;
 

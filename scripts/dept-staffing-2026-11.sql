@@ -19,10 +19,15 @@
 --  8 to 7 + 1) where the row is still as on the sheet. No multiplier
 --  changes. Re-run PART 2 too: staffing_save now takes the monthly hires.
 --
---  PART 1 makes the table and fills it with the physician staffing sheet of
---  13 Nov 2026 (13-11-69). updated_at and updated_by stay empty on these
---  rows: empty means "as on the sheet", not edited on the dashboard.
---  Re-running PART 1 never overwrites a number saved on the dashboard.
+--  PART 1 makes the table and fills it with the starting numbers of
+--  lib/dept-staffing.ts. Until 2026-11-25 those were the physician staffing
+--  sheet of 13 Nov 2026 (13-11-69); since then FTE is from that sheet and
+--  on staff, monthly and daily hires from the staffing report of 25 Nov
+--  2026 (อัตรากำลัง 25-11-69). A table made before then got the 25-11-69
+--  numbers through scripts/dept-staffing-update-2026-11-25.sql.
+--  updated_at and updated_by stay empty on these rows: empty means "as on
+--  the sheet", not edited on the dashboard. Re-running PART 1 never
+--  overwrites a number saved on the dashboard.
 --
 --  PART 2 adds staffing_save, which the tab calls (through the Vercel app,
 --  service role only) to save one department. A save also queues a new
@@ -35,7 +40,7 @@
 --  first. Safe to re-run. No backslashes, so it pastes through chat.
 -- ============================================================================
 
--- ── PART 1: the table and the 13-11-69 numbers ─────────────────────────────
+-- ── PART 1: the table and the starting numbers ─────────────────────────────
 -- Run it after the dashboard update with the จ้างรายเดือน column is live:
 -- the app before that reads staff without the monthly hires.
 
@@ -60,34 +65,35 @@ grant select, insert, update on table public.dept_staffing to service_role;
 
 insert into public.dept_staffing (code, fte, staff, monthly, daily)
 values
-  ('PED', 19, 21, 0,  1),
-  ('EYE',  9,  7, 1,  0),
+  ('PED', 19, 19, 0,  1),
+  ('EYE',  9,  6, 1,  0),
   ('PSY',  4,  4, 0,  2),
   ('CPT',  1,  1, 0,  0),
   ('FOR',  3,  2, 0,  0),
-  ('OPD',  5, 14, 0, 27),
+  ('OPD',  5,  3, 0, 11),
   ('PAT',  2,  3, 0,  0),
-  ('RAD', 15, 14, 0,  0),
-  ('ANS', 15,  9, 0,  0),
+  ('RAD', 15, 13, 0,  1),
+  ('ANS', 15,  7, 0,  0),
   ('RHB',  6,  4, 0,  0),
-  ('SOC', 10,  4, 0, 15),
+  ('SOC', 10,  5, 0, 15),
   ('EMR', 10, 10, 0,  0),
-  ('SUR', 39, 34, 0,  1),
+  ('SUR', 39, 33, 0,  1),
   ('ORT', 17, 15, 0,  0),
   ('OBG', 18, 13, 0,  2),
   ('ENT',  9,  8, 0,  0),
   ('OCM',  5,  3, 0,  0),
-  ('MED', 47, 36, 1,  4)
+  ('MED', 47, 33, 0,  4)
 on conflict (code) do nothing;
 
 -- A table made before the monthly column counted MED's and EYE's monthly
--- hire in staff: move it, only where the row is still as on the sheet.
+-- hire in staff (13-11-69 sheet: 37 and 8): move it, only where the row is
+-- still as on that sheet. A no-op on a table seeded above.
 update public.dept_staffing t
    set staff = t.staff - m.monthly, monthly = m.monthly
   from (values ('EYE', 8, 1), ('MED', 37, 1)) as m (code, sheet_staff, monthly)
  where t.code = m.code and t.staff = m.sheet_staff and t.monthly = 0 and t.updated_at is null;
 
--- Check: 18 departments; 234 FTE, 202 on staff, 2 monthly, 52 daily while unedited.
+-- Check: 18 departments; 234 FTE, 182 on staff, 1 monthly, 37 daily (25-11-69).
 select count(*) as departments, sum(fte) as fte, sum(staff) as on_staff, sum(monthly) as monthly,
        sum(daily) as daily, count(updated_at) as edited
   from public.dept_staffing;

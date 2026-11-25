@@ -11,16 +11,22 @@
  *   multiplier = 1 + LACK_K × lack
  *
  * Monthly hires (ลูกจ้างชั่วคราว รายเดือน) have their own column since
- * 2026-11-17 (Pong: "add column จ้างรายเดือน"). The sheet's รวมอัตราตามจริง
- * already counts them, so on staff is รวมอัตราตามจริง less the monthly hires
- * (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed.
+ * 2026-11-17 (Pong: "add column จ้างรายเดือน"). The 13-11-69 sheet's
+ * รวมอัตราตามจริง already counted them, so on staff was that less the
+ * monthly hires (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed.
  *
- * The numbers start as the physician staffing sheet of 13 Nov 2026
- * (13-11-69, ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม
- * Service Plan ขนาด a, 691 เตียง). Since 2026-11-16 (Pong) the owner edits
- * them on the dashboard's อัตรากำลัง tab, which saves them in the Supabase
- * table dept_staffing (scripts/dept-staffing-2026-11.sql); every SK03 build
- * reads that table. A department with no row there keeps the number below.
+ * FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69,
+ * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
+ * ขนาด a, 691 เตียง). On staff, monthly and daily hires are from the staffing
+ * report of 25 Nov 2026 (อัตรากำลัง 25-11-69, Pong: "update this data to
+ * dashboard and SK03 formula"): the doctors at work in the hospital's doctor
+ * list of that day, so doctors on study leave no longer count (the 13-11-69
+ * sheet counted them in รวมอัตราตามจริง). Since 2026-11-16 (Pong) the owner
+ * edits them on the dashboard's อัตรากำลัง tab, which saves them in the
+ * Supabase table dept_staffing (scripts/dept-staffing-2026-11.sql; the
+ * 25-11-69 numbers go in with scripts/dept-staffing-update-2026-11-25.sql);
+ * every SK03 build reads that table. A department with no row there keeps
+ * the number below.
  *
  * Departments, their names, codes and order are fixed here: the SK03
  * งบรายสาขา sheet has one row per department in this order, and a new
@@ -32,7 +38,7 @@ export interface DeptStaffing {
   name: string    // department name as in Supabase / DEPT_COLORS
   code: string
   fte: number     // doctors the department should have (จำนวนที่ควรมี, FTE)
-  staff: number   // doctors on staff (รวมอัตราตามจริง less the monthly hires)
+  staff: number   // doctors on staff at work (ข้าราชการ; not those on study leave)
   monthly: number // doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน), its own column since 2026-11-17
   daily: number   // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
 }
@@ -46,8 +52,12 @@ export interface DeptStaffingRow extends DeptStaffing {
 /** Every 10 points of lack adds 0.5 to the multiplier (Pong, 2026-11-13). */
 export const LACK_K = 5
 
-/** Where the starting numbers come from (the งบรายสาขา sheet's note says so when nothing has been edited). */
-export const STAFFING_SOURCE = "อัตรากำลัง 13-11-69"
+/**
+ * Where the starting numbers come from (the งบรายสาขา sheet's note says so).
+ * It ends with the date, d-m-yy in BE: the อัตรากำลัง tab reads it for
+ * "ปรับปรุงข้อมูล วันที่".
+ */
+export const STAFFING_SOURCE = "อัตรากำลัง 25-11-69"
 
 /** Limits of each number, as the dashboard and dept_staffing take them. FTE is at least 1 (it divides). */
 export const STAFFING_LIMITS: Record<"fte" | "staff" | "monthly" | "daily", { min: number; max: number }> = {
@@ -59,29 +69,30 @@ export const STAFFING_LIMITS: Record<"fte" | "staff" | "monthly" | "daily", { mi
 
 /**
  * The 18 STAFF departments in the order of FORMULA.md's "Departments and
- * Multipliers" table, with the numbers of the physician staffing sheet of
- * 13 Nov 2026 (Pong, 2026-11-13; daily hires counted since 2026-11-16;
- * monthly hires in their own column since 2026-11-17).
+ * Multipliers" table: FTE from the physician staffing sheet of 13 Nov 2026
+ * (Pong, 2026-11-13), on staff, monthly and daily hires from the staffing
+ * report of 25 Nov 2026 (Pong, 2026-11-25; daily hires counted since
+ * 2026-11-16, monthly hires in their own column since 2026-11-17).
  */
 export const DEPT_STAFFING_DEFAULTS: DeptStaffing[] = [
-  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 21, monthly: 0, daily: 1 },
-  { no: 2,  name: "จักษุวิทยา",                          code: "EYE", fte: 9,  staff: 7,  monthly: 1, daily: 0 },
+  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 19, monthly: 0, daily: 1 },
+  { no: 2,  name: "จักษุวิทยา",                          code: "EYE", fte: 9,  staff: 6,  monthly: 1, daily: 0 },
   { no: 3,  name: "จิตเวชและยาเสพติด",                   code: "PSY", fte: 4,  staff: 4,  monthly: 0, daily: 2 },
   { no: 4,  name: "เทคนิคการแพทย์และพยาธิวิทยาคลินิก",   code: "CPT", fte: 1,  staff: 1,  monthly: 0, daily: 0 },
   { no: 5,  name: "นิติเวช",                             code: "FOR", fte: 3,  staff: 2,  monthly: 0, daily: 0 },
-  { no: 6,  name: "ผู้ป่วยนอก",                           code: "OPD", fte: 5,  staff: 14, monthly: 0, daily: 27 },
+  { no: 6,  name: "ผู้ป่วยนอก",                           code: "OPD", fte: 5,  staff: 3,  monthly: 0, daily: 11 },
   { no: 7,  name: "พยาธิวิทยากายวิภาค",                  code: "PAT", fte: 2,  staff: 3,  monthly: 0, daily: 0 },
-  { no: 8,  name: "รังสีวิทยา",                           code: "RAD", fte: 15, staff: 14, monthly: 0, daily: 0 },
-  { no: 9,  name: "วิสัญญีวิทยา",                         code: "ANS", fte: 15, staff: 9,  monthly: 0, daily: 0 },
+  { no: 8,  name: "รังสีวิทยา",                           code: "RAD", fte: 15, staff: 13, monthly: 0, daily: 1 },
+  { no: 9,  name: "วิสัญญีวิทยา",                         code: "ANS", fte: 15, staff: 7,  monthly: 0, daily: 0 },
   { no: 10, name: "เวชกรรมฟื้นฟู",                        code: "RHB", fte: 6,  staff: 4,  monthly: 0, daily: 0 },
-  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 4,  monthly: 0, daily: 15 },
+  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 5,  monthly: 0, daily: 15 },
   { no: 12, name: "เวชศาสตร์ฉุกเฉิน",                     code: "EMR", fte: 10, staff: 10, monthly: 0, daily: 0 },
-  { no: 13, name: "ศัลยกรรม",                            code: "SUR", fte: 39, staff: 34, monthly: 0, daily: 1 },
+  { no: 13, name: "ศัลยกรรม",                            code: "SUR", fte: 39, staff: 33, monthly: 0, daily: 1 },
   { no: 14, name: "ศัลยกรรมออร์โธปิดิกส์",                code: "ORT", fte: 17, staff: 15, monthly: 0, daily: 0 },
   { no: 15, name: "สูติ-นรีเวชกรรม",                      code: "OBG", fte: 18, staff: 13, monthly: 0, daily: 2 },
   { no: 16, name: "โสต ศอ นาสิก",                         code: "ENT", fte: 9,  staff: 8,  monthly: 0, daily: 0 },
   { no: 17, name: "อาชีวเวชกรรม",                         code: "OCM", fte: 5,  staff: 3,  monthly: 0, daily: 0 },
-  { no: 18, name: "อายุรกรรม",                            code: "MED", fte: 47, staff: 36, monthly: 1, daily: 4 },
+  { no: 18, name: "อายุรกรรม",                            code: "MED", fte: 47, staff: 33, monthly: 0, daily: 4 },
 ]
 
 type Counts = { fte: number; staff: number; monthly: number; daily: number }
