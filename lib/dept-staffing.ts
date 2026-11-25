@@ -24,7 +24,7 @@
  * sheet counted them in รวมอัตราตามจริง). Since 2026-11-16 (Pong) the owner
  * edits them on the dashboard's อัตรากำลัง tab, which saves them in the
  * Supabase table dept_staffing (scripts/dept-staffing-2026-11.sql; the
- * 25-11-69 numbers went in with scripts/dept-staffing-update-2026-11-25.sql);
+ * 25-11-69 numbers go in with scripts/dept-staffing-update-2026-11-25.sql);
  * every SK03 build reads that table. A department with no row there keeps
  * the number below.
  *

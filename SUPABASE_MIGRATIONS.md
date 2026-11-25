@@ -381,7 +381,11 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     1.51 to 1.64, MED 1.64 to 2.06. Needs step 26 (both PARTs) and step 22.
     One statement, then the check query (18 departments, 234 FTE, 182 on
     staff, 1 monthly, 37 daily, 220 at work, edited_8 = 8). A second run
-    changes nothing; no backslashes.
+    changes nothing; no backslashes. Run it before (or right when) the app
+    update of 2026-11-25 goes live: that update names the starting numbers
+    25-11-69, so with the old numbers still in the table the SK03 note and
+    the tab's date would label them 25-11-69. The SQL does not need the app
+    update.
 
 ## Superseded — do NOT run
 
