@@ -76,7 +76,7 @@ A physician at the department average receives mult = 1.00. Physicians with clos
 
 ```
 extra_pool  = staff_budget − 10,000 × N_staff
-lack_d      = max(0, 1 − (on_staff_d + monthly_d + daily_d) / FTE_d)   from the staffing sheet (อัตรากำลัง tab)
+lack_d      = max(0, 1 − (on_staff_d + monthly_d + daily_d) / FTE_d)   from the อัตรากำลัง tab (dept_staffing)
 dept_mult_d = 1 + 5 × lack_d
 dept_extra  = extra_pool × (count_d × dept_mult_d) / Σ (count × dept_mult)
 payment_i   = ⌊ min(15,000, 10,000 + dept_extra × mult_i / Σ mult_d) ⌋     anything above 15,000 goes to the rest of the department (Step 3.6)
@@ -250,6 +250,7 @@ In SK03 `staff_summary`: column U = `mult_i`, column V = `rate_d` (งบรา�
 - Counting daily hires (Pong, 2026-11-16) changes SOC (4 + 15 of 10: 4.00 → 1.00), OBG (2.39 → 1.83), MED (2.06 → 1.64) and SUR (1.64 → 1.51). In 2569_08 the SOC average goes from ฿11,052 to ฿10,297 (−฿755), OBG −฿84, MED −฿57, and the other departments +฿17 to +฿101. SUR still gains ฿17 although its multiplier went down, because the extra per unit went up (฿262.99 → ฿296.75).
 - The 1 + 5 × lack rule replaced the capacity tiers (bonus weight 1.5 สาขาขาดแคลน / 1.0 กึ่งขาดแคลน / 0.5 เต็มศักยภาพ, Pong, 2026-11-11), at Pong's request on 2026-11-13: a department's share follows how short it is, without groups.
 - Replaces the earlier ฿7,500 guarantee + ฿10,000 top-up (the former Step 3.6), at Pong's request: ฿10,000 is built in, with no top-up.
+- These results use the 13-11-69 numbers. The 25-11-69 numbers (2026-11-25) raise EYE, ANS, SUR and MED: see the notes under [Departments and Multipliers](#departments-and-multipliers).
 
 ---
 
@@ -257,46 +258,52 @@ In SK03 `staff_summary`: column U = `mult_i`, column V = `rate_d` (งบรา�
 
 Used in Step 3.2: each STAFF department's multiplier sets its share of the extra pool above ฿10,000. INTERN is paid from its own pool (Step 2) and has no department multiplier. `Abbrev` is each department's short code.
 
-The multiplier comes from the hospital's doctor staffing sheet:
+The multiplier comes from each department's physician staffing:
 
 ```
 lack_d      = max(0, 1 − (on_staff_d + monthly_d + daily_d) / FTE_d)
-                 on staff = รวมอัตราตามจริง less the monthly hires, monthly = ลูกจ้างชั่วคราว รายเดือน,
-                 daily = ลูกจ้างชั่วคราว รายวัน, FTE = จำนวนที่ควรมี
+                 on staff = ข้าราชการ at work, monthly = ลูกจ้างชั่วคราว รายเดือน,
+                 daily = ลูกจ้างชั่วคราว รายวัน (paid by the day or session), FTE = จำนวนที่ควรมี
 dept_mult_d = 1 + 5 × lack_d
 ```
 
-Doctors hired by the day (ลูกจ้างชั่วคราว รายวัน) count the same as doctors on staff (Pong, 2026-11-16; before that they were left out). Doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน) have their own column since 2026-11-17 (Pong: "add column จ้างรายเดือน"); the sheet's รวมอัตราตามจริง already counts them, so on staff is that less them (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed. The SK03 งบรายสาขา sheet works out lack (column D, `=MAX(0,1-(on staff+monthly+daily)/FTE)`, headed ขาดแคลน since 2026-11-17) and the multiplier (column E) from the four numbers, so it uses exact values; the table below rounds them.
+Doctors hired by the day (ลูกจ้างชั่วคราว รายวัน) count the same as doctors on staff (Pong, 2026-11-16; before that they were left out). Doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน) have their own column since 2026-11-17 (Pong: "add column จ้างรายเดือน"); the 13-11-69 sheet's รวมอัตราตามจริง already counted them, so on staff was that less them (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed. The SK03 งบรายสาขา sheet works out lack (column D, `=MAX(0,1-(on staff+monthly+daily)/FTE)`, headed ขาดแคลน since 2026-11-17) and the multiplier (column E) from the four numbers, so it uses exact values; the table below rounds them.
 
-The numbers are from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan ขนาด a : ขนาดเตียงจำนวน 691 เตียง; Pong, 2026-11-13). SK03 builds use them since PR #287 went live on 2026-11-14, including a rebuild of an older month (2569_08 too). The last column is the multiplier before daily hires were counted (builds of 2026-11-14 to 2026-11-16).
+FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan ขนาด a : ขนาดเตียงจำนวน 691 เตียง; Pong, 2026-11-13). On staff, monthly and daily hires are from the staffing report of 25 Nov 2026 (อัตรากำลัง 25-11-69, รายงานอัตรากำลังแพทย์จำแนกตามกลุ่มงาน พ.ย. 2569; Pong, 2026-11-25: "update this data to dashboard and SK03 formula"): the doctors at work in the hospital's doctor list of that day, by the type of hire it gives. Doctors on study leave, gone or not working are left out; maternity leave counts as at work. SK03 builds have used the 13-11-69 numbers since PR #287 went live on 2026-11-14 and the 25-11-69 numbers since they were saved in Supabase (scripts/dept-staffing-update-2026-11-25.sql, which also queued new builds of 2569_08 and 2569_09). The last column is the multiplier with the 13-11-69 numbers (builds of 2026-11-16 to 2026-11-25).
 
-**Editing the numbers (Pong, 2026-11-16).** The numbers are kept in the Supabase table `dept_staffing` (scripts/dept-staffing-2026-11.sql) and edited on the dashboard's **อัตรากำลัง** (Staffing) tab: every dashboard user sees each department's FTE, on staff, monthly hires, daily hires, lack (ขาดแคลน) and multiplier; only the owner can change on staff, monthly and daily hires. FTE is locked in the edit box (Pong, 2026-11-16): it stays as on the 13-11-69 sheet. Every save is in ประวัติการใช้งาน (`staffing.save`, numbers and multiplier before and after). Workflow 2.2 reads the table on every SK03 build, and the งบรายสาขา note (A3) says when the numbers were last edited. A save that changes a number also queues a new build of every ตรวจสอบ month (from 2569_08) still on the auditee's side, so none of them can be sent with pay worked out from the old numbers; a month already with the auditor or approved keeps the build it was sent with, and any other month uses the new numbers on its next build. The table below is the starting numbers (13-11-69), which [`lib/dept-staffing.ts`](../lib/dept-staffing.ts) also keeps as the fallback for a department with no saved row (or before the SQL is run).
+**Editing the numbers (Pong, 2026-11-16).** The numbers are kept in the Supabase table `dept_staffing` (scripts/dept-staffing-2026-11.sql) and edited on the dashboard's **อัตรากำลัง** (Staffing) tab: every dashboard user sees each department's FTE, on staff, monthly hires, daily hires, lack (ขาดแคลน) and multiplier; only the owner can change on staff, monthly and daily hires. FTE is locked in the edit box (Pong, 2026-11-16): it stays as on the 13-11-69 sheet. Every save is in ประวัติการใช้งาน (`staffing.save`, numbers and multiplier before and after). Workflow 2.2 reads the table on every SK03 build, and the งบรายสาขา note (A3) says when the numbers were last edited. A save that changes a number also queues a new build of every ตรวจสอบ month (from 2569_08) still on the auditee's side, so none of them can be sent with pay worked out from the old numbers; a month already with the auditor or approved keeps the build it was sent with, and any other month uses the new numbers on its next build. The table below is the starting numbers (25-11-69), which [`lib/dept-staffing.ts`](../lib/dept-staffing.ts) also keeps as the fallback for a department with no saved row (or before the SQL is run).
 
-| # | Department | Abbrev | FTE | On staff | Monthly | Daily | Lack | Multiplier | Before 2026-11-16 |
+| # | Department | Abbrev | FTE | On staff | Monthly | Daily | Lack | Multiplier | Before 2026-11-25 |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 1 | กุมารเวชกรรม | PED | 19 | 21 | 0 | 1 | 0% | 1.00 | 1.00 |
-| 2 | จักษุวิทยา | EYE | 9 | 7 | 1 | 0 | 11.1% | 1.56 | 1.56 |
+| 1 | กุมารเวชกรรม | PED | 19 | 19 | 0 | 1 | 0% | 1.00 | 1.00 |
+| 2 | จักษุวิทยา | EYE | 9 | 6 | 1 | 0 | 22.2% | 2.11 | 1.56 |
 | 3 | จิตเวชและยาเสพติด | PSY | 4 | 4 | 0 | 2 | 0% | 1.00 | 1.00 |
 | 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 0 | 0 | 0% | 1.00 | 1.00 |
 | 5 | นิติเวช | FOR | 3 | 2 | 0 | 0 | 33.3% | 2.67 | 2.67 |
-| 6 | ผู้ป่วยนอก | OPD | 5 | 14 | 0 | 27 | 0% | 1.00 | 1.00 |
+| 6 | ผู้ป่วยนอก | OPD | 5 | 3 | 0 | 11 | 0% | 1.00 | 1.00 |
 | 7 | พยาธิวิทยากายวิภาค | PAT | 2 | 3 | 0 | 0 | 0% | 1.00 | 1.00 |
-| 8 | รังสีวิทยา | RAD | 15 | 14 | 0 | 0 | 6.7% | 1.33 | 1.33 |
-| 9 | วิสัญญีวิทยา | ANS | 15 | 9 | 0 | 0 | 40.0% | 3.00 | 3.00 |
+| 8 | รังสีวิทยา | RAD | 15 | 13 | 0 | 1 | 6.7% | 1.33 | 1.33 |
+| 9 | วิสัญญีวิทยา | ANS | 15 | 7 | 0 | 0 | 53.3% | 3.67 | 3.00 |
 | 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 0 | 0 | 33.3% | 2.67 | 2.67 |
-| 11 | เวชกรรมสังคม | SOC | 10 | 4 | 0 | 15 | 0% | 1.00 | 4.00 |
+| 11 | เวชกรรมสังคม | SOC | 10 | 5 | 0 | 15 | 0% | 1.00 | 1.00 |
 | 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 0 | 0 | 0% | 1.00 | 1.00 |
-| 13 | ศัลยกรรม | SUR | 39 | 34 | 0 | 1 | 10.3% | 1.51 | 1.64 |
+| 13 | ศัลยกรรม | SUR | 39 | 33 | 0 | 1 | 12.8% | 1.64 | 1.51 |
 | 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 0 | 0 | 11.8% | 1.59 | 1.59 |
-| 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 0 | 2 | 16.7% | 1.83 | 2.39 |
+| 15 | สูติ-นรีเวชกรรม | OBG | 18 | 13 | 0 | 2 | 16.7% | 1.83 | 1.83 |
 | 16 | โสต ศอ นาสิก | ENT | 9 | 8 | 0 | 0 | 11.1% | 1.56 | 1.56 |
 | 17 | อาชีวเวชกรรม | OCM | 5 | 3 | 0 | 0 | 40.0% | 3.00 | 3.00 |
-| 18 | อายุรกรรม | MED | 47 | 36 | 1 | 4 | 12.8% | 1.64 | 2.06 |
+| 18 | อายุรกรรม | MED | 47 | 33 | 0 | 4 | 21.3% | 2.06 | 1.64 |
 | 19 | INTERN | INT | — | — | — | — | — | — (own pool, Step 2) | — |
 
-11 departments are short of doctors (multiplier 1.33 to 3.00) and 7 are not (1.00).
+11 departments are short of doctors (multiplier 1.33 to 3.67) and 7 are not (1.00).
 
-Notes on the 13-11-69 sheet:
+Notes on the 25-11-69 report:
+- Changed against the 13-11-69 sheet: PED, EYE, OPD, RAD, ANS, SOC, SUR and MED (234 FTE; at work 182 on staff + 1 monthly + 37 daily = 220, before 202 + 2 + 52 = 256). Four multipliers change: EYE 1.56 → 2.11, ANS 3.00 → 3.67, SUR 1.51 → 1.64 and MED 1.64 → 2.06; the other departments keep theirs (PED, OPD and SOC stay at or above their FTE, RAD has 14 at work on both).
+- Mostly because the report leaves out doctors who are not at work (on study leave or otherwise absent), whom the 13-11-69 sheet counted in รวมอัตราตามจริง. OPD lists 3 ข้าราชการ and 11 doctors paid by the session (the sheet: 14 and 27 daily); it has lack 0 either way.
+- Monthly hires: EYE 1. The sheet also had one in MED; the hospital's list of 25 Nov 2026 has none there (MED 33 + 0 + 4).
+- Pay (estimate from the builds of 2569_08 and 2569_09 with the old numbers; the same budgets, scores and doctors): the department averages go up by about ฿123 / ฿97 in EYE, ฿115 / ฿91 in ANS and ฿81 / ฿64 in MED, SUR stays (−฿5 / −฿4), and every other department goes down ฿29 to ฿86 (2569_08) and ฿23 to ฿69 (2569_09), most in OCM, FOR and RHB. Nobody falls to ฿10,000 or rises above ฿15,000 (2569_08: ฿10,164 to ฿11,204).
+
+Notes on the 13-11-69 sheet (the numbers until 2026-11-25):
 - The sheet also lists กลุ่มงานการแพทย์แผนไทยฯ (FTE 1, 0 on staff) and three dental groups; none of them is a P4P department.
 - Monthly hires: MED 1, EYE 1 (2 in all). The sheet counts them in รวมอัตราตามจริง (MED 36 ข้าราชการ + 1 = 37, EYE 7 + 1 = 8), so On staff above is that less them.
 - Daily hires: OPD 27, SOC 15, MED 4, OBG 2, PSY 2, PED 1, SUR 1 (52 in all). With them SOC has 19 doctors for an FTE of 10, so it is not short (multiplier 1.00; 4.00 without them).

@@ -2055,7 +2055,8 @@ app.delete("/dashboard/api/roster/:table/:index", async (req: Request, res: Resp
 // ── อัตรากำลัง tab: each department's staffing and multiplier ─────────────
 // Routes live in lib/staffing-server.ts; every dashboard user reads, the
 // owner edits. The table comes from scripts/dept-staffing-2026-11.sql
-// (pasted by hand); until then the tab shows the 13-11-69 numbers.
+// (pasted by hand); until then the tab shows the starting numbers of
+// lib/dept-staffing.ts (25-11-69).
 ;(require("./lib/staffing-server") as { mountStaffing(deps: Record<string, unknown>): void }).mountStaffing({
   app,
   express,
