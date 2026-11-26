@@ -404,7 +404,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     update. End with the check query (departments_18 = 18, absent_13 = 13,
     functions_1 = 1, anon_0 = 0). Safe to re-run; no backslashes.
 
-34. `scripts/dept-staffing-move-2026-11-26.sql` — not yet applied.
+34. `scripts/dept-staffing-move-2026-11-26.sql` — applied 2026-11-26.
     One doctor paid by the session whom the hospital's list of 25 Nov 2026
     puts under กุมารเวชกรรม works in เวชกรรมสังคม (Pong, 2026-11-26): PED
     daily 1 to 0, SOC daily 15 to 16, through `staffing_save` as the owner
