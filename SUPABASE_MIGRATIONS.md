@@ -404,6 +404,16 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     update. End with the check query (departments_18 = 18, absent_13 = 13,
     functions_1 = 1, anon_0 = 0). Safe to re-run; no backslashes.
 
+34. `scripts/dept-staffing-move-2026-11-26.sql` — not yet applied.
+    One doctor paid by the session whom the hospital's list of 25 Nov 2026
+    puts under กุมารเวชกรรม works in เวชกรรมสังคม (Pong, 2026-11-26): PED
+    daily 1 to 0, SOC daily 15 to 16, through `staffing_save` as the owner
+    (the same as two saves on the tab; queues the rebuild of every ตรวจสอบ
+    month still on the auditee's side, and writes two `staffing.save` rows).
+    Both multipliers stay 1.00, so no pay changes. Needs step 33. One
+    statement, then the check query (PED 19 19 0 0, SOC 10 5 0 16). A
+    second run changes nothing; no backslashes.
+
 ## Superseded — do NOT run
 
 - **`scripts/security-rls.sql`** — the original anon-open RLS model,

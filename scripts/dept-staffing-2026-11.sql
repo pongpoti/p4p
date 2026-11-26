@@ -70,7 +70,7 @@ grant select, insert, update on table public.dept_staffing to service_role;
 
 insert into public.dept_staffing (code, fte, staff, monthly, daily, absent)
 values
-  ('PED', 19, 19, 0,  1, 3),
+  ('PED', 19, 19, 0,  0, 3),
   ('EYE',  9,  6, 1,  0, 1),
   ('PSY',  4,  4, 0,  2, 0),
   ('CPT',  1,  1, 0,  0, 0),
@@ -80,7 +80,7 @@ values
   ('RAD', 15, 13, 0,  1, 1),
   ('ANS', 15,  7, 0,  0, 2),
   ('RHB',  6,  4, 0,  0, 0),
-  ('SOC', 10,  5, 0, 15, 0),
+  ('SOC', 10,  5, 0, 16, 0),
   ('EMR', 10, 10, 0,  0, 0),
   ('SUR', 39, 33, 0,  1, 1),
   ('ORT', 17, 15, 0,  0, 1),
