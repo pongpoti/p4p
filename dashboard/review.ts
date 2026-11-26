@@ -571,6 +571,7 @@
     })
     function pickMonth(m: string): void {
         if (!m || m === month) return
+        idsDone.clear()
         month = m
         resetMonth()
         drawTabs()
@@ -600,6 +601,8 @@
         if (!quiet) loadingFor = month
         syncBusy()
         prefetchLists()
+        // Looked at again with the month: someone may have filled some in.
+        if (role === "auditee") { idFailed.delete(month); void loadIds(month, true) }
         try {
             await loadState(true, false, quiet)
         } catch (e) {
@@ -932,6 +935,13 @@
         chipDrawn = false
         const main = role === "auditee" ? auditee(s) : auditor(s)
         if (s.rounds.length) sideOut.push(historyEntry(s))
+        // ผู้จัดทำ: missing รหัสประจำตัวประชาชน at the top of the left column
+        // (Pong, 2026-11-26), on every round.
+        if (role === "auditee") {
+            const ids = idAlert(s)
+            if (ids) sideOut.unshift(ids)
+            if (!idChecks.has(s.month) && !idFailed.has(s.month)) void loadIds(s.month)
+        }
         const docked = (n: Node): boolean => n instanceof HTMLElement && n.classList.contains("rv-dock")
         // The parts kept from the last redraw stay in place; the rest is new.
         patchChildren(side, sideOut.filter((n) => !docked(n)))
@@ -1702,6 +1712,375 @@
         edit: { old_score: number | null; new_score: number; note?: string; created_at?: string; created_by?: string } | null
         request: Request | null
     }
+
+    // ── รหัสประจำตัวประชาชน (Pong, 2026-11-26: "on auditee mode : app checks
+    // whether national ID all filled, if not display alert on left column
+    // and allow to click open floating form to insert ID who are msising") ─
+    // The ผู้จัดทำ side's left column says when anyone on the month's roster
+    // has no รหัสประจำตัวประชาชน (the allocation sheet's เลขที่บัตรประชาชน),
+    // and its button opens a box to fill them in: typed, or the month
+    // before's number for the same name (copied on the server, so the page
+    // never gets a whole number: it shows the last 4 digits). A new month's
+    // roster starts with none, so that is most of them then.
+    interface IdGap { index: string; name: string; department: string; bad: boolean; prev: string | null }
+    interface IdCheck { column: boolean; total: number; missing: IdGap[]; prevMonth: string | null }
+    const idChecks = new Map<string, IdCheck>()
+    const idAsk = new Map<string, { seq: number; p: Promise<IdCheck | null> }>()
+    const idFailed = new Set<string>()
+    let idSeqN = 0
+    // Filled in full in this visit: a green line until another month is picked.
+    const idsDone = new Set<string>()
+    // fresh: ask again even when an answer is on its way (after a save).
+    function loadIds(m: string, fresh = false): Promise<IdCheck | null> {
+        const was = idAsk.get(m)
+        if (was && !fresh) return was.p
+        const seq = ++idSeqN
+        const p = api<IdCheck>("/dashboard/api/review/" + m + "/national-ids").then((c) => {
+            const latest = (idAsk.get(m) || { seq }).seq === seq
+            if (latest) {
+                idChecks.set(m, c)
+                idFailed.delete(m)
+                if (m === month && role === "auditee" && st) renderSoon()
+            }
+            return c
+        }, (e: unknown) => {
+            if (!signedOut(e)) console.error("national ids failed:", e)
+            idFailed.add(m)
+            return null
+        }).finally(() => { if ((idAsk.get(m) || { seq: -1 }).seq === seq) idAsk.delete(m) })
+        idAsk.set(m, { seq, p })
+        return p
+    }
+
+    function idAlert(s: State): HTMLElement | null {
+        const m = s.month
+        const c = idChecks.get(m)
+        if (!c) return null
+        const box = el("section", "rv-ids")
+        const h = el("h2", "rv-ids-h")
+        h.id = "rv-ids-h"
+        box.setAttribute("aria-labelledby", h.id)
+        if (!c.column) {
+            h.append(iconEl("id-card"), el("span", undefined, "รายชื่อเดือนนี้ยังไม่มีช่องรหัสประจำตัวประชาชน"))
+            box.append(h, el("p", undefined, "แจ้งผู้ดูแลระบบ รายละเอียดการจัดสรรเงินรายบุคคลจะยังไม่มีเลขที่บัตรประชาชน"))
+            return box
+        }
+        const note = noteEl("ids")
+        if (!c.missing.length) {
+            if (!idsDone.has(m)) return null
+            box.classList.add("rv-ids-done")
+            h.append(iconEl("check-circle"), el("span", undefined, "รหัสประจำตัวประชาชนครบแล้ว"))
+            box.append(h, el("p", undefined, "ครบทั้ง " + int(c.total) + " ราย"))
+            return box
+        }
+        h.append(iconEl("id-card"), el("span", undefined, "รหัสประจำตัวประชาชนยังไม่ครบ"))
+        const p = el("p")
+        p.append("ยังไม่มี ", el("span", "rv-ids-n", int(c.missing.length)), " จาก " + int(c.total) + " ราย")
+        const bad = c.missing.filter((x) => x.bad).length
+        if (bad) p.append(" (เลขเดิมผิดรูปแบบ " + int(bad) + " ราย)")
+        p.append(" ใช้ในรายละเอียดการจัดสรรเงินรายบุคคล")
+        box.append(h, p)
+        const prev = c.missing.filter((x) => x.prev).length
+        if (prev && c.prevMonth) box.append(el("p", undefined, "มีเลขจากเดือน " + shortMonth(c.prevMonth) + " ของชื่อเดียวกัน " + int(prev) + " ราย"))
+        if (note) box.append(note)
+        const b = el("button", "btn-primary")
+        b.type = "button"
+        b.id = "rv-ids-open"
+        b.setAttribute("aria-haspopup", "dialog")
+        b.append(iconEl("pencil"), el("span", undefined, "กรอกรหัสประจำตัวประชาชน"))
+        b.addEventListener("click", () => { void openIds(s) })
+        box.append(b)
+        return box
+    }
+
+    // ── The box ──
+    const idDlg = document.getElementById("review-ids") as HTMLDialogElement
+    const idSub = document.getElementById("review-ids-sub") as HTMLElement
+    const idForm = document.getElementById("review-ids-form") as HTMLFormElement
+    const idTools = document.getElementById("review-ids-tools") as HTMLElement
+    const idList = document.getElementById("review-ids-list") as HTMLElement
+    const idErr = document.getElementById("review-ids-error") as HTMLElement
+    const idSave = document.getElementById("review-ids-save") as HTMLButtonElement
+    const idCloses = [document.getElementById("review-ids-x"), document.getElementById("review-ids-cancel")] as HTMLButtonElement[]
+    // What was typed, and who takes the month before's number, by
+    // month|index: kept when the box is closed, until a save takes it.
+    const idDrafts = new Map<string, string>()
+    const idCopy = new Set<string>()
+    const idTouched = new Set<string>()
+    let idState: State | null = null
+    let idBusy = false
+    let idQuery = ""
+    const idKey = (m: string, i: string): string => m + "|" + i
+    const idDigits = (v: string): string => v.replace(/[\s-]/g, "")
+    // The same rule as the server (lib/review-core.ts nationalId): 13
+    // digits whose last is the check digit. "" nothing typed; short: not 13
+    // digits yet.
+    function idCheck(v: string): "" | "short" | "bad" | "ok" {
+        const d = idDigits(v)
+        if (!d) return ""
+        if (!/^[0-9]+$/.test(d) || d.length > 13) return "bad"
+        if (d.length < 13) return "short"
+        let sum = 0
+        for (let i = 0; i < 12; i++) sum += Number(d[i]) * (13 - i)
+        return (11 - (sum % 11)) % 10 === Number(d[12]) ? "ok" : "bad"
+    }
+    const idPrevText = (c: IdCheck, g: IdGap): string =>
+        "ใช้เลขเดือน " + (c.prevMonth ? shortMonth(c.prevMonth) : "ก่อน") + " (ลงท้าย " + g.prev + ")"
+
+    async function openIds(s: State): Promise<void> {
+        if (idBusy) return
+        idState = s
+        idQuery = ""
+        idTouched.clear()
+        idErr.classList.add("hidden")
+        drawIds()
+        idDlg.showModal()
+        const first = idList.querySelector<HTMLElement>("input, .ids-chip button")
+        if (first) first.focus()
+        // Looked at again: someone may have filled some in meanwhile.
+        const before = (idChecks.get(s.month) || { missing: [] as IdGap[] }).missing.map((g) => g.index).join()
+        const c = await loadIds(s.month, true)
+        if (c && idState === s && idDlg.open && !idBusy && c.missing.map((g) => g.index).join() !== before) drawIds()
+    }
+
+    function drawIds(): void {
+        const s = idState
+        if (!s) return
+        const m = s.month
+        const c = idChecks.get(m)
+        const a = document.activeElement
+        const focusId = a instanceof HTMLElement && idDlg.contains(a) ? a.id : ""
+        idSub.textContent = monthName(m) + (c ? " · ยังไม่มี " + int(c.missing.length) + " จาก " + int(c.total) + " ราย" : "")
+        idTools.replaceChildren()
+        if (!c || !c.missing.length) {
+            idList.replaceChildren(el("li", "ids-empty", c ? "มีรหัสครบทุกคนแล้ว" : "กำลังโหลด…"))
+            syncIds()
+            return
+        }
+        const sug = c.missing.filter((g) => g.prev)
+        const free = sug.filter((g) => !idCopy.has(idKey(m, g.index)) && !idDigits(idDrafts.get(idKey(m, g.index)) || ""))
+        if (sug.length && c.prevMonth) {
+            const row = el("div", "ids-copy")
+            row.append(el("span", undefined, "มีเลขจากเดือน " + shortMonth(c.prevMonth) + " ของชื่อเดียวกัน " + int(sug.length) + " ราย"))
+            const b = el("button", "btn-ghost", free.length ? "ใช้เลขเดือนก่อนทั้ง " + int(free.length) + " ราย" : "ใช้เลขเดือนก่อนครบแล้ว")
+            b.type = "button"
+            b.id = "review-ids-copyall"
+            b.disabled = !free.length
+            b.addEventListener("click", () => {
+                for (const g of free) idCopy.add(idKey(m, g.index))
+                drawIds()
+                idSave.focus()
+            })
+            row.append(b)
+            idTools.append(row)
+        }
+        if (c.missing.length > 8) {
+            const q = el("label", "search")
+            q.append(iconEl("search"))
+            const qi = el("input")
+            qi.type = "search"
+            qi.id = "review-ids-q"
+            qi.placeholder = "ค้นหาชื่อหรือกลุ่มงาน"
+            qi.setAttribute("aria-label", "ค้นหาชื่อหรือกลุ่มงาน")
+            qi.autocomplete = "off"
+            qi.value = idQuery
+            qi.addEventListener("input", () => { idQuery = qi.value; filterIds() })
+            q.append(qi)
+            idTools.append(q)
+        }
+        idList.replaceChildren(...c.missing.map((g) => idRow(c, m, g)))
+        filterIds()
+        paintIds()
+        if (focusId) { const f = document.getElementById(focusId); if (f) f.focus() }
+    }
+
+    function idRow(c: IdCheck, m: string, g: IdGap): HTMLElement {
+        const k = idKey(m, g.index)
+        const li = el("li", "ids-row")
+        li.dataset.index = g.index
+        li.dataset.find = (g.name + " " + g.department).toLowerCase()
+        const who = el("div", "ids-who")
+        const lab = el("label", undefined, g.name)
+        lab.title = g.name
+        const dep = el("small", undefined, g.department || "–")
+        if (g.bad) dep.append(" · ", el("span", "ids-bad", "เลขเดิมผิดรูปแบบ"))
+        who.append(lab, dep)
+        const f = el("div", "ids-field")
+        if (idCopy.has(k) && g.prev) {
+            lab.id = "rv-idl-" + g.index
+            const chip = el("div", "ids-chip")
+            const t = el("span", undefined, idPrevText(c, g))
+            t.title = t.textContent || ""
+            chip.append(t)
+            const x = el("button")
+            x.type = "button"
+            x.id = "rv-idc-" + g.index
+            x.setAttribute("aria-label", "ไม่ใช้เลขเดือนก่อน พิมพ์เอง: " + g.name)
+            x.title = "พิมพ์เอง"
+            x.append(iconEl("x"))
+            x.addEventListener("click", () => {
+                idCopy.delete(k)
+                drawIds()
+                const i = document.getElementById("rv-id-" + g.index)
+                if (i) i.focus()
+            })
+            chip.append(x)
+            f.append(chip)
+        } else {
+            const i = el("input")
+            i.id = "rv-id-" + g.index
+            lab.htmlFor = i.id
+            i.type = "text"
+            i.inputMode = "numeric"
+            i.autocomplete = "off"
+            i.spellcheck = false
+            i.maxLength = 17
+            i.placeholder = "เลข 13 หลัก"
+            i.value = idDrafts.get(k) || ""
+            const msg = el("p", "ids-msg")
+            msg.id = "rv-idm-" + g.index
+            i.setAttribute("aria-describedby", msg.id)
+            i.addEventListener("input", () => {
+                if (i.value) idDrafts.set(k, i.value); else idDrafts.delete(k)
+                idErr.classList.add("hidden")
+                paintIds()
+            })
+            i.addEventListener("blur", () => { if (i.value) { idTouched.add(k); paintIds() } })
+            f.append(i, msg)
+            if (g.prev) {
+                const use = el("button", "ids-prev", idPrevText(c, g))
+                use.type = "button"
+                use.id = "rv-idp-" + g.index
+                use.addEventListener("click", () => {
+                    idCopy.add(k)
+                    idDrafts.delete(k)
+                    drawIds()
+                    const x = document.getElementById("rv-idc-" + g.index)
+                    if (x) x.focus()
+                })
+                f.append(use)
+            }
+        }
+        li.append(who, f)
+        return li
+    }
+
+    function filterIds(): void {
+        const q = idQuery.trim().toLowerCase()
+        for (const li of Array.from(idList.querySelectorAll<HTMLElement>(".ids-row"))) li.hidden = !!q && !(li.dataset.find || "").includes(q)
+    }
+
+    // Each field's state, the same number typed twice, and the save button.
+    function idEntries(): { ids: { index: string; id: string }[]; copy: string[]; wrong: HTMLInputElement[] } {
+        const out = { ids: [] as { index: string; id: string }[], copy: [] as string[], wrong: [] as HTMLInputElement[] }
+        const s = idState
+        const c = s ? idChecks.get(s.month) : undefined
+        if (!s || !c) return out
+        const seen = new Map<string, IdGap>()
+        for (const g of c.missing) {
+            const k = idKey(s.month, g.index)
+            if (idCopy.has(k) && g.prev) { out.copy.push(g.index); continue }
+            const i = document.getElementById("rv-id-" + g.index) as HTMLInputElement | null
+            const v = idDrafts.get(k) || ""
+            const st = idCheck(v)
+            const msg = document.getElementById("rv-idm-" + g.index)
+            const li = i ? i.closest(".ids-row") : null
+            let text = ""
+            if (st === "bad") text = "เลขไม่ถูกต้อง ตรวจอีกครั้ง"
+            else if (st === "short" && idTouched.has(k)) text = "ต้องมี 13 หลัก (มี " + idDigits(v).length + ")"
+            else if (st === "ok") {
+                const d = idDigits(v)
+                const twin = seen.get(d)
+                if (twin) text = "ซ้ำกับ " + twin.name
+                else { seen.set(d, g); out.ids.push({ index: g.index, id: d }) }
+            }
+            if (i) {
+                if (text || st === "bad" || (st === "short" && idTouched.has(k))) out.wrong.push(i)
+                setAttr(i, "aria-invalid", text ? "true" : null)
+                const ok = li ? li.querySelector(".ids-ok") : null
+                if (st === "ok" && !text) { if (!ok && i.parentElement) i.parentElement.insertBefore(iconEl("check", "ids-ok"), i.nextSibling) }
+                else if (ok) ok.remove()
+            }
+            if (msg) setText(msg, text)
+        }
+        return out
+    }
+    function paintIds(): void { syncIds() }
+    function syncIds(): void {
+        const e = idEntries()
+        const n = e.ids.length + e.copy.length
+        if (!idBusy) {
+            idSave.disabled = n === 0
+            setText(idSave, n ? "บันทึก " + int(n) + " ราย" : "บันทึก")
+        }
+    }
+
+    idDlg.addEventListener("cancel", (ev) => { if (idBusy) ev.preventDefault() })
+    idDlg.addEventListener("click", (ev) => { if (ev.target === idDlg && !idBusy) idDlg.close() })
+    for (const b of idCloses) b.addEventListener("click", () => { if (!idBusy) idDlg.close() })
+    idDlg.addEventListener("close", () => {
+        const b = document.getElementById("rv-ids-open") || document.getElementById("rv-ids-h")
+        if (b) { if (!b.hasAttribute("tabindex") && b.tagName !== "BUTTON") b.tabIndex = -1; b.focus({ preventScroll: true }) }
+    })
+
+    idForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault()
+        const s = idState
+        if (!s || idBusy) return
+        // Every field looked at now, so a short one says so.
+        for (const g of (idChecks.get(s.month) || { missing: [] as IdGap[] }).missing) {
+            const k = idKey(s.month, g.index)
+            if (idDrafts.get(k)) idTouched.add(k)
+        }
+        const e = idEntries()
+        if (e.wrong.length) {
+            setText(idErr, "แก้เลขที่ไม่ถูกต้องก่อน (" + int(e.wrong.length) + " ราย) หรือลบออก")
+            idErr.classList.remove("hidden")
+            idQuery = ""
+            filterIds()
+            e.wrong[0].focus()
+            return
+        }
+        if (!e.ids.length && !e.copy.length) return
+        const label = idSave.textContent || "บันทึก"
+        const busy = (on: boolean): void => {
+            idBusy = on
+            for (const b of idCloses) b.disabled = on
+            for (const x of Array.from(idForm.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, .ids-tools button, .ids-list button"))) {
+                if (x instanceof HTMLInputElement) x.readOnly = on; else x.disabled = on
+            }
+        }
+        busy(true)
+        idSave.disabled = true
+        idSave.setAttribute("aria-busy", "true")
+        idSave.replaceChildren(el("span", "spinner"), document.createTextNode("กำลังบันทึก…"))
+        idErr.classList.add("hidden")
+        try {
+            const out = await post<{ ok: boolean; saved: number }>(monthApi(s) + "/national-ids", { ids: e.ids, copy: e.copy }, "PUT")
+            for (const x of e.ids) { idDrafts.delete(idKey(s.month, x.index)); idTouched.delete(idKey(s.month, x.index)) }
+            for (const i of e.copy) idCopy.delete(idKey(s.month, i))
+            const c = await loadIds(s.month, true)
+            if (c && c.column && !c.missing.length) idsDone.add(s.month)
+            busy(false)
+            idSave.removeAttribute("aria-busy")
+            idSave.textContent = label
+            tell(s, "ids", "ok", "บันทึกรหัสประจำตัวประชาชนแล้ว " + int(out.saved) + " ราย" +
+                (c && c.missing.length ? " ยังเหลือ " + int(c.missing.length) + " ราย" : ""))
+            idDlg.close()
+            renderSoon()
+        } catch (err) {
+            busy(false)
+            idSave.removeAttribute("aria-busy")
+            idSave.textContent = label
+            if (signedOut(err)) return
+            setText(idErr, errText(err, "บันทึกไม่สำเร็จ ลองอีกครั้ง"))
+            idErr.classList.remove("hidden")
+            // Some may have gone in before a failure: the list again.
+            const c = await loadIds(s.month, true)
+            if (c && idDlg.open) drawIds()
+            syncIds()
+        }
+    })
 
     // ── Send ─────────────────────────────────────────────────────────────
     function submitReasons(s: State): string[] {

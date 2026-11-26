@@ -183,9 +183,11 @@
     // aria-sort on the header says which, for screen readers.
     type SortDir = "asc" | "desc" | null
     const SORT_TIP: Record<string, string> = { asc: "เรียงจากน้อยไปมาก คลิกอีกครั้งเพื่อเรียงจากมากไปน้อย", desc: "เรียงจากมากไปน้อย คลิกอีกครั้งเพื่อกลับเป็นลำดับเดิม", "": "คลิกเพื่อเรียงลำดับ" }
-    function sortHeaders(ths: HTMLTableCellElement[], onSort: (col: number, dir: SortDir) => void): void {
-        let col = -1
-        let dir: SortDir = null
+    // init: the sort shown before any click (the caller draws its rows that way).
+    function sortHeaders(ths: HTMLTableCellElement[], onSort: (col: number, dir: SortDir) => void,
+                         init?: { col: number; dir: SortDir }): void {
+        let col = init && init.dir ? init.col : -1
+        let dir: SortDir = init && init.dir ? init.dir : null
         const btns = ths.map((th, i) => {
             const b = el("button", "th-sort") as HTMLButtonElement
             b.type = "button"
@@ -1164,6 +1166,7 @@
         "review.issue_close": "ปิดปัญหา",
         "review.pdf_retry": "สร้างเอกสารเบิกจ่ายอีกครั้ง",
         "review.reopen": "ยกเลิกเอกสารและเปิดตรวจอีกครั้ง",
+        "review.ids": "กรอกรหัสประจำตัวประชาชน",
         "review.reset": "รีเซ็ตเดือนในแท็บตรวจสอบ",
         "view.staffing": "เปิดแท็บอัตรากำลัง",
         "staffing.save": "แก้ไขอัตรากำลัง",
@@ -1200,6 +1203,8 @@
     const FIELD_LABEL: Record<string, string> = {
         prefix: "คำนำหน้า", firstname: "ชื่อ", lastname: "นามสกุล", department: "กลุ่มงาน", position: "ตำแหน่ง",
         type: "ประเภทบุคลากร", rank: "ระดับ", score: "คะแนน", submitted_at: "ส่งไฟล์เมื่อ",
+        // Pong, 2026-11-26: the national_id column (2026-11-22) by its Thai name.
+        national_id: "รหัสประจำตัวประชาชน",
     }
     const auditValue = (k: string, v: unknown): string => {
         if (v === null || v === undefined || v === "") return "—"
@@ -1310,6 +1315,15 @@
             case "review.reopen":
                 add(monthLabel(t.month)); if (t.round) add("รอบที่ " + t.round); add("เหตุผล: " + (t.reason || ""))
                 break
+            case "review.ids": {
+                // Names and counts only: the numbers are never logged.
+                add(monthLabel(t.month))
+                if (t.typed) add("กรอก " + Number(t.typed).toLocaleString("th-TH") + " คน")
+                if (t.copied) add("ใช้เลขเดือนก่อน " + Number(t.copied).toLocaleString("th-TH") + " คน")
+                const ppl = Array.isArray(t.people) ? t.people.filter((x: unknown) => typeof x === "string") : []
+                if (ppl.length) add(ppl.join(", ") + (t.more ? " และอีก " + Number(t.more).toLocaleString("th-TH") + " คน" : ""))
+                break
+            }
             case "review.reset":
                 add(monthLabel(t.month)); if (t.rounds) add("ลบ " + Number(t.rounds).toLocaleString("th-TH") + " รอบ")
                 if (t.decisions) add("ผลตรวจ " + Number(t.decisions).toLocaleString("th-TH") + " รายการ")
@@ -1370,7 +1384,7 @@
                 add(permsSummary(t.perms))
                 break
             case "staffing.save": {
-                // "อายุรกรรม (MED) · จ้างรายวัน 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
+                // "อายุรกรรม (MED) · อัตราจ้าง 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
                 add(t.name ? t.name + (t.code ? " (" + t.code + ")" : "") : t.code)
                 // Saves from before 2026-11-17 have no monthly hires (their staff counts them): 0.
                 const withMonthly = (r: unknown): Record<string, unknown> => {
@@ -1379,8 +1393,15 @@
                 }
                 const was = withMonthly(t.before), now = withMonthly(t.after)
                 let changed = 0
-                for (const [k, label] of [["fte", "FTE"], ["staff", "มีจริง"], ["monthly", "จ้างรายเดือน"], ["daily", "จ้างรายวัน"]]) {
-                    if (was[k] !== now[k]) { add(label + " " + auditValue("", was[k]) + " → " + auditValue("", now[k])); changed++ }
+                // staff was มีจริง until 2026-11-26 (the same number); absent
+                // is in saves since then only. Monthly and daily hires show
+                // as one อัตราจ้าง, as on the tab since 2026-11-26.
+                const hire = (r: Record<string, unknown>): unknown =>
+                    Number.isInteger(r.monthly) && Number.isInteger(r.daily) ? (r.monthly as number) + (r.daily as number) : r.daily
+                const w2: Record<string, unknown> = { ...was, hire: hire(was) }, n2: Record<string, unknown> = { ...now, hire: hire(now) }
+                for (const [k, label] of [["fte", "FTE"], ["staff", "ข้าราชการ"], ["hire", "อัตราจ้าง"], ["absent", "ไม่ได้ปฏิบัติงาน"]]) {
+                    if (k === "absent" && (w2[k] === undefined || n2[k] === undefined)) continue
+                    if (w2[k] !== n2[k]) { add(label + " " + auditValue("", w2[k]) + " → " + auditValue("", n2[k])); changed++ }
                 }
                 if (!changed) add("ตัวเลขเท่าเดิม")
                 const counts = (r: Record<string, unknown>): StaffingCounts | null =>
@@ -2047,8 +2068,11 @@
 
     // ── อัตรากำลัง: each department's staffing and multiplier ────────────
     // Every dashboard user sees the list (lib/staffing-server.ts); the owner
-    // gets an edit button on each row for on staff, monthly and daily hires;
-    // FTE is locked (Pong, 2026-11-16). A save that changes
+    // gets an edit button on each row for ข้าราชการ, อัตราจ้าง and
+    // ไม่ได้ปฏิบัติงาน; FTE is locked (Pong, 2026-11-16). Since 2026-11-26
+    // (Pong) the table shows ปฏิบัติงานจริง as ข้าราชการ (staff) and อัตราจ้าง
+    // (monthly + daily), then ไม่ได้ปฏิบัติงาน (absent, not in the
+    // multiplier), highest ตัวคูณสาขา first. A save that changes
     // a number queues a new SK03 build of each ตรวจสอบ month still with the
     // ผู้จัดทำ; any other month reads the new numbers on its next build.
     interface StaffingDept {
@@ -2059,6 +2083,8 @@
         staff: number
         monthly: number
         daily: number
+        // ไม่ได้ปฏิบัติงาน (2026-11-26): shown only, not in the multiplier.
+        absent: number
         lack: number
         multiplier: number
         updated_at: string | null
@@ -2068,12 +2094,16 @@
         installed: boolean
         // The table is from before the monthly column: shown, not saved, until the SQL is run again.
         needsUpdate?: boolean
+        // The table has no absent column yet (step 33): shown from the report, not saved.
+        needsAbsent?: boolean
         canEdit: boolean
         k: number
         source: string
         depts: StaffingDept[]
     }
+    // The multiplier's numbers; with ไม่ได้ปฏิบัติงาน, what the edit box saves.
     type StaffingCounts = { fte: number; staff: number; monthly: number; daily: number }
+    type StaffingValues = StaffingCounts & { absent: number }
     const staffingRows  = document.getElementById("staffing-rows") as HTMLElement
     const staffingFoot  = document.getElementById("staffing-foot") as HTMLElement
     const staffingTable = staffingRows.closest("table") as HTMLTableElement
@@ -2087,18 +2117,18 @@
     const sfForm  = document.getElementById("staffing-form") as HTMLFormElement
     const sfFte   = document.getElementById("staffing-fte") as HTMLInputElement
     const sfStaff = document.getElementById("staffing-staff") as HTMLInputElement
-    const sfMonthly = document.getElementById("staffing-monthly") as HTMLInputElement
-    const sfDaily = document.getElementById("staffing-daily") as HTMLInputElement
+    const sfHire  = document.getElementById("staffing-hire") as HTMLInputElement
+    const sfAbsent = document.getElementById("staffing-absent") as HTMLInputElement
     const sfLack  = document.getElementById("staffing-lack") as HTMLElement
     const sfMult  = document.getElementById("staffing-mult") as HTMLElement
     const sfMeta  = document.getElementById("staffing-meta") as HTMLElement
     const sfError = document.getElementById("staffing-error") as HTMLElement
     const sfSave  = document.getElementById("staffing-save") as HTMLButtonElement
     const sfCloses = Array.from(sfDlg.querySelectorAll<HTMLButtonElement>("[data-close]"))
-    // FTE is shown but locked (Pong, 2026-11-16): only on staff, monthly and
-    // daily hires are edited; the save sends the department's FTE unchanged.
+    // FTE is shown but locked (Pong, 2026-11-16): only ข้าราชการ, อัตราจ้าง and
+    // ไม่ได้ปฏิบัติงาน are edited; the save sends the department's FTE unchanged.
     sfFte.disabled = true
-    const sfInputs = [sfStaff, sfMonthly, sfDaily]
+    const sfInputs = [sfStaff, sfHire, sfAbsent]
     for (const i of sfInputs) numberField(i, false, 3, 0)
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy) sfDlg.close() })
@@ -2110,13 +2140,15 @@
     let sfBusy = false
     // The edit column is dropped once for anyone who cannot edit.
     let staffingEditCol = true
-    // Any column but the pencil sorts (Pong, 2026-11-19); ties, and no
-    // sort, in the sheet's own order (ที่).
-    let staffingSort: { col: number; dir: SortDir } = { col: -1, dir: null }
-    const STAFFING_KEYS: ((d: StaffingDept) => number | string)[] = [
-        (d) => d.no, (d) => d.name, (d) => d.code, (d) => d.fte, (d) => d.staff, (d) => d.monthly, (d) => d.daily,
-        (d) => d.staff + d.monthly + d.daily, (d) => d.lack, (d) => d.multiplier,
+    // Any column but the pencil and the ปฏิบัติงานจริง group sorts (Pong,
+    // 2026-11-19); ties, and no sort, in the sheet's own order (ที่). Opens
+    // on ตัวคูณสาขา, highest first (Pong, 2026-11-26).
+    const STAFFING_SORTS: [string, (d: StaffingDept) => number | string][] = [
+        ["no", (d) => d.no], ["name", (d) => d.name], ["fte", (d) => d.fte], ["staff", (d) => d.staff],
+        ["hire", (d) => d.monthly + d.daily], ["absent", (d) => d.absent], ["lack", (d) => d.lack], ["mult", (d) => d.multiplier],
     ]
+    const STAFFING_KEYS = STAFFING_SORTS.map(([, f]) => f)
+    let staffingSort: { col: number; dir: SortDir } = { col: STAFFING_SORTS.findIndex(([k]) => k === "mult"), dir: "desc" }
     const staffingOrder = (ds: StaffingDept[]): StaffingDept[] => {
         const key = STAFFING_KEYS[staffingSort.col]
         const sign = staffingSort.dir === "desc" ? -1 : 1
@@ -2129,10 +2161,17 @@
             return a.no - b.no
         })
     }
-    sortHeaders(Array.from(staffingTable.tHead!.rows[0].cells).slice(0, STAFFING_KEYS.length), (col, dir) => {
+    sortHeaders(STAFFING_SORTS.map(([k]) => staffingTable.tHead!.querySelector('th[data-sort="' + k + '"]') as HTMLTableCellElement), (col, dir) => {
         staffingSort = { col, dir }
         renderStaffing()
-    })
+    }, staffingSort)
+    // The second header row sticks right under the first, whatever its height.
+    const sfGroupTh = staffingTable.tHead!.querySelector("th.sf-group") as HTMLElement
+    const sfHead1 = (): void => {
+        const h = sfGroupTh.getBoundingClientRect().height
+        if (h > 0) staffingTable.style.setProperty("--sf-head1", h + "px")
+    }
+    if (typeof ResizeObserver === "function") new ResizeObserver(sfHead1).observe(sfGroupTh)
 
     // The same rule as lib/dept-staffing.ts, shown from the counts in whole
     // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
@@ -2177,7 +2216,8 @@
     }
     const sfEmpty = (text: string, cls?: string): HTMLElement => {
         const tr = emptyRow(text, cls)
-        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", String(staffingTable.tHead!.rows[0].cells.length))
+        // Every column: the header has two rows, so count the cols.
+        ;(tr.firstElementChild as HTMLElement).setAttribute("colspan", String(staffingTable.querySelectorAll("colgroup col").length))
         return tr
     }
 
@@ -2188,14 +2228,14 @@
         tr.dataset.code = d.code
         tr.appendChild(el("td", "num muted", String(d.no)))
         const name = el("td", "name", d.name)
-        name.title = d.name
         tr.appendChild(name)
-        tr.appendChild(el("td", "code", d.code))
+        name.title = d.name + " (" + d.code + ")"
         tr.appendChild(el("td", "num", fmtNum(d.fte)))
         tr.appendChild(el("td", "num", fmtNum(d.staff)))
-        tr.appendChild(el("td", "num" + (d.monthly ? "" : " muted"), fmtNum(d.monthly)))
-        tr.appendChild(el("td", "num" + (d.daily ? "" : " muted"), fmtNum(d.daily)))
-        tr.appendChild(el("td", "num total", fmtNum(sfHave(d))))
+        // อัตราจ้าง: monthly and daily hires together.
+        const hire = d.monthly + d.daily
+        tr.appendChild(el("td", "num" + (hire ? "" : " muted"), fmtNum(hire)))
+        tr.appendChild(el("td", "num" + (d.absent ? "" : " muted"), fmtNum(d.absent)))
         tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)))
         const mult = el("td", "mult")
         mult.appendChild(el("span", "mv", fmtMult(d, sfK())))
@@ -2229,7 +2269,7 @@
     function renderStaffing(): void {
         const data = staffing
         if (!data) return
-        const edit = !data.canEdit ? "none" : data.installed && !data.needsUpdate ? "edit" : "locked"
+        const edit = !data.canEdit ? "none" : data.installed && !data.needsUpdate && !data.needsAbsent ? "edit" : "locked"
         if (staffingEditCol && !data.canEdit) {
             // Read-only: no edit column at all.
             staffingTable.querySelector("col.c-edit")?.remove()
@@ -2259,6 +2299,10 @@
             staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องจ้างรายเดือน (มีจริงยังรวมจ้างรายเดือนอยู่ ตัวคูณสาขาไม่เปลี่ยน)" +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
             staffingAlert.className = "sf-alert"
+        } else if (data.needsAbsent && data.canEdit) {
+            staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องไม่ได้ปฏิบัติงาน จึงแสดงตัวเลขจากรายงาน " + sfSource() +
+                " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-absent-2026-11.sql ใน Supabase SQL editor"
+            staffingAlert.className = "sf-alert"
         } else {
             staffingAlert.className = "sf-alert hidden"
         }
@@ -2283,14 +2327,11 @@
         staffingRows.replaceChildren(...staffingOrder(ds).map((d) => staffingRow(d, edit)))
         const foot = el("tr")
         foot.appendChild(el("td"))
-        const label = el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน")
-        label.setAttribute("colspan", "2")
-        foot.appendChild(label)
+        foot.appendChild(el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน"))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.fte))))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.staff))))
-        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly))))
-        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.daily))))
-        foot.appendChild(el("td", "num total", fmtNum(sum(sfHave))))
+        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly + d.daily))))
+        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.absent))))
         // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
         const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน")
         shortCell.setAttribute("colspan", "2")
@@ -2330,13 +2371,26 @@
         const d = v.trim()
         return /^\d{1,3}$/.test(d) && Number(d) >= min ? Number(d) : null
     }
-    const sfValues = (): StaffingCounts | null => {
-        const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0)
-        const monthly = sfCount(sfMonthly.value, 0), daily = sfCount(sfDaily.value, 0)
-        return fte === null || staff === null || monthly === null || daily === null ? null : { fte, staff, monthly, daily }
+    // อัตราจ้าง is one box since 2026-11-26 (Pong: "no more input รายเดือน
+    // รายวัน, merge into อัตราจ้าง"). The table still keeps monthly and daily
+    // hires (both count the same); a save keeps the department's monthly
+    // hires up to the new total and puts the rest in daily, so an unchanged
+    // อัตราจ้าง saves the same numbers and rebuilds nothing.
+    const sfSplit = (d: StaffingCounts, hire: number): { monthly: number; daily: number } => {
+        const monthly = Math.min(d.monthly, hire)
+        return { monthly, daily: hire - monthly }
     }
-    const sfSame = (a: StaffingCounts, b: StaffingCounts): boolean =>
+    const sfValues = (): StaffingValues | null => {
+        const d = sfEditing
+        const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0)
+        const hire = sfCount(sfHire.value, 0), absent = sfCount(sfAbsent.value, 0)
+        return !d || fte === null || staff === null || hire === null || absent === null
+            ? null : { fte, staff, ...sfSplit(d, hire), absent }
+    }
+    // The multiplier's numbers only (ไม่ได้ปฏิบัติงาน is not one).
+    const sfSameCounts = (a: StaffingCounts, b: StaffingCounts): boolean =>
         a.fte === b.fte && a.staff === b.staff && a.monthly === b.monthly && a.daily === b.daily
+    const sfSame = (a: StaffingValues, b: StaffingValues): boolean => sfSameCounts(a, b) && a.absent === b.absent
 
     // The lack and multiplier as typed, beside the saved multiplier when it changes.
     const paintStaffing = (): void => {
@@ -2367,8 +2421,8 @@
         sfSub.textContent = d.name + " (" + d.code + ")"
         sfFte.value = String(d.fte)
         sfStaff.value = String(d.staff)
-        sfMonthly.value = String(d.monthly)
-        sfDaily.value = String(d.daily)
+        sfHire.value = String(d.monthly + d.daily)
+        sfAbsent.value = String(d.absent)
         sfError.classList.add("hidden")
         sfMeta.textContent = d.updated_at
             ? ["แก้ไขล่าสุด " + fmtWhen(d.updated_at), staffName(d.updated_by)].filter(Boolean).join(" · ")
@@ -2436,8 +2490,11 @@
         if (inBox) sfDlg.close()
         const rebuild = sfMonths(out.rebuild)
         staffingOk.replaceChildren(iconEl("check"), " ")
-        withArrows(staffingOk, "บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
-            (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้"))
+        // Only ไม่ได้ปฏิบัติงาน changed: the multiplier and SK03 stay as they were.
+        withArrows(staffingOk, sfSameCounts(d, saved)
+            ? "บันทึก" + saved.name + "แล้ว ไม่ได้ปฏิบัติงาน " + fmtNum(d.absent) + " → " + fmtNum(saved.absent) + " · ตัวคูณสาขาเท่าเดิม " + fmtMult(saved, sfK())
+            : "บันทึก" + saved.name + "แล้ว ตัวคูณสาขา " + fmtMult(d, sfK()) + " → " + fmtMult(saved, sfK()) +
+              (rebuild ? " · กำลังสร้าง SK03 ใหม่: " + rebuild + " (ดูที่แท็บตรวจสอบ)" : " · SK03 ที่สร้างครั้งถัดไปจะใช้ตัวเลขนี้"))
         staffingOk.classList.remove("hidden")
         const tr = staffingRows.querySelector('tr[data-code="' + saved.code + '"]') as HTMLElement | null
         if (tr) {

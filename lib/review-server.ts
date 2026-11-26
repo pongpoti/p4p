@@ -23,6 +23,9 @@
  *   POST /dashboard/api/review/:month/rounds/withdraw take it back before the auditor opens it
  *   POST /dashboard/api/review/:month/email           email the live round to the auditor (again)
  *   PUT  /dashboard/api/review/email-mode             {test: true|false}: the email's test mode switch
+ *   GET  /dashboard/api/review/:month/national-ids    who on the month's roster has no
+ *                                                     national ID yet (names only, never a number)
+ *   PUT  /dashboard/api/review/:month/national-ids    {ids: [{index, id}], copy: [index]}: fill them in
  *
  * Sending a round queues an email to the auditor (scripts/review-email-2026-11.sql,
  * sent by the always-on relay, automation/review-email.ts); the month's
@@ -81,6 +84,8 @@ const core = require("./review-core") as {
   parseBudget(v: unknown, max: number): number | null
   parseCount(v: unknown, max: number): number | null
   parseScore(v: unknown): number | null
+  nationalId(v: unknown): string | null
+  prevMonth(key: unknown): string | null
 }
 
 type Actor = { sub: string; name: string }
@@ -403,6 +408,169 @@ export function mountReview(d: ReviewDeps): void {
     try {
       res.json(await d.callServiceRpc("review_auditee_people", { p_month: g.month }))
     } catch (e: any) { fail(res, "list", e) }
+  })
+
+  // ── รหัสประจำตัวประชาชน (Pong, 2026-11-26: "on auditee mode: app checks
+  // whether national ID all filled, if not display alert on left column and
+  // allow to click open floating form to insert ID who are missing") ──
+  // The allocation sheet's เลขที่บัตรประชาชน is the month's roster
+  // national_id (2026-11-22). A new month's roster (provision_month) starts
+  // with the column empty, so the ผู้จัดทำ fills in whoever has none: typed,
+  // or copied from the month before for the same name (copied here, so the
+  // browser never gets a whole number; it sees the last 4 digits as a hint).
+  // Only a person with no valid number yet can be filled here; changing one
+  // stays with the owner on the รายชื่อ tab. A number must be 13 digits with
+  // a good check digit and not anyone else's that month. Any time, on any
+  // round: the allocation sheet reads the roster when it is downloaded, so
+  // nothing is rebuilt. History gets review.ids with names and counts, no
+  // digits.
+  type IdRow = { index: string; prefix?: string; firstname?: string; lastname?: string; department?: string; national_id?: unknown }
+  const fullName = (r: IdRow): string =>
+    (((r.prefix || "") + (r.firstname || "")).trim() + " " + (r.lastname || "")).trim().replace(/\s+/g, " ")
+  // The same person in another month: first and last name, spaces and prefix aside.
+  const nameKey = (r: IdRow): string => (String(r.firstname || "") + "|" + String(r.lastname || "")).replace(/\s+/g, "")
+  const validId = (v: unknown): string | null => (typeof v === "string" ? core.nationalId(v) : null)
+  const ID_COLS = "index,prefix,firstname,lastname,department,national_id"
+  // null: the month's roster has no national_id column.
+  const rosterIds = async (month: string): Promise<IdRow[] | null> => {
+    try {
+      const r = await axios.get(rest(encodeURIComponent(month) + "?select=" + ID_COLS), { headers: d.serviceHeaders(), timeout: 8000 })
+      return Array.isArray(r.data) ? r.data : []
+    } catch (e: any) {
+      if (pgError(e).code === "42703") return null
+      throw e
+    }
+  }
+  // The month before's number for each name there once, with a valid one.
+  const prevIds = async (month: string): Promise<{ month: string; byName: Map<string, string> } | null> => {
+    const prev = core.prevMonth(month)
+    if (!prev || !(await rosterTables()).includes(prev)) return null
+    let rows: IdRow[] | null
+    try { rows = await rosterIds(prev) } catch (e: any) {
+      console.error("[dashboard] review ids: month before failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      return null
+    }
+    if (!rows) return null
+    const seen = new Map<string, number>(), byName = new Map<string, string>()
+    for (const r of rows) seen.set(nameKey(r), (seen.get(nameKey(r)) || 0) + 1)
+    for (const r of rows) {
+      const id = validId(r.national_id)
+      if (id && seen.get(nameKey(r)) === 1) byName.set(nameKey(r), id)
+    }
+    return { month: prev, byName }
+  }
+  // Who has no valid number, and the month before's number for each when
+  // it is free to use (no one this month has it).
+  const missingIds = (rows: IdRow[], prev: { byName: Map<string, string> } | null) => {
+    const used = new Set(rows.map((r) => validId(r.national_id)).filter((x): x is string => !!x))
+    return rows.filter((r) => !validId(r.national_id)).map((r) => {
+      const p = prev ? prev.byName.get(nameKey(r)) : undefined
+      return { row: r, prev: p && !used.has(p) ? p : null }
+    })
+  }
+
+  app.get("/dashboard/api/review/:month/national-ids", async (req: Request, res: Response) => {
+    const g = await gate(req, res, "auditee")
+    if (!g) return
+    try {
+      const rows = await rosterIds(g.month)
+      if (!rows) return res.json({ column: false, total: 0, missing: [], prevMonth: null })
+      const gaps = missingIds(rows, rows.some((r) => !validId(r.national_id)) ? await prevIds(g.month) : null)
+      const prev = gaps.some((x) => x.prev) ? core.prevMonth(g.month) : null
+      const missing = gaps.map(({ row, prev: p }) => ({
+        index: row.index, name: fullName(row), department: String(row.department || ""),
+        // Something there that is not a valid number (typed wrong).
+        bad: row.national_id != null && String(row.national_id).trim() !== "",
+        prev: p ? p.slice(-4) : null,
+      })).sort((a, b) => a.department.localeCompare(b.department, "th") || a.name.localeCompare(b.name, "th"))
+      res.json({ column: true, total: rows.length, missing, prevMonth: prev })
+    } catch (e: any) { fail(res, "ids", e) }
+  })
+
+  app.put("/dashboard/api/review/:month/national-ids", d.express.json({ limit: "128kb" }), async (req: Request, res: Response) => {
+    const g = await gate(req, res, "auditee")
+    if (!g) return
+    const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>
+    const typed = Array.isArray(body.ids) ? body.ids : []
+    const copy = Array.isArray(body.copy) ? body.copy : []
+    if (!typed.length && !copy.length) return res.status(400).json({ error: "ยังไม่ได้กรอกเลข" })
+    if (typed.length + copy.length > 1000) return res.status(400).json({ error: "ส่งมาเกิน 1,000 คน" })
+    try {
+      const rows = await rosterIds(g.month)
+      if (!rows) return res.status(409).json({ error: "รายชื่อเดือนนี้ยังไม่มีช่องรหัสประจำตัวประชาชน แจ้งผู้ดูแลระบบ" })
+      const byIndex = new Map(rows.map((r) => [String(r.index), r]))
+      // Every number taken this month, and by whom.
+      const owner = new Map<string, string>()
+      for (const r of rows) { const id = validId(r.national_id); if (id) owner.set(id, String(r.index)) }
+      const writes = new Map<string, { row: IdRow; id: string; copied: boolean }>()
+      // Already has a valid number (filled meanwhile): left as it is.
+      const skipped = new Set<string>()
+      const take = (row: IdRow, id: string, copied: boolean): string | null => {
+        const index = String(row.index)
+        if (validId(row.national_id)) { skipped.add(index); return null }
+        const other = owner.get(id)
+        if (other && other !== index) {
+          const who = byIndex.get(other)
+          return "เลขของ " + fullName(row) + " ซ้ำกับ " + (who ? fullName(who) : "คนอื่นในรายชื่อเดือนนี้")
+        }
+        owner.set(id, index)
+        writes.set(index, { row, id, copied })
+        return null
+      }
+      for (const t of typed) {
+        const index = String(t && (t as any).index || "")
+        const row = UUID_RE.test(index) ? byIndex.get(index) : undefined
+        if (!row) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้", index })
+        const id = core.nationalId((t as any).id)
+        if (!id) return res.status(400).json({ error: fullName(row) + ": ต้องเป็นเลข 13 หลักที่ถูกต้อง", index })
+        const clash = take(row, id, false)
+        if (clash) return res.status(409).json({ error: clash, index })
+      }
+      if (copy.length) {
+        const prev = await prevIds(g.month)
+        for (const c of copy) {
+          const index = String(c || "")
+          const row = UUID_RE.test(index) ? byIndex.get(index) : undefined
+          if (!row) return res.status(404).json({ error: "ไม่พบชื่อนี้ในรายชื่อเดือนนี้", index })
+          if (writes.has(index) || skipped.has(index)) continue   // typed: the typed one
+          if (validId(row.national_id)) { skipped.add(index); continue }
+          const id = prev ? prev.byName.get(nameKey(row)) : undefined
+          if (!id) return res.status(409).json({ error: fullName(row) + ": ไม่พบเลขของเดือนก่อน กรอกเอง", index })
+          const clash = take(row, id, true)
+          if (clash) return res.status(409).json({ error: clash, index })
+        }
+      }
+      const list = Array.from(writes.entries())
+      // A few at a time: up to 230 people on a new month.
+      let next = 0
+      const saved: string[] = []
+      const worker = async (): Promise<void> => {
+        while (next < list.length) {
+          const [index, w] = list[next++]
+          await axios.patch(rest(encodeURIComponent(g.month) + "?index=eq." + index), { national_id: w.id },
+            { headers: json({ Prefer: "return=minimal" }), timeout: 8000 })
+          saved.push(index)
+        }
+      }
+      let failed: any = null
+      await Promise.all(Array.from({ length: Math.min(6, list.length) }, () => worker().catch((e) => { failed = failed || e })))
+      if (saved.length) {
+        const done = list.filter(([i]) => saved.includes(i))
+        await d.audit(req, g.s, "review.ids", {
+          month: g.month,
+          typed: done.filter(([, w]) => !w.copied).length,
+          copied: done.filter(([, w]) => w.copied).length,
+          people: done.slice(0, 40).map(([, w]) => fullName(w.row)),
+          ...(done.length > 40 ? { more: done.length - 40 } : {}),
+        })
+      }
+      if (failed) {
+        console.error("[dashboard] review ids save failed after " + saved.length + ":",
+          failed.response ? JSON.stringify(failed.response.data) : failed.message)
+        return res.status(500).json({ error: "บันทึกได้ " + saved.length + " จาก " + list.length + " คน ลองอีกครั้ง", saved: saved.length })
+      }
+      res.json({ ok: true, saved: saved.length, skipped: skipped.size })
+    } catch (e: any) { fail(res, "ids save", e) }
   })
 
   app.post("/dashboard/api/review/:month/rebuild", async (req: Request, res: Response) => {

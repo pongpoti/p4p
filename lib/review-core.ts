@@ -388,6 +388,30 @@ function scoreFlag(score: number | null | undefined): "high" | "low" | null {
   return score >= SCORE_HIGH ? "high" : score < SCORE_LOW ? "low" : null
 }
 
+/**
+ * A Thai national ID (เลขประจำตัวประชาชน) as typed: 13 digits, spaces and
+ * dashes allowed ("1-2345-67890-12-1"), whose last digit is the check digit
+ * (11 − Σ digit × weight 13…2 mod 11, mod 10). Every one on the rosters of
+ * Aug to Nov 2569 passes (640 checked 2026-11-26). The 13 digits, or null.
+ */
+function nationalId(v: unknown): string | null {
+  if (typeof v !== "string" && typeof v !== "number") return null
+  const s = String(v).replace(/[\s-]/g, "")
+  if (!/^[0-9]{13}$/.test(s)) return null
+  let sum = 0
+  for (let i = 0; i < 12; i++) sum += Number(s[i]) * (13 - i)
+  return (11 - (sum % 11)) % 10 === Number(s[12]) ? s : null
+}
+
+/** The month before: "2569_01" → "2568_12", "2569_12" → "2569_11"; null for a bad key. */
+function prevMonth(key: unknown): string | null {
+  const p = parseMonth(key)
+  if (!p) return null
+  const be = p.month === 1 ? p.be - 1 : p.be
+  const m = p.month === 1 ? 12 : p.month - 1
+  return be + "_" + String(m).padStart(2, "0")
+}
+
 ;(module as NodeModule).exports = {
   GRAND_TOTAL_LABELS,
   SUBTOTAL_LABELS,
@@ -409,4 +433,6 @@ function scoreFlag(score: number | null | undefined): "high" | "low" | null {
   SCORE_HIGH,
   SCORE_LOW,
   scoreFlag,
+  nationalId,
+  prevMonth,
 }
