@@ -83,7 +83,7 @@ export const STAFFING_LIMITS: Record<"fte" | "staff" | "monthly" | "daily" | "ab
  * ราย"; it leaves ผู้ป่วยนอก's out, so OPD is 0).
  */
 export const DEPT_STAFFING_DEFAULTS: DeptStaffing[] = [
-  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 19, monthly: 0, daily: 1, absent: 3 },
+  { no: 1,  name: "กุมารเวชกรรม",                        code: "PED", fte: 19, staff: 19, monthly: 0, daily: 0, absent: 3 },
   { no: 2,  name: "จักษุวิทยา",                          code: "EYE", fte: 9,  staff: 6,  monthly: 1, daily: 0, absent: 1 },
   { no: 3,  name: "จิตเวชและยาเสพติด",                   code: "PSY", fte: 4,  staff: 4,  monthly: 0, daily: 2, absent: 0 },
   { no: 4,  name: "เทคนิคการแพทย์และพยาธิวิทยาคลินิก",   code: "CPT", fte: 1,  staff: 1,  monthly: 0, daily: 0, absent: 0 },
@@ -93,7 +93,7 @@ export const DEPT_STAFFING_DEFAULTS: DeptStaffing[] = [
   { no: 8,  name: "รังสีวิทยา",                           code: "RAD", fte: 15, staff: 13, monthly: 0, daily: 1, absent: 1 },
   { no: 9,  name: "วิสัญญีวิทยา",                         code: "ANS", fte: 15, staff: 7,  monthly: 0, daily: 0, absent: 2 },
   { no: 10, name: "เวชกรรมฟื้นฟู",                        code: "RHB", fte: 6,  staff: 4,  monthly: 0, daily: 0, absent: 0 },
-  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 5,  monthly: 0, daily: 15, absent: 0 },
+  { no: 11, name: "เวชกรรมสังคม",                         code: "SOC", fte: 10, staff: 5,  monthly: 0, daily: 16, absent: 0 },
   { no: 12, name: "เวชศาสตร์ฉุกเฉิน",                     code: "EMR", fte: 10, staff: 10, monthly: 0, daily: 0, absent: 0 },
   { no: 13, name: "ศัลยกรรม",                            code: "SUR", fte: 39, staff: 33, monthly: 0, daily: 1, absent: 1 },
   { no: 14, name: "ศัลยกรรมออร์โธปิดิกส์",                code: "ORT", fte: 17, staff: 15, monthly: 0, daily: 0, absent: 1 },

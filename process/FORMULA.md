@@ -275,7 +275,7 @@ FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้
 
 | # | Department | Abbrev | FTE | On staff | Monthly | Daily | Lack | Multiplier | Before 2026-11-25 |
 |:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 1 | กุมารเวชกรรม | PED | 19 | 19 | 0 | 1 | 0% | 1.00 | 1.00 |
+| 1 | กุมารเวชกรรม | PED | 19 | 19 | 0 | 0 | 0% | 1.00 | 1.00 |
 | 2 | จักษุวิทยา | EYE | 9 | 6 | 1 | 0 | 22.2% | 2.11 | 1.56 |
 | 3 | จิตเวชและยาเสพติด | PSY | 4 | 4 | 0 | 2 | 0% | 1.00 | 1.00 |
 | 4 | เทคนิคการแพทย์และพยาธิวิทยาคลินิก | CPT | 1 | 1 | 0 | 0 | 0% | 1.00 | 1.00 |
@@ -285,7 +285,7 @@ FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้
 | 8 | รังสีวิทยา | RAD | 15 | 13 | 0 | 1 | 6.7% | 1.33 | 1.33 |
 | 9 | วิสัญญีวิทยา | ANS | 15 | 7 | 0 | 0 | 53.3% | 3.67 | 3.00 |
 | 10 | เวชกรรมฟื้นฟู | RHB | 6 | 4 | 0 | 0 | 33.3% | 2.67 | 2.67 |
-| 11 | เวชกรรมสังคม | SOC | 10 | 5 | 0 | 15 | 0% | 1.00 | 1.00 |
+| 11 | เวชกรรมสังคม | SOC | 10 | 5 | 0 | 16 | 0% | 1.00 | 1.00 |
 | 12 | เวชศาสตร์ฉุกเฉิน | EMR | 10 | 10 | 0 | 0 | 0% | 1.00 | 1.00 |
 | 13 | ศัลยกรรม | SUR | 39 | 33 | 0 | 1 | 12.8% | 1.64 | 1.51 |
 | 14 | ศัลยกรรมออร์โธปิดิกส์ | ORT | 17 | 15 | 0 | 0 | 11.8% | 1.59 | 1.59 |
@@ -300,6 +300,7 @@ FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69, headed ข้
 Notes on the 25-11-69 report:
 - Changed against the 13-11-69 sheet: PED, EYE, OPD, RAD, ANS, SOC, SUR and MED (234 FTE; at work 182 on staff + 1 monthly + 37 daily = 220, before 202 + 2 + 52 = 256). Four multipliers change: EYE 1.56 → 2.11, ANS 3.00 → 3.67, SUR 1.51 → 1.64 and MED 1.64 → 2.06; the other departments keep theirs (PED, OPD and SOC stay at or above their FTE, RAD has 14 at work on both).
 - Mostly because the report leaves out doctors who are not at work (on study leave or otherwise absent), whom the 13-11-69 sheet counted in รวมอัตราตามจริง. OPD lists 3 ข้าราชการ and 11 doctors paid by the session (the sheet: 14 and 27 daily); it has lack 0 either way.
+- One doctor paid by the session whom the list of 25 Nov 2026 puts under กุมารเวชกรรม works in เวชกรรมสังคม (Pong, 2026-11-26): PED daily 1 → 0 and SOC 15 → 16 (same totals). Both departments stay at or above their FTE (19 of 19 and 21 of 10), so both multipliers stay 1.00 and nobody's pay changes.
 - Monthly hires: EYE 1. The sheet also had one in MED; the hospital's list of 25 Nov 2026 has none there (MED 33 + 0 + 4).
 - Pay (estimate from the builds of 2569_08 and 2569_09 with the old numbers; the same budgets, scores and doctors): the department averages go up by about ฿123 / ฿97 in EYE, ฿115 / ฿91 in ANS and ฿81 / ฿64 in MED, SUR stays (−฿5 / −฿4), and every other department goes down ฿29 to ฿86 (2569_08) and ฿23 to ฿69 (2569_09), most in OCM, FOR and RHB. Nobody falls to ฿10,000 or rises above ฿15,000 (2569_08: ฿10,164 to ฿11,204).
 
