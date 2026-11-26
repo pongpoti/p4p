@@ -1484,7 +1484,7 @@
                 add(permsSummary(t.perms));
                 break;
             case "staffing.save": {
-                // "อายุรกรรม (MED) · จ้างรายวัน 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
+                // "อายุรกรรม (MED) · อัตราจ้าง 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
                 add(t.name ? t.name + (t.code ? " (" + t.code + ")" : "") : t.code);
                 // Saves from before 2026-11-17 have no monthly hires (their staff counts them): 0.
                 const withMonthly = (r) => {
@@ -1494,12 +1494,15 @@
                 const was = withMonthly(t.before), now = withMonthly(t.after);
                 let changed = 0;
                 // staff was มีจริง until 2026-11-26 (the same number); absent
-                // is in saves since then only.
-                for (const [k, label] of [["fte", "FTE"], ["staff", "ข้าราชการ"], ["monthly", "จ้างรายเดือน"], ["daily", "จ้างรายวัน"], ["absent", "ไม่ได้ปฏิบัติงาน"]]) {
-                    if (k === "absent" && (was[k] === undefined || now[k] === undefined))
+                // is in saves since then only. Monthly and daily hires show
+                // as one อัตราจ้าง, as on the tab since 2026-11-26.
+                const hire = (r) => Number.isInteger(r.monthly) && Number.isInteger(r.daily) ? r.monthly + r.daily : r.daily;
+                const w2 = { ...was, hire: hire(was) }, n2 = { ...now, hire: hire(now) };
+                for (const [k, label] of [["fte", "FTE"], ["staff", "ข้าราชการ"], ["hire", "อัตราจ้าง"], ["absent", "ไม่ได้ปฏิบัติงาน"]]) {
+                    if (k === "absent" && (w2[k] === undefined || n2[k] === undefined))
                         continue;
-                    if (was[k] !== now[k]) {
-                        add(label + " " + auditValue("", was[k]) + " → " + auditValue("", now[k]));
+                    if (w2[k] !== n2[k]) {
+                        add(label + " " + auditValue("", w2[k]) + " → " + auditValue("", n2[k]));
                         changed++;
                     }
                 }
@@ -2220,8 +2223,7 @@
     const sfForm = document.getElementById("staffing-form");
     const sfFte = document.getElementById("staffing-fte");
     const sfStaff = document.getElementById("staffing-staff");
-    const sfMonthly = document.getElementById("staffing-monthly");
-    const sfDaily = document.getElementById("staffing-daily");
+    const sfHire = document.getElementById("staffing-hire");
     const sfAbsent = document.getElementById("staffing-absent");
     const sfLack = document.getElementById("staffing-lack");
     const sfMult = document.getElementById("staffing-mult");
@@ -2229,10 +2231,10 @@
     const sfError = document.getElementById("staffing-error");
     const sfSave = document.getElementById("staffing-save");
     const sfCloses = Array.from(sfDlg.querySelectorAll("[data-close]"));
-    // FTE is shown but locked (Pong, 2026-11-16): only on staff, monthly and
-    // daily hires are edited; the save sends the department's FTE unchanged.
+    // FTE is shown but locked (Pong, 2026-11-16): only ข้าราชการ, อัตราจ้าง and
+    // ไม่ได้ปฏิบัติงาน are edited; the save sends the department's FTE unchanged.
     sfFte.disabled = true;
-    const sfInputs = [sfStaff, sfMonthly, sfDaily, sfAbsent];
+    const sfInputs = [sfStaff, sfHire, sfAbsent];
     for (const i of sfInputs)
         numberField(i, false, 3, 0);
     // The box stays open while a save is on its way (no Esc, backdrop or close).
@@ -2342,11 +2344,9 @@
         name.title = d.name + " (" + d.code + ")";
         tr.appendChild(el("td", "num", fmtNum(d.fte)));
         tr.appendChild(el("td", "num", fmtNum(d.staff)));
-        // อัตราจ้าง: monthly and daily hires together; each in the tooltip.
+        // อัตราจ้าง: monthly and daily hires together.
         const hire = d.monthly + d.daily;
-        const hires = el("td", "num" + (hire ? "" : " muted"), fmtNum(hire));
-        hires.title = "จ้างรายเดือน " + fmtNum(d.monthly) + " · จ้างรายวัน " + fmtNum(d.daily);
-        tr.appendChild(hires);
+        tr.appendChild(el("td", "num" + (hire ? "" : " muted"), fmtNum(hire)));
         tr.appendChild(el("td", "num" + (d.absent ? "" : " muted"), fmtNum(d.absent)));
         tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)));
         const mult = el("td", "mult");
@@ -2444,9 +2444,7 @@
         foot.appendChild(el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน"));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.fte))));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.staff))));
-        const hires = el("td", "num", fmtNum(sum((d) => d.monthly + d.daily)));
-        hires.title = "จ้างรายเดือน " + fmtNum(sum((d) => d.monthly)) + " · จ้างรายวัน " + fmtNum(sum((d) => d.daily));
-        foot.appendChild(hires);
+        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly + d.daily))));
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.absent))));
         // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
         const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน");
@@ -2495,11 +2493,21 @@
         const d = v.trim();
         return /^\d{1,3}$/.test(d) && Number(d) >= min ? Number(d) : null;
     };
+    // อัตราจ้าง is one box since 2026-11-26 (Pong: "no more input รายเดือน
+    // รายวัน, merge into อัตราจ้าง"). The table still keeps monthly and daily
+    // hires (both count the same); a save keeps the department's monthly
+    // hires up to the new total and puts the rest in daily, so an unchanged
+    // อัตราจ้าง saves the same numbers and rebuilds nothing.
+    const sfSplit = (d, hire) => {
+        const monthly = Math.min(d.monthly, hire);
+        return { monthly, daily: hire - monthly };
+    };
     const sfValues = () => {
+        const d = sfEditing;
         const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0);
-        const monthly = sfCount(sfMonthly.value, 0), daily = sfCount(sfDaily.value, 0), absent = sfCount(sfAbsent.value, 0);
-        return fte === null || staff === null || monthly === null || daily === null || absent === null
-            ? null : { fte, staff, monthly, daily, absent };
+        const hire = sfCount(sfHire.value, 0), absent = sfCount(sfAbsent.value, 0);
+        return !d || fte === null || staff === null || hire === null || absent === null
+            ? null : { fte, staff, ...sfSplit(d, hire), absent };
     };
     // The multiplier's numbers only (ไม่ได้ปฏิบัติงาน is not one).
     const sfSameCounts = (a, b) => a.fte === b.fte && a.staff === b.staff && a.monthly === b.monthly && a.daily === b.daily;
@@ -2536,8 +2544,7 @@
         sfSub.textContent = d.name + " (" + d.code + ")";
         sfFte.value = String(d.fte);
         sfStaff.value = String(d.staff);
-        sfMonthly.value = String(d.monthly);
-        sfDaily.value = String(d.daily);
+        sfHire.value = String(d.monthly + d.daily);
         sfAbsent.value = String(d.absent);
         sfError.classList.add("hidden");
         sfMeta.textContent = d.updated_at

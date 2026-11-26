@@ -1229,8 +1229,8 @@
         .staffing-table td.audit-empty { height: 88px; }
         /* keep a focused row clear of the sticky head and the totals row (WCAG 2.4.11) */
         #staffing-view .audit-table-wrap { scroll-padding: 60px 0 52px; }
-        .log-dialog.sf-dialog { width: min(820px, 94vw); }
-        .sf-form { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        .log-dialog.sf-dialog { width: min(720px, 94vw); }
+        .sf-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         .sf-form .bd-field label small { font-size: inherit; font-weight: 400; }
         .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
         .sf-preview { align-items: center; flex-wrap: wrap; }
@@ -1238,7 +1238,6 @@
         .sf-preview .k .v { font-size: var(--fs-2xl); }
         .sf-preview .was { font-size: var(--fs-md); font-weight: 400; color: var(--c-text-2); }
         .sf-preview .was .ic { width: var(--icon-sm); height: var(--icon-sm); vertical-align: -2px; }
-        @media (max-width: 760px) { .sf-form { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         @media (max-width: 640px) { .sf-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 400px) { .sf-form { grid-template-columns: 1fr; } }
 
@@ -2715,21 +2714,17 @@
                 <input id="staffing-staff" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
-                <label for="staffing-monthly">จ้างรายเดือน <small>อัตราจ้าง</small></label>
-                <input id="staffing-monthly" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
-            </div>
-            <div class="bd-field">
-                <label for="staffing-daily">จ้างรายวัน <small>อัตราจ้าง</small></label>
-                <input id="staffing-daily" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
+                <label for="staffing-hire">อัตราจ้าง <small>ปฏิบัติงานจริง</small></label>
+                <input id="staffing-hire" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
                 <label for="staffing-absent">ไม่ได้ปฏิบัติงาน</label>
                 <input id="staffing-absent" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
-            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม 0–999 · อัตราจ้าง = จ้างรายเดือน + จ้างรายวัน · ไม่ได้ปฏิบัติงาน (เช่น ลาศึกษาต่อ) ไม่นับในขาดแคลนและไม่เปลี่ยนตัวคูณสาขา</p>
+            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม 0–999 · ไม่ได้ปฏิบัติงาน (เช่น ลาศึกษาต่อ) ไม่นับในขาดแคลนและไม่เปลี่ยนตัวคูณสาขา</p>
             <div class="bd-rate sf-preview" aria-live="polite">
-                <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
-                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-monthly staffing-daily">–</output></span>
+                <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff staffing-hire">–</output></span>
+                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-hire">–</output></span>
             </div>
             <p id="staffing-meta" class="bd-meta hidden"></p>
             <p class="bd-meta">บันทึกแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขนี้เมื่อสร้างครั้งถัดไป</p>
