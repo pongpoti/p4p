@@ -387,7 +387,7 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     the tab's date would label them 25-11-69. The SQL does not need the app
     update.
 
-33. `scripts/dept-staffing-absent-2026-11.sql` — not yet applied.
+33. `scripts/dept-staffing-absent-2026-11.sql` — applied 2026-11-26.
     ไม่ได้ปฏิบัติงาน on the อัตรากำลัง tab (Pong, 2026-11-26: the table shows
     ปฏิบัติงานจริง with ข้าราชการ and อัตราจ้าง under it, and a new column
     ไม่ได้ปฏิบัติงาน). Adds `dept_staffing.absent` (0 to 999, default 0),

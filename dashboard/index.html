@@ -1165,31 +1165,23 @@
         @media (max-width: 420px) { .bd-form { grid-template-columns: 1fr; } }
 
         /* ── อัตรากำลัง: each department's staffing and multiplier ───────── */
-        .sf-head {
-            display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3) var(--sp-6); flex-wrap: wrap;
-            padding: var(--sp-3) var(--sp-4); flex-shrink: 0;
-        }
-        .sf-intro { min-width: 0; flex: 1 1 520px; display: flex; flex-direction: column; gap: 2px; }
-        .sf-intro h2 { font-size: var(--fs-lg); font-weight: 700; line-height: var(--lh-ui); }
-        .sf-formula { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+        /* Title with the date chip at its right, then the formula and the note, all on one left edge */
+        .sf-head { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); flex-shrink: 0; }
+        .sf-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+        .sf-title h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; line-height: var(--lh-ui); }
+        .sf-formula { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-text); font-variant-numeric: tabular-nums; }
         .sf-formula .sf-dot { margin: 0 var(--sp-2); color: var(--c-text-2); }
         /* Each formula stays on one line; a narrow window breaks between them. */
         .sf-formula > span { white-space: nowrap; }
-        .sf-sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); }
+        @media (max-width: 640px) { .sf-formula > span { white-space: normal; } .sf-formula .sf-dot { display: none; } .sf-formula > span + span { display: block; } }
+        .sf-sub { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); }
         /* When the numbers were last brought up to date: its own chip, never cut in two */
         .sf-asof {
             display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap;
             padding: 0 var(--sp-2) 0 6px; border: 1px solid var(--st-neutral-line); border-radius: var(--r-pill);
-            background: var(--st-neutral-bg); color: var(--st-neutral-fg); font-style: normal; font-weight: 700; line-height: 1.35;
+            background: var(--st-neutral-bg); color: var(--st-neutral-fg); font-size: var(--fs-sm); font-style: normal; font-weight: 700; line-height: 1.35;
         }
         .sf-asof .ic { width: var(--icon-sm); height: var(--icon-sm); }
-        /* The three figures: a ruled strip of cells */
-        .sf-stats { display: grid; grid-template-columns: repeat(3, auto); margin: 0; border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface); }
-        .sf-stats div { min-width: 140px; padding: var(--sp-2) var(--sp-4); }
-        .sf-stats div + div { border-left: 1px solid var(--c-border); }
-        .sf-stats dt { font-size: var(--fs-sm); font-weight: 400; color: var(--c-text-2); white-space: nowrap; }
-        .sf-stats dd { margin: 0; font-size: var(--fs-xl); font-weight: 700; line-height: var(--lh-ui); font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .sf-stats dd small { font-size: var(--fs-sm); font-weight: 400; color: var(--c-text-2); }
         .sf-alert, .sf-ok { margin: 0; }
         .sf-ok { font-weight: 700; }
         .staffing-table col.c-sno { width: 52px; }
@@ -2500,13 +2492,14 @@
         <!-- อัตรากำลัง: every dashboard user sees each department's staffing and
              multiplier; only the owner gets the edit buttons (lib/staffing-server.ts) -->
         <section id="staffing-view" class="hidden" aria-labelledby="staffing-title">
+            <!-- Pong, 2026-11-26: no figure boxes; the date chip at the title's right. -->
             <div class="sf-head glass">
-                <div class="sf-intro">
+                <div class="sf-title">
                     <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
-                    <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − ปฏิบัติงานจริง (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0</span></p>
-                    <p id="staffing-sub" class="sf-sub"></p>
+                    <span id="staffing-asof" class="sf-asof hidden"></span>
                 </div>
-                <dl id="staffing-stats" class="sf-stats"></dl>
+                <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − ปฏิบัติงานจริง (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0</span></p>
+                <p id="staffing-sub" class="sf-sub"></p>
             </div>
             <p id="staffing-alert" class="sf-alert hidden" role="alert"></p>
             <p id="staffing-ok" class="sf-ok hidden" role="status"></p>

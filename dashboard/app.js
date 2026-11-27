@@ -2213,8 +2213,8 @@
     const staffingRows = document.getElementById("staffing-rows");
     const staffingFoot = document.getElementById("staffing-foot");
     const staffingTable = staffingRows.closest("table");
-    const staffingStats = document.getElementById("staffing-stats");
     const staffingSub = document.getElementById("staffing-sub");
+    const staffingAsOf = document.getElementById("staffing-asof");
     const staffingK = document.getElementById("staffing-k");
     const staffingAlert = document.getElementById("staffing-alert");
     const staffingOk = document.getElementById("staffing-ok");
@@ -2391,20 +2391,17 @@
             staffingEditCol = false;
         }
         staffingK.textContent = String(data.k);
-        // The แก้ไขล่าสุด column is gone (Pong, 2026-11-17); the line under
-        // the title ends with when the numbers were last brought up to date,
-        // as a chip of its own (no italics, 2026-11-18): the staffing sheet's
-        // date (13-11-69 → 13 พ.ย. 69), or the latest edit in the tab if
-        // there is a later one.
-        staffingSub.replaceChildren(data.canEdit
+        // The แก้ไขล่าสุด column is gone (Pong, 2026-11-17): when the
+        // numbers were last brought up to date is a chip of its own (no
+        // italics, 2026-11-18), at the title's right since 2026-11-26: the
+        // staffing sheet's date (13-11-69 → 13 พ.ย. 69), or the latest edit
+        // in the tab if there is a later one.
+        staffingSub.textContent = data.canEdit
             ? "แก้ไขแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขใหม่เมื่อสร้างครั้งถัดไป"
-            : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข");
+            : "ดูได้อย่างเดียว ผู้ดูแลระบบเป็นผู้แก้ไข";
         const asOf = sfAsOf(data);
-        if (asOf) {
-            const chip = el("span", "sf-asof");
-            chip.append(iconEl("calendar"), "ปรับปรุงข้อมูล วันที่ " + asOf);
-            staffingSub.appendChild(chip);
-        }
+        staffingAsOf.replaceChildren(...(asOf ? [iconEl("calendar"), document.createTextNode("ปรับปรุงข้อมูล วันที่ " + asOf)] : []));
+        staffingAsOf.classList.toggle("hidden", !asOf);
         if (!data.installed && data.canEdit) {
             staffingAlert.textContent = "ยังไม่ได้ติดตั้งตารางอัตรากำลังใน Supabase จึงแสดงค่าตั้งต้น " + sfSource() +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor";
@@ -2425,19 +2422,7 @@
         }
         const ds = data.depts;
         const short = ds.filter((d) => d.lack > 0);
-        const top = ds.reduce((m, d) => Math.max(m, d.multiplier), 1);
-        const topDept = ds.find((d) => d.multiplier === top);
         const sum = (f) => ds.reduce((n, d) => n + f(d), 0);
-        const stat = (k, v, small) => {
-            const div = el("div");
-            div.appendChild(el("dt", undefined, k));
-            const dd = el("dd", undefined, v);
-            if (small)
-                dd.appendChild(el("small", undefined, " " + small));
-            div.appendChild(dd);
-            return div;
-        };
-        staffingStats.replaceChildren(stat("กลุ่มงานที่ขาดแคลน", fmtNum(short.length), "จาก " + fmtNum(ds.length)), stat("ตัวคูณสูงสุด", topDept ? fmtMult(topDept, data.k) : "1.00", ds.filter((d) => d.multiplier === top).map((d) => d.code).join(" ")), stat("แพทย์รวม", fmtNum(sum(sfHave)), "FTE " + fmtNum(sum((d) => d.fte))));
         staffingRows.replaceChildren(...staffingOrder(ds).map((d) => staffingRow(d, edit)));
         const foot = el("tr");
         foot.appendChild(el("td"));
