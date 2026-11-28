@@ -43,6 +43,8 @@ const ICON_PATHS = {
     "x": '<path d="M18 6 6 18M6 6l12 12"/>',
     // อัตรากำลัง: when the numbers were last brought up to date.
     "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    // อัตรากำลัง's report PDF (2026-11-28): the owner's upload (download and info are above).
+    "upload": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
     // ภาพรวม's ข้อมูล menu (2026-11-18): งบรายเดือน.
     "banknote": '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
     // The owner's user menu (QR invite, 2026-11-18).

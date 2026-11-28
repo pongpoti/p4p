@@ -7,13 +7,15 @@
  * Actions) and the Vercel app (lib/staffing-server.ts, the dashboard's
  * อัตรากำลัง tab). No network, no dependencies.
  *
- *   lack       = max(0, 1 − (on staff + monthly hires + daily hires) ÷ FTE)
+ *   lack       = max(0, 1 − on staff ÷ FTE)
  *   multiplier = 1 + LACK_K × lack
  *
- * Monthly hires (ลูกจ้างชั่วคราว รายเดือน) have their own column since
- * 2026-11-17 (Pong: "add column จ้างรายเดือน"). The 13-11-69 sheet's
- * รวมอัตราตามจริง already counted them, so on staff was that less the
- * monthly hires (MED 37 = 36 + 1, EYE 8 = 7 + 1) and no multiplier changed.
+ * Since 2026-11-28 (Pong: "The calculation now does not include อัตราจ้าง")
+ * only doctors on staff (ข้าราชการ at work) fill the FTE. Monthly and daily
+ * hires (อัตราจ้าง: ลูกจ้างชั่วคราว รายเดือน / รายวัน) are still stored in
+ * dept_staffing but are not in the multiplier. From 2026-11-16 to
+ * 2026-11-27 they counted like staff (daily hires from 2026-11-16, monthly
+ * hires in their own column from 2026-11-17).
  *
  * FTE is from the physician staffing sheet of 13 Nov 2026 (13-11-69,
  * ข้อมูลอัตรากำลังภารกิจบริการทุติยภูมิและตติยภูมิ ระดับโรงพยาบาลตาม Service Plan
@@ -30,7 +32,7 @@
  *
  * ไม่ได้ปฏิบัติงาน (absent: the department's doctors not at work, such as
  * on study leave) is shown on the อัตรากำลัง tab since 2026-11-26 (Pong).
- * It is not in the multiplier: lack counts only the doctors at work.
+ * It is not in the multiplier: lack counts only the doctors on staff at work.
  *
  * Departments, their names, codes and order are fixed here: the SK03
  * งบรายสาขา sheet has one row per department in this order, and a new
@@ -43,8 +45,8 @@ export interface DeptStaffing {
   code: string
   fte: number     // doctors the department should have (จำนวนที่ควรมี, FTE)
   staff: number   // doctors on staff at work (ข้าราชการ; not those on study leave)
-  monthly: number // doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน), its own column since 2026-11-17
-  daily: number   // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน), counted with staff since 2026-11-16
+  monthly: number // doctors hired by the month (ลูกจ้างชั่วคราว รายเดือน); stored, not in the multiplier since 2026-11-28
+  daily: number   // doctors hired by the day (ลูกจ้างชั่วคราว รายวัน); stored, not in the multiplier since 2026-11-28
   absent: number  // doctors not at work (ไม่ได้ปฏิบัติงาน), shown only, since 2026-11-26; not in the multiplier
 }
 
@@ -77,8 +79,8 @@ export const STAFFING_LIMITS: Record<"fte" | "staff" | "monthly" | "daily" | "ab
  * The 18 STAFF departments in the order of FORMULA.md's "Departments and
  * Multipliers" table: FTE from the physician staffing sheet of 13 Nov 2026
  * (Pong, 2026-11-13), on staff, monthly and daily hires from the staffing
- * report of 25 Nov 2026 (Pong, 2026-11-25; daily hires counted since
- * 2026-11-16, monthly hires in their own column since 2026-11-17), and
+ * report of 25 Nov 2026 (Pong, 2026-11-25; only on staff is in the
+ * multiplier since 2026-11-28, the hires are kept for the record), and
  * ไม่ได้ปฏิบัติงาน from the same report ("แพทย์ที่ไม่ได้ปฏิบัติงาน จำนวน N
  * ราย"; it leaves ผู้ป่วยนอก's out, so OPD is 0).
  */
@@ -103,12 +105,12 @@ export const DEPT_STAFFING_DEFAULTS: DeptStaffing[] = [
   { no: 18, name: "อายุรกรรม",                            code: "MED", fte: 47, staff: 33, monthly: 0, daily: 4, absent: 4 },
 ]
 
-// The multiplier's numbers (absent is not one).
-type Counts = { fte: number; staff: number; monthly: number; daily: number }
+// The multiplier's numbers: FTE and on staff (monthly, daily and absent are not in it since 2026-11-28).
+type Counts = { fte: number; staff: number }
 
-/** Share of the department's FTE not filled by staff, monthly and daily hires (0 when fully or over-staffed). */
+/** Share of the department's FTE not filled by doctors on staff (0 when fully or over-staffed). Hires are not counted (2026-11-28). */
 export function deptLack(d: Counts): number {
-  return Math.max(0, 1 - (d.staff + d.monthly + d.daily) / d.fte)
+  return Math.max(0, 1 - d.staff / d.fte)
 }
 
 /** The department's multiplier on the extra above 10,000: 1 + LACK_K × lack. */
@@ -139,9 +141,10 @@ export function parseStaffCount(v: unknown, field: keyof typeof STAFFING_LIMITS)
  * listed in `unknown` and left out.
  *
  * A row with no monthly field at all comes from a table made before
- * 2026-11-17, whose staff still counts the monthly hires: it is taken with
- * monthly 0 (the same total, so the same multiplier) and its code is listed
- * in `noMonthly` until the SQL file is run again.
+ * 2026-11-17, whose staff still counts the monthly hires (so its
+ * multiplier would be too low under the staff-only rule): it is taken with
+ * monthly 0 and its code is listed in `noMonthly` until the SQL file is run
+ * again. The live table has the column.
  *
  * A row with no absent field comes from a table made before 2026-11-26
  * (scripts/dept-staffing-absent-2026-11.sql not run yet): it gets the

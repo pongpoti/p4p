@@ -414,6 +414,22 @@ Do this **before** the branch that removes the hard-coded owner LINE userId
     statement, then the check query (PED 19 19 0 0, SOC 10 5 0 16). A
     second run changes nothing; no backslashes.
 
+35. `scripts/dept-staffing-staff-only-2026-11-28.sql` — run after the app
+    update of 2026-11-28 is merged (not before: the SK03 build reads the
+    rule from the code on main).
+    ขาดแคลน counts ข้าราชการ only (Pong, 2026-11-28: "The calculation now
+    does not include อัตราจ้าง"): lack = max(0, 1 − on staff ÷ FTE). No
+    table changes; dept_staffing keeps its monthly and daily hires for the
+    record. Queues a new SK03 build of every ตรวจสอบ month from 2569_08
+    still on the auditee's side (2569_08 and 2569_09 on 2026-11-28), the
+    same as a save on the อัตรากำลัง tab, and writes one `staffing.rule` row
+    to ประวัติการใช้งาน. Multipliers SOC 1.00 to 3.50, OPD 1.00 to 3.00,
+    OBG 1.83 to 2.39, EYE 2.11 to 2.67, MED 2.06 to 2.49, RAD 1.33 to 1.67,
+    SUR 1.64 to 1.77. Needs steps 22 and 30. One DO block, then the two
+    check queries (a queued or running build for each month, and the
+    history row). A second run queues nothing new while those builds still
+    wait; no backslashes.
+
 ## Superseded — do NOT run
 
 - **`scripts/security-rls.sql`** — the original anon-open RLS model,
