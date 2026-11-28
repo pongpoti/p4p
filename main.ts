@@ -934,6 +934,8 @@ const DASH_PATH_RIGHTS: [RegExp, (method: string) => string | null][] = [
   [/^[/]dashboard[/]api[/]followups([/].*)?$/i, (m) => (m === "GET" || m === "HEAD" ? "followup.view" : "followup.edit")],
   [/^[/]dashboard[/]api[/]roster([/].*)?$/i, (m) => (m === "GET" || m === "HEAD" ? "roster.view" : null)],
   [/^[/]dashboard[/]api[/]staffing$/i, (m) => (m === "GET" || m === "HEAD" ? "staffing.view" : null)],
+  // The staffing report PDF (2026-11-28): read with the tab; the upload is the owner's (checked in the handler).
+  [/^[/]dashboard[/]api[/]staffing[/]report$/i, (m) => (m === "GET" || m === "HEAD" ? "staffing.view" : null)],
 ]
 const dashGatePath = (path: string): string => path.toLowerCase().replace(/[/]{2,}/g, "/").replace(/(.)[/]+$/, "$1")
 function dashPathRight(method: string, path: string): string | null {
@@ -1845,11 +1847,11 @@ app.delete("/dashboard/api/followups/:id", async (req: Request, res: Response) =
 const AUDIT_GROUPS: Record<string, string> = {
   login: "action=like.login.*",
   session: "action=like.session.*",
-  view: "action=in.(view.overview,view.followup,view.roster,view.review,view.staffing,pending.open,followup.history,audit.view,review.download)",
+  view: "action=in.(view.overview,view.followup,view.roster,view.review,view.staffing,pending.open,followup.history,audit.view,review.download,staffing.download)",
   change: "action=in.(followup.add,followup.delete,roster.add,roster.edit,roster.delete,access.approve,access.reject," +
     "budget.save,review.inputs,review.rebuild,review.upload,review.submit,review.withdraw,review.decide,review.reply," +
     "review.return,review.unreturn,review.approve,review.issue,review.issue_reply,review.issue_open,review.issue_close," +
-    "review.pdf_retry,review.reopen,review.reset,review.email,review.email_mode,review.approve_all,review.ids,staffing.save," +
+    "review.pdf_retry,review.reopen,review.reset,review.email,review.email_mode,review.approve_all,review.ids,staffing.save,staffing.report,staffing.rule," +
     "user.approve,user.reject,user.edit,user.suspend,user.import,alloc.upload,alloc.set)",
   refused: "action=in.(login.refused,user.claim_refused,user.bad_code)",
   users: "action=like.user.*",

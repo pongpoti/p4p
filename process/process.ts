@@ -220,8 +220,8 @@ function getMgmt(person: { firstname: string; lastname: string }): MgmtEntry | n
   return MGMT_LOOKUP[key] ?? null;
 }
 
-// Each department's staffing (FTE, on staff, monthly and daily hires) for the
-// department multiplier, as saved on the dashboard's อัตรากำลัง tab (Supabase
+// Each department's staffing (FTE, on staff, monthly and daily hires; only FTE
+// and on staff are in the multiplier since 2026-11-28) for the department multiplier, as saved on the dashboard's อัตรากำลัง tab (Supabase
 // dept_staffing, scripts/dept-staffing-2026-11.sql; Pong, 2026-11-16). Read
 // once per run by loadDeptStaffing() in main(); until then, and when the
 // table is not there yet, the starting numbers of lib/dept-staffing.ts.
@@ -258,8 +258,8 @@ async function loadDeptStaffing(supabase: SupabaseClient): Promise<void> {
   if (merged.missing.length) log(`  [Staffing] ⚠ no saved row for ${merged.missing.join(', ')} — starting numbers used`, 'warn');
   if (merged.bad.length) log(`  [Staffing] ⚠ out-of-range numbers for ${merged.bad.join(', ')} — starting numbers used`, 'warn');
   if (merged.unknown.length) log(`  [Staffing] ⚠ rows for unknown codes ignored: ${merged.unknown.join(', ')}`, 'warn');
-  if (merged.noMonthly.length) log(`  [Staffing] ⚠ dept_staffing has no monthly column yet (staff still counts monthly hires; same totals) — run scripts/dept-staffing-2026-11.sql again`, 'warn');
-  log(`  [Staffing] ${DEPT_STAFFING.map((d) => `${d.code} ${d.staff}+${d.monthly}+${d.daily}/${d.fte} ×${deptMultiplier(d).toFixed(2)}`).join(' · ')}`);
+  if (merged.noMonthly.length) log(`  [Staffing] ⚠ dept_staffing has no monthly column yet (its staff may still count monthly hires, which the multiplier no longer counts) — run scripts/dept-staffing-2026-11.sql again`, 'warn');
+  log(`  [Staffing] on staff/FTE (hires not counted): ${DEPT_STAFFING.map((d) => `${d.code} ${d.staff}/${d.fte} ×${deptMultiplier(d).toFixed(2)}`).join(' · ')}`);
 }
 
 const DEPT_ORDER: Record<string, number> = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));

@@ -225,6 +225,8 @@
         const time = d.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" })
         return date + "\u2003" + time + " น."
     }
+    // A file's size, e.g. "0.2 MB" or "850 KB" (the อัตรากำลัง report, 2026-11-28).
+    const sfSize = (n: number): string => n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"
 
     const renderMonth = (m: MonthStatus): HTMLElement => {
         const card = el("article", "month-card glass")
@@ -1170,6 +1172,9 @@
         "review.reset": "รีเซ็ตเดือนในแท็บตรวจสอบ",
         "view.staffing": "เปิดแท็บอัตรากำลัง",
         "staffing.save": "แก้ไขอัตรากำลัง",
+        "staffing.report": "อัปโหลดรายงานอัตรากำลัง (PDF)",
+        "staffing.download": "ดาวน์โหลดรายงานอัตรากำลัง (PDF)",
+        "staffing.rule": "เปลี่ยนการนับขาดแคลนเป็นข้าราชการเท่านั้น",
         "user.invite": "สร้าง QR เพิ่มผู้ใช้",
         "user.cancel": "ยกเลิก QR",
         "user.claim": "สแกน QR ขอเข้าใช้งาน",
@@ -1383,6 +1388,18 @@
             case "user.import":
                 add(permsSummary(t.perms))
                 break
+            case "staffing.rule": {
+                // SQL step 35 (2026-11-28): ขาดแคลน counts ข้าราชการ only.
+                add("ไม่นับอัตราจ้าง")
+                const rebuild = sfMonths(t.rebuild)
+                if (rebuild) add("สร้าง SK03 ใหม่ " + rebuild)
+                break
+            }
+            case "staffing.report":
+            case "staffing.download":
+                add(t.name)
+                if (a.action === "staffing.report" && typeof t.bytes === "number") add(sfSize(t.bytes))
+                break
             case "staffing.save": {
                 // "อายุรกรรม (MED) · อัตราจ้าง 4 → 6 · ตัวคูณสาขา 1.64 → 1.43"
                 add(t.name ? t.name + (t.code ? " (" + t.code + ")" : "") : t.code)
@@ -1407,11 +1424,14 @@
                 const counts = (r: Record<string, unknown>): StaffingCounts | null =>
                     [r.fte, r.staff, r.monthly, r.daily].every((n) => Number.isInteger(n)) && (r.fte as number) > 0
                         ? { fte: r.fte as number, staff: r.staff as number, monthly: r.monthly as number, daily: r.daily as number } : null
+                // The multipliers as the save logged them: until 2026-11-28 they
+                // counted อัตราจ้าง, so working them out again with today's rule
+                // (ข้าราชการ only) would misstate an older save.
                 const cb = counts(was), ca = counts(now)
-                if (cb && ca && typeof t.k === "number") {
-                    add("ตัวคูณสาขา " + fmtMult(cb, t.k) + " → " + fmtMult(ca, t.k))
-                } else if (typeof t.multiplier_before === "number" && typeof t.multiplier_after === "number") {
+                if (typeof t.multiplier_before === "number" && typeof t.multiplier_after === "number") {
                     add("ตัวคูณสาขา " + t.multiplier_before.toFixed(2) + " → " + t.multiplier_after.toFixed(2))
+                } else if (cb && ca && typeof t.k === "number") {
+                    add("ตัวคูณสาขา " + fmtMult(cb, t.k) + " → " + fmtMult(ca, t.k))
                 }
                 const rebuild = sfMonths(t.rebuild)
                 if (rebuild) add("สร้าง SK03 ใหม่ " + rebuild)
@@ -2068,11 +2088,14 @@
 
     // ── อัตรากำลัง: each department's staffing and multiplier ────────────
     // Every dashboard user sees the list (lib/staffing-server.ts); the owner
-    // gets an edit button on each row for ข้าราชการ, อัตราจ้าง and
-    // ไม่ได้ปฏิบัติงาน; FTE is locked (Pong, 2026-11-16). Since 2026-11-26
-    // (Pong) the table shows ปฏิบัติงานจริง as ข้าราชการ (staff) and อัตราจ้าง
-    // (monthly + daily), then ไม่ได้ปฏิบัติงาน (absent, not in the
-    // multiplier), highest ตัวคูณสาขา first. A save that changes
+    // gets an edit button on each row for ข้าราชการ and ไม่ได้ปฏิบัติงาน; FTE
+    // is locked (Pong, 2026-11-16). Since 2026-11-28 (Pong: "The calculation
+    // now does not include อัตราจ้าง") ขาดแคลน counts ข้าราชการ at work only:
+    // the table has no อัตราจ้าง column and a save sends the department's
+    // saved monthly and daily hires unchanged. ไม่ได้ปฏิบัติงาน (absent) is
+    // shown, not in the multiplier; highest ตัวคูณสาขา first. Everyone can
+    // download the staffing report PDF, which the owner uploads; the tab says
+    // that อัตรากำลัง is updated once a year. A save that changes
     // a number queues a new SK03 build of each ตรวจสอบ month still with the
     // ผู้จัดทำ; any other month reads the new numbers on its next build.
     interface StaffingDept {
@@ -2100,8 +2123,11 @@
         k: number
         source: string
         depts: StaffingDept[]
+        // The staffing report PDF (2026-11-28); null: none uploaded yet.
+        report?: StaffingReport | null
     }
-    // The multiplier's numbers; with ไม่ได้ปฏิบัติงาน, what the edit box saves.
+    interface StaffingReport { name: string; bytes: number | null; uploaded_at: string | null; uploaded_by: string }
+    // What a save sends (with ไม่ได้ปฏิบัติงาน); the multiplier reads fte and staff only (2026-11-28).
     type StaffingCounts = { fte: number; staff: number; monthly: number; daily: number }
     type StaffingValues = StaffingCounts & { absent: number }
     const staffingRows  = document.getElementById("staffing-rows") as HTMLElement
@@ -2117,7 +2143,6 @@
     const sfForm  = document.getElementById("staffing-form") as HTMLFormElement
     const sfFte   = document.getElementById("staffing-fte") as HTMLInputElement
     const sfStaff = document.getElementById("staffing-staff") as HTMLInputElement
-    const sfHire  = document.getElementById("staffing-hire") as HTMLInputElement
     const sfAbsent = document.getElementById("staffing-absent") as HTMLInputElement
     const sfLack  = document.getElementById("staffing-lack") as HTMLElement
     const sfMult  = document.getElementById("staffing-mult") as HTMLElement
@@ -2125,10 +2150,11 @@
     const sfError = document.getElementById("staffing-error") as HTMLElement
     const sfSave  = document.getElementById("staffing-save") as HTMLButtonElement
     const sfCloses = Array.from(sfDlg.querySelectorAll<HTMLButtonElement>("[data-close]"))
-    // FTE is shown but locked (Pong, 2026-11-16): only ข้าราชการ, อัตราจ้าง and
-    // ไม่ได้ปฏิบัติงาน are edited; the save sends the department's FTE unchanged.
+    // FTE is shown but locked (Pong, 2026-11-16): only ข้าราชการ and
+    // ไม่ได้ปฏิบัติงาน are edited; the save sends the department's FTE (and,
+    // since 2026-11-28, its monthly and daily hires) unchanged.
     sfFte.disabled = true
-    const sfInputs = [sfStaff, sfHire, sfAbsent]
+    const sfInputs = [sfStaff, sfAbsent]
     for (const i of sfInputs) numberField(i, false, 3, 0)
     // The box stays open while a save is on its way (no Esc, backdrop or close).
     sfDlg.addEventListener("click", (ev) => { if (ev.target === sfDlg && !sfBusy) sfDlg.close() })
@@ -2140,12 +2166,12 @@
     let sfBusy = false
     // The edit column is dropped once for anyone who cannot edit.
     let staffingEditCol = true
-    // Any column but the pencil and the ปฏิบัติงานจริง group sorts (Pong,
-    // 2026-11-19); ties, and no sort, in the sheet's own order (ที่). Opens
-    // on ตัวคูณสาขา, highest first (Pong, 2026-11-26).
+    // Any column but the pencil sorts (Pong, 2026-11-19); ties, and no
+    // sort, in the sheet's own order (ที่). Opens on ตัวคูณสาขา, highest
+    // first (Pong, 2026-11-26).
     const STAFFING_SORTS: [string, (d: StaffingDept) => number | string][] = [
         ["no", (d) => d.no], ["name", (d) => d.name], ["fte", (d) => d.fte], ["staff", (d) => d.staff],
-        ["hire", (d) => d.monthly + d.daily], ["absent", (d) => d.absent], ["lack", (d) => d.lack], ["mult", (d) => d.multiplier],
+        ["absent", (d) => d.absent], ["lack", (d) => d.lack], ["mult", (d) => d.multiplier],
     ]
     const STAFFING_KEYS = STAFFING_SORTS.map(([, f]) => f)
     let staffingSort: { col: number; dir: SortDir } = { col: STAFFING_SORTS.findIndex(([k]) => k === "mult"), dir: "desc" }
@@ -2165,28 +2191,22 @@
         staffingSort = { col, dir }
         renderStaffing()
     }, staffingSort)
-    // The second header row sticks right under the first, whatever its height.
-    const sfGroupTh = staffingTable.tHead!.querySelector("th.sf-group") as HTMLElement
-    const sfHead1 = (): void => {
-        const h = sfGroupTh.getBoundingClientRect().height
-        if (h > 0) staffingTable.style.setProperty("--sf-head1", h + "px")
-    }
-    if (typeof ResizeObserver === "function") new ResizeObserver(sfHead1).observe(sfGroupTh)
 
     // The same rule as lib/dept-staffing.ts, shown from the counts in whole
     // numbers so a half always rounds up (1/200 short is 0.5%, ×1.03): lack
     // to 0.1%, multiplier to 0.01. The SK03 build uses the unrounded value.
-    const sfHave = (d: StaffingCounts): number => d.staff + d.monthly + d.daily
-    const sfShort = (d: StaffingCounts): number => Math.max(0, d.fte - sfHave(d))
+    // ข้าราชการ at work only since 2026-11-28 (hires are not counted).
+    type SfLackCounts = { fte: number; staff: number }
+    const sfShort = (d: SfLackCounts): number => Math.max(0, d.fte - d.staff)
     const sfFixed = (n: number, places: number): string => {
         const p = places === 1 ? 10 : 100
         return Math.floor(n / p) + "." + String(n % p).padStart(places, "0")
     }
-    const fmtLack = (d: StaffingCounts): string => {
+    const fmtLack = (d: SfLackCounts): string => {
         const s = sfShort(d)
         return s <= 0 ? "0%" : sfFixed(Math.floor((2000 * s + d.fte) / (2 * d.fte)), 1) + "%"
     }
-    const fmtMult = (d: StaffingCounts, k: number): string => Number.isInteger(k) && k >= 0
+    const fmtMult = (d: SfLackCounts, k: number): string => Number.isInteger(k) && k >= 0
         ? sfFixed(Math.floor((200 * (d.fte + k * sfShort(d)) + d.fte) / (2 * d.fte)), 2)
         : (1 + k * sfShort(d) / d.fte).toFixed(2)
     const sfK = (): number => staffing ? staffing.k : 5
@@ -2232,9 +2252,6 @@
         name.title = d.name + " (" + d.code + ")"
         tr.appendChild(el("td", "num", fmtNum(d.fte)))
         tr.appendChild(el("td", "num", fmtNum(d.staff)))
-        // อัตราจ้าง: monthly and daily hires together.
-        const hire = d.monthly + d.daily
-        tr.appendChild(el("td", "num" + (hire ? "" : " muted"), fmtNum(hire)))
         tr.appendChild(el("td", "num" + (d.absent ? "" : " muted"), fmtNum(d.absent)))
         tr.appendChild(el("td", "num lack" + (d.lack > 0 ? "" : " muted"), fmtLack(d)))
         const mult = el("td", "mult")
@@ -2293,7 +2310,7 @@
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor"
             staffingAlert.className = "sf-alert"
         } else if (data.needsUpdate && data.canEdit) {
-            staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องจ้างรายเดือน (มีจริงยังรวมจ้างรายเดือนอยู่ ตัวคูณสาขาไม่เปลี่ยน)" +
+            staffingAlert.textContent = "ตารางอัตรากำลังใน Supabase ยังไม่มีช่องจ้างรายเดือน (ข้าราชการยังรวมจ้างรายเดือนอยู่)" +
                 " และยังแก้ไขไม่ได้ ผู้ดูแลระบบต้องรันไฟล์ scripts/dept-staffing-2026-11.sql ใน Supabase SQL editor อีกครั้ง"
             staffingAlert.className = "sf-alert"
         } else if (data.needsAbsent && data.canEdit) {
@@ -2312,7 +2329,6 @@
         foot.appendChild(el("td", undefined, "รวม " + fmtNum(ds.length) + " กลุ่มงาน"))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.fte))))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.staff))))
-        foot.appendChild(el("td", "num", fmtNum(sum((d) => d.monthly + d.daily))))
         foot.appendChild(el("td", "num", fmtNum(sum((d) => d.absent))))
         // Under ขาดแคลน and ตัวคูณสาขา together, so it fits.
         const shortCell = el("td", "muted", "ขาดแคลน " + fmtNum(short.length) + " กลุ่มงาน")
@@ -2320,7 +2336,116 @@
         foot.appendChild(shortCell)
         if (staffingEditCol) foot.appendChild(el("td"))
         staffingFoot.replaceChildren(foot)
+        renderReport()
     }
+
+    // ── The staffing report PDF (Pong, 2026-11-28: "add download button for
+    // pdf on dashboard") ──
+    // Everyone who sees the tab downloads it (a signed link, saved under the
+    // file's name); the owner uploads it or puts a new one in its place.
+    const sfReportBox = document.getElementById("staffing-report") as HTMLElement
+    const sfDl = document.getElementById("staffing-dl") as HTMLButtonElement
+    const sfUp = document.getElementById("staffing-up") as HTMLButtonElement
+    const sfFile = document.getElementById("staffing-file") as HTMLInputElement
+    const sfReportMeta = document.getElementById("staffing-report-meta") as HTMLElement
+    const SF_REPORT_MAX = 4 * 1024 * 1024
+    let sfReportBusy: "" | "dl" | "up" = ""
+    const sfBtn = (b: HTMLButtonElement, ic: string, text: string, busy: boolean): void => {
+        b.replaceChildren(busy ? el("span", "spinner") : iconEl(ic), document.createTextNode(text))
+        b.disabled = !!sfReportBusy
+        if (busy) b.setAttribute("aria-busy", "true")
+        else b.removeAttribute("aria-busy")
+    }
+    function renderReport(): void {
+        const data = staffing
+        if (!data) return
+        const rep = data.report || null
+        const owner = data.canEdit
+        sfReportBox.classList.toggle("hidden", !rep && !owner)
+        sfDl.classList.toggle("hidden", !rep)
+        sfBtn(sfDl, "download", sfReportBusy === "dl" ? "กำลังดาวน์โหลด…" : "ดาวน์โหลดรายงานอัตรากำลัง (PDF)", sfReportBusy === "dl")
+        sfUp.classList.toggle("hidden", !owner)
+        sfBtn(sfUp, "upload", sfReportBusy === "up" ? "กำลังอัปโหลด…" : rep ? "เปลี่ยนไฟล์ PDF" : "อัปโหลดรายงาน PDF", sfReportBusy === "up")
+        const meta: string[] = []
+        if (rep) {
+            meta.push(rep.name + (typeof rep.bytes === "number" ? " (" + sfSize(rep.bytes) + ")" : ""))
+            if (rep.uploaded_at) meta.push("อัปโหลด " + fmtWhen(rep.uploaded_at))
+        } else if (owner) {
+            meta.push("ยังไม่มีไฟล์ อัปโหลดรายงาน PDF ไม่เกิน 4 MB เพื่อให้ผู้ใช้ทุกคนในแท็บนี้ดาวน์โหลดได้")
+        }
+        sfReportMeta.textContent = meta.join(" · ")
+        sfReportMeta.classList.toggle("hidden", !meta.length)
+    }
+    const sfTell = (text: string, ok: boolean): void => {
+        if (ok) {
+            staffingAlert.className = "sf-alert hidden"
+            staffingOk.replaceChildren(iconEl("check"), " ", text)
+            staffingOk.classList.remove("hidden")
+        } else {
+            staffingOk.classList.add("hidden")
+            staffingAlert.textContent = text
+            staffingAlert.className = "sf-alert error"
+        }
+    }
+    const sfErr = async (r: Response, fallback: string): Promise<string> => {
+        const j = await r.json().catch(() => null) as { error?: unknown } | null
+        return j && typeof j.error === "string" && j.error ? j.error : fallback + " (" + r.status + ")"
+    }
+    sfDl.addEventListener("click", async () => {
+        if (sfReportBusy) return
+        sfReportBusy = "dl"
+        renderReport()
+        try {
+            const r = await fetch("/dashboard/api/staffing/report?link=1", { credentials: "same-origin" })
+            if (r.status === 401) { location.href = "/dashboard/login?error=idle"; return }
+            if (!r.ok) { sfTell(await sfErr(r, "ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง"), false); return }
+            const j = await r.json().catch(() => null) as { url?: unknown } | null
+            if (!j || typeof j.url !== "string") { sfTell("ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง", false); return }
+            const a = document.createElement("a")
+            a.href = j.url
+            a.style.display = "none"
+            document.body.append(a)
+            a.click()
+            a.remove()
+        } catch (e) {
+            console.error("staffing report download failed:", e)
+            sfTell("ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง", false)
+        } finally {
+            sfReportBusy = ""
+            renderReport()
+        }
+    })
+    sfUp.addEventListener("click", () => { if (!sfReportBusy) sfFile.click() })
+    sfFile.addEventListener("change", async () => {
+        const f = sfFile.files && sfFile.files[0]
+        sfFile.value = ""
+        if (!f || sfReportBusy) return
+        if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") { sfTell("เลือกไฟล์ PDF เท่านั้น", false); return }
+        if (f.size > SF_REPORT_MAX) { sfTell("ไฟล์ใหญ่เกิน 4 MB", false); return }
+        sfReportBusy = "up"
+        renderReport()
+        try {
+            const body = await f.arrayBuffer()
+            const head = new Uint8Array(body.slice(0, 5))
+            if (String.fromCharCode(...head) !== "%PDF-") { sfTell("ไฟล์นี้ไม่ใช่ PDF", false); return }
+            const r = await fetch("/dashboard/api/staffing/report", {
+                method: "POST", credentials: "same-origin",
+                headers: { "Content-Type": "application/pdf", "X-File-Name": encodeURIComponent(f.name) },
+                body,
+            })
+            if (r.status === 401) { location.href = "/dashboard/login?error=idle"; return }
+            if (!r.ok) { sfTell(await sfErr(r, "อัปโหลดไม่สำเร็จ ลองใหม่อีกครั้ง"), false); return }
+            const j = await r.json().catch(() => null) as { report?: StaffingReport } | null
+            if (staffing && j && j.report) staffing.report = j.report
+            sfTell("อัปโหลดรายงานอัตรากำลังแล้ว " + (j && j.report ? j.report.name : f.name) + " ผู้ใช้ทุกคนในแท็บนี้ดาวน์โหลดได้", true)
+        } catch (e) {
+            console.error("staffing report upload failed:", e)
+            sfTell("อัปโหลดไม่สำเร็จ ลองใหม่อีกครั้ง", false)
+        } finally {
+            sfReportBusy = ""
+            renderReport()
+        }
+    })
 
     // logged: the user opened the tab (written to the audit log).
     async function loadStaffing(logged: boolean): Promise<void> {
@@ -2353,21 +2478,16 @@
         const d = v.trim()
         return /^\d{1,3}$/.test(d) && Number(d) >= min ? Number(d) : null
     }
-    // อัตราจ้าง is one box since 2026-11-26 (Pong: "no more input รายเดือน
-    // รายวัน, merge into อัตราจ้าง"). The table still keeps monthly and daily
-    // hires (both count the same); a save keeps the department's monthly
-    // hires up to the new total and puts the rest in daily, so an unchanged
-    // อัตราจ้าง saves the same numbers and rebuilds nothing.
-    const sfSplit = (d: StaffingCounts, hire: number): { monthly: number; daily: number } => {
-        const monthly = Math.min(d.monthly, hire)
-        return { monthly, daily: hire - monthly }
-    }
+    // อัตราจ้าง has no box since 2026-11-28 (Pong: "The calculation now does
+    // not include อัตราจ้าง"): the save sends the department's saved monthly
+    // and daily hires as they are, so they stay in the table for the record
+    // and change nothing.
     const sfValues = (): StaffingValues | null => {
         const d = sfEditing
         const fte = sfCount(sfFte.value, 1), staff = sfCount(sfStaff.value, 0)
-        const hire = sfCount(sfHire.value, 0), absent = sfCount(sfAbsent.value, 0)
-        return !d || fte === null || staff === null || hire === null || absent === null
-            ? null : { fte, staff, ...sfSplit(d, hire), absent }
+        const absent = sfCount(sfAbsent.value, 0)
+        return !d || fte === null || staff === null || absent === null
+            ? null : { fte, staff, monthly: d.monthly, daily: d.daily, absent }
     }
     // The multiplier's numbers only (ไม่ได้ปฏิบัติงาน is not one).
     const sfSameCounts = (a: StaffingCounts, b: StaffingCounts): boolean =>
@@ -2403,7 +2523,6 @@
         sfSub.textContent = d.name + " (" + d.code + ")"
         sfFte.value = String(d.fte)
         sfStaff.value = String(d.staff)
-        sfHire.value = String(d.monthly + d.daily)
         sfAbsent.value = String(d.absent)
         sfError.classList.add("hidden")
         sfMeta.textContent = d.updated_at

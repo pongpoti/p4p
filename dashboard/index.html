@@ -1186,18 +1186,13 @@
         .sf-ok { font-weight: 700; }
         .staffing-table col.c-sno { width: 52px; }
         .staffing-table col.c-n { width: 68px; }
-        .staffing-table col.c-work { width: 96px; }
+        .staffing-table col.c-work { width: 124px; }
         .staffing-table col.c-absent { width: 112px; }
         .staffing-table col.c-lack { width: 104px; }
         .staffing-table col.c-mult { width: 152px; }
         .staffing-table col.c-edit { width: 64px; }
-        /* Two header rows (2026-11-26): ปฏิบัติงานจริง over ข้าราชการ and
-           อัตราจ้าง. The second row sticks under the first (app.ts sets
-           --sf-head1 to the first row's height). */
-        .staffing-table thead tr:first-child th { height: 34px; }
-        .staffing-table thead th[rowspan] { height: 66px; }
-        .staffing-table thead .sf-subhead th { top: var(--sf-head1, 34px); height: 32px; }
-        .staffing-table th.sf-group { text-align: center; color: var(--c-text); box-shadow: inset 0 -1px 0 var(--c-border-strong); }
+        /* One header row since 2026-11-28 (ข้าราชการ only, no อัตราจ้าง column): two-line headings. */
+        .staffing-table thead th { height: 58px; }
         .staffing-table td { height: 40px; }
         .staffing-table td.mult { text-overflow: clip; }
         .staffing-table .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1219,10 +1214,17 @@
         .staffing-table tfoot td { position: sticky; bottom: 0; height: 44px; background: var(--c-surface-3); border-top: 0; box-shadow: inset 0 2px 0 var(--c-border-strong); border-bottom: 0; font-weight: 700; }
         .staffing-table tfoot td.muted { color: var(--c-text-2); }
         .staffing-table td.audit-empty { height: 88px; }
+        /* Once a year (Pong, 2026-11-28), and the staffing report PDF: download for everyone, upload for the owner */
+        .sf-note { margin: 0; display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); line-height: var(--lh-text); font-weight: 700; color: var(--c-text); }
+        .sf-note .ic { width: var(--icon-sm); height: var(--icon-sm); flex: none; color: var(--c-text-2); }
+        .sf-report { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-2); }
+        .sf-report .ic { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
+        .sf-report .btn-ghost .spinner { border-color: var(--c-border-strong); border-top-color: var(--c-brand); }
+        .sf-report-meta { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-text); color: var(--c-text-2); overflow-wrap: anywhere; }
         /* keep a focused row clear of the sticky head and the totals row (WCAG 2.4.11) */
         #staffing-view .audit-table-wrap { scroll-padding: 60px 0 52px; }
         .log-dialog.sf-dialog { width: min(720px, 94vw); }
-        .sf-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .sf-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .sf-form .bd-field label small { font-size: inherit; font-weight: 400; }
         .sf-form .bd-meta, .sf-form .bd-rate { grid-column: 1 / -1; }
         .sf-preview { align-items: center; flex-wrap: wrap; }
@@ -2498,19 +2500,27 @@
                     <h2 id="staffing-title">อัตรากำลังแพทย์และตัวคูณสาขา</h2>
                     <span id="staffing-asof" class="sf-asof hidden"></span>
                 </div>
-                <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − ปฏิบัติงานจริง (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0</span></p>
+                <!-- Pong, 2026-11-28: "The calculation now does not include อัตราจ้าง". -->
+                <p class="sf-formula"><span>ตัวคูณสาขา = 1 + <span id="staffing-k">5</span> × ขาดแคลน<span class="sf-dot" aria-hidden="true">·</span></span><span>ขาดแคลน = 1 − ข้าราชการที่ปฏิบัติงานจริง ÷ FTE ไม่ต่ำกว่า 0 (ไม่นับอัตราจ้าง)</span></p>
+                <p class="sf-note"><svg class="ic" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5M12 7.5v.5"/></svg>ข้อมูลอัตรากำลังปรับปรุงปีละ 1 ครั้ง</p>
                 <p id="staffing-sub" class="sf-sub"></p>
+                <!-- The staffing report PDF (2026-11-28): everyone downloads it, the owner uploads it. -->
+                <div id="staffing-report" class="sf-report hidden">
+                    <button type="button" id="staffing-dl" class="btn-ghost hidden"></button>
+                    <button type="button" id="staffing-up" class="btn-ghost hidden"></button>
+                    <input type="file" id="staffing-file" accept="application/pdf,.pdf" hidden>
+                    <p id="staffing-report-meta" class="sf-report-meta hidden"></p>
+                </div>
             </div>
             <p id="staffing-alert" class="sf-alert hidden" role="alert"></p>
             <p id="staffing-ok" class="sf-ok hidden" role="status"></p>
             <div class="audit-table-wrap glass">
                 <table class="audit-table staffing-table">
-                    <!-- Pong, 2026-11-26: ปฏิบัติงานจริง over ข้าราชการ and อัตราจ้าง
-                         (จ้างรายเดือน + จ้างรายวัน), then ไม่ได้ปฏิบัติงาน; no รหัส, มีจริง or รวม. -->
-                    <colgroup><col class="c-sno"><col><col class="c-n"><col class="c-work"><col class="c-work"><col class="c-absent"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
+                    <!-- Pong, 2026-11-28: ข้าราชการที่ปฏิบัติงานจริง only (no อัตราจ้าง
+                         column: not in the multiplier), then ไม่ได้ปฏิบัติงาน; no รหัส, มีจริง or รวม. -->
+                    <colgroup><col class="c-sno"><col><col class="c-n"><col class="c-work"><col class="c-absent"><col class="c-lack"><col class="c-mult"><col class="c-edit"></colgroup>
                     <thead>
-                        <tr><th scope="col" rowspan="2" class="num" data-sort="no">ที่</th><th scope="col" rowspan="2" data-sort="name">กลุ่มงาน</th><th scope="col" rowspan="2" class="num" title="จำนวนที่ควรมี" data-sort="fte">FTE</th><th scope="colgroup" colspan="2" class="sf-group">ปฏิบัติงานจริง</th><th scope="col" rowspan="2" class="num" title="เช่น ลาศึกษาต่อ ไม่นับในขาดแคลน" data-sort="absent">ไม่ได้<br>ปฏิบัติงาน</th><th scope="col" rowspan="2" class="num" title="1 − (ข้าราชการ + อัตราจ้าง) ÷ FTE ไม่ต่ำกว่า 0" data-sort="lack">ขาดแคลน</th><th scope="col" rowspan="2" data-sort="mult">ตัวคูณสาขา</th><th scope="col" rowspan="2"><span class="sr-only">แก้ไข</span></th></tr>
-                        <tr class="sf-subhead"><th scope="col" class="num" title="ข้าราชการที่ปฏิบัติงานจริง" data-sort="staff">ข้าราชการ</th><th scope="col" class="num" title="ลูกจ้างชั่วคราว จ้างรายเดือน + จ้างรายวัน" data-sort="hire">อัตราจ้าง</th></tr>
+                        <tr><th scope="col" class="num" data-sort="no">ที่</th><th scope="col" data-sort="name">กลุ่มงาน</th><th scope="col" class="num" title="จำนวนที่ควรมี" data-sort="fte">FTE</th><th scope="col" class="num" title="ข้าราชการที่ปฏิบัติงานจริง (ไม่นับอัตราจ้าง)" data-sort="staff">ข้าราชการ<br>ปฏิบัติงานจริง</th><th scope="col" class="num" title="เช่น ลาศึกษาต่อ ไม่นับในขาดแคลน" data-sort="absent">ไม่ได้<br>ปฏิบัติงาน</th><th scope="col" class="num" title="1 − ข้าราชการที่ปฏิบัติงานจริง ÷ FTE ไม่ต่ำกว่า 0" data-sort="lack">ขาดแคลน</th><th scope="col" data-sort="mult">ตัวคูณสาขา</th><th scope="col"><span class="sr-only">แก้ไข</span></th></tr>
                     </thead>
                     <tbody id="staffing-rows"></tbody>
                     <tfoot id="staffing-foot"></tfoot>
@@ -2685,7 +2695,7 @@
         </form>
     </dialog>
 
-    <!-- อัตรากำลัง: one department's FTE, on staff, monthly and daily hires (owner only) -->
+    <!-- อัตรากำลัง: one department's FTE, on staff and absent (owner only); hires are kept as saved (2026-11-28) -->
     <dialog id="staffing-dialog" class="log-dialog sf-dialog" aria-labelledby="staffing-dialog-title" aria-describedby="staffing-dialog-sub">
         <div class="log-header">
             <div>
@@ -2707,17 +2717,13 @@
                 <input id="staffing-staff" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
             <div class="bd-field">
-                <label for="staffing-hire">อัตราจ้าง <small>ปฏิบัติงานจริง</small></label>
-                <input id="staffing-hire" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
-            </div>
-            <div class="bd-field">
                 <label for="staffing-absent">ไม่ได้ปฏิบัติงาน</label>
                 <input id="staffing-absent" type="text" inputmode="numeric" autocomplete="off" aria-describedby="staffing-hint">
             </div>
-            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม 0–999 · ไม่ได้ปฏิบัติงาน (เช่น ลาศึกษาต่อ) ไม่นับในขาดแคลนและไม่เปลี่ยนตัวคูณสาขา</p>
+            <p id="staffing-hint" class="bd-meta">จำนวนเต็ม 0–999 · ขาดแคลนนับเฉพาะข้าราชการที่ปฏิบัติงานจริง<br>ไม่ได้ปฏิบัติงาน (เช่น ลาศึกษาต่อ) ไม่เปลี่ยนตัวคูณสาขา</p>
             <div class="bd-rate sf-preview" aria-live="polite">
-                <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff staffing-hire">–</output></span>
-                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff staffing-hire">–</output></span>
+                <span class="k">ขาดแคลน <output id="staffing-lack" for="staffing-fte staffing-staff">–</output></span>
+                <span class="k">ตัวคูณสาขา <output id="staffing-mult" class="v" for="staffing-fte staffing-staff">–</output></span>
             </div>
             <p id="staffing-meta" class="bd-meta hidden"></p>
             <p class="bd-meta">บันทึกแล้ว เดือนที่ยังอยู่กับผู้จัดทำในแท็บตรวจสอบจะสร้าง SK03 ใหม่ทันที เดือนอื่นใช้ตัวเลขนี้เมื่อสร้างครั้งถัดไป</p>

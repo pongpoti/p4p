@@ -12,7 +12,24 @@
  *                                       dashboard user. canEdit: the owner.
  *   PUT /dashboard/api/staffing/:code   {fte, staff, monthly, daily,
  *                                       absent}: one department, owner only
- *                                       (404 for anyone else)
+ *                                       (404 for anyone else). Since
+ *                                       2026-11-28 the tab sends the saved
+ *                                       monthly and daily hires unchanged:
+ *                                       they are not in the multiplier.
+ *   GET /dashboard/api/staffing/report  the staffing report PDF (Pong,
+ *                                       2026-11-28: "add download button
+ *                                       for pdf on dashboard"): a signed
+ *                                       Storage link saved under its name
+ *                                       (?link=1 answers {url, name}); any
+ *                                       user who sees the tab
+ *   POST /dashboard/api/staffing/report the owner uploads it (the PDF
+ *                                       itself as the body, its name in
+ *                                       X-File-Name); it replaces the last
+ *
+ * The report is review-files/staffing/report.pdf (the private bucket of
+ * scripts/review-tab-2026-11.sql, which takes PDFs). Its name, size, when
+ * and by whom come from the last staffing.report row of the audit log
+ * (the upload writes it), so no SQL file is needed for it.
  *
  * The numbers live in the Supabase table dept_staffing, saved through
  * staffing_save (scripts/dept-staffing-2026-11.sql). Until that file has
@@ -39,8 +56,8 @@ const staffing = require("./dept-staffing") as typeof import("./dept-staffing")
 
 export interface StaffingDeps {
   app: Express
-  express: { json(opts?: { limit?: string }): any }
-  axios: Pick<AxiosStatic, "get">
+  express: { json(opts?: { limit?: string }): any; raw(opts: { limit: string; type: (req: any) => boolean }): any }
+  axios: Pick<AxiosStatic, "get" | "post">
   supabaseUrl: string
   serviceHeaders(): Record<string, string>
   callServiceRpc(fn: string, args?: Record<string, unknown>): Promise<any>
@@ -73,6 +90,40 @@ const FIELD_ERROR: Record<"fte" | "staff" | "monthly" | "daily" | "absent", stri
 }
 const FIELDS = ["fte", "staff", "monthly", "daily", "absent"] as const
 
+// The staffing report PDF (2026-11-28).
+const BUCKET = "review-files"
+const REPORT_PATH = "staffing/report.pdf"
+// Vercel takes a request body up to about 4.5 MB; the report is about 0.2 MB.
+const REPORT_MAX_BYTES = 4 * 1024 * 1024
+const REPORT_DEFAULT_NAME = "รายงานอัตรากำลังแพทย์จำแนกตามกลุ่มงาน.pdf"
+export interface StaffingReport { name: string; bytes: number | null; uploaded_at: string | null; uploaded_by: string }
+/** The file name as typed or stored: no folders or control characters, at most 150 characters, ending .pdf. */
+export function reportName(v: unknown): string {
+  let n = ""
+  if (typeof v === "string") {
+    try { n = decodeURIComponent(v) } catch { n = v }
+  }
+  n = n.split(/[/\\]/).pop() || ""
+  // eslint-disable-next-line no-control-regex -- control characters are what it takes out
+  n = n.replace(/[\u0000-\u001f\u007f"<>|*?:]/g, "").replace(/\s+/g, " ").trim()
+  if (!n.replace(/\.pdf$/i, "").replace(/[.\s]/g, "")) return REPORT_DEFAULT_NAME
+  if (!/\.pdf$/i.test(n)) n = n.slice(0, 146) + ".pdf"
+  if (n.length > 150) n = n.slice(0, 146).trim() + ".pdf"
+  return n
+}
+/** The last staffing.report row of the audit log, as the tab shows it (null: none, or unreadable). */
+const reportOf = (rows: unknown): StaffingReport | null => {
+  const r = Array.isArray(rows) ? rows[0] : null
+  const t = r && r.target && typeof r.target === "object" ? r.target : null
+  if (!t || typeof t.name !== "string") return null
+  return {
+    name: reportName(t.name),
+    bytes: Number.isInteger(t.bytes) ? t.bytes : null,
+    uploaded_at: typeof r.created_at === "string" ? r.created_at : null,
+    uploaded_by: typeof r.actor_name === "string" ? r.actor_name : "",
+  }
+}
+
 type Counts = { fte: number; staff: number; monthly: number; daily: number; absent: number }
 const round4 = (n: number): number => Math.round(n * 10000) / 10000
 /** One department as the tab shows it: the numbers, lack and multiplier (4 decimals). */
@@ -92,6 +143,18 @@ const monthsOf = (v: unknown): string[] =>
 
 export function mountStaffing(d: StaffingDeps): void {
   const { app } = d
+  const storage = (p: string): string => d.supabaseUrl + "/storage/v1/" + p
+  // The report's name and who uploaded it; null when there is none, or the read fails (the tab then offers no download).
+  const readReport = async (): Promise<StaffingReport | null> => {
+    try {
+      const r = await d.axios.get(d.supabaseUrl + "/rest/v1/dashboard_audit_log?select=created_at,actor_name,target" +
+        "&action=eq.staffing.report&order=id.desc&limit=1", { headers: d.serviceHeaders(), timeout: 8000 })
+      return reportOf(r.data)
+    } catch (e: any) {
+      console.error("[dashboard] staffing report read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
+      return null
+    }
+  }
 
   app.get("/dashboard/api/staffing", async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store")
@@ -101,6 +164,7 @@ export function mountStaffing(d: StaffingDeps): void {
     const logged = req.query.view === "1" ? d.audit(req, s, "view.staffing") : Promise.resolve()
     let installed = true
     let rows: unknown = []
+    const report = readReport()
     try {
       // select=*: a table made before the monthly column still reads.
       const r = await d.axios.get(d.supabaseUrl + "/rest/v1/dept_staffing?select=*",
@@ -108,7 +172,7 @@ export function mountStaffing(d: StaffingDeps): void {
       rows = r.data
     } catch (e: any) {
       if (!notInstalled(e)) {
-        await logged
+        await Promise.all([logged, report])
         console.error("[dashboard] staffing read failed:", e.response ? JSON.stringify(e.response.data) : e.message)
         return res.status(500).json({ error: "โหลดอัตรากำลังไม่สำเร็จ" })
       }
@@ -125,7 +189,61 @@ export function mountStaffing(d: StaffingDeps): void {
       source: staffing.STAFFING_SOURCE,
       limits: staffing.STAFFING_LIMITS,
       depts: merged.list.map(withMultiplier),
+      report: await report,
     })
+  })
+
+  // The staffing report PDF: everyone who sees the tab downloads it.
+  app.get("/dashboard/api/staffing/report", async (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store")
+    const s = d.dashSession(req)
+    if (!s) return res.status(401).json({ error: "not authenticated" })
+    if (d.canView && !d.canView(s)) return res.status(404).json({ error: "not found" })
+    const report = await readReport()
+    if (!report) return res.status(404).json({ error: "ยังไม่มีไฟล์รายงานอัตรากำลัง" })
+    try {
+      const signed = await d.axios.post(storage("object/sign/" + BUCKET + "/" + REPORT_PATH), { expiresIn: 120 },
+        { headers: { ...d.serviceHeaders(), "Content-Type": "application/json" }, timeout: 8000 })
+      const link = signed && signed.data && typeof signed.data.signedURL === "string" ? signed.data.signedURL : ""
+      if (!link) throw new Error("no signedURL")
+      await d.audit(req, { sub: s.sub, name: s.name }, "staffing.download", { name: report.name })
+      const url = d.supabaseUrl + "/storage/v1" + link + (link.includes("?") ? "&" : "?") + "download=" + encodeURIComponent(report.name)
+      if (req.query.link === "1") return res.json({ url, name: report.name })
+      res.redirect(302, url)
+    } catch (e: any) {
+      const st = e.response ? Number(e.response.status) : 0
+      const body = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message
+      console.error("[dashboard] staffing report link failed:", st, body)
+      // Storage answers a missing object with 400/404 {"statusCode":"404"}.
+      if (st === 404 || /not.?found|404/i.test(String(body))) return res.status(404).json({ error: "ยังไม่มีไฟล์รายงานอัตรากำลัง" })
+      res.status(502).json({ error: "ดาวน์โหลดไม่สำเร็จ ลองใหม่อีกครั้ง" })
+    }
+  })
+
+  // The owner uploads (or replaces) it: the PDF as the body, its name in X-File-Name (URI-encoded).
+  app.post("/dashboard/api/staffing/report",
+    d.express.raw({ limit: "4500kb", type: () => true }), async (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store")
+    const s = d.dashSession(req)
+    if (!s) return res.status(401).json({ error: "not authenticated" })
+    if (!d.isDashOwner(s.sub)) return res.status(404).json({ error: "not found" })
+    const buf: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+    if (!buf.length) return res.status(400).json({ error: "ไม่พบไฟล์ เลือกไฟล์ PDF แล้วลองใหม่" })
+    if (buf.length > REPORT_MAX_BYTES) return res.status(413).json({ error: "ไฟล์ใหญ่เกิน 4 MB" })
+    if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") return res.status(400).json({ error: "ไฟล์นี้ไม่ใช่ PDF" })
+    const name = reportName(req.headers["x-file-name"])
+    try {
+      await d.axios.post(storage("object/" + BUCKET + "/" + REPORT_PATH), buf, {
+        headers: { ...d.serviceHeaders(), "Content-Type": "application/pdf", "x-upsert": "true", "cache-control": "no-cache" },
+        timeout: 20000, maxBodyLength: Infinity, maxContentLength: Infinity,
+      })
+    } catch (e: any) {
+      console.error("[dashboard] staffing report upload failed:", e.response ? e.response.status + " " + JSON.stringify(e.response.data) : e.message)
+      return res.status(502).json({ error: "อัปโหลดไม่สำเร็จ ลองใหม่อีกครั้ง" })
+    }
+    await d.audit(req, { sub: s.sub, name: s.name }, "staffing.report", { name, bytes: buf.length })
+    const report: StaffingReport = { name, bytes: buf.length, uploaded_at: new Date().toISOString(), uploaded_by: s.name }
+    res.json({ ok: true, report })
   })
 
   app.put("/dashboard/api/staffing/:code", d.express.json({ limit: "2kb" }), async (req: Request, res: Response) => {
